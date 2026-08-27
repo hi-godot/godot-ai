@@ -720,6 +720,45 @@ func test_generate_rotated_scaled_mesh_uses_body_local_bounds() -> void:
 	_remove_node(mesh)
 
 
+func test_generate_top_level_mesh_preserves_global_alignment() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var parent := Node3D.new()
+	parent.name = "GenerateTopLevelParent"
+	parent.position = Vector3(20, -3, 8)
+	parent.rotation_degrees = Vector3(0, 35, 0)
+	parent.scale = Vector3(2, 3, 4)
+	scene_root.add_child(parent)
+	parent.set_owner(scene_root)
+	var mesh := MeshInstance3D.new()
+	mesh.name = "GenerateTopLevel"
+	var box := BoxMesh.new()
+	box.size = Vector3(2, 1, 3)
+	mesh.mesh = box
+	parent.add_child(mesh)
+	mesh.set_owner(scene_root)
+	mesh.top_level = true
+	mesh.global_position = Vector3(4, 5, -6)
+	mesh.global_rotation_degrees = Vector3(10, 25, -15)
+	mesh.scale = Vector3(2, 1, 0.5)
+	var expected_global_transform := mesh.global_transform
+
+	var result := _handler.generate({"paths": [McpScenePath.from_node(mesh, scene_root)]})
+	assert_has_key(result, "data")
+	var nodes := _generated_nodes(result, scene_root)
+	assert_true(nodes.body.top_level, "generated body must preserve top_level")
+	assert_true(nodes.body.global_position.is_equal_approx(expected_global_transform.origin),
+		"generated body must preserve the mesh's global position")
+	assert_true(nodes.body.global_transform.basis.get_rotation_quaternion().is_equal_approx(
+		expected_global_transform.basis.get_rotation_quaternion()
+	), "generated body must preserve the mesh's global rotation")
+	assert_true(nodes.collision.shape.size.is_equal_approx(Vector3(4, 1, 1.5)))
+	_remove_node(nodes.body)
+	_remove_node(parent)
+
+
 func test_generate_negative_scale_produces_positive_bounds() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -827,6 +866,8 @@ func test_generate_rejects_empty_non_array_and_non_mesh_paths() -> void:
 	assert_is_error(empty, ErrorCodes.MISSING_REQUIRED_PARAM)
 	var non_array := _handler.generate({"paths": "/Main/Mesh"})
 	assert_is_error(non_array, ErrorCodes.INVALID_PARAMS)
+	var non_string_entry := _handler.generate({"paths": [42]})
+	assert_is_error(non_string_entry, ErrorCodes.INVALID_PARAMS)
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		skip("No scene root")

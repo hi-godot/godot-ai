@@ -61,15 +61,21 @@ func generate(params: Dictionary) -> Dictionary:
 	var raw_paths: Variant = params.get("paths", [])
 	if not raw_paths is Array:
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "paths must be an array of MeshInstance3D scene paths")
-	var paths: Array = raw_paths
-	if paths.is_empty():
+	if raw_paths.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: paths")
+	var paths: Array[String] = []
+	for raw_path in raw_paths:
+		if not raw_path is String:
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
+				"paths entries must be MeshInstance3D scene path strings",
+			)
+		paths.append(raw_path)
 
-	## Precompute every body-local bound before opening the undo action. The
-	## generated body is a sibling, so both transforms use the same parent space.
+	## Precompute every body-local bound before opening the undo action. Normal
+	## siblings use parent space; top-level siblings use global space.
 	var plans: Array[Dictionary] = []
-	for raw_path in paths:
-		var mesh_path := String(raw_path)
+	for mesh_path in paths:
 		var resolved := McpNodeValidator.resolve_or_error(
 			mesh_path, "paths", params.get("scene_file", "")
 		)
@@ -88,14 +94,16 @@ func generate(params: Dictionary) -> Dictionary:
 				ErrorCodes.INVALID_PARAMS,
 				"MeshInstance3D at %s has no parent — cannot create a sibling body" % mesh_path
 			)
+		var source_transform := mesh.global_transform if mesh.top_level else mesh.transform
 		var body_transform := Transform3D(
-			Basis(mesh.quaternion),
-			mesh.position,
+			Basis(source_transform.basis.get_rotation_quaternion()),
+			source_transform.origin,
 		)
-		var mesh_to_body := body_transform.affine_inverse() * mesh.transform
+		var mesh_to_body := body_transform.affine_inverse() * source_transform
 		plans.append({
 			"mesh": mesh,
 			"parent": parent,
+			"top_level": mesh.top_level,
 			"body_transform": body_transform,
 			"bounds": _transform_aabb(mesh.get_aabb(), mesh_to_body),
 		})
@@ -106,6 +114,7 @@ func generate(params: Dictionary) -> Dictionary:
 		var mesh: MeshInstance3D = plan.mesh
 		var body: CollisionObject3D = ClassDB.instantiate(_GENERATED_BODY_CLASSES[body_type])
 		body.name = mesh.name + "Collider"
+		body.top_level = plan.top_level
 		body.transform = plan.body_transform
 
 		var collision := CollisionShape3D.new()
