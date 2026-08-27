@@ -261,8 +261,14 @@ func note_editor_play_stopped() -> void:
 ## `mcp:hello` branch in `_capture` and by the buffered replay in
 ## `_replay_pending_hello`, so a held beacon produces exactly the same state
 ## and side effects as one that arrived after adoption (#891).
-func _accept_game_hello() -> void:
+func _accept_game_hello(session_id: int) -> void:
 	_pending_hello_session_id = -1
+	## Bind the run to the game that actually announced itself. Adoption
+	## clears `_game_session_id`, so without this a replayed beacon would
+	## leave the run bound to nothing and the staleness checks toothless
+	## until Godot's next `_setup_session` (#891 review).
+	if session_id != -1:
+		_game_session_id = session_id
 	_game_ready = true
 	_ready_run_token = _game_run_token
 	## #641: boot-time parse errors race the hello beacon — both ride
@@ -294,7 +300,7 @@ func _replay_pending_hello() -> void:
 		return
 	if _log_buffer:
 		_log_buffer.log("[debug] replaying held mcp:hello from debugger session %d" % held)
-	_accept_game_hello()
+	_accept_game_hello(held)
 
 
 func _connect_session_stopped(session_id: int) -> void:
@@ -769,6 +775,15 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 			_on_log_batch(data)
 			return true
 		"mcp:hello":
+			## Staleness is checked FIRST, before the buffering branch below:
+			## `_begin_game_run_tracking` clears `_game_session_id`, so a beacon
+			## validated only at replay time could never be rejected (#891
+			## review). A beacon from a session other than the attached one is
+			## some other game's — never hold it, never apply it.
+			if _game_session_id != -1 and session_id != _game_session_id:
+				if _log_buffer:
+					_log_buffer.log("[debug] ignored stale mcp:hello from debugger session %d (current %d)" % [session_id, _game_session_id])
+				return true
 			if not _game_run_active:
 				## #891: the run is not adopted YET — a manually started play
 				## whose debugger session attached before the editor flipped
@@ -780,11 +795,7 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 				if _log_buffer:
 					_log_buffer.log("[debug] holding mcp:hello from debugger session %d until the run is adopted" % session_id)
 				return true
-			if _game_session_id != -1 and session_id != _game_session_id:
-				if _log_buffer:
-					_log_buffer.log("[debug] ignored stale mcp:hello from debugger session %d (current %d)" % [session_id, _game_session_id])
-				return true
-			_accept_game_hello()
+			_accept_game_hello(session_id)
 			return true
 		"mcp:eval_liveness_response":
 			_on_eval_liveness_response(data)

@@ -100,3 +100,33 @@ func test_mcp_started_run_accepts_the_same_hello() -> void:
 	assert_true(consumed, "the hello is consumed off the debugger wire")
 	assert_true(plugin.is_game_capture_ready(),
 		"project_run's begin_game_run() makes the identical hello land")
+
+
+func test_hello_from_another_debugger_session_is_never_held() -> void:
+	## #891 review: the beacon must be rejected on ARRIVAL, not at replay time.
+	## Adoption clears _game_session_id, so a beacon validated only on replay
+	## could never be rejected -- another game's hello would mark this run ready
+	## before its own helper had registered, letting runtime tools skip the
+	## readiness wait.
+	var plugin := _plugin_with_log()
+	plugin._setup_session(1)
+	var consumed := plugin._capture("mcp:hello", [], 2)
+	assert_true(consumed, "the foreign hello is still consumed off the wire")
+	assert_eq(plugin._pending_hello_session_id, -1,
+		"a beacon from a session other than the attached one must not be held")
+	plugin.note_editor_play_started()
+	assert_false(plugin.is_game_capture_ready(),
+		"adoption must not go ready on another debugger session's beacon")
+
+
+func test_accepted_hello_binds_the_run_to_its_debugger_session() -> void:
+	## Adoption clears _game_session_id; accepting a beacon re-binds the run to
+	## the game that announced itself, so later staleness checks have something
+	## to compare against instead of silently passing.
+	var plugin := _plugin_with_log()
+	plugin._setup_session(7)
+	plugin._capture("mcp:hello", [], 7)
+	plugin.note_editor_play_started()
+	assert_true(plugin.is_game_capture_ready(), "precondition: held beacon replayed")
+	assert_eq(plugin._game_session_id, 7,
+		"the replayed beacon must bind the run to its own debugger session")
