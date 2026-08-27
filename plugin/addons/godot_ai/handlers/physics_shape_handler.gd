@@ -30,6 +30,128 @@ const _SHAPE_2D_CLASSES := {
 	"capsule": "CapsuleShape2D",
 }
 
+const _GENERATED_BODY_CLASSES := {
+	"static": "StaticBody3D",
+	"area": "Area3D",
+}
+
+
+## Generates sibling physics bodies and collision shapes for MeshInstance3D
+## nodes. Every path and option is validated before the single bulk undo action
+## begins, so an invalid entry cannot leave a partially generated batch.
+func generate(params: Dictionary) -> Dictionary:
+	var scene_check := McpScenePath.require_edited_scene(params.get("scene_file", ""))
+	if scene_check.has("error"):
+		return scene_check
+	var scene_root: Node = scene_check.node
+
+	var shape_type := String(params.get("shape_type", "box"))
+	if not _SHAPE_3D_CLASSES.has(shape_type):
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Invalid shape_type '%s'. Valid: %s" % [shape_type, ", ".join(_SHAPE_3D_CLASSES.keys())]
+		)
+	var body_type := String(params.get("body_type", "static"))
+	if not _GENERATED_BODY_CLASSES.has(body_type):
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Invalid body_type '%s'. Valid: %s" % [body_type, ", ".join(_GENERATED_BODY_CLASSES.keys())]
+		)
+
+	var raw_paths: Variant = params.get("paths", [])
+	if not raw_paths is Array:
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "paths must be an array of MeshInstance3D scene paths")
+	var paths: Array = raw_paths
+	if paths.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: paths")
+
+	## Precompute every body-local bound before opening the undo action. The
+	## generated body is a sibling, so both transforms use the same parent space.
+	var plans: Array[Dictionary] = []
+	for raw_path in paths:
+		var mesh_path := String(raw_path)
+		var resolved := McpNodeValidator.resolve_or_error(
+			mesh_path, "paths", params.get("scene_file", "")
+		)
+		if resolved.has("error"):
+			return resolved
+		var node: Node = resolved.node
+		if not node is MeshInstance3D:
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
+				"Node at %s is %s — must be MeshInstance3D" % [mesh_path, node.get_class()]
+			)
+		var mesh := node as MeshInstance3D
+		var parent := mesh.get_parent()
+		if parent == null:
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
+				"MeshInstance3D at %s has no parent — cannot create a sibling body" % mesh_path
+			)
+		var body_transform := Transform3D(
+			Basis(mesh.quaternion),
+			mesh.position,
+		)
+		var mesh_to_body := body_transform.affine_inverse() * mesh.transform
+		plans.append({
+			"mesh": mesh,
+			"parent": parent,
+			"body_transform": body_transform,
+			"bounds": _transform_aabb(mesh.get_aabb(), mesh_to_body),
+		})
+
+	_undo_redo.create_action("MCP: Generate physics shapes for %d mesh(es)" % plans.size())
+	var created_nodes: Array[Dictionary] = []
+	for plan in plans:
+		var mesh: MeshInstance3D = plan.mesh
+		var body: CollisionObject3D = ClassDB.instantiate(_GENERATED_BODY_CLASSES[body_type])
+		body.name = mesh.name + "Collider"
+		body.transform = plan.body_transform
+
+		var collision := CollisionShape3D.new()
+		collision.name = "CollisionShape3D"
+		var bounds: AABB = plan.bounds
+		collision.position = bounds.get_center()
+		var shape: Shape3D = ClassDB.instantiate(_SHAPE_3D_CLASSES[shape_type])
+		_apply_shape_size(shape, shape_type, {"aabb": bounds}, true)
+		collision.shape = shape
+		body.add_child(collision)
+
+		var parent: Node = plan.parent
+		_undo_redo.add_do_method(parent, "add_child", body, true)
+		_undo_redo.add_do_method(body, "set_owner", scene_root)
+		_undo_redo.add_do_method(collision, "set_owner", scene_root)
+		_undo_redo.add_do_reference(body)
+		_undo_redo.add_undo_method(parent, "remove_child", body)
+		created_nodes.append({"mesh": mesh, "body": body, "collision": collision})
+	_undo_redo.commit_action()
+
+	var created: Array[Dictionary] = []
+	for entry in created_nodes:
+		created.append({
+			"mesh_path": McpScenePath.from_node(entry.mesh, scene_root),
+			"body_path": McpScenePath.from_node(entry.body, scene_root),
+			"shape_path": McpScenePath.from_node(entry.collision, scene_root),
+			"shape_type": shape_type,
+			"body_type": body_type,
+		})
+	return {"data": {"created": created, "undoable": true}}
+
+
+## Transform all eight source corners and enclose them in target space. This
+## avoids rotating an already world-axis-aligned AABB a second time.
+static func _transform_aabb(source: AABB, transform: Transform3D) -> AABB:
+	var first := transform * source.position
+	var result := AABB(first, Vector3.ZERO)
+	for corner_index in range(1, 8):
+		var corner := source.position + Vector3(
+			source.size.x if corner_index & 1 else 0.0,
+			source.size.y if corner_index & 2 else 0.0,
+			source.size.z if corner_index & 4 else 0.0,
+		)
+		result = result.expand(transform * corner)
+	return result
+
 
 func autofit(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")

@@ -563,6 +563,20 @@ class StubClient:
                 "size": {"x": 2.0, "y": 1.0, "z": 1.0},
                 "undoable": True,
             }
+        if command == "physics_shape_generate":
+            return {
+                "created": [
+                    {
+                        "mesh_path": path,
+                        "body_path": f"{path}Collider",
+                        "shape_path": f"{path}Collider/CollisionShape3D",
+                        "shape_type": params.get("shape_type", "box"),
+                        "body_type": params.get("body_type", "static"),
+                    }
+                    for path in params.get("paths", [])
+                ],
+                "undoable": True,
+            }
         if command == "create_resource":
             if params.get("resource_path"):
                 return {
@@ -3518,6 +3532,56 @@ async def test_physics_shape_autofit_requires_writable():
         await physics_shape_handlers.physics_shape_autofit(runtime, path="/Main/Body/Collision")
 
 
+async def test_physics_shape_generate_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await physics_shape_handlers.physics_shape_generate(
+        runtime,
+        paths=["/Main/Body", "/Main/Wing"],
+        shape_type="sphere",
+        body_type="area",
+    )
+    assert result["created"][0]["shape_type"] == "sphere"
+    assert result["created"][0]["body_type"] == "area"
+    assert client.calls[-1]["command"] == "physics_shape_generate"
+    assert client.calls[-1]["params"] == {
+        "paths": ["/Main/Body", "/Main/Wing"],
+        "shape_type": "sphere",
+        "body_type": "area",
+    }
+
+
+async def test_physics_shape_generate_defaults():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
+    assert client.calls[-1]["params"] == {
+        "paths": ["/Main/Body"],
+        "shape_type": "box",
+        "body_type": "static",
+    }
+
+
+async def test_physics_shape_generate_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    client.live_readiness = "importing"
+    session = Session(
+        session_id="s1",
+        godot_version="4.5",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
+
+
 async def test_resource_create_requires_writable():
     """Write tools must raise EDITOR_NOT_READY when editor is importing."""
     from godot_ai.godot_client.client import GodotCommandError
@@ -4054,9 +4118,7 @@ async def test_editor_screenshot_handler_forwards_user_prompt():
     the vision model can describe what the agent is looking for."""
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await editor_handlers.editor_screenshot(
-        runtime, user_prompt="Why is the spider red?"
-    )
+    await editor_handlers.editor_screenshot(runtime, user_prompt="Why is the spider red?")
     assert client.calls[-1]["params"]["user_prompt"] == "Why is the spider red?"
 
 
@@ -4065,7 +4127,6 @@ async def test_editor_screenshot_handler_omits_empty_user_prompt():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await editor_handlers.editor_screenshot(runtime, user_prompt="")
     assert "user_prompt" not in client.calls[-1]["params"]
-
 
 
 async def test_editor_screenshot_routed_metadata_forwarded_without_image():
@@ -4115,6 +4176,7 @@ async def test_editor_screenshot_routed_drops_image_block():
     assert '"routed_via": "groq:qwen/qwen3.6-27b"' in result[0].text
     assert "vision_description" in result[0].text
     assert "spider" in result[0].text
+
 
 async def test_editor_screenshot_handler_coverage_passes_param():
     client = StubClient()

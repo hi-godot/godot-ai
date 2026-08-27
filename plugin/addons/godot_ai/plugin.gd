@@ -483,6 +483,7 @@ func _enter_tree() -> void:
 	_dispatcher.register_lazy("audio_stop", "audio", &"stop")
 	_dispatcher.register_lazy("audio_list", "audio", &"list_streams")
 	_dispatcher.register_lazy("physics_shape_autofit", "physics_shape", &"autofit")
+	_dispatcher.register_lazy("physics_shape_generate", "physics_shape", &"generate")
 	_dispatcher.register_lazy("environment_create", "environment", &"create_environment")
 	_dispatcher.register_lazy("gradient_texture_create", "texture", &"create_gradient_texture")
 	_dispatcher.register_lazy("noise_texture_create", "texture", &"create_noise_texture")

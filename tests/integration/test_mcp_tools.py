@@ -2595,6 +2595,53 @@ class TestPhysicsShapeAutofitTool:
 
 
 # ---------------------------------------------------------------------------
+# physics_shape_generate
+# ---------------------------------------------------------------------------
+
+
+class TestPhysicsShapeGenerateTool:
+    async def test_generate_dispatches_through_resource_manage(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "physics_shape_generate"
+            assert cmd["params"] == {
+                "paths": ["/Main/Body", "/Main/Wing"],
+                "shape_type": "box",
+                "body_type": "static",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "created": [
+                        {
+                            "mesh_path": "/Main/Body",
+                            "body_path": "/Main/BodyCollider",
+                            "shape_path": "/Main/BodyCollider/CollisionShape3D",
+                            "shape_type": "box",
+                            "body_type": "static",
+                        }
+                    ],
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "resource_manage",
+            {
+                "op": "physics_shape_generate",
+                "params": {"paths": ["/Main/Body", "/Main/Wing"]},
+            },
+        )
+        await task
+
+        assert result.data["created"][0]["body_path"] == "/Main/BodyCollider"
+        assert result.data["undoable"] is True
+
+
+# ---------------------------------------------------------------------------
 # filesystem_read_text
 # ---------------------------------------------------------------------------
 

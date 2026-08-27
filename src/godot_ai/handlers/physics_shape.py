@@ -6,6 +6,24 @@ from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
+async def physics_shape_generate(
+    runtime: DirectRuntime,
+    paths: list[str],
+    shape_type: str = "box",
+    body_type: str = "static",
+) -> dict:
+    """Generate sibling physics bodies and shapes for 3D meshes."""
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "physics_shape_generate",
+        {
+            "paths": paths,
+            "shape_type": shape_type,
+            "body_type": body_type,
+        },
+    )
+
+
 async def physics_shape_autofit(
     runtime: DirectRuntime,
     path: str,
