@@ -130,3 +130,98 @@ func test_accepted_hello_binds_the_run_to_its_debugger_session() -> void:
 	assert_true(plugin.is_game_capture_ready(), "precondition: held beacon replayed")
 	assert_eq(plugin._game_session_id, 7,
 		"the replayed beacon must bind the run to its own debugger session")
+
+
+## Counts the adoption calls the production play-state poll makes.
+class _SpyDebugger extends McpDebuggerPlugin:
+	var started := 0
+	var stopped := 0
+
+	func note_editor_play_started() -> void:
+		started += 1
+
+	func note_editor_play_stopped() -> void:
+		stopped += 1
+
+
+func test_connection_play_state_edge_drives_adoption() -> void:
+	## #891 review: without this, deleting the start-edge call in connection.gd
+	## -- the half that actually makes F5/F6 work -- leaves every other test in
+	## this suite passing. Drives the real McpConnection poll, not the plugin
+	## method directly.
+	var conn := McpConnection.new()
+	var spy := _SpyDebugger.new()
+	conn.debugger_plugin = spy
+	conn._last_play_state_for_run = false
+
+	conn._check_game_run_play_state(true)
+	assert_eq(spy.started, 1, "the stopped -> playing edge must adopt the run")
+	conn._check_game_run_play_state(true)
+	assert_eq(spy.started, 1, "a level, not an edge: no repeat adoption while play continues")
+	conn._check_game_run_play_state(false)
+	assert_eq(spy.stopped, 1, "the playing -> stopped edge must still end the run")
+	assert_eq(spy.started, 1, "the stop edge must not adopt")
+	conn.free()
+
+
+func test_adoption_keeps_the_attached_debugger_session() -> void:
+	## #891 review: clearing _game_session_id at adoption left every staleness
+	## guard comparing against -1, so a foreign session's `stopped` could end a
+	## live manual run (_on_debugger_session_stopped lets a manual-armed run end
+	## on any session while the id is unknown).
+	var plugin := _plugin_with_log()
+	plugin._setup_session(5)
+	plugin.note_editor_play_started()
+	assert_eq(plugin._game_session_id, 5,
+		"adoption must keep the session the game is already attached on")
+	plugin._on_debugger_session_stopped(9)
+	assert_true(plugin._game_run_active,
+		"a foreign session's stop must not end the adopted run")
+	plugin._on_debugger_session_stopped(5)
+	assert_false(plugin._game_run_active,
+		"the run's own session stopping still ends it")
+
+
+func test_adoption_preserves_a_pre_adoption_debugger_break() -> void:
+	## #891 review: a boot parse error breaks the game before the play-state
+	## edge. Adoption used to clear that break, losing the actionable #645
+	## diagnosis -- and the beacon never arrives for a game parked at a break,
+	## so nothing restored it.
+	var plugin := _plugin_with_log()
+	plugin._setup_session(1)
+	plugin.note_debug_break(true, "Parse error in res://broken.gd")
+	plugin.note_editor_play_started()
+	assert_true(plugin._break_active, "the break must survive adoption")
+	assert_eq(plugin._break_reason, "Parse error in res://broken.gd",
+		"the break reason must survive adoption")
+	assert_true(plugin._break_pre_live,
+		"the break must be re-evaluated as pre-live for the adopted run")
+
+
+func test_boot_output_stays_visible_under_the_adopted_run_id() -> void:
+	## #891 review: the helper flushes boot/main-scene output immediately after
+	## its beacon. If adoption rotated the run id afterwards, those lines stayed
+	## tagged with the superseded id -- and logs_read(source="game") returns the
+	## CURRENT run only, so a game whose only output happens in _ready() read as
+	## an empty log while the bridge reported live.
+	var plugin := _plugin_with_log()
+	var game_log := McpGameLogBuffer.new()
+	plugin._game_log_buffer = game_log
+	var run_before := game_log.run_id()
+
+	plugin._setup_session(1)
+	plugin._capture("mcp:hello", [], 1)
+	plugin._capture("mcp:log_batch", [[["info", "boot line from _ready"]]], 1)
+	var run_at_boot := game_log.run_id()
+	assert_true(run_at_boot != run_before,
+		"holding the beacon must start this game's run identity")
+
+	plugin.note_editor_play_started()
+	assert_eq(game_log.run_id(), run_at_boot,
+		"adoption must not rotate again and orphan the boot output")
+
+	var page := game_log.get_run_page(game_log.run_id(), 0, 10)
+	var entries: Array = page.get("entries", [])
+	assert_eq(entries.size(), 1,
+		"the boot line must be readable in the current run, the way logs_read returns it")
+	assert_eq(str(entries[0].get("text", "")), "boot line from _ready")
