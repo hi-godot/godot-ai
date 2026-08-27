@@ -888,9 +888,10 @@ func _check_state_changes() -> void:
 				log_buffer.log("[event] readiness -> %s" % readiness, false)
 
 
-## Playing→stopped edge for game-run bookkeeping. Runs every process tick
-## (any socket state) so a self-quit game's run ends even while the
-## transport is down or reconnecting.
+## Stopped↔playing edge handler for game-run bookkeeping. Handles both the
+## stopped→playing edge (adopting editor-started runs) and the playing→stopped
+## edge (ending runs). Runs every process tick (any socket state) so a
+## self-quit game's run ends even while the transport is down or reconnecting.
 func _check_game_run_play_state(playing: bool) -> void:
 	if playing == _last_play_state_for_run:
 		return
