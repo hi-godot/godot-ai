@@ -894,8 +894,17 @@ func _check_state_changes() -> void:
 func _check_game_run_play_state(playing: bool) -> void:
 	if playing == _last_play_state_for_run:
 		return
-	if not playing and debugger_plugin != null:
-		debugger_plugin.note_editor_play_stopped()
+	if debugger_plugin != null:
+		if playing:
+			## #891: adopt a play the user started from the editor. The
+			## debugger session's own adoption in `_setup_session` only fires
+			## when `is_playing_scene()` is already true when the session
+			## attaches, which an F5/F6 launch routinely misses; this edge is
+			## the other half of that race. Polled every tick regardless of
+			## socket state, same as the stop edge below.
+			debugger_plugin.note_editor_play_started()
+		else:
+			debugger_plugin.note_editor_play_stopped()
 	_last_play_state_for_run = playing
 
 
