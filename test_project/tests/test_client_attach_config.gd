@@ -1111,6 +1111,33 @@ func test_pi_json_strategy_fails_closed_on_project_override() -> void:
 	assert_true(unchanged["servers"].has("project-other"), "fail-closed Remove must preserve peers")
 
 
+func test_prewarm_argv_pins_exact_version_and_exits_via_version_flag() -> void:
+	## The pre-warm spawn's whole job is to make `uvx --from godot-ai==<v>`
+	## a warm cache hit for the post-update respawn: the argv must pin the
+	## exact version and terminate via --version instead of starting a
+	## server (#890).
+	assert_eq(
+		McpClientConfigurator.prewarm_server_package_argv("3.2.0"),
+		["--from", "godot-ai==3.2.0", "godot-ai", "--version"] as Array[String]
+	)
+
+
+func test_prewarm_argv_rejects_empty_and_non_pep440_versions() -> void:
+	## The version can originate from a GitHub release tag — anything
+	## outside the PEP 440 alphabet must produce no argv at all (no spawn),
+	## same as an empty version (#890 review).
+	assert_true(McpClientConfigurator.prewarm_server_package_argv("").is_empty())
+	assert_true(McpClientConfigurator.prewarm_server_package_argv("   ").is_empty())
+	assert_true(
+		McpClientConfigurator.prewarm_server_package_argv("3.2.0 --index-url http://evil").is_empty(),
+		"whitespace/flag smuggling must be rejected"
+	)
+	assert_true(
+		McpClientConfigurator.prewarm_server_package_argv("3.2.0@https://evil/pkg.whl").is_empty(),
+		"direct-reference smuggling must be rejected"
+	)
+
+
 func _pi_clone(path: String) -> McpClient:
 	var registered := McpClientRegistry.get_by_id("pi")
 	var client := McpClient.new()

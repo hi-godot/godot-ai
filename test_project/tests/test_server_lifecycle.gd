@@ -32,6 +32,12 @@ class _ManagerHostStub extends GodotAiPlugin:
 	var stop_watch_calls := 0
 	var finalize_calls := 0
 	var probe_calls := 0
+	var prewarm_calls: Array[String] = []
+
+	## Recorded, never spawned: the real seam launches a detached uvx.
+	func _prewarm_server_package(version: String) -> int:
+		prewarm_calls.append(version)
+		return -1
 
 	func _find_all_pids_on_port(_port: int) -> Array[int]:
 		var pids: Array[int] = []
@@ -1006,11 +1012,39 @@ func test_recover_stale_port_occupant_kills_with_weak_proof_and_clears() -> void
 	var recovered: bool = await manager.recover_stale_port_occupant(TEST_PORT, 0.5)
 	var killed := host.killed_targets.duplicate()
 	var clear_calls := host.cleared_record_calls
+	var prewarms := host.prewarm_calls.duplicate()
 	host.free()
 
 	assert_true(recovered, "weak-proof recovery must succeed once the port frees")
 	assert_eq(killed, [13131] as Array[int])
 	assert_eq(clear_calls, 1, "a freed port must clear the managed record")
+	assert_eq(prewarms, [McpClientConfigurator.get_plugin_version()] as Array[String],
+		"the kill worker must pre-warm the current server env so the respawn wins the bind race")
+
+
+func test_recover_stale_port_occupant_aborts_on_same_version_occupant() -> void:
+	## #890 CodeRabbit TOCTOU: the caller's staleness gate ran on an earlier
+	## probe. If a SAME-version server took the port in the interval, the
+	## worker's fresh re-probe must abort the recovery — never kill it.
+	var host := _stale_occupant_host()
+	host.live_status = {
+		"name": "godot-ai",
+		"version": McpClientConfigurator.get_plugin_version(),
+		"ws_port": 9500,
+		"status_code": 200,
+	}
+	var manager := McpServerLifecycleManagerScript.new(host)
+
+	var recovered: bool = await manager.recover_stale_port_occupant(TEST_PORT, 0.5)
+	var killed := host.killed_targets.duplicate()
+	var prewarms := host.prewarm_calls.duplicate()
+	host.free()
+
+	assert_false(recovered)
+	assert_true(killed.is_empty(),
+		"a same-version occupant appearing mid-recovery must not be killed")
+	assert_true(prewarms.is_empty(),
+		"an aborted recovery must not reach the kill worker's pre-warm")
 
 
 func test_recover_stale_port_occupant_refuses_foreign_occupant() -> void:

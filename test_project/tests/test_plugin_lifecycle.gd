@@ -28,6 +28,12 @@ class _ProofPlugin extends GodotAiPlugin:
 	var cleared_record_calls := 0
 	var waited_calls := 0
 	var probe_calls := 0
+	var prewarm_calls: Array[String] = []
+
+	## Recorded, never spawned: the real seam launches a detached uvx.
+	func _prewarm_server_package(version: String) -> int:
+		prewarm_calls.append(version)
+		return -1
 
 	func _find_all_pids_on_port(_port: int) -> Array[int]:
 		var pids: Array[int] = []
@@ -1439,6 +1445,7 @@ func test_recover_incompatible_returns_false_and_leaves_state_when_port_remains_
 	var status := plugin.get_server_status()
 	var killed := plugin.killed_targets.duplicate()
 	var clear_calls := plugin.cleared_record_calls
+	var prewarms := plugin.prewarm_calls.duplicate()
 	plugin.free()
 
 	assert_false(ok, "recovery click must report failure when the kill did not free the port")
@@ -1446,6 +1453,8 @@ func test_recover_incompatible_returns_false_and_leaves_state_when_port_remains_
 	assert_true(bool(status.get("connection_blocked", false)))
 	assert_eq(killed, [24680] as Array[int])
 	assert_eq(clear_calls, 0, "failed recovery must preserve record/pid-file state")
+	assert_eq(prewarms, [McpClientConfigurator.get_plugin_version()] as Array[String],
+		"the recovery kill worker must pre-warm the current server env (#890)")
 
 
 func test_recovery_click_arms_stale_budget_but_auto_trigger_does_not() -> void:

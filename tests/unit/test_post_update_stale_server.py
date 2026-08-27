@@ -52,15 +52,87 @@ def test_update_install_prewarms_new_server_before_download_starts() -> None:
 def test_prewarm_pins_exact_version_and_exits_via_version_flag() -> None:
     """The warmed env must be the exact release being installed, and the
     spawned process must exit on its own (`--version`) rather than starting
-    a server."""
+    a server. The argv builder also constrains the version to the PEP 440
+    alphabet — the value can originate from a GitHub release tag (#890)."""
     source = _read("client_configurator.gd")
-    block = get_func_block(
+    spawn_block = get_func_block(
         source, "static func prewarm_server_package(version: String) -> int:"
     )
+    assert "prewarm_server_package_argv(version)" in spawn_block
+    assert "find_uvx()" in spawn_block, "must no-op cleanly when uvx is absent"
 
-    assert '"--from", "godot-ai==%s" % pinned' in block
-    assert '"--version"' in block
-    assert "find_uvx()" in block, "must no-op cleanly when uvx is absent"
+    argv_block = get_func_block(
+        source, "static func prewarm_server_package_argv(version: String) -> Array[String]:"
+    )
+    assert '"--from", "godot-ai==%s" % pinned' in argv_block
+    assert '"--version"' in argv_block
+    assert "RegEx" in argv_block, "the tag-originated version must be charset-constrained"
+
+
+def test_recovery_kill_workers_prewarm_the_current_version() -> None:
+    """#890 review P1 (transition release): the upgrade INTO the release that
+    ships this code runs the OLD updater, so no click-time pre-warm happens.
+    Both weak-kill flows must therefore warm the current server env inside
+    their kill worker (overlapping the kill + port drain), via the host seam
+    so tests never spawn a real uvx."""
+    lifecycle = _read("utils/server_lifecycle.gd")
+
+    stale_block = get_func_block(
+        lifecycle, "func recover_stale_port_occupant(port: int, wait_s: float) -> bool:"
+    )
+    assert "_host._prewarm_server_package(expected_version)" in stale_block
+
+    recover_block = get_func_block(
+        lifecycle, "func recover_incompatible_server() -> bool:"
+    )
+    assert "_host._prewarm_server_package(recovery_expected_version)" in recover_block
+
+    plugin = (PLUGIN_ROOT / "plugin.gd").read_text(encoding="utf-8")
+    seam = get_func_block(plugin, "func _prewarm_server_package(version: String) -> int:")
+    assert "ClientConfigurator.prewarm_server_package(version)" in seam
+
+
+def test_stale_recovery_reverifies_version_inside_the_worker() -> None:
+    """#890 CodeRabbit: the caller's staleness gate ran on an earlier probe.
+    The recovery worker must re-probe and abort on a same-version (or
+    unverifiable) occupant before evaluating any kill proof."""
+    lifecycle = _read("utils/server_lifecycle.gd")
+    block = get_func_block(
+        lifecycle, "func recover_stale_port_occupant(port: int, wait_s: float) -> bool:"
+    )
+    assert "_verified_status_version(live)" in block
+    assert "live_version.is_empty() or live_version == expected_version" in block
+    reprobe_at = block.index("_verified_status_version")
+    proof_at = block.index("_evaluate_recovery_port_occupant_proof")
+    assert reprobe_at < proof_at, "the version re-check must precede the kill proof"
+
+
+def test_pid_file_publication_does_not_cancel_the_stale_budget() -> None:
+    """#890 review P1: the Python server writes its pid-file during import,
+    BEFORE binding HTTP/WS — publication is not proof the new server owns
+    either port, so it must not zero the remaining recovery rounds."""
+    lifecycle = _read("utils/server_lifecycle.gd")
+    block = get_func_block(lifecycle, "func check_server_health() -> void:")
+    ## Assignment forms only: the slice legitimately includes the following
+    ## function's doc comment, which may mention the field by name.
+    assert "_stale_recovery_budget = 0" not in block, (
+        "zeroing the budget at pid-file publication strands a post-pid-file "
+        "bind failure with no recovery round"
+    )
+    assert "_stale_recovery_budget -=" not in block
+
+
+def test_repin_gate_never_shells_out_on_the_main_thread() -> None:
+    """#890 review P2: the gate runs on the main thread from the dock's
+    sweep-completion callback; cli-descriptor probe paths run subprocesses
+    with multi-second timeouts and must fail closed instead."""
+    source = _read("client_configurator.gd")
+    block = get_func_block(
+        source, "static func entry_drift_is_version_pin_only("
+    )
+    assert 'client.config_type == "cli"' in block
+    assert "_scope_diverges_from_json_fallback(client)" in block
+    assert "has_json_fallback()" in block
 
 
 def test_plugin_arms_stale_recovery_before_the_startup_walk() -> None:

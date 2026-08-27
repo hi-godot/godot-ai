@@ -101,9 +101,12 @@ var _readopt_walk_pending: bool = false
 ## so without this budget every lost port race dead-ends in INCOMPATIBLE
 ## and the user is left toggling the plugin by hand. Never spent on a
 ## same-version or foreign occupant; each spent round re-proves brand at
-## kill time. Reset on every proven recovery (adoption, verified handshake,
-## pid-file publish) so leftover rounds can't authorize a kill in a later,
-## unrelated episode.
+## kill time. Reset on the proven recoveries — adoption and the verified
+## compatible handshake — so leftover rounds can't authorize a kill in a
+## later, unrelated episode. Pid-file publication deliberately does NOT
+## reset it: the server writes that file before binding either port, so a
+## bridge respawn can still steal the bind afterwards and the fast-exit
+## needs its remaining rounds (#890 review P1).
 var _stale_recovery_budget: int = 0
 
 ## Bounded deadline for the foreign-port adoption-confirmation watcher.
@@ -1264,10 +1267,18 @@ func check_server_health() -> void:
 		## the actual live listener (#759).
 		_host._write_managed_server_record(real_pid, _expected_server_version(), _server_keep_alive)
 		## #805: the spawn survived to publish its pid-file — proven
-		## recovery, so the fast-exit re-adopt budget refreshes. The
-		## stale-recovery episode ends with it (see adopt_compatible_server).
+		## recovery, so the fast-exit re-adopt budget refreshes.
+		##
+		## The stale-recovery budget is deliberately NOT reset here (#890
+		## review P1): the Python server writes its pid-file during import,
+		## BEFORE uvicorn binds HTTP or the WebSocket listener starts
+		## (src/godot_ai/__init__.py) — publication proves the child reached
+		## that line, not that it owns either port. A bridge respawn can
+		## still steal the bind after the pid-file lands, and zeroing here
+		## left that fast-exit with no recovery round. The budget resets on
+		## the genuinely proven recoveries: adoption and the verified
+		## compatible handshake.
 		_readopt_after_spawn_exit_retried = false
-		_stale_recovery_budget = 0
 	elif not PortResolver.pid_alive(spawn_pid):
 		_spawn_dead_since_ms = first_death_stamp(_spawn_dead_since_ms, elapsed)
 		if is_spawn_handoff_pending(
@@ -1611,14 +1622,23 @@ func recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dicti
 ## every PID at kill time (#686), so a recycled or unrelated PID on the
 ## port is never killed. No pre-probed `live` parameter on purpose: a prior
 ## failed strong recovery may have partially changed the port's state, so
-## the proof helper re-probes.
+## the worker re-probes — and re-verifies STALENESS on that fresh snapshot
+## (#890 CodeRabbit): the caller's version gate ran on an earlier probe,
+## and a same-version server that took the port in the interval must abort
+## this recovery, not be killed by it.
 func recover_stale_port_occupant(port: int, wait_s: float) -> bool:
 	var async_gen := _async_generation
 	var record: Dictionary = _host._read_managed_server_record()
+	## Resolved on the main thread: the worker must not touch EditorSettings.
+	var expected_version := _expected_server_version()
 	var proof_result: Variant = await _run_blocking(func() -> Variant:
 		if not is_instance_valid(_host):
 			return {"proof": "", "pids": []}
-		return _host._evaluate_recovery_port_occupant_proof(port, {}, record)
+		var live: Dictionary = _host._probe_live_server_status_for_port(port)
+		var live_version := str(_host._verified_status_version(live))
+		if live_version.is_empty() or live_version == expected_version:
+			return {"proof": "", "pids": []}
+		return _host._evaluate_recovery_port_occupant_proof(port, live, record)
 	)
 	if _async_stale(async_gen) or proof_result == null:
 		return false
@@ -1632,6 +1652,14 @@ func recover_stale_port_occupant(port: int, wait_s: float) -> bool:
 	var freed_result: Variant = await _run_blocking(func() -> Variant:
 		if not is_instance_valid(_host):
 			return false
+		## Warm the current-version uv env in parallel with the kill + port
+		## drain below (#890 review P1): on the release that first ships this
+		## code the OLD updater ran the update, so no click-time pre-warm
+		## happened and the respawn would resolve cold — exactly the race
+		## this episode exists to win. Detached fire-and-forget via the host
+		## seam (stubbed in tests); worker-safe (CliFinder is mutex-guarded,
+		## no EditorSettings access).
+		_host._prewarm_server_package(expected_version)
 		var killed: Array = _host._kill_processes_and_windows_spawn_children(targets, true)
 		if not killed.is_empty():
 			print("MCP | killed pids %s on port %d" % [str(killed), port])
@@ -1901,9 +1929,17 @@ func recover_incompatible_server() -> bool:
 	## Move into STOPPING so the post-kill respawn passes the
 	## first-writer-wins guards.
 	transition_state(McpServerStateScript.STOPPING)
+	## Main-thread read for the worker below (EditorSettings-backed).
+	var recovery_expected_version := _expected_server_version()
 	var freed_result: Variant = await _run_blocking(func() -> Variant:
 		if not is_instance_valid(_host):
 			return false
+		## Warm the current-version uv env in parallel with the kill + drain
+		## so the respawn below wins the bind race even when no click-time
+		## pre-warm ran (#890 review P1 — the transition release's update runs
+		## the OLD updater). Same rationale and seam as
+		## recover_stale_port_occupant.
+		_host._prewarm_server_package(recovery_expected_version)
 		## verify_brand=true: the proof above ran in a separate
 		## _run_blocking task with main-thread frames in between — re-check
 		## each target at kill time so a PID recycled inside that gap isn't

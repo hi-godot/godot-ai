@@ -47,6 +47,10 @@ converge without user intervention:
    triggers only spend budget; only user actions (Update click, dock Restart
    click) arm it, so the kill/respawn loop cannot run unbounded. Same-version
    and foreign occupants are never touched by this path.
+   Because a click-time pre-warm cannot be guaranteed (see the transition
+   note below, and any pre-warm failure), both weak-kill recovery flows
+   also fire the pre-warm inside their kill worker, overlapping the uv
+   build with the kill + port drain.
 3. **Auto-repin** (`mcp_dock.gd::_maybe_auto_repin_after_update`): once the
    new server is healthy, the first completed client sweep rewrites client
    configs to the new version pin, armed one-shot by the drained update
@@ -61,6 +65,18 @@ converge without user intervention:
    fixture's ports. Markers from pre-gate runners lack `from_version` and
    arm nothing. Running client apps still need a restart to pick up the
    new argv, which the incompatible-occupant message continues to say.
+
+**Transition-release caveat**: the upgrade INTO the release that first
+ships these mechanisms is executed by the OLD installed updater and
+runner, which contain none of them. On that one upgrade there is no
+click-time pre-warm and no auto-repin (the old runner's marker carries no
+`from_version`, and the gate fails closed without it). The stale-occupant
+recovery still works — its arming peeks only `status == "success"`, which
+old runners do write — and the in-recovery pre-warm (new code, running in
+the kill worker) covers the bind race, so the update still converges
+without manual intervention; the bridges simply stay pinned to the old
+version until the user clicks Configure all. Every subsequent upgrade gets
+the full behavior.
 
 In dev checkouts the check is skipped: `is_dev_checkout()` detects a nearby `.venv` and short-circuits to avoid offering a path that would overwrite tracked source (the addons dir is a symlink into `plugin/`). Three override knobs let you exercise the update flow without leaving the repo (resolved in priority order):
 

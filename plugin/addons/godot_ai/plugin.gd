@@ -1428,6 +1428,14 @@ func _evaluate_recovery_port_occupant_proof(
 	return {"proof": "", "pids": []}
 
 
+## Seam over the static pre-warm so lifecycle recovery flows can fire it
+## through the host (`_host._prewarm_server_package(...)`) and test stubs
+## can record the call instead of spawning a real uvx process. Worker-safe:
+## the static touches only CliFinder (mutex-guarded) and OS.create_process.
+func _prewarm_server_package(version: String) -> int:
+	return ClientConfigurator.prewarm_server_package(version)
+
+
 func _recover_strong_port_occupant(port: int, wait_s: float, pre_kill_live: Dictionary = {}) -> bool:
 	## `await` because the manager method is a coroutine in production
 	## (#678); with `defer_blocking_work` off it completes synchronously

@@ -485,6 +485,25 @@ static func entry_drift_is_version_pin_only(
 	var pinned_from := from_version.strip_edges()
 	if pinned_from.is_empty():
 		return false
+	## Never shell out from this gate — it runs on the MAIN thread from the
+	## dock's sweep-completion callback (#890 review P2). The cli-descriptor
+	## probe paths run a subprocess with a multi-second timeout (`claude mcp
+	## get` is 6s), which would freeze the editor; those clients fail closed
+	## to the drift banner's click flow, whose fan-out already runs on
+	## worker threads. Every path left after these guards is a bounded
+	## config-file read plus cached launch discovery (worst case one CLI
+	## lookup on a cold CliFinder cache — the same bounded one-shot the
+	## dock's `_reprobe_uv_if_negative` accepts on this thread).
+	var client := ClientRegistry.get_by_id(id)
+	if client == null:
+		return false
+	if client.config_type == "cli":
+		if client.command_shape == Client.CommandShape.NONE:
+			return false
+		if not client.has_json_fallback():
+			return false
+		if _scope_diverges_from_json_fallback(client):
+			return false
 	var context := launch_context if not launch_context.is_empty() else capture_launch_context()
 	var old_context := context.duplicate(true)
 	old_context["plugin_version"] = pinned_from
@@ -1501,17 +1520,33 @@ static func find_uvx() -> String:
 ## spawned PID, or -1 when skipped (no uvx on this machine — the dev-venv
 ## and system tiers have no per-version cache to warm — or no version).
 static func prewarm_server_package(version: String) -> int:
-	var pinned := version.strip_edges()
-	if pinned.is_empty():
+	var args := prewarm_server_package_argv(version)
+	if args.is_empty():
 		return -1
 	var uvx := find_uvx()
 	if uvx.is_empty():
 		return -1
-	var args: Array[String] = ["--from", "godot-ai==%s" % pinned, "godot-ai", "--version"]
 	var pid := OS.create_process(uvx, args)
 	if pid > 0:
-		print("MCP | pre-warming godot-ai==%s server package for the post-update restart" % pinned)
+		print("MCP | pre-warming godot-ai==%s server package for the post-update restart" % version.strip_edges())
 	return pid
+
+
+## Pure argv builder for the pre-warm spawn, split out so tests can pin the
+## exact command without spawning a process. Empty array when there is no
+## version to pin, or when the version carries characters outside the PEP
+## 440 alphabet — the value can originate from a GitHub release tag, and
+## while OS.create_process argv can't be shell-injected, constraining the
+## pin keeps a hostile tag from smuggling anything into the requirement
+## spec uv parses (#890 review).
+static func prewarm_server_package_argv(version: String) -> Array[String]:
+	var pinned := version.strip_edges()
+	if pinned.is_empty():
+		return []
+	var re := RegEx.new()
+	if re.compile("^[A-Za-z0-9.+!*-]+$") != OK or re.search(pinned) == null:
+		return []
+	return ["--from", "godot-ai==%s" % pinned, "godot-ai", "--version"]
 
 
 static func _uvx_cli_names() -> Array[String]:
