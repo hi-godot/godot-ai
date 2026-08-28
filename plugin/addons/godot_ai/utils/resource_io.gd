@@ -120,10 +120,18 @@ static func save_to_disk(
 		)
 	var uid_err := ensure_uid(resource_path, prior_uid)
 	if uid_err != OK:
-		return ErrorCodes.make(
+		# The bytes already landed; only the uid bookkeeping failed. Say so in
+		# the payload: this is the one error branch after which the file on disk
+		# carries the caller's new values, so a caller that rolls its in-memory
+		# copy back on failure (resource_handler.set_resource_property) would
+		# leave the editor's cached instance BEHIND the file. Absence of this
+		# key means nothing reached the file.
+		var uid_failure := ErrorCodes.make(
 			ErrorCodes.INTERNAL_ERROR,
 			"%s saved to %s but failed to write its uid: %s" % [label, resource_path, error_string(uid_err)]
 		)
+		uid_failure["error"]["data"] = {"persisted": true}
+		return uid_failure
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs != null:

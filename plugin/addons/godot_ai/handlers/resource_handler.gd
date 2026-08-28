@@ -486,7 +486,10 @@ func set_resource_property(params: Dictionary) -> Dictionary:
 	if not (properties_raw is Dictionary):
 		return ErrorCodes.make(
 			ErrorCodes.WRONG_TYPE,
-			"properties must be a dictionary of {name: value}, got %s" % type_string(typeof(properties_raw))
+			"properties must be a dictionary of {name: value}, got %s: %s" % [
+				type_string(typeof(properties_raw)),
+				_abbreviate_value(properties_raw),
+			]
 		)
 	var properties: Dictionary = properties_raw
 	if properties.is_empty():
@@ -542,7 +545,8 @@ func set_resource_property(params: Dictionary) -> Dictionary:
 		"reason": "File save is persistent; edit the .tres file manually to revert",
 	}, _connection)
 	if result.has("error"):
-		_restore_properties(res, prior_values)
+		if _should_restore_after_save_error(result):
+			_restore_properties(res, prior_values)
 		return result
 
 	# #737: a resave must not drop the file's uid — any uid:// reference
@@ -575,6 +579,34 @@ static func _snapshot_properties(res: Resource, keys: Array) -> Dictionary:
 static func _restore_properties(res: Resource, snapshot: Dictionary) -> void:
 	for key in snapshot:
 		res.set(key, snapshot[key])
+
+
+## Whether a `McpResourceIO.save_to_disk` error means nothing reached the file,
+## so the cached instance must be rolled back.
+##
+## False for the one branch where the save succeeded and only the uid write
+## failed (`data.persisted`): the file already carries the new values there, so
+## rolling the cached instance back would leave the editor BEHIND the file, and
+## the editor's stale copy would be re-serialized over the good file later. That
+## is this op's own failure mode, mirrored. Keep the applied values instead and
+## let the caller act on the uid error.
+static func _should_restore_after_save_error(result: Dictionary) -> bool:
+	var err: Variant = result.get("error", {})
+	if not (err is Dictionary):
+		return true
+	var data: Variant = (err as Dictionary).get("data", {})
+	if not (data is Dictionary):
+		return true
+	return not bool((data as Dictionary).get("persisted", false))
+
+
+## A caller-supplied value rendered for an error message, capped so a huge
+## payload can't bloat the response the agent reads back.
+static func _abbreviate_value(value: Variant, limit: int = 120) -> String:
+	var text := str(value)
+	if text.length() <= limit:
+		return text
+	return text.substr(0, limit) + "... (truncated)"
 
 
 ## Introspect a Resource class — return its editor-visible properties, parent,

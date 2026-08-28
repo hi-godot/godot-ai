@@ -354,6 +354,9 @@ func test_set_resource_property_non_dict_properties() -> void:
 	})
 	assert_is_error(result, ErrorCodes.WRONG_TYPE)
 	assert_contains(result.error.message, "properties")
+	# The rejected value itself, not just its type: the caller needs to see what
+	# the plugin actually received to correct the call.
+	assert_contains(result.error.message, "size")
 
 
 func test_set_resource_property_rejects_path_outside_project() -> void:
@@ -394,6 +397,7 @@ func test_set_resource_property_round_trip_updates_file_and_cache() -> void:
 		"properties": {"size": {"x": 1, "y": 1, "z": 1}},
 	})
 	assert_has_key(created, "data")
+	assert_eq(created.data.resource_class, "BoxShape3D", "setup fixture must be the resource these assertions assume")
 	var original_uid := ResourceLoader.get_resource_uid(out_path)
 	# Warm the editor's ResourceCache the way an open scene would, so the test
 	# exercises the cached-instance path rather than a fresh load.
@@ -431,6 +435,7 @@ func test_set_resource_property_bad_name_rolls_back_earlier_keys() -> void:
 		"properties": {"size": {"x": 1, "y": 1, "z": 1}},
 	})
 	assert_has_key(created, "data")
+	assert_eq(created.data.resource_class, "BoxShape3D", "setup fixture must be the resource these assertions assume")
 	var cached: Resource = ResourceLoader.load(out_path)
 
 	# `size` applies, then `not_a_real_field` is rejected. Nothing is saved, so
@@ -461,6 +466,9 @@ func test_set_resource_property_custom_class_name_resource() -> void:
 		"properties": {"label": "before"},
 	})
 	assert_has_key(created, "data")
+	# `type` is the requested class; `resource_class` is res.get_class(), which
+	# for a scripted Resource is the native base, not the script's class_name.
+	assert_eq(created.data.type, "MyTestResource", "setup fixture must be the resource these assertions assume")
 	var cached: Resource = ResourceLoader.load(out_path)
 
 	var result := _handler.set_resource_property({
@@ -473,6 +481,50 @@ func test_set_resource_property_custom_class_name_resource() -> void:
 	assert_eq(on_disk.label, "after")
 	assert_eq(cached.label, "after", "the cached instance must match the file")
 	_rm_tmp(out_path)
+
+
+func test_set_resource_property_rolls_back_when_nothing_reached_the_file() -> void:
+	# A real save_to_disk refusal (overwrite gating, checked before any write)
+	# carries no persisted marker, so the cached instance must be rolled back.
+	var out_path := "res://test_tmp_setprop_prewrite.tres"
+	_rm_tmp(out_path)
+	var created := _handler.create_resource({
+		"type": "BoxShape3D",
+		"resource_path": out_path,
+	})
+	assert_has_key(created, "data")
+	assert_eq(created.data.resource_class, "BoxShape3D", "setup fixture must be the resource these assertions assume")
+	var refused := McpResourceIO.save_to_disk(BoxShape3D.new(), out_path, false, "Resource")
+	assert_is_error(refused)
+	assert_false(refused.error.get("data", {}).has("persisted"),
+		"an error raised before the write must not claim the file was persisted")
+	assert_true(ResourceHandler._should_restore_after_save_error(refused),
+		"nothing reached the file, so the cached instance must be rolled back")
+	_rm_tmp(out_path)
+
+
+func test_set_resource_property_keeps_values_when_only_the_uid_write_failed() -> void:
+	# save_to_disk's uid branch runs AFTER ResourceSaver.save succeeded, so the
+	# file already carries the new values. Rolling back there would leave the
+	# editor's cached copy behind the file, and the editor would later
+	# re-serialize that stale copy over the good file: this op's own failure
+	# mode, mirrored. A real set_uid failure isn't reachable from a test, so
+	# this pins the decision on the marker; the sibling test above pins that
+	# pre-write errors don't carry it.
+	var persisted_err := ErrorCodes.make(
+		ErrorCodes.INTERNAL_ERROR,
+		"Resource saved to res://x.tres but failed to write its uid: Permission denied"
+	)
+	persisted_err["error"]["data"] = {"persisted": true}
+	assert_false(ResourceHandler._should_restore_after_save_error(persisted_err),
+		"the file carries the new values, so the cached instance must keep them")
+
+
+func test_set_resource_property_restore_defaults_to_rolling_back() -> void:
+	# An error with no data at all (any future save_to_disk branch) must take
+	# the safe path: assume the file is unchanged and restore.
+	var bare := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "something else failed")
+	assert_true(ResourceHandler._should_restore_after_save_error(bare))
 
 
 # ----- get_resource_info -----
