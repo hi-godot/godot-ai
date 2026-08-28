@@ -37,6 +37,15 @@ Ops:
         Instantiate a Resource subclass. Either path+property (assign to a
         node, undoable) or resource_path (save to .tres). For specific
         families (Curve, Environment, etc.) prefer the dedicated ops.
+  • set_property(resource_path, properties)
+        Change fields on a .tres / .res that already exists, in place.
+        properties is {name: value} — one call, one save. Use this
+        instead of rewriting the file as text: while Godot is running it
+        holds the resource in ResourceCache, nothing reachable from MCP
+        evicts that cache (godot#73602, godot#75865), and the editor
+        re-serializes its stale copy over an external edit as soon as
+        anything marks the resource dirty. Errors if the file does not
+        exist (that is create's job). Not undoable — it writes the file.
   • curve_set_points(points, path="", property="", resource_path="")
         Replace all points on a Curve / Curve2D / Curve3D. Auto-creates
         the curve resource if the slot is empty (curve_created flag).
@@ -79,6 +88,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
             "assign": resource_handlers.resource_assign,
             "get_info": resource_handlers.resource_get_info,
             "create": resource_handlers.resource_create,
+            "set_property": resource_handlers.resource_set_property,
             "curve_set_points": curve_handlers.curve_set_points,
             "environment_create": environment_handlers.environment_create,
             "physics_shape_autofit": physics_shape_handlers.physics_shape_autofit,

@@ -2161,6 +2161,55 @@ class TestResourceCreateTool:
 
 
 # ---------------------------------------------------------------------------
+# resource_set_property
+# ---------------------------------------------------------------------------
+
+
+class TestResourceSetPropertyTool:
+    async def test_set_property_on_existing_resource(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_resource_property"
+            assert cmd["params"] == {
+                "resource_path": "res://settings/ocean.tres",
+                "properties": {"wave_height": 2.5, "wind_speed": 12.0},
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "resource_path": "res://settings/ocean.tres",
+                    "resource_class": "Resource",
+                    "properties_applied": 2,
+                    "overwritten": True,
+                    "uid_preserved": True,
+                    "undoable": False,
+                    "reason": (
+                        "File save is persistent; edit the .tres file manually to revert"
+                    ),
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "resource_manage",
+            {
+                "op": "set_property",
+                "params": {
+                    "resource_path": "res://settings/ocean.tres",
+                    "properties": {"wave_height": 2.5, "wind_speed": 12.0},
+                },
+            },
+        )
+        await task
+
+        assert result.data["properties_applied"] == 2
+        assert result.data["uid_preserved"] is True
+        assert result.data["undoable"] is False
+
+
+# ---------------------------------------------------------------------------
 # resource_get_info
 # ---------------------------------------------------------------------------
 

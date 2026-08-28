@@ -320,6 +320,161 @@ func test_create_resource_unknown_property_in_properties_dict() -> void:
 	_remove_node(mi)
 
 
+# ----- set_resource_property -----
+
+func _rm_tmp(path: String) -> void:
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+## Read `path` straight off disk, bypassing the editor's ResourceCache. The whole
+## point of set_property is that the cached instance and the file agree, so every
+## round-trip assertion has to check the file itself — a plain load() would hand
+## back the very instance the handler just mutated and pass either way.
+func _load_from_disk(path: String) -> Resource:
+	return ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+
+
+func test_set_resource_property_missing_resource_path() -> void:
+	var result := _handler.set_resource_property({"properties": {"size": 1}})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_contains(result.error.message, "resource_path")
+
+
+func test_set_resource_property_empty_properties() -> void:
+	var result := _handler.set_resource_property({"resource_path": "res://test_tmp_setprop.tres"})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_contains(result.error.message, "properties")
+
+
+func test_set_resource_property_non_dict_properties() -> void:
+	var result := _handler.set_resource_property({
+		"resource_path": "res://test_tmp_setprop.tres",
+		"properties": ["size"],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "properties")
+
+
+func test_set_resource_property_rejects_path_outside_project() -> void:
+	var result := _handler.set_resource_property({
+		"resource_path": "/tmp/bad.tres",
+		"properties": {"size": 1},
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+func test_set_resource_property_rejects_scene_file() -> void:
+	# A .tscn loads as a PackedScene; resaving one from here would rewrite the
+	# scene's bundled state behind the caller's back. Steer to the scene verbs.
+	var result := _handler.set_resource_property({
+		"resource_path": "res://main.tscn",
+		"properties": {"resource_name": "nope"},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "node_set_property")
+
+
+func test_set_resource_property_missing_file_points_at_create() -> void:
+	var result := _handler.set_resource_property({
+		"resource_path": "res://test_tmp_never_created.tres",
+		"properties": {"size": 1},
+	})
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
+	# A typo in the path must not silently mint a resource — name the verb that does.
+	assert_contains(result.error.message, "resource_manage(op=\"create\"")
+
+
+func test_set_resource_property_round_trip_updates_file_and_cache() -> void:
+	var out_path := "res://test_tmp_setprop_roundtrip.tres"
+	_rm_tmp(out_path)
+	var created := _handler.create_resource({
+		"type": "BoxShape3D",
+		"resource_path": out_path,
+		"properties": {"size": {"x": 1, "y": 1, "z": 1}},
+	})
+	assert_has_key(created, "data")
+	var original_uid := ResourceLoader.get_resource_uid(out_path)
+	# Warm the editor's ResourceCache the way an open scene would, so the test
+	# exercises the cached-instance path rather than a fresh load.
+	var cached: Resource = ResourceLoader.load(out_path)
+
+	var result := _handler.set_resource_property({
+		"resource_path": out_path,
+		"properties": {"size": {"x": 4, "y": 5, "z": 6}},
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.resource_class, "BoxShape3D")
+	assert_eq(result.data.properties_applied, 1)
+	assert_false(result.data.undoable, "a file write is not scene-undoable")
+	assert_true(result.data.overwritten, "set_property always rewrites an existing file")
+
+	var on_disk := _load_from_disk(out_path)
+	assert_true(on_disk is BoxShape3D)
+	assert_true(on_disk.size is Vector3, "size must land as a typed Vector3, not a Dictionary")
+	assert_eq(on_disk.size, Vector3(4, 5, 6), "the file on disk must carry the new value")
+	# The claim that makes this op safe: the instance the editor is holding
+	# matches the file, so nothing can re-serialize a stale copy over it.
+	assert_eq(cached.size, Vector3(4, 5, 6), "the cached instance must match the file")
+	# #737: any uid:// reference elsewhere in the project must keep resolving.
+	assert_true(result.data.uid_preserved, "resave must not drop the file's uid")
+	assert_eq(ResourceLoader.get_resource_uid(out_path), original_uid)
+	_rm_tmp(out_path)
+
+
+func test_set_resource_property_bad_name_rolls_back_earlier_keys() -> void:
+	var out_path := "res://test_tmp_setprop_rollback.tres"
+	_rm_tmp(out_path)
+	var created := _handler.create_resource({
+		"type": "BoxShape3D",
+		"resource_path": out_path,
+		"properties": {"size": {"x": 1, "y": 1, "z": 1}},
+	})
+	assert_has_key(created, "data")
+	var cached: Resource = ResourceLoader.load(out_path)
+
+	# `size` applies, then `not_a_real_field` is rejected. Nothing is saved, so
+	# the already-applied key must be rolled back — otherwise the cached instance
+	# ends up ahead of the file, which is the divergence this op exists to avoid.
+	var result := _handler.set_resource_property({
+		"resource_path": out_path,
+		"properties": {"size": {"x": 9, "y": 9, "z": 9}, "not_a_real_field": 42},
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_has_key(result.error, "data")
+	assert_has_key(result.error.data, "valid_properties")
+	assert_contains(result.error.data.valid_properties, "size")
+	assert_eq(cached.size, Vector3(1, 1, 1), "rejected call must leave the cached instance untouched")
+	assert_eq(_load_from_disk(out_path).size, Vector3(1, 1, 1), "rejected call must not write the file")
+	_rm_tmp(out_path)
+
+
+func test_set_resource_property_custom_class_name_resource() -> void:
+	# #580's failure class: custom `class_name` Resources are where the
+	# create/save path historically broke, and the .tres that motivated this op
+	# was one. Exercise the same shape here.
+	var out_path := "res://tests/_mcp_test_setprop_custom.tres"
+	_rm_tmp(out_path)
+	var created := _handler.create_resource({
+		"type": "MyTestResource",
+		"resource_path": out_path,
+		"properties": {"label": "before"},
+	})
+	assert_has_key(created, "data")
+	var cached: Resource = ResourceLoader.load(out_path)
+
+	var result := _handler.set_resource_property({
+		"resource_path": out_path,
+		"properties": {"label": "after"},
+	})
+	assert_has_key(result, "data")
+	var on_disk := _load_from_disk(out_path)
+	assert_true(on_disk is MyTestResource, "resaved file must still load as MyTestResource")
+	assert_eq(on_disk.label, "after")
+	assert_eq(cached.label, "after", "the cached instance must match the file")
+	_rm_tmp(out_path)
+
+
 # ----- get_resource_info -----
 
 func test_get_resource_info_missing_type() -> void:

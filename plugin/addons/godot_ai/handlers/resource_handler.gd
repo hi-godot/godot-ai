@@ -460,6 +460,123 @@ func _save_created_resource(res: Resource, type_str: String, resource_path: Stri
 	}, _connection)
 
 
+## Mutate properties on a resource that already exists on disk, in place.
+##
+## Deliberately loads through the CACHED instance (plain `ResourceLoader.load`,
+## default cache mode) rather than duplicating it: while the editor is running
+## it holds the resource in ResourceCache, and nothing reachable from the MCP
+## evicts that cache (`filesystem_manage(op="scan")`, `scene_open(force_reload)`
+## and a fresh `load_resource` all keep returning the stale copy — engine
+## behaviour, godotengine/godot#73602 and #75865). So editing a .tres as text
+## from outside Godot is unsafe: the editor re-serializes its stale copy over
+## the file the next time anything marks the resource dirty. Mutating the
+## instance the editor is already holding and saving THAT leaves no second copy
+## to diverge — the same property that makes set_property + save_scene safe for
+## scenes.
+##
+## Not undoable (a file write, like create_resource's save branch). Both failure
+## paths restore the prior values so a rejected property or a failed save can't
+## leave the cached instance ahead of the file.
+func set_resource_property(params: Dictionary) -> Dictionary:
+	var resource_path: String = params.get("resource_path", "")
+	if resource_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: resource_path")
+
+	var properties_raw: Variant = params.get("properties", {})
+	if not (properties_raw is Dictionary):
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"properties must be a dictionary of {name: value}, got %s" % type_string(typeof(properties_raw))
+		)
+	var properties: Dictionary = properties_raw
+	if properties.is_empty():
+		return ErrorCodes.make(
+			ErrorCodes.MISSING_REQUIRED_PARAM,
+			"Missing required param: properties (non-empty dictionary of {name: value})"
+		)
+
+	# for_write: this path resaves the file, so it must refuse the same targets
+	# every other write refuses (project.godot, .godot/, the loaded plugin tree)
+	# and reject uid:// / user:// up front rather than at ResourceSaver time.
+	var rpath_err = McpPathValidator.path_error(resource_path, "resource_path", true)
+	if rpath_err != null:
+		return rpath_err
+
+	var ext := resource_path.get_extension().to_lower()
+	if ext == "tscn" or ext == "scn":
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"%s is a scene, not a resource file — use node_set_property then scene_save to edit a scene" % resource_path
+		)
+
+	if not ResourceLoader.exists(resource_path):
+		return ErrorCodes.make(
+			ErrorCodes.RESOURCE_NOT_FOUND,
+			(
+				"Resource not found: %s — set_property edits an existing file. "
+				+ "To make a new one call resource_manage(op=\"create\", params={\"type\": \"...\", \"resource_path\": \"%s\"})."
+			) % [resource_path, resource_path]
+		)
+
+	var res: Resource = ResourceLoader.load(resource_path)
+	if res == null:
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Failed to load resource from %s (file exists but load returned null — may be corrupt)" % resource_path
+		)
+
+	# Snapshot before mutating: _apply_resource_properties applies key-by-key and
+	# returns on the first rejection, so a bad name in position 2 would otherwise
+	# leave key 1 written to the cached instance but never saved.
+	var prior_values := _snapshot_properties(res, properties.keys())
+	var prior_uid := ResourceLoader.get_resource_uid(resource_path)
+
+	var apply_err: Variant = _apply_resource_properties(res, properties)
+	if apply_err != null:
+		_restore_properties(res, prior_values)
+		return apply_err
+
+	var result := McpResourceIO.save_to_disk(res, resource_path, true, "Resource", {
+		"resource_class": res.get_class(),
+		"properties_applied": properties.size(),
+		"reason": "File save is persistent; edit the .tres file manually to revert",
+	}, _connection)
+	if result.has("error"):
+		_restore_properties(res, prior_values)
+		return result
+
+	# #737: a resave must not drop the file's uid — any uid:// reference
+	# elsewhere in the project resolves through it. A file that had no uid to
+	# begin with (INVALID_ID) counts as preserved: save_to_disk minted one and
+	# nothing was lost.
+	var new_uid := ResourceLoader.get_resource_uid(resource_path)
+	result.data["uid_preserved"] = prior_uid == ResourceUID.INVALID_ID or new_uid == prior_uid
+
+	# Nudge any inspector currently showing this resource to redraw. The file and
+	# the cached instance already agree at this point; this only refreshes the UI.
+	res.emit_changed()
+	return result
+
+
+## Current values of `keys` that actually exist on `res`, for rollback. Names
+## the resource doesn't have are skipped — _apply_resource_properties rejects
+## them, and `set()`ing them back would be a no-op at best.
+static func _snapshot_properties(res: Resource, keys: Array) -> Dictionary:
+	var known := {}
+	for prop in res.get_property_list():
+		known[prop.name] = true
+	var snapshot := {}
+	for key in keys:
+		if known.has(key):
+			snapshot[key] = res.get(key)
+	return snapshot
+
+
+static func _restore_properties(res: Resource, snapshot: Dictionary) -> void:
+	for key in snapshot:
+		res.set(key, snapshot[key])
+
+
 ## Introspect a Resource class — return its editor-visible properties, parent,
 ## whether it's abstract, and (for abstract bases) the list of concrete
 ## subclasses that resource_create can instantiate. Read-only.
