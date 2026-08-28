@@ -709,6 +709,7 @@ func test_generate_rotated_scaled_mesh_uses_body_local_bounds() -> void:
 	mesh.position = Vector3(4, 2, -1)
 	var result := _handler.generate({"paths": [McpScenePath.from_node(mesh, scene_root)]})
 	assert_has_key(result, "data")
+	assert_eq(result.data.created.size(), 1)
 	var nodes := _generated_nodes(result, scene_root)
 	assert_eq(nodes.body.transform.origin, mesh.transform.origin)
 	assert_true(nodes.body.transform.basis.get_scale().is_equal_approx(Vector3.ONE),
@@ -747,6 +748,7 @@ func test_generate_top_level_mesh_preserves_global_alignment() -> void:
 
 	var result := _handler.generate({"paths": [McpScenePath.from_node(mesh, scene_root)]})
 	assert_has_key(result, "data")
+	assert_eq(result.data.created.size(), 1)
 	var nodes := _generated_nodes(result, scene_root)
 	assert_true(nodes.body.top_level, "generated body must preserve top_level")
 	assert_true(nodes.body.global_position.is_equal_approx(expected_global_transform.origin),
@@ -767,6 +769,7 @@ func test_generate_negative_scale_produces_positive_bounds() -> void:
 	var mesh := _add_generate_mesh("GenerateNegativeScale", Vector3.ONE, Vector3(-2, 3, 4))
 	var result := _handler.generate({"paths": [McpScenePath.from_node(mesh, scene_root)]})
 	assert_has_key(result, "data")
+	assert_eq(result.data.created.size(), 1)
 	var nodes := _generated_nodes(result, scene_root)
 	assert_true(nodes.collision.shape.size.is_equal_approx(Vector3(2, 3, 4)))
 	_remove_node(nodes.body)
@@ -794,6 +797,7 @@ func test_generate_centers_offset_mesh_geometry() -> void:
 	mesh.set_owner(scene_root)
 	var result := _handler.generate({"paths": [McpScenePath.from_node(mesh, scene_root)]})
 	assert_has_key(result, "data")
+	assert_eq(result.data.created.size(), 1)
 	var nodes := _generated_nodes(result, scene_root)
 	assert_true(nodes.collision.position.is_equal_approx(Vector3(2, 3.5, 5)))
 	assert_true(nodes.collision.shape.size.is_equal_approx(Vector3(2, 3, 4)))
