@@ -148,21 +148,27 @@ func reparent_node(params: Dictionary) -> Dictionary:
 
 	var old_parent := node.get_parent()
 	var old_idx := node.get_index()
+	## Snapshot descendants before commit: remove_child clears owner on any
+	## child whose owner sits outside the pruned subtree, so both do and undo
+	## must restore those owners as part of the recorded action (#904).
+	var descendants := _collect_descendants(node)
 
 	_undo_redo.create_action("MCP: Reparent %s" % node.name)
 	_undo_redo.add_do_method(old_parent, "remove_child", node)
 	_undo_redo.add_do_method(new_parent, "add_child", node, true)
 	_undo_redo.add_do_method(node, "set_owner", scene_root)
+	for child in descendants:
+		_undo_redo.add_do_method(child, "set_owner", scene_root)
 	_undo_redo.add_do_reference(node)
 	_undo_redo.add_undo_method(new_parent, "remove_child", node)
 	_undo_redo.add_undo_method(old_parent, "add_child", node, true)
 	_undo_redo.add_undo_method(old_parent, "move_child", node, old_idx)
 	_undo_redo.add_undo_method(node, "set_owner", scene_root)
+	for child in descendants:
+		var prior_owner: Node = child.owner if child.owner != null else scene_root
+		_undo_redo.add_undo_method(child, "set_owner", prior_owner)
 	_undo_redo.add_undo_reference(node)
 	_undo_redo.commit_action()
-
-	# Re-set owner for all descendants (reparent can break ownership chain)
-	_set_owner_recursive(node, scene_root)
 
 	return {
 		"data": {
@@ -381,15 +387,19 @@ func duplicate_node(params: Dictionary) -> Dictionary:
 	if not new_name.is_empty():
 		dup.name = new_name
 
+	## Record descendant owners inside the action so redo restores them.
+	## Undo is just remove_child of the copy; descendants live on `dup`
+	## via add_do_reference and do not need their own undo set_owner (#904).
+	var descendants := _collect_descendants(dup)
+
 	_undo_redo.create_action("MCP: Duplicate %s" % node.name)
 	_undo_redo.add_do_method(parent, "add_child", dup, true)
 	_undo_redo.add_do_method(dup, "set_owner", scene_root)
+	for child in descendants:
+		_undo_redo.add_do_method(child, "set_owner", scene_root)
 	_undo_redo.add_do_reference(dup)
 	_undo_redo.add_undo_method(parent, "remove_child", dup)
 	_undo_redo.commit_action()
-
-	# Set owner for all descendants of the duplicate
-	_set_owner_recursive(dup, scene_root)
 
 	return {
 		"data": {
@@ -536,10 +546,15 @@ func set_selection(params: Dictionary) -> Dictionary:
 	}
 
 
-func _set_owner_recursive(node: Node, owner: Node) -> void:
+## All descendants of `node` (not including `node` itself), depth-first.
+## Used to record per-child set_owner inside an undo action without
+## targeting the handler as an UndoRedo receiver (#904).
+static func _collect_descendants(node: Node) -> Array[Node]:
+	var out: Array[Node] = []
 	for child in node.get_children():
-		child.set_owner(owner)
-		_set_owner_recursive(child, owner)
+		out.append(child)
+		out.append_array(_collect_descendants(child))
+	return out
 
 
 ## Canonical dict-key sets for dict→Variant coercion. Alpha on `COLOR_KEYS`
