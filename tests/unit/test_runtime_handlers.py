@@ -3549,6 +3549,7 @@ async def test_physics_shape_generate_handler():
         "shape_type": "sphere",
         "body_type": "area",
     }
+    assert client.calls[-1]["timeout"] == physics_shape_handlers.PHYSICS_SHAPE_GENERATE_TIMEOUT_SEC
 
 
 async def test_physics_shape_generate_defaults():

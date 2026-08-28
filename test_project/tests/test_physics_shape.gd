@@ -830,6 +830,39 @@ func test_generate_bulk_is_one_undo_redo_action() -> void:
 	_remove_node(second)
 
 
+func test_generate_already_applied_batch_is_one_undo_redo_action() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var first := _add_generate_mesh("GenerateDeferredUndoA", Vector3.ONE)
+	var second := _add_generate_mesh("GenerateDeferredUndoB", Vector3.ONE)
+	var entries: Array[Dictionary] = []
+	for mesh in [first, second]:
+		var path := McpScenePath.from_node(mesh, scene_root)
+		var planned := PhysicsShapeHandler._plan_generate_mesh(path, "")
+		assert_has_key(planned, "plan")
+		var entry := PhysicsShapeHandler._create_generated_entry(planned.plan, "box", "static")
+		entry.parent.add_child(entry.body, true)
+		entry.body.set_owner(scene_root)
+		entry.collision.set_owner(scene_root)
+		entries.append(entry)
+
+	PhysicsShapeHandler._commit_generated_action(entries, scene_root, _undo_redo, false)
+	assert_eq(entries[0].body.get_parent(), scene_root)
+	assert_eq(entries[1].body.get_parent(), scene_root)
+	assert_true(editor_undo(_undo_redo), "already-applied bulk undo should succeed")
+	assert_true(entries[0].body.get_parent() == null)
+	assert_true(entries[1].body.get_parent() == null)
+	assert_true(editor_redo(_undo_redo), "already-applied bulk redo should succeed")
+	assert_eq(entries[0].body.get_parent(), scene_root)
+	assert_eq(entries[1].body.get_parent(), scene_root)
+	_remove_node(entries[0].body)
+	_remove_node(entries[1].body)
+	_remove_node(first)
+	_remove_node(second)
+
+
 func test_generate_prevalidates_entire_batch() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -879,3 +912,23 @@ func test_generate_rejects_empty_non_array_and_non_mesh_paths() -> void:
 	var wrong_type := _handler.generate({"paths": [McpScenePath.from_node(plain, scene_root)]})
 	assert_is_error(wrong_type, ErrorCodes.WRONG_TYPE)
 	_remove_node(plain)
+
+
+func test_generate_bounds_direct_and_total_batch_sizes() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var direct_paths: Array[String] = []
+	for index in range(PhysicsShapeHandler._GENERATE_DIRECT_MAX_PATHS + 1):
+		direct_paths.append("/Main/DirectGenerate%d" % index)
+	var direct_result := _handler.generate({"paths": direct_paths})
+	assert_is_error(direct_result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(direct_result.error.message, "batch_execute")
+
+	var oversized_paths: Array[String] = []
+	for index in range(PhysicsShapeHandler._GENERATE_MAX_PATHS + 1):
+		oversized_paths.append("/Main/OversizedGenerate%d" % index)
+	var oversized_result := _handler.generate({"paths": oversized_paths})
+	assert_is_error(oversized_result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(oversized_result.error.message, "at most")

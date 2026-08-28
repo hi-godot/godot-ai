@@ -59,7 +59,8 @@ Ops:
         Generate a StaticBody3D or Area3D sibling with a CollisionShape3D
         for every MeshInstance3D path. Shapes are fitted in body-local space.
         shape_type: box | sphere | capsule | cylinder.
-        body_type: static | area. The bulk write is one undo action.
+        body_type: static | area. Up to 1024 paths are processed in bounded
+        work across editor frames. The bulk write is one undo action.
         Returns: {created: [{mesh_path, body_path, shape_path, shape_type,
                   body_type}], undoable: true}.
   • gradient_texture_create(stops, width=256, height=1, fill="linear",

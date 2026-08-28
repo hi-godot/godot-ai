@@ -11,10 +11,12 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 ## Shape type defaults: Box for 3D, Rectangle for 2D.
 
 var _undo_redo: EditorUndoRedoManager
+var _connection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 const _SHAPE_3D_CLASSES := {
@@ -34,12 +36,45 @@ const _GENERATED_BODY_CLASSES := {
 	"static": "StaticBody3D",
 	"area": "Area3D",
 }
+const _GENERATE_ITEMS_PER_FRAME := 16
+const _GENERATE_DIRECT_MAX_PATHS := 16
+const _GENERATE_MAX_PATHS := 1024
+const _GENERATE_DEFERRED_TIMEOUT_MS := 30000
 
 
 ## Generates sibling physics bodies and collision shapes for MeshInstance3D
 ## nodes. Every path and option is validated before the single bulk undo action
 ## begins, so an invalid entry cannot leave a partially generated batch.
 func generate(params: Dictionary) -> Dictionary:
+	var validated := _validate_generate_request(params)
+	if validated.has("error"):
+		return validated
+
+	var request_id: String = params.get("_request_id", "")
+	if _connection != null and not request_id.is_empty():
+		_finish_generate_deferred(validated, request_id, _undo_redo, _connection)
+		return {
+			"_deferred": true,
+			"_deferred_timeout_ms": _GENERATE_DEFERRED_TIMEOUT_MS,
+		}
+
+	## `dispatch_direct()` strips the request id, so batch_execute and unit-test
+	## callers cannot yield across frames. Keep that compatibility path bounded;
+	## larger requests must use the normal MCP command and its deferred reply.
+	var raw_paths: Array = validated.paths
+	if raw_paths.size() > _GENERATE_DIRECT_MAX_PATHS:
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			(
+				"physics_shape_generate supports at most %d paths inside batch_execute; "
+				+ "call resource_manage(op='physics_shape_generate') directly for larger batches"
+			) % _GENERATE_DIRECT_MAX_PATHS,
+		)
+	return _generate_synchronous(validated, _undo_redo)
+
+
+## Validate request-wide options and cap total work before any per-path scan.
+static func _validate_generate_request(params: Dictionary) -> Dictionary:
 	var scene_check := McpScenePath.require_edited_scene(params.get("scene_file", ""))
 	if scene_check.has("error"):
 		return scene_check
@@ -63,8 +98,27 @@ func generate(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "paths must be an array of MeshInstance3D scene paths")
 	if raw_paths.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: paths")
+	if raw_paths.size() > _GENERATE_MAX_PATHS:
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			"paths supports at most %d entries per request" % _GENERATE_MAX_PATHS,
+		)
+	return {
+		"data": true,
+		"scene_root": scene_root,
+		"scene_file": params.get("scene_file", ""),
+		"shape_type": shape_type,
+		"body_type": body_type,
+		"paths": raw_paths,
+	}
+
+
+## Execute the bounded fallback used by direct/batch dispatch and unit tests.
+static func _generate_synchronous(
+	validated: Dictionary, undo_redo: EditorUndoRedoManager
+) -> Dictionary:
 	var paths: Array[String] = []
-	for raw_path in raw_paths:
+	for raw_path in validated.paths:
 		if not raw_path is String:
 			return ErrorCodes.make(
 				ErrorCodes.INVALID_PARAMS,
@@ -76,64 +130,102 @@ func generate(params: Dictionary) -> Dictionary:
 	## siblings use parent space; top-level siblings use global space.
 	var plans: Array[Dictionary] = []
 	for mesh_path in paths:
-		var resolved := McpNodeValidator.resolve_or_error(
-			mesh_path, "paths", params.get("scene_file", "")
-		)
-		if resolved.has("error"):
-			return resolved
-		var node: Node = resolved.node
-		if not node is MeshInstance3D:
-			return ErrorCodes.make(
-				ErrorCodes.WRONG_TYPE,
-				"Node at %s is %s — must be MeshInstance3D" % [mesh_path, node.get_class()]
-			)
-		var mesh := node as MeshInstance3D
-		var parent := mesh.get_parent()
-		if parent == null:
-			return ErrorCodes.make(
-				ErrorCodes.INVALID_PARAMS,
-				"MeshInstance3D at %s has no parent — cannot create a sibling body" % mesh_path
-			)
-		var source_transform := mesh.global_transform if mesh.top_level else mesh.transform
-		var body_transform := Transform3D(
-			Basis(source_transform.basis.get_rotation_quaternion()),
-			source_transform.origin,
-		)
-		var mesh_to_body := body_transform.affine_inverse() * source_transform
-		plans.append({
-			"mesh": mesh,
-			"parent": parent,
-			"top_level": mesh.top_level,
-			"body_transform": body_transform,
-			"bounds": _transform_aabb(mesh.get_aabb(), mesh_to_body),
-		})
+		var planned := _plan_generate_mesh(mesh_path, validated.scene_file)
+		if planned.has("error"):
+			return planned
+		plans.append(planned.plan)
 
-	_undo_redo.create_action("MCP: Generate physics shapes for %d mesh(es)" % plans.size())
 	var created_nodes: Array[Dictionary] = []
 	for plan in plans:
-		var mesh: MeshInstance3D = plan.mesh
-		var body: CollisionObject3D = ClassDB.instantiate(_GENERATED_BODY_CLASSES[body_type])
-		body.name = mesh.name + "Collider"
-		body.top_level = plan.top_level
-		body.transform = plan.body_transform
+		created_nodes.append(_create_generated_entry(
+			plan, validated.shape_type, validated.body_type
+		))
+	_commit_generated_action(created_nodes, validated.scene_root, undo_redo, true)
+	return _generated_response(created_nodes, validated.scene_root, validated.shape_type, validated.body_type)
 
-		var collision := CollisionShape3D.new()
-		collision.name = "CollisionShape3D"
-		var bounds: AABB = plan.bounds
-		collision.position = bounds.get_center()
-		var shape: Shape3D = ClassDB.instantiate(_SHAPE_3D_CLASSES[shape_type])
-		_apply_shape_size(shape, shape_type, {"aabb": bounds}, true)
-		collision.shape = shape
-		body.add_child(collision)
 
-		var parent: Node = plan.parent
-		_undo_redo.add_do_method(parent, "add_child", body, true)
-		_undo_redo.add_do_method(body, "set_owner", scene_root)
-		_undo_redo.add_do_method(collision, "set_owner", scene_root)
-		_undo_redo.add_do_reference(body)
-		_undo_redo.add_undo_method(parent, "remove_child", body)
-		created_nodes.append({"mesh": mesh, "body": body, "collision": collision})
-	_undo_redo.commit_action()
+## Resolve one mesh and capture the coordinate-space data needed for creation.
+static func _plan_generate_mesh(mesh_path: String, scene_file: String) -> Dictionary:
+	var resolved := McpNodeValidator.resolve_or_error(mesh_path, "paths", scene_file)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	if not node is MeshInstance3D:
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Node at %s is %s — must be MeshInstance3D" % [mesh_path, node.get_class()]
+		)
+	var mesh := node as MeshInstance3D
+	var parent := mesh.get_parent()
+	if parent == null:
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			"MeshInstance3D at %s has no parent — cannot create a sibling body" % mesh_path
+		)
+	var source_transform := mesh.global_transform if mesh.top_level else mesh.transform
+	var body_transform := Transform3D(
+		Basis(source_transform.basis.get_rotation_quaternion()),
+		source_transform.origin,
+	)
+	var mesh_to_body := body_transform.affine_inverse() * source_transform
+	return {"plan": {
+		"mesh": mesh,
+		"parent": parent,
+		"top_level": mesh.top_level,
+		"body_transform": body_transform,
+		"bounds": _transform_aabb(mesh.get_aabb(), mesh_to_body),
+	}}
+
+
+## Build one detached body/collision pair from a prevalidated mesh plan.
+static func _create_generated_entry(
+	plan: Dictionary, shape_type: String, body_type: String
+) -> Dictionary:
+	var mesh: MeshInstance3D = plan.mesh
+	var body: CollisionObject3D = ClassDB.instantiate(_GENERATED_BODY_CLASSES[body_type])
+	body.name = mesh.name + "Collider"
+	body.top_level = plan.top_level
+	body.transform = plan.body_transform
+	var collision := CollisionShape3D.new()
+	collision.name = "CollisionShape3D"
+	var bounds: AABB = plan.bounds
+	collision.position = bounds.get_center()
+	var shape: Shape3D = ClassDB.instantiate(_SHAPE_3D_CLASSES[shape_type])
+	_apply_shape_size(shape, shape_type, {"aabb": bounds}, true)
+	collision.shape = shape
+	body.add_child(collision)
+	return {
+		"mesh": mesh,
+		"parent": plan.parent,
+		"body": body,
+		"collision": collision,
+	}
+
+
+## Record all generated nodes as one undo action, optionally executing it.
+static func _commit_generated_action(
+	created_nodes: Array[Dictionary],
+	scene_root: Node,
+	undo_redo: EditorUndoRedoManager,
+	execute: bool,
+) -> void:
+	undo_redo.create_action("MCP: Generate physics shapes for %d mesh(es)" % created_nodes.size())
+	for entry in created_nodes:
+		var parent: Node = entry.parent
+		var body: CollisionObject3D = entry.body
+		var collision: CollisionShape3D = entry.collision
+		undo_redo.add_do_method(parent, "add_child", body, true)
+		undo_redo.add_do_method(body, "set_owner", scene_root)
+		undo_redo.add_do_method(collision, "set_owner", scene_root)
+		undo_redo.add_do_reference(body)
+		undo_redo.add_undo_method(parent, "remove_child", body)
+	undo_redo.commit_action(execute)
+
+
+## Build the public response after every body is present in the edited scene.
+static func _generated_response(
+	created_nodes: Array[Dictionary], scene_root: Node, shape_type: String, body_type: String
+) -> Dictionary:
 
 	var created: Array[Dictionary] = []
 	for entry in created_nodes:
@@ -145,6 +237,177 @@ func generate(params: Dictionary) -> Dictionary:
 			"body_type": body_type,
 		})
 	return {"data": {"created": created, "undoable": true}}
+
+
+## Check that the connection and deferred dispatcher entry are both live.
+static func _deferred_request_pending(connection, request_id: String) -> bool:
+	if not is_instance_valid(connection):
+		return false
+	var dispatcher = connection.dispatcher
+	return dispatcher == null or dispatcher.has_pending_deferred_response(request_id)
+
+
+## Send a deferred payload only while its request can still accept a response.
+static func _send_deferred_if_pending(
+	connection, request_id: String, payload: Dictionary
+) -> void:
+	if _deferred_request_pending(connection, request_id):
+		connection.send_deferred_response(request_id, payload)
+
+
+## Free detached or partially-added nodes in bounded groups across frames.
+static func _rollback_generated_deferred(created_nodes: Array[Dictionary], tree: SceneTree) -> void:
+	var index := 0
+	while index < created_nodes.size():
+		var end := mini(index + _GENERATE_ITEMS_PER_FRAME, created_nodes.size())
+		for entry_index in range(index, end):
+			var body: Node = created_nodes[entry_index].body
+			if is_instance_valid(body):
+				body.call_deferred("queue_free")
+		index = end
+		await tree.process_frame
+
+
+## Validate, prepare, and apply a live request cooperatively across frames.
+static func _finish_generate_deferred(
+	validated: Dictionary,
+	request_id: String,
+	undo_redo: EditorUndoRedoManager,
+	connection,
+) -> void:
+	if not is_instance_valid(connection):
+		return
+	var tree: SceneTree = connection.get_tree()
+	if tree == null:
+		return
+	## The first yield lets the dispatcher register the deferred request before
+	## any validation error or successful result can be sent.
+	await tree.process_frame
+	if not _deferred_request_pending(connection, request_id):
+		return
+
+	var paths: Array[String] = []
+	var raw_paths: Array = validated.paths
+	var index := 0
+	while index < raw_paths.size():
+		var end := mini(index + _GENERATE_ITEMS_PER_FRAME, raw_paths.size())
+		for path_index in range(index, end):
+			var raw_path: Variant = raw_paths[path_index]
+			if not raw_path is String:
+				_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
+					ErrorCodes.INVALID_PARAMS,
+					"paths entries must be MeshInstance3D scene path strings",
+				))
+				return
+			paths.append(raw_path)
+		index = end
+		if index < raw_paths.size():
+			await tree.process_frame
+			if not _deferred_request_pending(connection, request_id):
+				return
+
+	var plans: Array[Dictionary] = []
+	index = 0
+	while index < paths.size():
+		if (
+			not is_instance_valid(validated.scene_root)
+			or EditorInterface.get_edited_scene_root() != validated.scene_root
+		):
+			_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
+				"The edited scene changed while physics shapes were generated",
+			))
+			return
+		var end := mini(index + _GENERATE_ITEMS_PER_FRAME, paths.size())
+		for path_index in range(index, end):
+			var planned := _plan_generate_mesh(paths[path_index], validated.scene_file)
+			if planned.has("error"):
+				_send_deferred_if_pending(connection, request_id, planned)
+				return
+			plans.append(planned.plan)
+		index = end
+		if index < paths.size():
+			await tree.process_frame
+			if not _deferred_request_pending(connection, request_id):
+				return
+
+	var created_nodes: Array[Dictionary] = []
+	index = 0
+	while index < plans.size():
+		var end := mini(index + _GENERATE_ITEMS_PER_FRAME, plans.size())
+		for plan_index in range(index, end):
+			created_nodes.append(_create_generated_entry(
+				plans[plan_index], validated.shape_type, validated.body_type
+			))
+		index = end
+		if index < plans.size():
+			await tree.process_frame
+			if not _deferred_request_pending(connection, request_id):
+				await _rollback_generated_deferred(created_nodes, tree)
+				return
+
+	## Apply only a bounded group of scene-tree mutations per frame. They are
+	## queued through call_deferred(), then observed on the next process frame.
+	var applied_nodes: Array[Dictionary] = []
+	index = 0
+	while index < created_nodes.size():
+		if (
+			not _deferred_request_pending(connection, request_id)
+			or not is_instance_valid(validated.scene_root)
+			or EditorInterface.get_edited_scene_root() != validated.scene_root
+		):
+			await _rollback_generated_deferred(created_nodes, tree)
+			_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
+				"The edited scene changed while physics shapes were generated",
+			))
+			return
+		var end := mini(index + _GENERATE_ITEMS_PER_FRAME, created_nodes.size())
+		for entry_index in range(index, end):
+			var entry: Dictionary = created_nodes[entry_index]
+			if not is_instance_valid(entry.mesh) or not is_instance_valid(entry.parent):
+				await _rollback_generated_deferred(created_nodes, tree)
+				_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
+					ErrorCodes.INVALID_PARAMS,
+					"A source mesh or its parent was removed while physics shapes were generated",
+				))
+				return
+			entry.parent.call_deferred("add_child", entry.body, true)
+			entry.body.call_deferred("set_owner", validated.scene_root)
+			entry.collision.call_deferred("set_owner", validated.scene_root)
+		await tree.process_frame
+		for entry_index in range(index, end):
+			var entry: Dictionary = created_nodes[entry_index]
+			if not is_instance_valid(entry.body) or entry.body.get_parent() != entry.parent:
+				await _rollback_generated_deferred(created_nodes, tree)
+				_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
+					ErrorCodes.INTERNAL_ERROR,
+					"Failed to add a generated physics body to the edited scene",
+				))
+				return
+			applied_nodes.append(entry)
+		index = end
+
+	if not _deferred_request_pending(connection, request_id):
+		await _rollback_generated_deferred(created_nodes, tree)
+		return
+	for entry in applied_nodes:
+		if not is_instance_valid(entry.parent) or not is_instance_valid(entry.body):
+			await _rollback_generated_deferred(created_nodes, tree)
+			_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
+				"The edited scene changed while physics shapes were generated",
+			))
+			return
+
+	## The nodes are already in the scene, so commit with execute=false. This
+	## records one atomic undo/redo action without replaying every mutation on
+	## the completion frame.
+	_commit_generated_action(applied_nodes, validated.scene_root, undo_redo, false)
+	var response := _generated_response(
+		applied_nodes, validated.scene_root, validated.shape_type, validated.body_type
+	)
+	_send_deferred_if_pending(connection, request_id, response)
 
 
 ## Transform all eight source corners and enclose them in target space. This

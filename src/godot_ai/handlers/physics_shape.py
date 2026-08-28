@@ -5,6 +5,8 @@ from __future__ import annotations
 from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
+PHYSICS_SHAPE_GENERATE_TIMEOUT_SEC = 35.0
+
 
 async def physics_shape_generate(
     runtime: DirectRuntime,
@@ -21,6 +23,7 @@ async def physics_shape_generate(
             "shape_type": shape_type,
             "body_type": body_type,
         },
+        timeout=PHYSICS_SHAPE_GENERATE_TIMEOUT_SEC,
     )
 
 
