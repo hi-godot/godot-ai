@@ -64,7 +64,7 @@ func generate(params: Dictionary) -> Dictionary:
 	var raw_paths: Array = validated.paths
 	if raw_paths.size() > _GENERATE_DIRECT_MAX_PATHS:
 		return ErrorCodes.make(
-			ErrorCodes.INVALID_PARAMS,
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			(
 				"physics_shape_generate supports at most %d paths inside batch_execute; "
 				+ "call resource_manage(op='physics_shape_generate') directly for larger batches"
@@ -95,12 +95,12 @@ static func _validate_generate_request(params: Dictionary) -> Dictionary:
 
 	var raw_paths: Variant = params.get("paths", [])
 	if not raw_paths is Array:
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "paths must be an array of MeshInstance3D scene paths")
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "paths must be an array of MeshInstance3D scene paths")
 	if raw_paths.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: paths")
 	if raw_paths.size() > _GENERATE_MAX_PATHS:
 		return ErrorCodes.make(
-			ErrorCodes.INVALID_PARAMS,
+			ErrorCodes.VALUE_OUT_OF_RANGE,
 			"paths supports at most %d entries per request" % _GENERATE_MAX_PATHS,
 		)
 	return {
@@ -121,7 +121,7 @@ static func _generate_synchronous(
 	for raw_path in validated.paths:
 		if not raw_path is String:
 			return ErrorCodes.make(
-				ErrorCodes.INVALID_PARAMS,
+				ErrorCodes.WRONG_TYPE,
 				"paths entries must be MeshInstance3D scene path strings",
 			)
 		paths.append(raw_path)
@@ -295,7 +295,7 @@ static func _finish_generate_deferred(
 			var raw_path: Variant = raw_paths[path_index]
 			if not raw_path is String:
 				_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
-					ErrorCodes.INVALID_PARAMS,
+					ErrorCodes.WRONG_TYPE,
 					"paths entries must be MeshInstance3D scene path strings",
 				))
 				return
@@ -314,7 +314,7 @@ static func _finish_generate_deferred(
 			or EditorInterface.get_edited_scene_root() != validated.scene_root
 		):
 			_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
-				ErrorCodes.INVALID_PARAMS,
+				ErrorCodes.EDITED_SCENE_MISMATCH,
 				"The edited scene changed while physics shapes were generated",
 			))
 			return
@@ -358,7 +358,7 @@ static func _finish_generate_deferred(
 		):
 			await _rollback_generated_deferred(created_nodes, tree)
 			_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
-				ErrorCodes.INVALID_PARAMS,
+				ErrorCodes.EDITED_SCENE_MISMATCH,
 				"The edited scene changed while physics shapes were generated",
 			))
 			return
@@ -368,7 +368,7 @@ static func _finish_generate_deferred(
 			if not is_instance_valid(entry.mesh) or not is_instance_valid(entry.parent):
 				await _rollback_generated_deferred(created_nodes, tree)
 				_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
-					ErrorCodes.INVALID_PARAMS,
+					ErrorCodes.NODE_NOT_FOUND,
 					"A source mesh or its parent was removed while physics shapes were generated",
 				))
 				return
@@ -395,7 +395,7 @@ static func _finish_generate_deferred(
 		if not is_instance_valid(entry.parent) or not is_instance_valid(entry.body):
 			await _rollback_generated_deferred(created_nodes, tree)
 			_send_deferred_if_pending(connection, request_id, ErrorCodes.make(
-				ErrorCodes.INVALID_PARAMS,
+				ErrorCodes.EDITED_SCENE_MISMATCH,
 				"The edited scene changed while physics shapes were generated",
 			))
 			return

@@ -898,9 +898,9 @@ func test_generate_rejects_empty_non_array_and_non_mesh_paths() -> void:
 	var empty := _handler.generate({"paths": []})
 	assert_is_error(empty, ErrorCodes.MISSING_REQUIRED_PARAM)
 	var non_array := _handler.generate({"paths": "/Main/Mesh"})
-	assert_is_error(non_array, ErrorCodes.INVALID_PARAMS)
+	assert_is_error(non_array, ErrorCodes.WRONG_TYPE)
 	var non_string_entry := _handler.generate({"paths": [42]})
-	assert_is_error(non_string_entry, ErrorCodes.INVALID_PARAMS)
+	assert_is_error(non_string_entry, ErrorCodes.WRONG_TYPE)
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		skip("No scene root")
@@ -923,12 +923,12 @@ func test_generate_bounds_direct_and_total_batch_sizes() -> void:
 	for index in range(PhysicsShapeHandler._GENERATE_DIRECT_MAX_PATHS + 1):
 		direct_paths.append("/Main/DirectGenerate%d" % index)
 	var direct_result := _handler.generate({"paths": direct_paths})
-	assert_is_error(direct_result, ErrorCodes.INVALID_PARAMS)
+	assert_is_error(direct_result, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(direct_result.error.message, "batch_execute")
 
 	var oversized_paths: Array[String] = []
 	for index in range(PhysicsShapeHandler._GENERATE_MAX_PATHS + 1):
 		oversized_paths.append("/Main/OversizedGenerate%d" % index)
 	var oversized_result := _handler.generate({"paths": oversized_paths})
-	assert_is_error(oversized_result, ErrorCodes.INVALID_PARAMS)
+	assert_is_error(oversized_result, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(oversized_result.error.message, "at most")
