@@ -66,6 +66,7 @@ from godot_ai.sessions.registry import SessionRegistry
 from godot_ai.telemetry import (
     MilestoneType,
     RecordType,
+    TelemetryConfig,
     install_fastmcp_wraps,
     record_milestone,
     record_telemetry,
@@ -662,6 +663,9 @@ def create_server(
                 ## ``instance_id`` it belongs to, so it cannot be stale
                 ## relative to that instance.
                 "active_lease_count": leases.active_count(),
+                ## Live opt-out, not the construction-time snapshot, so the
+                ## dock can show what this process will actually send (#913).
+                "telemetry_enabled": not TelemetryConfig._is_disabled_via_env(),
             }
         )
 

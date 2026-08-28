@@ -13,6 +13,7 @@ from godot_ai.protocol.attach import (
     owner_type_from_env,
 )
 from godot_ai.server import create_server
+from godot_ai.telemetry import TelemetryConfig
 
 
 def test_status_route_reports_live_server_version():
@@ -30,6 +31,7 @@ def test_status_route_reports_live_server_version():
     payload = response.json()
     instance_id = payload.pop("instance_id")
     catalog_hash = payload.pop("tool_catalog_hash")
+    telemetry_enabled = payload.pop("telemetry_enabled")
     assert payload == {
         "name": "godot-ai",
         "server_version": __version__,
@@ -41,9 +43,22 @@ def test_status_route_reports_live_server_version():
         "attach_protocol_version": 1,
         "active_lease_count": 0,
     }
+    assert telemetry_enabled is (not TelemetryConfig._is_disabled_via_env())
     assert len(instance_id) == 32
     assert len(catalog_hash) == 64
     assert set(catalog_hash) <= set("0123456789abcdef")
+
+
+def test_status_route_telemetry_enabled_rereads_env(monkeypatch) -> None:
+    monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
+    server = create_server(ws_port=9557)
+    app = server.http_app(transport="streamable-http")
+    client = TestClient(app, base_url="http://127.0.0.1")
+
+    response = client.get("/godot-ai/status")
+
+    assert response.status_code == 200
+    assert response.json()["telemetry_enabled"] is False
 
 
 def test_status_route_package_path_points_at_loaded_package_dir():

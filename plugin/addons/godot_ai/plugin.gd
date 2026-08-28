@@ -1020,6 +1020,11 @@ static func _project_status_payload(parsed: Dictionary) -> Dictionary:
 		## skew. Older servers omit it; treat the missing field as "".
 		"package_path": str(parsed.get("package_path", "")),
 	}
+	## #913: live server telemetry state. Absent on older backends so the
+	## dock can tell "too old to publish" from an explicit false.
+	var telemetry_enabled: Variant = parsed.get("telemetry_enabled")
+	if telemetry_enabled is bool:
+		projected["telemetry_enabled"] = telemetry_enabled
 	## #824: advisory attach-lease count, consumed by teardown to decide
 	## detach-vs-kill. Absent stays absent rather than defaulting to 0, so
 	## `ServerLifecycleManager.active_lease_count` keeps distinguishing "backend

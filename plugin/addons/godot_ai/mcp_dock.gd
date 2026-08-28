@@ -1548,12 +1548,33 @@ func _load_telemetry_setting() -> void:
 		)
 	else:
 		_telemetry_toggle.disabled = false
-		_telemetry_toggle.tooltip_text = ""
+		_telemetry_toggle.tooltip_text = _live_telemetry_tooltip(enabled)
 
 
 func _on_telemetry_toggled(pressed: bool) -> void:
 	_telemetry_pending_enabled = pressed
+	if _telemetry_toggle != null:
+		_telemetry_toggle.tooltip_text = _live_telemetry_tooltip(pressed)
 	_refresh_tools_ui_state()
+
+
+## Report the running server's telemetry state, not just this editor's
+## checkbox. An adopted backend ignores the EditorSetting until its own
+## environment is changed (#913).
+func _live_telemetry_tooltip(local_enabled: bool) -> String:
+	if _plugin == null or not _plugin.has_method("_probe_live_server_status"):
+		return ""
+	var live: Dictionary = _plugin._probe_live_server_status(ClientConfigurator.http_port())
+	if not (live.get("telemetry_enabled") is bool):
+		return ""
+	var server_enabled: bool = live.get("telemetry_enabled")
+	if server_enabled == local_enabled:
+		return "Running server telemetry is %s." % ("on" if server_enabled else "off")
+	return (
+		"This editor wants telemetry %s, but the running server still has it %s. "
+		+ "Opt-out only reaches a server this plugin spawned. Stop that process "
+		+ "or set GODOT_AI_DISABLE_TELEMETRY in its environment."
+	) % ["on" if local_enabled else "off", "on" if server_enabled else "off"]
 
 
 # --- Dev mode persistence ---

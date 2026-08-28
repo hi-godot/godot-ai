@@ -1968,6 +1968,27 @@ func test_status_projection_carries_the_lease_count_to_the_consumer() -> void:
 	assert_true(bool(projected.get("reachable")))
 
 
+func test_status_projection_surfaces_telemetry_enabled() -> void:
+	## #913: the dock reads the live server's opt-out from the projected
+	## probe, not from EditorSettings.
+	var off := GodotAiPlugin._project_status_payload({
+		"name": "godot-ai", "telemetry_enabled": false,
+	})
+	assert_true(off.has("telemetry_enabled"))
+	assert_eq(off.get("telemetry_enabled"), false)
+	var on := GodotAiPlugin._project_status_payload({
+		"name": "godot-ai", "telemetry_enabled": true,
+	})
+	assert_eq(on.get("telemetry_enabled"), true)
+
+
+func test_status_projection_leaves_telemetry_enabled_absent_on_old_backend() -> void:
+	var projected := GodotAiPlugin._project_status_payload({
+		"name": "godot-ai", "server_version": "3.0.6",
+	})
+	assert_false(projected.has("telemetry_enabled"))
+
+
 func test_status_projection_leaves_an_older_backends_field_absent() -> void:
 	## "Too old to publish it" must stay distinguishable from "reports zero",
 	## which is what the absent-stays-absent rule buys. Both stop the server.
