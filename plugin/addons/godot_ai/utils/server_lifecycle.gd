@@ -384,6 +384,12 @@ func arm_version_check(connection, expected_version: String) -> void:
 func disarm_version_check() -> void:
 	if _version_check != null:
 		_version_check.disarm()
+		## `_version_check` was built as McpServerVersionCheck.new(self), so it
+		## holds this manager back — leaving the field set is a
+		## RefCounted<->RefCounted cycle GDScript's refcounting can't collect
+		## (both instances and both scripts leak until the process exits). Drop
+		## it; arm_version_check() reconstructs it lazily on the next arm.
+		_version_check = null
 
 
 func get_version_check():
@@ -1790,6 +1796,11 @@ func _recover_stale_port_occupant_impl(port: int, wait_s: float) -> bool:
 ## so enabling the setting mid-session takes effect on the next server
 ## start instead of leaving a record that points at a soon-reaped PID.
 func teardown_for_editor_exit() -> void:
+	## Break the version-check <-> manager refcount cycle up front, regardless
+	## of which exit branch runs below (detach / lease-handover / stop). The
+	## other disarm_version_check() call sites only cover terminal-diagnosis
+	## paths, so a normal editor close would otherwise leak the pair.
+	disarm_version_check()
 	if _server_keep_alive:
 		detach_server()
 		return

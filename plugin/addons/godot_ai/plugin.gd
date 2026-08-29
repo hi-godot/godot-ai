@@ -623,6 +623,10 @@ func _exit_tree() -> void:
 	if _headless_disabled:
 		_server_started_this_session = false
 		_headless_disabled = false
+		## `_lifecycle` is built in _init(), before the headless guard in
+		## _enter_tree() runs, so it exists even on this path — null it here
+		## too (the full teardown below is skipped).
+		_lifecycle = null
 		return
 
 	if _custom_tool_registry != null:
@@ -680,6 +684,12 @@ func _exit_tree() -> void:
 	## same-session disable/enable cycle) to adopt. Explicit stops (dock
 	## Restart, update reload) still kill via _stop_server.
 	_lifecycle.teardown_for_editor_exit()
+	## Match the nulling every sibling field gets above. `_lifecycle` was built
+	## as ServerLifecycleManager.new(self), so it holds the plugin back —
+	## leaving the field set keeps the manager and its scripts alive past
+	## plugin teardown (surfaces as leaked ObjectDB instances / "resource still
+	## in use" for server_lifecycle.gd + server_version_check.gd at editor exit).
+	_lifecycle = null
 	## Symmetric with prepare_for_update_reload: the static guard persists
 	## across disable/enable within a single editor session, so the re-enabled
 	## plugin instance's _start_server would short-circuit and never respawn.
