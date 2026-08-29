@@ -124,7 +124,9 @@ class TestTelemetryConfig:
     def test_live_enabled_rereads_env_after_construction(
         self, monkeypatch, clean_env, isolated_data_dir
     ) -> None:
-        ## #913: an adopted process must honor a later opt-out without restart.
+        ## #913: in-process env changes are re-read; this is not a
+        ## dock-to-adopted-server channel (the editor cannot mutate
+        ## another process's environment).
         monkeypatch.delenv("GODOT_AI_DISABLE_TELEMETRY", raising=False)
         monkeypatch.delenv("DISABLE_TELEMETRY", raising=False)
         config = tel.TelemetryConfig()
@@ -272,6 +274,8 @@ class TestTelemetryCollector:
     def test_runtime_env_opt_out_drops_later_records(
         self, monkeypatch, clean_env, isolated_data_dir
     ) -> None:
+        ## In-process env changes are honored on the next record(); the
+        ## dock checkbox still cannot reach an adopted server's env.
         collector = tel.TelemetryCollector()
         sent: list[tel.TelemetryRecord] = []
         _drain_to(collector, sent)

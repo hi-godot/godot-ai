@@ -1969,8 +1969,9 @@ func test_status_projection_carries_the_lease_count_to_the_consumer() -> void:
 
 
 func test_status_projection_surfaces_telemetry_enabled() -> void:
-	## #913: the dock reads the live server's opt-out from the projected
-	## probe, not from EditorSettings.
+	## #913: the dock reads the live server's env-derived state from the
+	## projected probe, not from EditorSettings. This is a report, not a
+	## channel that applies the checkbox to an adopted process.
 	var off := GodotAiPlugin._project_status_payload({
 		"name": "godot-ai", "telemetry_enabled": false,
 	})

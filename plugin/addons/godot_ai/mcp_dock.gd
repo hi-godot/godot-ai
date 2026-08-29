@@ -1559,8 +1559,8 @@ func _on_telemetry_toggled(pressed: bool) -> void:
 
 
 ## Report the running server's telemetry state, not just this editor's
-## checkbox. An adopted backend ignores the EditorSetting until its own
-## environment is changed (#913).
+## checkbox. Apply & Restart injects opt-out into a server this plugin
+## spawns; it cannot change the environment of an adopted process (#913).
 func _live_telemetry_tooltip(local_enabled: bool) -> String:
 	if _plugin == null or not _plugin.has_method("_probe_live_server_status"):
 		return ""

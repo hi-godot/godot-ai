@@ -205,9 +205,16 @@ class TelemetryConfig:
         """Re-read opt-out env vars on every call.
 
         ``enabled`` is the construction-time snapshot used to decide
-        whether to create on-disk artifacts and start the worker. An
-        adopted server the plugin did not spawn keeps that snapshot for
-        life unless we re-check here (#913).
+        whether to create on-disk artifacts and start the worker.
+        Record/send paths consult this method so an in-process change
+        to ``GODOT_AI_DISABLE_TELEMETRY`` / ``DISABLE_TELEMETRY`` takes
+        effect without reconstructing the collector (#913).
+
+        This does not receive the dock checkbox: the Godot editor cannot
+        mutate another process's environment. An adopted server keeps
+        sending until *that* process sees the env var. Status
+        ``telemetry_enabled`` reports this live read so the dock can
+        show the disagreement instead of claiming the checkbox applied.
         """
         return not self._is_disabled_via_env()
 

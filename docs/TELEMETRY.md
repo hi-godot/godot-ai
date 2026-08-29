@@ -88,6 +88,19 @@ spawns). Attach entries written before the toggle changed read as
 `configured_mismatch` — re-run Configure so the client relaunches the bridge
 with the current preference.
 
+Apply & Restart does **not** mutate the environment of a server the plugin
+adopted rather than spawned (a hand-started dev server, CI backend, or
+attach-owned process). That process keeps whatever telemetry state it was
+born with until *its* environment changes or it is replaced. `/godot-ai/status`
+publishes `telemetry_enabled` from a live env re-read so the dock can show
+when the checkbox and the running server disagree; it is a report, not an
+opt-out channel.
+
+Record/send paths in an already-running Python process re-read
+`GODOT_AI_DISABLE_TELEMETRY` / `DISABLE_TELEMETRY` on each event, so an
+in-process env change in that server takes effect without reconstructing
+the collector.
+
 ### Via environment variable
 
 Set either environment variable to `true` / `1` / `yes` / `on`:
