@@ -463,6 +463,76 @@ func test_reparent_preserves_descendant_owner_on_undo() -> void:
 	chain.teardown.call()
 
 
+func test_reparent_restores_owned_and_unowned_descendants_on_undo_redo() -> void:
+	## #904 review: undo must restore a null owner unchanged rather than
+	## substituting scene_root. One subtree with both a scene-owned and an
+	## unowned child, covering do / undo / redo.
+	var parent_res := _handler.create_node({
+		"type": "Node3D",
+		"name": "_McpTestMixParent",
+		"parent_path": "/Main",
+	})
+	assert_has_key(parent_res, "data")
+	assert_eq(parent_res.data.name, "_McpTestMixParent")
+	var owned_res := _handler.create_node({
+		"type": "Node3D",
+		"name": "_McpTestMixOwned",
+		"parent_path": "/Main/_McpTestMixParent",
+	})
+	assert_has_key(owned_res, "data")
+	assert_eq(owned_res.data.name, "_McpTestMixOwned")
+	var unowned_res := _handler.create_node({
+		"type": "Node3D",
+		"name": "_McpTestMixUnowned",
+		"parent_path": "/Main/_McpTestMixParent",
+	})
+	assert_has_key(unowned_res, "data")
+	assert_eq(unowned_res.data.name, "_McpTestMixUnowned")
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var owned := scene_root.get_node_or_null("_McpTestMixParent/_McpTestMixOwned")
+	var unowned := scene_root.get_node_or_null("_McpTestMixParent/_McpTestMixUnowned")
+	assert_ne(owned, null, "precondition: owned child exists")
+	assert_ne(unowned, null, "precondition: unowned child exists")
+	assert_eq(owned.owner, scene_root, "precondition: owned child is scene-owned")
+	unowned.owner = null
+	assert_eq(unowned.owner, null, "precondition: unowned child has a null owner")
+
+	var dest := _handler.create_node({
+		"type": "Node3D",
+		"name": "_McpTestMixDest",
+		"parent_path": "/Main",
+	})
+	assert_has_key(dest, "data")
+	assert_eq(dest.data.name, "_McpTestMixDest")
+
+	var result := _handler.reparent_node({
+		"path": "/Main/_McpTestMixParent",
+		"new_parent": "/Main/_McpTestMixDest",
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.undoable, "reparent should be undoable")
+	assert_eq(owned.owner, scene_root, "owned child is scene-owned after reparent")
+	assert_eq(unowned.owner, scene_root, "unowned child is scene-owned after reparent")
+
+	assert_true(editor_undo(_undo_redo), "undo reparent should succeed")
+	assert_eq(owned.owner, scene_root, "owned child owner restored to scene root on undo")
+	assert_eq(unowned.owner, null, "unowned child owner restored to null on undo")
+
+	assert_true(editor_redo(_undo_redo), "redo reparent should succeed")
+	assert_eq(owned.owner, scene_root, "owned child is scene-owned after redo")
+	assert_eq(unowned.owner, scene_root, "unowned child is scene-owned after redo")
+
+	assert_true(editor_undo(_undo_redo), "undo reparent after redo should succeed")
+	assert_eq(owned.owner, scene_root, "owned child owner restored after second undo")
+	assert_eq(unowned.owner, null, "unowned child owner restored to null after second undo")
+
+	assert_true(editor_undo(_undo_redo), "undo dest create should succeed")
+	assert_true(editor_undo(_undo_redo), "undo unowned create should succeed")
+	assert_true(editor_undo(_undo_redo), "undo owned create should succeed")
+	assert_true(editor_undo(_undo_redo), "undo parent create should succeed")
+
+
 ## Build a nested chain of throwaway Node3D test nodes under /Main, returning
 ## the deepest path and a teardown closure that unwinds each create via undo.
 func _build_temp_chain(names: Array[String]) -> Dictionary:

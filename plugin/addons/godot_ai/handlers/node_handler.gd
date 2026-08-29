@@ -165,7 +165,9 @@ func reparent_node(params: Dictionary) -> Dictionary:
 	_undo_redo.add_undo_method(old_parent, "move_child", node, old_idx)
 	_undo_redo.add_undo_method(node, "set_owner", scene_root)
 	for child in descendants:
-		var prior_owner: Node = child.owner if child.owner != null else scene_root
+		## Keep a null owner as null. Substituting scene_root would make an
+		## intentionally unowned descendant scene-owned on undo (#904).
+		var prior_owner: Node = child.owner
 		_undo_redo.add_undo_method(child, "set_owner", prior_owner)
 	_undo_redo.add_undo_reference(node)
 	_undo_redo.commit_action()
