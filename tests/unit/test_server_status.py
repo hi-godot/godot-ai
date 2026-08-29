@@ -50,11 +50,20 @@ def test_status_route_reports_live_server_version():
 
 
 def test_status_route_telemetry_enabled_rereads_env(monkeypatch) -> None:
-    monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
+    ## Prove a live env re-read on an already-constructed server, not a
+    ## construction-time snapshot (#913). Pytest's conftest setdefault
+    ## would otherwise leave opt-out on before create_server.
+    monkeypatch.delenv("GODOT_AI_DISABLE_TELEMETRY", raising=False)
+    monkeypatch.delenv("DISABLE_TELEMETRY", raising=False)
     server = create_server(ws_port=9557)
     app = server.http_app(transport="streamable-http")
     client = TestClient(app, base_url="http://127.0.0.1")
 
+    before = client.get("/godot-ai/status")
+    assert before.status_code == 200
+    assert before.json()["telemetry_enabled"] is True
+
+    monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
     response = client.get("/godot-ai/status")
 
     assert response.status_code == 200
