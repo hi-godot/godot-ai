@@ -40,7 +40,7 @@ dependencies = [
     # attach/proxy.py uses AnyIO's stream exceptions directly. Keep that
     # contract explicit instead of inheriting FastMCP's transitive choice.
     "anyio==4.14.2",
-    "mcp==1.29.1",
+    "mcp==2.1.1",
     "websockets==17.1",
     "pydantic==2.13.5",
     # The attach bridge uses AsyncClient, transport errors, and granular
