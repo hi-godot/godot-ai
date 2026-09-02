@@ -85,6 +85,8 @@ var _eval_token_counter: int = 0
 ## _handle_take_screenshot (running inside that capture) detects the freeze
 ## synchronously. -1 until the first tick.
 var _last_loop_tick_msec: int = -1
+var _mcp_runtime_process_ticks: int = 0
+var _last_debug_status_reply: Dictionary = {}
 ## Rendering-freeze beacon for the Windows-minimize state (#794 smoke, 1b):
 ## the frames_drawn value last observed in _process, and when it last
 ## advanced. -1 until the first observed advance, so a booting or
@@ -135,6 +137,7 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	_mcp_runtime_process_ticks += 1
 	## #777: liveness beacon for _handle_take_screenshot's stalled-loop check.
 	## Recorded before the early returns below so the signal stays truthful
 	## even when the logger or debugger channel is unavailable.
@@ -188,6 +191,9 @@ func _on_debug_message(message: String, data: Array) -> bool:
 		"eval_liveness":
 			_reply_eval_liveness(data)
 			return true
+		"debug_status":
+			_reply_debug_status(data)
+			return true
 		"eval":
 			_handle_eval(data)
 			return true
@@ -209,6 +215,31 @@ func _reply_eval_liveness(data: Array) -> void:
 	_last_eval_liveness_reply = {"request_id": request_id, "loop_live": loop_live}
 	if EngineDebugger.is_active():
 		EngineDebugger.send_message("mcp:eval_liveness_response", [request_id, loop_live])
+
+
+func _debug_status_snapshot() -> Dictionary:
+	var tree := get_tree()
+	return {
+		"probe_version": 1,
+		"helper_found": true,
+		"suspended": not can_process(),
+		"loop_live": not _main_loop_appears_stalled(),
+		"loop_tick_msec": _last_loop_tick_msec,
+		"process_ticks": _mcp_runtime_process_ticks,
+		"tree_paused": tree.paused if tree != null else false,
+		"frames_drawn": Engine.get_frames_drawn(),
+		"process_frames": Engine.get_process_frames(),
+		"physics_frames": Engine.get_physics_frames(),
+		"time_scale": Engine.time_scale,
+	}
+
+
+func _reply_debug_status(data: Array) -> void:
+	var request_id: String = data[0] if data.size() > 0 else ""
+	var state := _debug_status_snapshot()
+	_last_debug_status_reply = {"request_id": request_id, "state": state.duplicate(true)}
+	if EngineDebugger.is_active():
+		EngineDebugger.send_message("mcp:debug_status_response", [request_id, state])
 
 
 func _handle_take_screenshot(data: Array) -> void:

@@ -9,6 +9,7 @@ from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
 
 GAME_COMMAND_TIMEOUT_SEC = 15.0
+GAME_DEBUG_TIMEOUT_SEC = 5.0
 
 ## input_sequence drives the game forward one frame per step, so its reply
 ## legitimately takes seconds — it gets a wider client timeout than the
@@ -29,6 +30,28 @@ async def _game_command(runtime: DirectRuntime, op: str, params: dict[str, Any])
         {"op": op, "params": params},
         timeout=GAME_COMMAND_TIMEOUT_SEC,
     )
+
+
+async def _game_debug_control(runtime: DirectRuntime, action: str) -> dict:
+    return await runtime.send_command(
+        "game_debug_control", {"action": action}, timeout=GAME_DEBUG_TIMEOUT_SEC
+    )
+
+
+async def game_suspend(runtime: DirectRuntime) -> dict:
+    return await _game_debug_control(runtime, "suspend")
+
+
+async def game_resume(runtime: DirectRuntime) -> dict:
+    return await _game_debug_control(runtime, "resume")
+
+
+async def game_next_frame(runtime: DirectRuntime) -> dict:
+    return await _game_debug_control(runtime, "next_frame")
+
+
+async def game_debug_status(runtime: DirectRuntime) -> dict:
+    return await _game_debug_control(runtime, "debug_status")
 
 
 async def game_get_scene_tree(

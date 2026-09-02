@@ -306,6 +306,24 @@ func test_eval_liveness_probe_reports_loop_beacon() -> void:
 	helper.free()
 
 
+func test_debug_status_probe_reports_tick_counter() -> void:
+	var helper: Node = GameHelper.new()
+	helper._mcp_runtime_process_ticks = 7
+	helper._last_loop_tick_msec = Time.get_ticks_msec()
+	var state: Dictionary = helper._debug_status_snapshot()
+	assert_eq(state.process_ticks, 7)
+	assert_has_key(state, "suspended")
+	assert_has_key(state, "time_scale")
+	assert_true(helper._on_debug_message("mcp:debug_status", ["rid-status"]),
+		"the helper should capture suspended-runtime status probes")
+	assert_eq(helper._last_debug_status_reply.request_id, "rid-status")
+	assert_eq(helper._last_debug_status_reply.state.process_ticks, 7)
+	helper._process(0.016)
+	assert_eq(helper._mcp_runtime_process_ticks, 8,
+		"each helper _process call advances the verification counter exactly once")
+	helper.free()
+
+
 func test_rendering_appears_stalled_false_before_first_advance() -> void:
 	## A game that has never presented (booting, render-less) has no
 	## trustworthy frame — the -1 sentinel must read as NOT render-stalled so

@@ -377,6 +377,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("quit_editor", "editor", &"quit_editor")
 	_dispatcher.register_lazy("game_eval", "editor", &"game_eval")
 	_dispatcher.register_lazy("game_command", "editor", &"game_command")
+	_dispatcher.register_lazy("game_debug_control", "editor", &"game_debug_control")
 	_dispatcher.register_lazy("get_project_setting", "project", &"get_project_setting")
 	_dispatcher.register_lazy("set_project_setting", "project", &"set_project_setting")
 	_dispatcher.register_lazy("set_main_scene", "project", &"set_main_scene")

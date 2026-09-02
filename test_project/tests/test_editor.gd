@@ -226,6 +226,42 @@ func test_screenshot_game_not_playing() -> void:
 	assert_eq(result.error.data.sub_code, ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING)
 
 
+# ----- game debug control (#939) -----
+
+func test_game_debug_verification_requires_exact_tick() -> void:
+	var before := {"process_ticks": 10, "suspended": true}
+	var pending := McpDebuggerPlugin.game_debug_verification(
+		"next_frame", before, {"process_ticks": 10, "suspended": true})
+	assert_eq(pending.status, "pending")
+	assert_eq(pending.ticks_advanced, 0)
+	var exact := McpDebuggerPlugin.game_debug_verification(
+		"next_frame", before, {"process_ticks": 11, "suspended": true})
+	assert_eq(exact.status, "verified")
+	assert_eq(exact.ticks_advanced, 1)
+	var not_resuspended := McpDebuggerPlugin.game_debug_verification(
+		"next_frame", before, {"process_ticks": 11, "suspended": false})
+	assert_eq(not_resuspended.status, "pending")
+	var too_many := McpDebuggerPlugin.game_debug_verification(
+		"next_frame", before, {"process_ticks": 12, "suspended": true})
+	assert_eq(too_many.status, "failed")
+	assert_eq(too_many.reason, "multiple_process_ticks")
+
+
+func test_game_debug_verification_suspend_resume_state() -> void:
+	var before := {"process_ticks": 3, "suspended": false}
+	var suspended := McpDebuggerPlugin.game_debug_verification(
+		"suspend", before, {"process_ticks": 3, "suspended": true})
+	assert_eq(suspended.status, "verified")
+	var resumed := McpDebuggerPlugin.game_debug_verification(
+		"resume", {"process_ticks": 3, "suspended": true},
+		{"process_ticks": 3, "suspended": false})
+	assert_eq(resumed.status, "verified")
+	var still_suspended := McpDebuggerPlugin.game_debug_verification(
+		"resume", {"process_ticks": 3, "suspended": true},
+		{"process_ticks": 3, "suspended": true})
+	assert_eq(still_suspended.status, "pending")
+
+
 # ----- game_command -----
 
 func test_game_command_missing_op() -> void:

@@ -1009,6 +1009,29 @@ func game_eval(params: Dictionary) -> Dictionary:
 	return McpDispatcher.DEFERRED_RESPONSE
 
 
+func game_debug_control(params: Dictionary) -> Dictionary:
+	var action := str(params.get("action", ""))
+	if action not in ["suspend", "resume", "next_frame", "debug_status"]:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Invalid game debug action '%s' — use suspend, resume, next_frame, or debug_status" % action,
+		)
+	if _debugger_plugin == null or _connection == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"Debugger bridge unavailable — plugin may not be fully initialised")
+	if not EditorInterface.is_playing_scene():
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING,
+			"Game is not running — start the project first", false,
+			"Start the game with project_run (or wait for the user to run it), then retry.")
+	var request_id := str(params.get("_request_id", ""))
+	if request_id.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"Missing request_id — cannot correlate deferred response")
+	_debugger_plugin.request_game_debug_control(action, request_id, _connection)
+	return McpDispatcher.DEFERRED_RESPONSE
+
+
 func game_command(params: Dictionary) -> Dictionary:
 	var op: String = str(params.get("op", ""))
 	if op.is_empty():
