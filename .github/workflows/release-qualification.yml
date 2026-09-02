@@ -1,0 +1,158 @@
+name: Qualify v4 release candidates
+
+# Builds A and its disposable B child once, signs them in the protected
+# environment, and passes their exact archived bytes to every required OS.
+# This workflow publishes no tag, GitHub Release, or PyPI distribution.
+on:
+  workflow_dispatch:
+    inputs:
+      source_a:
+        description: "Immutable 40-character commit for the publishable candidate A"
+        required: true
+        type: string
+      version_a:
+        description: "Publishable semantic version (for example 4.1.0)"
+        required: true
+        type: string
+      source_b:
+        description: "Immutable 40-character commit for the qualification-only child B"
+        required: true
+        type: string
+      version_b:
+        description: "Reserved semantic version for B (never published)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  GODOT_AI_DISABLE_TELEMETRY: "true"
+
+jobs:
+  validate-inputs:
+    name: Bind B to A before signing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ inputs.source_a }}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${{ inputs.source_b }}" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "${{ inputs.source_a }}^{commit}"
+          git cat-file -e "${{ inputs.source_b }}^{commit}"
+          git merge-base --is-ancestor "${{ inputs.source_a }}" "${{ inputs.source_b }}"
+          test "${{ inputs.version_a }}" != "${{ inputs.version_b }}"
+
+  build:
+    name: Build and sign candidate ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    needs: validate-inputs
+    environment: release-signing
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: a
+            source: ${{ inputs.source_a }}
+            version: ${{ inputs.version_a }}
+          - name: b
+            source: ${{ inputs.source_b }}
+            version: ${{ inputs.version_b }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Bind checkout and version to candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ matrix.source }}"
+          test "$(sed -n 's/^version="\(.*\)"$/\1/p' plugin/addons/godot_ai/plugin.cfg)" = "${{ matrix.version }}"
+          test "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" = "${{ matrix.version }}"
+      - name: Build exact release and Python artifacts
+        env:
+          RELEASE_SIGNING_KEY_PEM: ${{ secrets.RELEASE_SIGNING_KEY_PEM }}
+          CANDIDATE: ${{ matrix.name }}
+          SOURCE: ${{ matrix.source }}
+          VERSION: ${{ matrix.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_SIGNING_KEY_PEM"
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "$RELEASE_SIGNING_KEY_PEM" > "$key_file"
+          python -m pip install --upgrade build==1.6.0
+          python script/v4-release build --output-dir candidate/release --private-key "$key_file" --channel stable --tag "v${{ matrix.version }}" --version "${{ matrix.version }}" --source-commit "${{ matrix.source }}"
+          python -m build --outdir candidate/dist
+          (cd candidate && find release dist -type f -print0 | sort -z | xargs -0 sha256sum) > candidate/SHA256SUMS
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path("candidate")
+          files = {}
+          for path in sorted((root / "release").glob("*")) + sorted((root / "dist").glob("*")):
+              if path.is_file():
+                  files[str(path.relative_to(root))] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+          (root / "evidence.json").write_text(json.dumps({"schema": 1, "candidate": os.environ["CANDIDATE"], "source": os.environ["SOURCE"], "version": os.environ["VERSION"], "tag": "v" + os.environ["VERSION"], "files": files}, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v4-candidate-${{ matrix.name }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 90
+
+  qualify:
+    name: Verify immutable A/B bytes / ${{ matrix.os }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/download-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v4-candidate-a
+          path: candidates/a
+      - uses: actions/download-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v4-candidate-b
+          path: candidates/b
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify artifact inventories and install exact wheels
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in candidates/*; do
+            (cd "$candidate" && sha256sum -c SHA256SUMS)
+            python - "$candidate/evidence.json" <<'PY'
+          import json, sys
+          record = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert record["schema"] == 1 and record["candidate"] in {"a", "b"}
+          assert len(record["source"]) == 40 and record["tag"] == "v" + record["version"]
+          PY
+            wheel=$(find "$candidate/dist" -name '*.whl' -print -quit)
+            python -m venv "$RUNNER_TEMP/$(basename "$candidate")"
+            if [ -x "$RUNNER_TEMP/$(basename "$candidate")/bin/python" ]; then PY="$RUNNER_TEMP/$(basename "$candidate")/bin/python"; else PY="$RUNNER_TEMP/$(basename "$candidate")/Scripts/python.exe"; fi
+            "$PY" -m pip install "$wheel"
+            "$PY" -m godot_ai --version
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v4-qualification-${{ matrix.os }}
+          path: candidates/
+          retention-days: 90

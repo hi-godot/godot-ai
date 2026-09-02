@@ -3,9 +3,9 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [main, beta]
+    branches: [main]
   pull_request:
-    branches: [main, beta]
+    branches: [main]
 
 ## Stop CI from injecting fake "installs" into the telemetry dashboard or
 ## burning streaming-insert quota on the backend. Opt-out is fully

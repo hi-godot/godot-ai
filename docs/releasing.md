@@ -8,18 +8,40 @@ protocol. A temporary, signed v3-compatible capsule carries that same tree
 across the major-version boundary; it is not a second v4 runtime shape. See the
 [v4 migration guide](v4-migration.md) for the one-click user flow.
 
-## Publication is intentionally closed
+## Qualification and publication
 
-`.github/workflows/release.yml` is a read-only, fail-closed publication gate.
-It creates no tag or release and publishes nothing to PyPI. The old
-`bump-and-release.yml` workflow has been removed. Do not work around this gate
-with a tag push, ad-hoc upload, rebuilt artifact, or marketplace update.
+V4 publishes only immutable, qualified bytes. `release-qualification.yml`
+builds and signs the A/B candidates once, retains their SHA-256 inventories,
+and verifies those exact artifacts on Linux, macOS, and Windows. It creates no
+tag, GitHub Release, or PyPI upload.
 
-The v3 Asset Library and Asset Store listings remain frozen on v3. V4 may be
-published only after the Phase-7 immutable A/B qualification described in
-[Packaging & Distribution](packaging-distribution.md) is complete on Linux,
-macOS, and Windows and the exact approved bytes can be promoted without a
-rebuild.
+After the independent attestation repository commits an approval JSON whose
+contents exactly match both candidate `evidence.json` files, dispatch
+`release.yml`. Select **patch**, **minor**, or **major**, provide the previous
+published version, qualification run ID, and the immutable approval commit and
+path. The workflow computes the target version, verifies it matches A, publishes
+the already-qualified wheel and sdist first, then creates the tag and GitHub
+Release from A's already-qualified six assets. It never checks out or rebuilds
+the candidate. A duplicate PyPI version, changed artifact, missing B evidence,
+or mismatched approval fails closed.
+
+The approval file is JSON with this exact object shape (the `candidates` value
+is copied without changing any generated evidence fields):
+
+```json
+{"schema":1,"bump":"minor","previous_version":"4.0.0","candidates":{"a":"A evidence object","b":"B evidence object"}}
+```
+
+Keep it in the attestation repository at a full commit SHA; the release
+workflow reads neither a branch nor a mutable release note. The attestation
+review must confirm the qualification run, sources, signed artifact hashes,
+and the separate repository's access boundary before creating that record.
+
+The old `bump-and-release.yml` remains retired. Version changes are reviewed
+source changes: prepare A with the chosen next semantic version and B as its
+reserved qualification-only child before dispatching qualification. This keeps
+the familiar major/minor/patch release choice without letting a release button
+silently mutate a reviewed source tree.
 
 `verify-signing.yml` is safe to dispatch separately: it exercises the protected
 `release-signing` environment against a synthetic payload and publishes

@@ -201,7 +201,7 @@ publication remain unqualified until their retained evidence is reviewed.
       dependency artifact selected by each publication-smoke row equals its
       approved digest.
 
-The packaging, signing, and verification primitives are implemented. The
-Phase-7 qualification-and-promotion workflow is not: release remains
-fail-closed until that workflow exists, the exact evidence above is reviewed,
-and publication is explicitly authorized.
+The packaging, signing, verification, qualification, and promotion workflows
+are implemented. Publication remains fail-closed until an operator supplies a
+complete A/B qualification run and an independent immutable approval record
+that names its exact digest set; see [the release runbook](releasing.md).

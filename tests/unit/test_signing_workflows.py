@@ -1,4 +1,4 @@
-"""Fail-closed contracts for signing and not-yet-authorized publication."""
+"""Contracts for protected signing and digest-bound v4 publication."""
 
 from pathlib import Path
 
@@ -28,7 +28,7 @@ def test_signing_secret_check_uses_the_protected_environment() -> None:
         assert retired not in workflow
 
 
-def test_v4_publication_is_manual_and_fails_before_credentials_or_writes() -> None:
+def test_v4_publication_is_manual_and_promotes_only_qualified_bytes() -> None:
     path = WORKFLOWS / "release.yml"
     raw = path.read_text(encoding="utf-8")
     workflow = yaml.safe_load(raw)
@@ -36,19 +36,34 @@ def test_v4_publication_is_manual_and_fails_before_credentials_or_writes() -> No
     triggers = workflow.get(True, workflow.get("on"))
     assert set(triggers) == {"workflow_dispatch"}
     assert workflow["permissions"] == {"contents": "read"}
-    assert set(workflow["jobs"]) == {"publication-gate"}
-    assert "exit 1" in raw
-    assert "immutable A/B qualification artifacts" in raw
-    for forbidden in (
-        "RELEASE_SIGNING_KEY_PEM",
-        "gh release create",
-        "action-gh-release",
-        "gh-action-pypi-publish",
-        "contents: write",
-        "tags:",
-    ):
-        assert forbidden not in raw
+    assert set(workflow["jobs"]) == {"verify-approval", "publish-pypi", "publish-github"}
+    assert triggers["workflow_dispatch"]["inputs"]["bump"]["options"] == [
+        "patch",
+        "minor",
+        "major",
+    ]
+    assert "qualification_run_id" in raw
+    assert "approval_repository" in raw
+    assert "approval_commit" in raw
+    assert "approval does not name this exact A/B digest set" in raw
+    assert "gh release create" in raw
+    assert "python -m build" not in raw
+    assert "actions/checkout@" not in raw
 
 
-def test_legacy_auto_bump_tag_push_and_dispatch_workflow_is_retired() -> None:
+def test_qualification_builds_and_signs_a_b_once_then_verifies_on_all_platforms() -> None:
+    raw = (WORKFLOWS / "release-qualification.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(raw)
+    assert workflow["permissions"] == {"contents": "read"}
+    assert set(workflow["jobs"]) == {"validate-inputs", "build", "qualify"}
+    assert "environment: release-signing" in raw
+    assert "RELEASE_SIGNING_KEY_PEM" in raw
+    assert "python script/v4-release build" in raw
+    assert "v4-candidate-${{ matrix.name }}" in raw
+    assert "ubuntu-latest, macos-latest, windows-latest" in raw
+    assert "gh release create" not in raw
+    assert "gh-action-pypi-publish" not in raw
+
+
+def test_legacy_auto_bump_tag_push_workflow_is_retired() -> None:
     assert not (WORKFLOWS / "bump-and-release.yml").exists()

@@ -1,11 +1,36 @@
-name: Release (qualification gated)
+name: Promote qualified v4 release
 
-# v4 publication must promote previously qualified, immutable A/B artifacts.
-# That cross-run digest binding is intentionally not approximated here: until
-# the Phase-7 promotion workflow exists, a release request fails before it can
-# read signing credentials, create a tag/release, or publish to PyPI.
+# Promotion never checks out or rebuilds source: it publishes only files from
+# the completed qualification run after an independent digest approval.
 on:
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Semantic release kind"
+        required: true
+        type: choice
+        options: [patch, minor, major]
+      previous_version:
+        description: "Previously published X.Y.Z version"
+        required: true
+        type: string
+      qualification_run_id:
+        description: "Completed qualification run ID"
+        required: true
+        type: string
+      approval_repository:
+        description: "Independent attestation repository"
+        required: true
+        default: dsarno/godot-ai-release-attestations
+        type: string
+      approval_commit:
+        description: "Full immutable commit SHA containing approval JSON"
+        required: true
+        type: string
+      approval_path:
+        description: "Approval JSON path"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,12 +39,101 @@ env:
   GODOT_AI_DISABLE_TELEMETRY: "true"
 
 jobs:
-  publication-gate:
-    name: Refuse unqualified publication
+  verify-approval:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      source: ${{ steps.identity.outputs.source }}
     steps:
-      - name: Require exact qualified-artifact promotion
+      - uses: actions/download-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: ${{ github.repository }}
+          name: v4-candidate-a
+          path: candidates/a
+      - uses: actions/download-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: ${{ github.repository }}
+          name: v4-candidate-b
+          path: candidates/b
+      - name: Read immutable independent approval
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          echo "::error::v4 publication is disabled until immutable A/B qualification artifacts are bound to an approved promotion by run ID and digest."
-          exit 1
+          set -euo pipefail
+          [[ "${{ inputs.approval_commit }}" =~ ^[0-9a-f]{40}$ ]]
+          gh api "repos/${{ inputs.approval_repository }}/git/commits/${{ inputs.approval_commit }}" >/dev/null
+          gh api "repos/${{ inputs.approval_repository }}/contents/${{ inputs.approval_path }}?ref=${{ inputs.approval_commit }}" --jq .content | base64 --decode > approval.json
+      - id: identity
+        name: Bind approval, A/B digests, and requested semantic bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "${{ inputs.bump }}" "${{ inputs.previous_version }}" candidates approval.json >> "$GITHUB_OUTPUT" <<'PY'
+          import hashlib, json, re, sys
+          from pathlib import Path
+          bump, previous, root, approval_path = sys.argv[1:]
+          match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", previous)
+          if not match: raise SystemExit("previous_version must be X.Y.Z")
+          records = {}
+          for path in Path(root).glob("*/evidence.json"):
+              record = json.loads(path.read_text(encoding="utf-8"))
+              if record.get("schema") != 1 or record.get("candidate") not in {"a", "b"}: raise SystemExit("invalid candidate evidence")
+              if record["candidate"] in records: raise SystemExit("duplicate candidate evidence")
+              for name, meta in record["files"].items():
+                  artifact = path.parent / name
+                  if not artifact.is_file() or hashlib.sha256(artifact.read_bytes()).hexdigest() != meta["sha256"] or artifact.stat().st_size != meta["size"]: raise SystemExit(f"candidate artifact mismatch: {name}")
+              records[record["candidate"]] = record
+          if set(records) != {"a", "b"}: raise SystemExit("both A and B evidence bundles are required")
+          approval = json.loads(Path(approval_path).read_text(encoding="utf-8"))
+          if approval != {"schema": 1, "bump": bump, "previous_version": previous, "candidates": records}: raise SystemExit("approval does not name this exact A/B digest set")
+          major, minor, patch = map(int, match.groups())
+          version = f"{major + 1}.0.0" if bump == "major" else f"{major}.{minor + 1}.0" if bump == "minor" else f"{major}.{minor}.{patch + 1}"
+          if records["a"]["version"] != version or records["a"]["tag"] != "v" + version or not re.fullmatch(r"[0-9a-f]{40}", records["a"]["source"]): raise SystemExit("A identity does not match requested bump")
+          print("version=" + version)
+          print("source=" + records["a"]["source"])
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: approved-v4-candidates
+          path: candidates/
+          retention-days: 90
+
+  publish-pypi:
+    needs: verify-approval
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: approved-v4-candidates
+          path: candidates
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: candidates/a/dist/
+          skip-existing: false
+
+  publish-github:
+    needs: [verify-approval, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: approved-v4-candidates
+          path: candidates
+      - name: Create immutable tag and release from approved files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${{ needs.verify-approval.outputs.version }}"
+          gh api --method POST "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="${{ needs.verify-approval.outputs.source }}"
+          gh release create "$tag" candidates/a/release/* --target "${{ needs.verify-approval.outputs.source }}" --generate-notes
