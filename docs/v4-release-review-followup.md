@@ -50,6 +50,24 @@ handlers and an unchanged lifecycle after a busy preflight.
 
 ## Development validation
 
+### #961 integration on the release branch — September 3
+
+The accumulated batch was committed as `84097d7`. The exact changes from
+merged #961 (`f3dcc437d01e3bbdda70fb8912b628f7a0db7d1d`) apply cleanly on top;
+unrelated newer main-branch changes are not included by this integration.
+The owned QA copy includes its new WebSocket timeout and connection comment.
+The combined live Godot suite passed **2,153 tests, zero failures, 11 skips,
+71 suites**, followed by metadata refresh, exact replacement-session reload
+proof, real reads and normal quit without ObjectDB/resource-in-use warnings.
+Native GLES findings remain open. Evidence:
+`/private/tmp/godot-ai-949-with961-full-godot.log`.
+Ruff, shell syntax, actionlint and all eleven architecture gates pass.
+The full Python/integration gauntlet passed **2,699 tests, four skips**, in
+508.46 seconds with the existing Starlette/httpx warning:
+`/private/tmp/godot-ai-949-with961-full-pytest.log`. The earlier manual Update proof
+remains evidence for `84097d7`; this keepalive integration does not change the
+updater, signing layout, plugin enable/disable or startup barrier behavior.
+
 ### Current integration checkpoint — September 3, 13:50 UTC
 
 At the owner's explicit request, PR [#961](https://github.com/hi-godot/godot-ai/pull/961)

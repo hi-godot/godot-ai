@@ -29,7 +29,17 @@ elif [ -z "${GODOT_AI_HTTP_CAPABILITY:-}" ] || [ -z "${GODOT_AI_WS_TOKEN:-}" ]; 
 fi
 export GODOT_AI_HTTP_CAPABILITY GODOT_AI_WS_TOKEN
 
-$PYTHON_CMD -m godot_ai --transport streamable-http --port $PORT &
+## Server output goes to mcp-server.log (mirroring godot-editor.log) so a
+## failed job keeps the server's side of the bridge — WebSocket keepalive
+## kills ("Session disconnected ... close code 1011"), circuit-breaker
+## trips, command timeouts. Before #958 the background process's output was
+## lost once this step ended, so the editor-side log was the only evidence
+## for a bridge drop and the server's view of the same window was gone.
+## Jobs that dump godot-editor.log on failure should tail this one too.
+MCP_SERVER_LOG="${MCP_SERVER_LOG:-mcp-server.log}"
+$PYTHON_CMD -m godot_ai --transport streamable-http --port $PORT \
+  > "$MCP_SERVER_LOG" 2>&1 &
+echo "Server output -> $MCP_SERVER_LOG"
 
 for i in $(seq 1 30); do
   if curl --fail --silent --output /dev/null --max-filesize 65536 \

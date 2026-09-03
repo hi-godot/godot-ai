@@ -959,8 +959,9 @@ const _SERVICE_REJECT_LOG_EVERY := 100
 ## Service the WebSocket transport from inside a long synchronous handler
 ## (an "exclusive run" — the test runner). The editor main thread is
 ## blocked, so `_process` cannot poll; without this the server keepalive
-## (20s ping interval / 20s timeout) closes the session mid-run. See
-## docs/test-run-transport-starvation-plan.md.
+## (`DEFAULT_KEEPALIVE_PING_INTERVAL_SECONDS` / `_PING_TIMEOUT_SECONDS` in
+## `transport/websocket.py` — 20s interval, 60s pong deadline since #958)
+## closes the session mid-run. See docs/test-run-transport-starvation-plan.md.
 ##
 ## Contract — do NOT extend this method to dispatch:
 ## - `WebSocketPeer.poll()` has no heartbeat-only mode; it also buffers
