@@ -209,6 +209,13 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         godot: ["4.7.0"]
         python: ["3.11"]
+        include:
+          # One extra Linux row at the newest supported engine, so a 4.7.x
+          # regression is caught before publication without tripling the
+          # runtime matrix. Ordinary CI runs only 4.7.0.
+          - os: ubuntu-latest
+            godot: "4.7.2"
+            python: "3.11"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

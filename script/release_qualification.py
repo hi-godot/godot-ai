@@ -31,6 +31,9 @@ TEST_REQUIREMENTS = (
 )
 GODOT_BUILDS = ("4.7.0",)
 RUNTIME_PYTHONS = ("3.11",)
+# One extra real-editor row at the newest supported engine on Linux, so a
+# 4.7.x regression is caught before publication without tripling the matrix.
+EXTRA_RUNTIME_ROWS = (("ubuntu-latest", "3.11", "4.7.2"),)
 
 # The release gate is the exact-artifact Python rows plus one real-editor
 # A -> B hot update per desktop OS. Failpoint/crash and storm matrices are
@@ -57,7 +60,7 @@ def validate_mandatory_cases(kind: str, cases: Any) -> None:
 
 
 def required_row_keys() -> set[tuple[str, str, str, str | None]]:
-    return {
+    keys = {
         (kind, os_label, python, godot)
         for os_label in support.PLATFORMS
         for kind, versions, godots in (
@@ -67,6 +70,10 @@ def required_row_keys() -> set[tuple[str, str, str, str | None]]:
         for python in versions
         for godot in godots
     }
+    keys.update(
+        ("runtime", os_label, python, godot) for os_label, python, godot in EXTRA_RUNTIME_ROWS
+    )
+    return keys
 
 
 def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:

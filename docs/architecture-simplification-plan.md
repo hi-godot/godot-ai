@@ -700,10 +700,10 @@ bundle A + bundle B + per-row dependency artifacts
 ```
 
 The successor has a unique signed, stable-shaped qualification identity. Version
-`4.0.1` is permanently burned for this proof: it is never published, relabeled,
-or reused, so the next publishable stable version is at least `4.0.2`. Before an
-eventual v4.1 release, published v4.0 must qualify the exact private stable-v4.1
-candidate that will be published.
+`4.0.1` is test-only for this proof: it is never published or relabeled, but
+the number is not reserved; the next patch publication is a fresh reviewed A
+under it. Before an eventual v4.1 release, published v4.0 must qualify the
+exact private stable-v4.1 candidate that will be published.
 
 Main synchronizes only between immutable green tags. Each sync is range-diffed
 and re-runs affected evidence.

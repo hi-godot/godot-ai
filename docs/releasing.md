@@ -20,7 +20,8 @@ those exact bytes:
   A and B, the installed test suites, and the documented closed-editor
   installer for both candidates.
 - **Runtime rows** — the same three operating systems × Godot 4.7.0 × Python
-  3.11: one real-editor exact A -> B hot update through the private HTTPS
+  3.11, plus one Linux row at Godot 4.7.2, the newest supported engine: one
+  real-editor exact A -> B hot update through the private HTTPS
   origin and the retained package index, with the engine executable checked
   against its reviewed pin.
 

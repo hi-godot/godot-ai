@@ -64,7 +64,7 @@ Pin exact current-stable patch/build hashes at implementation start. At minimum:
 |---|---|---|---|
 | Windows | x86_64 | 4.7.0 (Python 3.11) | 3.11, 3.14 |
 | macOS | arm64 | 4.7.0 (Python 3.11) | 3.11, 3.14 |
-| Linux | x86_64 | 4.7.0 (Python 3.11) | 3.11, 3.14 |
+| Linux | x86_64 | 4.7.0 and 4.7.2 (Python 3.11) | 3.11, 3.14 |
 
 The runtime row is keyed by the pinned binary hash of the reviewed 4.7.0
 executable for that platform. The nightly diagnostics workflow exercises the
@@ -127,12 +127,13 @@ manual smoke in the runbook, and the functional/security, reopen/backup and
 repeated-crash cases are nightly diagnostics.
 
 Runtime jobs and aggregate evidence keys carry the engine version: one row per
-desktop OS at Godot 4.7.0 / Python 3.11 (three runtime rows). The producer
+desktop OS at Godot 4.7.0 / Python 3.11, plus one Linux row at Godot 4.7.2
+(four runtime rows). The producer
 rejects a reported engine version that differs from its requested stable
 official identity. The checked-in
 [engine manifest](verification/godot-builds-v1.json) pins the official 4.7.0
 and 4.7.2 executables by exact size and SHA-256, with their source archive
-digests; only 4.7.0 is a required row. The runtime producer checks executable
+digests; 4.7.0 is required on every OS and 4.7.2 on Linux. The runtime producer checks executable
 bytes before even running `--version`, rejects a row labeled for a different
 host OS, and retains the checked identity. Aggregate validation independently
 compares the exact A→B case's engine identity against that manifest; evidence

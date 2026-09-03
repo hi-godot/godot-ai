@@ -62,8 +62,9 @@ def test_required_rows_are_the_trimmed_release_matrix():
 
     # Release gate: Python rows on every desktop OS at the floor and ceiling
     # interpreters, plus one real-editor A -> B row per OS at the pinned
-    # Godot 4.7.0 / Python 3.11. Failpoint and stress rows are nightly
-    # diagnostics, not completion requirements.
+    # Godot 4.7.0 / Python 3.11, and one Linux row at the newest supported
+    # engine. Failpoint and stress rows are nightly diagnostics, not
+    # completion requirements.
     assert keys == python_keys | runtime_keys
     assert support.PYTHONS == ("3.11", "3.14")
     assert python_keys == {
@@ -73,7 +74,7 @@ def test_required_rows_are_the_trimmed_release_matrix():
     }
     assert runtime_keys == {
         ("runtime", os_label, "3.11", "4.7.0") for os_label in support.PLATFORMS
-    }
+    } | {("runtime", "ubuntu-latest", "3.11", "4.7.2")}
     assert qualification.MANDATORY_CASES == {"runtime": frozenset({"exact-a-to-b-hot-update"})}
     assert not hasattr(qualification, "preflight")
 

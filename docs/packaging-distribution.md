@@ -172,7 +172,8 @@ oversized files/trees/archives, signature failure, and any exact-tree mismatch.
    promotion.
 6. Exact private source-A/source-B candidate qualification: package rows on
    Linux, macOS, and Windows at Python 3.11 and 3.14, plus one real-editor
-   A -> B hot-update row per OS at Godot 4.7.0 / Python 3.11, bound to
+   A -> B hot-update row per OS at Godot 4.7.0 / Python 3.11 and a Linux row
+   at Godot 4.7.2, bound to
    immutable plugin, Python-package, and resolved-dependency artifact digests.
 
 Tier 6 is the release gate. Promotion cannot accept install smoke as a
