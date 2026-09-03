@@ -109,6 +109,12 @@ pinned at implementation start.
 
 ### 2.3 v4.0 crosses the boundary through a temporary bridge
 
+> **Superseded 2026-09-03.** The capsule design below delegated to the
+> transactional actor, which was replaced by the in-editor updater in
+> [self-update.md](self-update.md); the bridge now runs that installer on the
+> embedded triple and restarts the editor. See the note at section 6.7 for the
+> reason. The text below is kept as history.
+
 The classic Asset Library and Asset Store can overlay an existing
 `addons/godot_ai` tree without deleting old-only files. They cannot enforce the
 closed-editor replacement boundary. Their v3 listings therefore remain frozen
@@ -122,6 +128,13 @@ and commits only the canonical v4 tree. Store install can return only after a
 store surface can preserve the same clean replacement boundary.
 
 ### 2.4 Keep one retained backup
+
+> **Superseded 2026-09-03.** Under [self-update.md](self-update.md) the
+> retained backup lives at `addons/.godot_ai_update/backup/<old version>/`
+> inside the project, is replaced by the next successful update rather than
+> blocking it, and is never deleted on a failure path; the editor-closed
+> archive step below no longer exists. See the note at section 6.7 for the
+> reason. The text below is kept as history.
 
 The activation protocol never automatically deletes its successful backup.
 The Dock reports its external path and hash. Cleanup is a separate,
@@ -513,6 +526,18 @@ is transitional delivery code, not authority to weaken canonical verification
 or introduce permanent v3 branches into v4.
 
 ### 6.7 Transactional v4 updater
+
+> **Superseded 2026-09-03.** The transactional actor specified below was
+> replaced by the lean in-editor updater in [self-update.md](self-update.md).
+> It was built to defend against failure modes that were never observed in
+> the field — a separate Python actor launched through `uvx`, a journal,
+> repair and abort modes, editor leases and elections, failpoints, hot reload
+> behind a quiescence barrier, and a startup barrier that ran the actor on
+> every editor start — and doing so cost about 5,400 lines and 39 real-editor
+> tests. The replacement is verify, stage, swap, restart, then verify again:
+> one GDScript path, one retained backup, and three marker states
+> (`success`, `rolled_back`, `repair_required`). The text below is kept as
+> history and is no longer the implementation baseline.
 
 Preparation occurs while the old plugin remains enabled:
 

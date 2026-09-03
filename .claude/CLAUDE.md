@@ -13,7 +13,8 @@ from the relevant `AGENTS.md` section — load it when the task calls for it:
 | Adding or changing an MCP tool | [docs/tool-surface.md](../docs/tool-surface.md) |
 | Verifying a change before commit | [docs/verification.md](../docs/verification.md) |
 | Server start/adopt/teardown, reload | [docs/server-lifecycle.md](../docs/server-lifecycle.md) |
-| Release or self-update paths | [docs/releasing.md](../docs/releasing.md) |
+| Cutting a release | [docs/releasing.md](../docs/releasing.md) |
+| Self-update, migration capsule, or release verification changes | [docs/self-update.md](../docs/self-update.md) |
 | Undo patterns, readiness, WS security | [docs/plugin-architecture.md](../docs/plugin-architecture.md) |
 | Repairing or sharing a worktree | [docs/worktrees.md](../docs/worktrees.md) |
 | Adding an MCP client descriptor | [docs/client-configuration.md](../docs/client-configuration.md) |
