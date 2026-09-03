@@ -428,13 +428,18 @@ static func windows_process_chain(
 ) -> Array[Dictionary]:
 	if pid <= 1 or max_depth <= 0:
 		return []
+	## No double quotes anywhere in this script: OS.execute on Windows wraps
+	## an argument in quotes without escaping quotes already inside it, so an
+	## embedded `"` ends the argument early and PowerShell sees a mangled
+	## command. Every working script in this file is single-quote only for
+	## the same reason; string joins replace interpolation.
 	var script := (
 		"$current = %d; $stop = %d; $depth = 0; "
 		+ "while ($current -gt 1 -and $current -ne $stop -and $depth -lt %d) { "
-		+ "$p = Get-CimInstance Win32_Process -Filter \"ProcessId = $current\" "
+		+ "$p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $current) "
 		+ "-ErrorAction SilentlyContinue; "
 		+ "if (-not $p) { break }; "
-		+ "\"$($p.ProcessId)|$($p.ParentProcessId)|$($p.CommandLine)\"; "
+		+ "($p.ProcessId, $p.ParentProcessId, $p.CommandLine) -join '|'; "
 		+ "if ($p.ParentProcessId -le 1 -or $p.ParentProcessId -eq $p.ProcessId) { break }; "
 		+ "$current = $p.ParentProcessId; $depth++ }"
 	) % [pid, stop_at, max_depth]

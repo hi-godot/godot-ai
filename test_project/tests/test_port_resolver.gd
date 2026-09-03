@@ -338,6 +338,8 @@ func test_windows_process_chain_walks_editor_ancestry_in_one_spawn_windows() -> 
 	var editor_pid := OS.get_process_id()
 	var chain := McpPortResolver.windows_process_chain(editor_pid, 0)
 	assert_true(chain.size() >= 1, "the editor's own record must resolve")
+	if chain.is_empty():
+		return
 	assert_eq(chain[0]["pid"], editor_pid)
 	assert_true(
 		str(chain[0]["commandline"]).to_lower().contains("godot"),
