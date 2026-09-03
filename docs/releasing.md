@@ -28,39 +28,30 @@ deletion. The packager creates required version tags only in disposable local
 checkouts; it never pushes B's tag or publishes B. Python regression fixtures
 that patch sources remain development evidence, not exact-candidate runtime proof.
 
-After the independent attestation repository commits an approval JSON whose
-contents exactly match both candidate `evidence.json` files and the complete
-qualification inventory, dispatch
-`release.yml`. Select **patch**, **minor**, or **major**, provide the previous
-published version, qualification run ID, and the immutable approval commit and
-path. The workflow computes the target version, verifies it matches A, publishes
-the already-qualified wheel and sdist first, then creates the tag and GitHub
-Release from A's already-qualified six assets. Publishing jobs check out trusted
-workflow tooling only; they never install, execute, check out, or rebuild the
-candidate. Before any artifact download, each job checks the qualification
-workflow path, canonical repository, `workflow_dispatch` event, `main` branch,
-successful run, and successful complete job set. Approval binds the source,
-run ID, attempt, signatures, and exact file inventories.
+After the qualification run's `Require complete release evidence` job is
+green, dispatch `release.yml`. Select **patch**, **minor**, or **major**, and
+provide the previous published version and the qualification run ID. The
+`verify-approval` job checks the run's provenance before downloading anything,
+then rebuilds the expected release record from the downloaded candidates and
+the complete qualification evidence: signatures, exact file inventories, A as
+the reviewed workflow source, A's version as the requested bump of the
+previous version, the canonical `qualification.json`, and every mandatory
+evidence row. The human approval is the `release-publish` environment's
+required reviewer; promotion reads no approval file in another repository.
+The workflow then publishes the already-qualified wheel and sdist first, then
+creates the tag and GitHub Release from A's already-qualified six assets.
+Publishing jobs check out trusted workflow tooling only; they never install,
+execute, check out, or rebuild the candidate. Before any artifact download,
+each job checks the qualification workflow path, canonical repository,
+`workflow_dispatch` event, `main` branch, successful run, and successful
+complete job set, and each publishing command recomputes the release record
+before its write.
 
-Generate a canonical schema-2 approval **draft** from retained evidence, rather
-than hand-copying or replacing evidence objects with strings:
-
-```bash
-python -m script.release_promotion make-approval \
-  --root /absolute/path/to/candidates \
-  --evidence /absolute/path/to/qualification \
-  --run-id QUALIFICATION_RUN_ID --bump major --previous 3.2.4 \
-  --output /absolute/path/to/approval.json
-```
-
-The draft contains `repository`, `bump`, `previous_version`, the full `a` and `b`
-candidate objects, and the qualification file inventory. Generating a draft is
-not approval. A human reviews it and commits it to the fixed canonical
-`dsarno/godot-ai-release-attestations` repository. Promotion accepts a full
-commit SHA reachable from its protected `main` and a bounded relative JSON path;
-the caller cannot choose a different approval repository. The attestation
-review must confirm the qualification run, sources, signed artifact hashes,
-and the separate repository's access boundary before creating that record.
+The `v4-publication-receipt` artifact records the promoted identity: version,
+tag, source commit, qualification run and attempt, the embedded public-key
+SPKI fingerprint, and the size and SHA-256 of every release asset (all six),
+distribution (wheel and sdist), and verifier file, plus the public PyPI and
+GitHub URLs that were re-downloaded and compared.
 
 Existing public version data is a recovery case, not an automatic success:
 PyPI's existing files must match approved metadata **and downloaded bytes**.
@@ -104,9 +95,7 @@ not establish that it is protected. The release operator must:
    private-key material in chat, logs, source, or build artifacts.
 3. Confirm no repository-scoped signing-key fallback exists: jobs must not be
    able to obtain the key without the environment approval gate.
-4. Verify the separately permissioned attestation channel below before freezing
-   A. A reviewer on the release repository alone does not establish that boundary.
-5. Protect `release-publish` with the designated required reviewer, no admin
+4. Protect `release-publish` with the designated required reviewer, no admin
    bypass, and an explicit `main`-only branch policy. Both publishing jobs use
    it. PyPI's trusted publisher must be owner `hi-godot`, repository `godot-ai`,
    workflow `release.yml`, environment **`release-publish`**. Remove any older
@@ -127,21 +116,21 @@ Actions secret does not revoke the credential. See the
 [setup checkpoint](v4-pr-head-checkpoint.md#signing-and-attestation-setup--owner-approved-boundary)
 for run links and the revocation status. No bootstrap operation approves a release.
 
-### Attestation channel and approved threat boundary
+### Trust roots and the retired attestation channel
 
 The owner approved [dsarno/godot-ai-release-attestations](https://github.com/dsarno/godot-ai-release-attestations)
-on 2026-09-01. Its [bootstrap record](https://github.com/dsarno/godot-ai-release-attestations/blob/c39ec40245e83aa2143a0e4361a97eee48407563/README.md)
-names `dsarno`, the existing SPKI fingerprint, and the boundary; it is **not**
-an approval of any candidate. Cite future approval records by full commit SHA.
+on 2026-09-01 as a separately permissioned approval channel; its
+[bootstrap record](https://github.com/dsarno/godot-ai-release-attestations/blob/c39ec40245e83aa2143a0e4361a97eee48407563/README.md)
+names `dsarno`, the existing SPKI fingerprint, and the boundary. That
+repository is **no longer a promotion dependency** and promotion never reads
+it. The required reviewer on `release-publish` is the approval, and the
+public-key fingerprint plus the six release-asset hashes are recorded in the
+publication receipt artifact.
 
-This is credential/repository separation, not independent administration.
-The attestation repo is public, owner-write-only, has Actions disabled and no
-deploy keys, and protects its main history from force-push/deletion. Do not
-grant godot-ai release workflows a credential that can write there. Recheck
-those controls and actual release credential scope at qualification time.
-Compromise of `dsarno`, GitHub, the signing key, or the trusted approval process
-remains outside this guarantee; GitHub account identity and the known canonical
-attestation repository are accepted bootstrap trust roots.
+This is one human approval checkpoint, not independent administration.
+Compromise of `dsarno`, GitHub, or the signing key remains outside this
+guarantee; the signing key and the same GitHub owner account are the trust
+roots.
 
 The `release-signing` environment requires approval by `dsarno`, permits only
 `main`, and disallows admin bypass. The obsolete
@@ -229,12 +218,11 @@ python3 script/v4-release verify \
 
 The standalone migration verifier is exactly `script/v4-release` plus
 `src/godot_ai/release_verify.py` from the named source commit. GitHub release
-notes are mutable and must not be treated as a trust anchor. Before publication,
-the separately permissioned channel described above must authenticate the source
-commit, both verifier digests, all six asset identities, the embedded public-key
-SPKI fingerprint, and its approved attestation identity. The migration guide
-names that channel; exact-candidate approval and retained permission checks
-remain required before publication. The two verifier files and repository
+notes are mutable and must not be treated as a trust anchor. The required
+reviewer on `release-publish` is the approval, and the publication receipt
+artifact records the embedded public-key SPKI fingerprint plus the six
+release-asset hashes alongside the wheel, sdist, and verifier-file digests of
+the promoted source commit. The two verifier files and repository
 documentation are not their own trust anchor.
 
 ## V3-to-v4 bridge transaction

@@ -42,9 +42,15 @@ def test_v4_publication_is_manual_and_promotes_only_qualified_bytes() -> None:
         "minor",
         "major",
     ]
-    assert "qualification_run_id" in raw
-    assert "approval_repository" not in triggers["workflow_dispatch"]["inputs"]
-    assert "approval_commit" in raw
+    assert set(triggers["workflow_dispatch"]["inputs"]) == {
+        "bump",
+        "previous_version",
+        "qualification_run_id",
+    }
+    # The human approval is the release-publish reviewer, not a record in
+    # another repository: promotion takes no approval commit/path inputs.
+    for retired in ("approval_commit", "approval_path", "attestation", "make-approval"):
+        assert retired not in raw
     assert "script.release_promotion verify" in raw
     assert "script.release_promotion pypi-preflight" in raw
     assert "script.release_promotion verify-pypi" in raw

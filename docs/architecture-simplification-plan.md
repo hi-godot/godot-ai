@@ -503,11 +503,12 @@ complete temporary/old tree and renames only the exact canonical stage live.
 First v4 startup broadly replaces owned pre-v4 client entries, durably records
 completion, and starts the managed server without a second confirmation.
 
-The owner-approved, separately permissioned attestation channel documented in
-[the release runbook](releasing.md#attestation-channel-and-approved-threat-boundary)
+The publication receipt documented in
+[the release runbook](releasing.md#trust-roots-and-the-retired-attestation-channel)
 still binds the source commit, both
 verifier-file digests, all six release assets, Python-package artifacts,
-qualification dependency inventories, and signing-key fingerprint. A capsule
+and signing-key fingerprint, and the qualification evidence retains every
+dependency inventory. A capsule
 is transitional delivery code, not authority to weaken canonical verification
 or introduce permanent v3 branches into v4.
 

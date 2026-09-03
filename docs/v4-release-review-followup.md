@@ -1315,10 +1315,10 @@ development results or the Python row alone into an approved release.
 3. Collect and review the required platform baselines; check in numeric latency
    and resource ceilings, then run all locked profiles and seeds. The passing
    exploratory run above is not a substitute.
-4. Freeze reviewed A/B source identities, execute the complete matrix, review
-   the immutable approval draft in the separately permissioned repository,
-   then promote the same bytes. Public dependency re-resolution and immutable
-   post-publication attestation remain required after publication.
+4. Freeze reviewed A/B source identities, execute the complete matrix, approve
+   the `release-publish` environment, then promote the same bytes. Public
+   dependency re-resolution and immutable post-publication attestation remain
+   required after publication.
 
 Do not remove the preflight guard, mark the complete contract satisfied, or
 sign a final stable identity just to obtain a green workflow.

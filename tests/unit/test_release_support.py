@@ -1,4 +1,4 @@
-"""Adversarial tests for the artifact/approval boundary (no network or publishing)."""
+"""Adversarial tests for the artifact/promotion boundary (no network or publishing)."""
 
 from __future__ import annotations
 
@@ -366,21 +366,13 @@ def test_existing_tag_mismatch_refuses_before_writes(monkeypatch):
     assert len(calls) == 1 and "--method" not in calls[0]
 
 
-def test_approval_repository_is_fixed_and_paths_reject_injection(monkeypatch):
-    monkeypatch.setattr(promotion, "gh", lambda *args, **kw: pytest.fail("unexpected API call"))
-    for path in ("../approval.json", "/approval.json", "a.json?ref=evil", "$(id).json"):
-        with pytest.raises(support.ReleaseError):
-            promotion.read_approval("a" * 40, path)
-    assert support.ATTESTATION_REPOSITORY == "dsarno/godot-ai-release-attestations"
-
-
-def test_incomplete_qualification_cannot_be_approved(pair, tmp_path):
+def test_incomplete_qualification_cannot_be_promoted(pair, tmp_path):
     _, candidates, a, _ = pair
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     (evidence / "qualification.json").write_bytes(support.canonical({"status": "passed"}))
     with pytest.raises(support.ReleaseError, match="complete qualification"):
-        promotion.verify_approval(candidates, evidence, {}, run_record(a), "major", "3.2.4")
+        promotion.verify_qualification(candidates, evidence, run_record(a), "major", "3.2.4")
 
 
 def test_download_verifies_bytes_not_just_registry_metadata(monkeypatch):
@@ -625,36 +617,6 @@ def test_provenance_checks_every_page_of_jobs(monkeypatch):
     with pytest.raises(support.ReleaseError, match="every qualification job"):
         promotion.check_run_provenance("123")
     assert len(calls) == 3 and calls[-1].endswith("page=2")
-
-
-def test_approval_read_uses_only_canonical_repository_commit_and_file(monkeypatch):
-    import base64
-
-    calls = []
-    raw = support.canonical({"schema": 2})
-
-    def api(path):
-        calls.append(path)
-        if "/compare/" in path:
-            return {"status": "ahead"}
-        return {
-            "type": "file",
-            "encoding": "base64",
-            "size": len(raw),
-            "content": base64.b64encode(raw).decode(),
-        }
-
-    monkeypatch.setattr(promotion, "gh", api)
-    assert promotion.read_approval("a" * 40, "releases/v4-0-0.json") == {"schema": 2}
-    assert all(path.startswith("repos/dsarno/godot-ai-release-attestations/") for path in calls)
-    assert calls[-1].endswith("?ref=" + "a" * 40)
-
-
-@pytest.mark.parametrize("status", ["behind", "diverged"])
-def test_approval_must_belong_to_attestation_main(monkeypatch, status):
-    monkeypatch.setattr(promotion, "gh", lambda *args: {"status": status})
-    with pytest.raises(support.ReleaseError, match="not on canonical"):
-        promotion.read_approval("a" * 40, "approval.json")
 
 
 @pytest.mark.parametrize("existing_count", [0, 1, 6])
@@ -961,11 +923,11 @@ def test_candidate_test_checkout_never_reuses_an_existing_directory(pair, tmp_pa
 
 
 @pytest.fixture
-def approval_boundary(pair, tmp_path, monkeypatch):
-    """Isolate approval serialization from the separately fail-closed matrix.
+def promotion_boundary(pair, tmp_path, monkeypatch):
+    """Isolate record reconstruction from the separately fail-closed matrix.
 
     Only this test's matrix validator is stubbed. Candidate signatures,
-    inventories, run binding and approval equality still use real validation.
+    inventories, run binding and evidence equality still use real validation.
     Nothing created here is release evidence or leaves the disposable fixture.
     """
     _, candidates, a, _ = pair
@@ -984,99 +946,62 @@ def approval_boundary(pair, tmp_path, monkeypatch):
     monkeypatch.setattr(promotion, "validate_rows", validate)
     qualification.complete(candidates, output)
     run = run_record(a)
-    approval = promotion.approval_payload(candidates, output, run, "major", "3.2.4")
-    return candidates, output, run, approval
+    record = promotion.verify_qualification(candidates, output, run, "major", "3.2.4")
+    return candidates, output, run, record
 
 
-def test_approval_contains_exact_full_objects_and_rejects_any_mutation(approval_boundary):
-    candidates, output, run, approval = approval_boundary
-    for name in ("a", "b"):
-        assert approval["candidates"][name] == support.read_json(
-            candidates / name / "evidence.json"
-        )
-    expected = approval["candidates"]["a"]
-    assert (
-        promotion.verify_approval(candidates, output, approval, run, "major", "3.2.4") == expected
-    )
-    for key, value in (
-        ("repository", "other/repository"),
-        ("previous_version", "3.2.3"),
-        ("bump", "minor"),
-        ("qualification", {}),
-        ("extra", True),
+def test_promotion_record_is_exact_candidate_a_and_rejects_drift(promotion_boundary):
+    candidates, output, run, record = promotion_boundary
+    assert record == support.read_json(candidates / "a/evidence.json")
+    assert record["spki_sha256"] == v4_release._verify.PUBLIC_KEY_SPKI_SHA256
+    assert {name.split("/", 1)[0] for name in record["files"]} == {"dist", "release", "verifier"}
+    for bump, previous, message in (
+        ("minor", "3.2.4", "does not match requested bump"),
+        ("major", "4.0.0", "does not match requested bump"),
     ):
-        with pytest.raises(support.ReleaseError, match="does not name"):
-            promotion.verify_approval(
-                candidates, output, {**approval, key: value}, run, "major", "3.2.4"
-            )
+        with pytest.raises(support.ReleaseError, match=message):
+            promotion.verify_qualification(candidates, output, run, bump, previous)
+    with pytest.raises(support.ReleaseError, match="attempt mismatch"):
+        promotion.verify_qualification(
+            candidates, output, {**run, "run_attempt": 2}, "major", "3.2.4"
+        )
     (output / "proof.txt").write_text("changed bytes\n", encoding="utf-8")
     with pytest.raises(support.ReleaseError, match="has changed"):
-        promotion.verify_approval(candidates, output, approval, run, "major", "3.2.4")
-
-
-def test_approval_draft_cli_writes_once_without_publishing(
-    approval_boundary, tmp_path, monkeypatch
-):
-    candidates, output, run, approval = approval_boundary
-    monkeypatch.setattr(promotion, "check_run_provenance", lambda run_id: run)
-    monkeypatch.setattr(
-        promotion, "publish_github", lambda *_: pytest.fail("unexpected publication")
-    )
-    destination = tmp_path / "approval.json"
-    args = [
-        "make-approval",
-        "--root",
-        str(candidates),
-        "--evidence",
-        str(output),
-        "--run-id",
-        "123",
-        "--bump",
-        "major",
-        "--previous",
-        "3.2.4",
-        "--output",
-        str(destination),
-    ]
-    assert promotion.main(args) == 0
-    assert destination.read_bytes() == support.canonical(approval)
-    assert promotion.main(args) == 1
-    assert destination.read_bytes() == support.canonical(approval)
+        promotion.verify_qualification(candidates, output, run, "major", "3.2.4")
 
 
 @pytest.mark.parametrize("command", ["verify", "pypi-preflight", "verify-pypi", "github"])
-def test_every_promotion_cli_revalidates_approval_before_any_write(
-    approval_boundary, tmp_path, monkeypatch, command
+def test_every_promotion_cli_revalidates_qualification_before_any_write(
+    promotion_boundary, tmp_path, monkeypatch, command
 ):
-    candidates, output, run, approval = approval_boundary
+    candidates, output, run, record = promotion_boundary
     monkeypatch.chdir(tmp_path)
     events = []
     monkeypatch.setattr(promotion, "check_run_provenance", lambda run_id: run)
-    monkeypatch.setattr(promotion, "read_approval", lambda *args: approval)
-    actual_verify = promotion.verify_approval
+    actual_verify = promotion.verify_qualification
 
     def verify(*args):
         result = actual_verify(*args)
-        events.append("approval-verified")
+        events.append("qualification-verified")
         return result
 
     def github_preflight(record):
-        assert events == ["approval-verified"]
+        assert events == ["qualification-verified"]
         events.append("github-preflight")
 
     def pypi_preflight(candidate, record, pending):
-        assert events == ["approval-verified", "github-preflight"]
+        assert events == ["qualification-verified", "github-preflight"]
         events.append("pypi-preflight")
         pending.mkdir()
         shutil.copyfile(next((candidate / "dist").glob("*.whl")), pending / "candidate.whl")
         return {}
 
     def publish(*args):
-        assert events == ["approval-verified", "github-preflight"]
+        assert events == ["qualification-verified", "github-preflight"]
         events.append("github-publish")
         return {}
 
-    monkeypatch.setattr(promotion, "verify_approval", verify)
+    monkeypatch.setattr(promotion, "verify_qualification", verify)
     monkeypatch.setattr(promotion, "github_preflight", github_preflight)
     monkeypatch.setattr(promotion, "pypi_preflight", pypi_preflight)
     monkeypatch.setattr(promotion, "verify_pypi", lambda *_: {"verified": True})
@@ -1095,20 +1020,22 @@ def test_every_promotion_cli_revalidates_approval_before_any_write(
         "major",
         "--previous",
         "3.2.4",
-        "--approval-commit",
-        "c" * 40,
-        "--approval-path",
-        "releases/v4-0-0.json",
         "--output",
         str(result),
     ]
     assert promotion.main(args) == 0
     report = support.read_json(result)
-    assert report["source"] == run["head_sha"] and report["approval_commit"] == "c" * 40
+    assert report["source"] == run["head_sha"] and report["version"] == "4.0.0"
+    # The receipt names the promoted bytes: key fingerprint plus every digest.
+    assert report["spki_sha256"] == record["spki_sha256"]
+    assert report["files"] == record["files"]
+    assert set(support.RELEASE_NAMES) == {
+        name.removeprefix("release/") for name in report["files"] if name.startswith("release/")
+    }
     if command == "pypi-preflight":
         assert (tmp_path / "step-output").read_text(encoding="utf-8") == "pending=true\n"
     events.clear()
-    approval["bump"] = "minor"
+    args[args.index("--bump") + 1] = "minor"
     assert promotion.main(args) == 1
     assert events == []  # No preflight mutation or publication after refusal.
 

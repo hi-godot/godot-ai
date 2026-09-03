@@ -2,6 +2,8 @@ name: Promote qualified v4 release
 
 # Reviewed workflow code validates data artifacts. Candidate code is never
 # installed/executed or rebuilt in any job with publication permissions.
+# The human approval is the release-publish environment's required reviewer;
+# the expected release record is rebuilt from the qualification artifacts.
 on:
   workflow_dispatch:
     inputs:
@@ -18,14 +20,6 @@ on:
         description: "Successful complete qualification run"
         required: true
         type: string
-      approval_commit:
-        description: "Full approval commit in dsarno/godot-ai-release-attestations"
-        required: true
-        type: string
-      approval_path:
-        description: "Canonical approval JSON path at that commit"
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -37,8 +31,6 @@ concurrency:
 
 env:
   GODOT_AI_DISABLE_TELEMETRY: "true"
-  APPROVAL_COMMIT: ${{ inputs.approval_commit }}
-  APPROVAL_PATH: ${{ inputs.approval_path }}
   QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
   BUMP: ${{ inputs.bump }}
   PREVIOUS_VERSION: ${{ inputs.previous_version }}
@@ -89,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          python -m script.release_promotion verify --approval-commit "$APPROVAL_COMMIT" --approval-path "$APPROVAL_PATH" --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+          python -m script.release_promotion verify --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
       - name: pypi-preflight
         env:
           GH_TOKEN: ${{ github.token }}
@@ -97,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          python -m script.release_promotion pypi-preflight --approval-commit "$APPROVAL_COMMIT" --approval-path "$APPROVAL_PATH" --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+          python -m script.release_promotion pypi-preflight --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
 
   publish-pypi:
     needs: verify-approval
@@ -151,7 +143,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          python -m script.release_promotion pypi-preflight --approval-commit "$APPROVAL_COMMIT" --approval-path "$APPROVAL_PATH" --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+          python -m script.release_promotion pypi-preflight --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         if: steps.preflight.outputs.pending == 'true'
         with:
@@ -164,7 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          python -m script.release_promotion verify-pypi --approval-commit "$APPROVAL_COMMIT" --approval-path "$APPROVAL_PATH" --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+          python -m script.release_promotion verify-pypi --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
 
   publish-github:
     needs: [verify-approval, publish-pypi]
@@ -216,7 +208,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          python -m script.release_promotion github --approval-commit "$APPROVAL_COMMIT" --approval-path "$APPROVAL_PATH" --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+          python -m script.release_promotion github --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: v4-publication-receipt

@@ -20,9 +20,9 @@ Cherry Studio is not supported in v4; remove its stale v3 entry in Cherry
 Studio itself. Godot AI cannot safely edit that application's internal database.
 
 The public v4 release is not available yet: publication remains fail-closed
-until its immutable cross-platform qualification and release attestation
-are complete. The steps above describe the supported flow once publication
-opens. Do not install an unpublished candidate into a real project.
+until the cross-platform qualification run is complete and the maintainer
+approves promotion. The steps above describe the supported flow once
+publication opens. Do not install an unpublished candidate into a real project.
 
 ## What the Update click does
 
@@ -108,9 +108,8 @@ no-config/no-build uv arguments with official PyPI named explicitly.
 
 This still relies on the installed `uv` executable/cache, PyPI/TLS delivery,
 and same-user machine integrity. GitHub release notes are mutable and are not
-a trust anchor. Approval records will be published in
-[dsarno/godot-ai-release-attestations](https://github.com/dsarno/godot-ai-release-attestations),
-where godot-ai release automation must have no write access. This separates repository
-credentials, not the GitHub provider or owner account. Its bootstrap README
-does not approve a release; public migration remains closed until the exact
-promoted bytes have passed qualification and received a commit-pinned approval.
+a trust anchor. The required reviewer on the `release-publish` environment is
+the approval, and the public-key fingerprint plus the six release-asset hashes
+are recorded in the publication receipt artifact. The signing key and the same
+GitHub owner account are the trust roots. Public migration remains closed until
+the exact promoted bytes have passed qualification and that review.

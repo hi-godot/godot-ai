@@ -1,8 +1,10 @@
-"""Approve and resume publication of immutable release artifacts.
+"""Verify and resume publication of immutable release artifacts.
 
 GitHub credentials are used only through gh. PyPI/public asset downloads never
 receive those credentials. Each publishing job repeats verification before a
-write; neither downloads nor executes candidate Python code.
+write; neither downloads nor executes candidate Python code. The human approval
+is the ``release-publish`` environment's required reviewer, not a record in
+another repository.
 """
 
 from __future__ import annotations
@@ -90,32 +92,6 @@ def verify_public_file(url: str, expected: dict[str, Any], hosts: set[str]) -> N
     )
 
 
-def read_approval(commit: str, path: str) -> dict[str, Any]:
-    support.require(support.SHA.fullmatch(commit), "approval must use a full commit SHA")
-    support.require(
-        re.fullmatch(r"[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\.json", path), "invalid approval path"
-    )
-    base = f"repos/{support.ATTESTATION_REPOSITORY}"
-    comparison = gh(f"{base}/compare/{commit}...main")
-    support.require(
-        comparison.get("status") in {"ahead", "identical"},
-        "approval commit is not on canonical attestation main",
-    )
-    entry = gh(f"{base}/contents/{path}?ref={commit}")
-    support.require(
-        entry.get("type") == "file"
-        and entry.get("encoding") == "base64"
-        and entry.get("size", 0) <= support.MAX_JSON_BYTES,
-        "approval is not a bounded repository file",
-    )
-    import base64
-
-    raw = base64.b64decode(entry["content"], validate=False)
-    record = support.strict_json(raw)
-    support.require(raw == support.canonical(record), "approval must be canonical JSON")
-    return record
-
-
 def check_run_provenance(run_id: str) -> dict[str, Any]:
     """Reject wrong/red runs before any cross-run artifact download."""
     support.require(re.fullmatch(r"[1-9][0-9]*", run_id), "invalid run ID")
@@ -150,13 +126,19 @@ def check_run_provenance(run_id: str) -> dict[str, Any]:
     return run
 
 
-def approval_payload(
+def verify_qualification(
     root: Path,
     evidence_root: Path,
     run: dict[str, Any],
     bump: str,
     previous: str,
 ) -> dict[str, Any]:
+    """Rebuild the expected release record from retained artifacts.
+
+    Returns candidate A's sealed record. Every publishing command recomputes
+    this from the downloaded candidates and the complete qualification
+    evidence; nothing downloaded is executed or treated as an approval.
+    """
     candidates = {name: support.verify_candidate(root / name, name) for name in ("a", "b")}
     a, b = candidates["a"], candidates["b"]
     support.require(a["source"] == a["workflow_sha"], "A must be the reviewed workflow source")
@@ -186,30 +168,7 @@ def approval_payload(
         "complete qualification evidence is missing or has changed",
     )
     validate_rows(evidence_root, qualification["candidates"])
-    return {
-        "schema": 2,
-        "repository": support.REPOSITORY,
-        "bump": bump,
-        "previous_version": previous,
-        "candidates": candidates,
-        "qualification": evidence,
-    }
-
-
-def verify_approval(
-    root: Path,
-    evidence_root: Path,
-    approval: dict[str, Any],
-    run: dict[str, Any],
-    bump: str,
-    previous: str,
-) -> dict[str, Any]:
-    expected = approval_payload(root, evidence_root, run, bump, previous)
-    support.require(
-        support.canonical(approval) == support.canonical(expected),
-        "approval does not name this exact candidate and qualification evidence set",
-    )
-    return expected["candidates"]["a"]
+    return a
 
 
 def pypi_preflight(candidate: Path, record: dict[str, Any], pending: Path) -> dict[str, Any]:
@@ -232,7 +191,7 @@ def pypi_preflight(candidate: Path, record: dict[str, Any], pending: Path) -> di
             row.get("digests", {}).get("sha256") == expected["sha256"]
             and row.get("size") == expected["size"]
             and not row.get("yanked"),
-            "existing PyPI distribution does not match approval",
+            "existing PyPI distribution does not match the qualified record",
         )
         verify_public_file(row["url"], expected, {"files.pythonhosted.org"})
         verified[name] = {"url": row["url"], **expected}
@@ -290,7 +249,7 @@ def github_preflight(record: dict[str, Any]) -> dict[str, Any] | None:
             support.require(
                 row["size"] == expected["size"]
                 and row.get("digest") == "sha256:" + expected["sha256"],
-                "existing GitHub asset differs from approval",
+                "existing GitHub asset differs from the qualified record",
             )
         support.require(
             release["draft"] or len(assets) == 6, "public release has an incomplete asset set"
@@ -376,19 +335,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=(
-            "run-provenance",
-            "make-approval",
-            "verify",
-            "pypi-preflight",
-            "verify-pypi",
-            "github",
-        ),
+        choices=("run-provenance", "verify", "pypi-preflight", "verify-pypi", "github"),
     )
     parser.add_argument("--root", type=Path, default=Path("candidates"))
     parser.add_argument("--evidence", type=Path, default=Path("qualification"))
-    parser.add_argument("--approval-commit")
-    parser.add_argument("--approval-path")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--bump", choices=("major", "minor", "patch"))
     parser.add_argument("--previous")
@@ -398,34 +348,24 @@ def main(argv: list[str] | None = None) -> int:
         run = check_run_provenance(args.run_id)
         if args.command == "run-provenance":
             return 0
-        if args.command == "make-approval":
-            support.require(
-                args.bump and args.previous, "approval draft requires previous version and bump"
-            )
-            draft = approval_payload(args.root, args.evidence, run, args.bump, args.previous)
-            support.require(
-                draft["candidates"]["a"]["run_id"] == args.run_id, "candidate run ID mismatch"
-            )
-            with args.output.open("xb") as stream:
-                stream.write(support.canonical(draft))
-            print(
-                "Wrote approval draft only; a human must review and commit it "
-                "in the attestation repository."
-            )
-            return 0
         support.require(
-            all((args.approval_commit, args.approval_path, args.bump, args.previous)),
-            "promotion requires an approval, previous version, and bump",
+            args.bump and args.previous, "promotion requires the previous version and bump"
         )
-        approval = read_approval(args.approval_commit, args.approval_path)
-        record = verify_approval(args.root, args.evidence, approval, run, args.bump, args.previous)
+        record = verify_qualification(args.root, args.evidence, run, args.bump, args.previous)
         support.require(record["run_id"] == args.run_id, "candidate run ID mismatch")
         github_preflight(record)
+        # The publication receipt names the promoted bytes: the embedded
+        # public-key fingerprint plus every release, distribution and
+        # verifier digest of candidate A.
         result = {
             "version": record["version"],
+            "tag": record["tag"],
             "source": record["source"],
-            "approval_commit": args.approval_commit,
-            "approval_path": args.approval_path,
+            "workflow_sha": record["workflow_sha"],
+            "run_id": record["run_id"],
+            "run_attempt": record["run_attempt"],
+            "spki_sha256": record["spki_sha256"],
+            "files": record["files"],
         }
         if args.command == "pypi-preflight":
             result["pypi"] = pypi_preflight(args.root / "a", record, Path("pending-pypi"))

@@ -25,7 +25,6 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "hi-godot/godot-ai"
-ATTESTATION_REPOSITORY = "dsarno/godot-ai-release-attestations"
 QUALIFICATION_WORKFLOW = ".github/workflows/release-qualification.yml"
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")

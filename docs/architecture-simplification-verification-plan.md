@@ -167,23 +167,19 @@ engine runtime coverage.
 
 ## 5. Bootstrap verifier and bridge migration
 
-### 5.1 Separately permissioned trust channel
+### 5.1 Trust roots
 
 v4.0 uses the existing release-signing key. The migration instructions obtain
-the small verifier from the exact immutable v4 release source commit. At least
-one separately permissioned surface, not writable with release-publisher credentials,
-authenticates that commit, both verifier-file digests, every release-asset
-identity, and the expected public-key fingerprint.
+the small verifier from the exact immutable v4 release source commit. The
+required reviewer on the `release-publish` environment is the approval, and
+the publication receipt artifact records the public-key fingerprint plus the
+six release-asset hashes, together with the verifier-file and wheel/sdist
+digests of that commit. Promotion consults no second repository.
 
-The owner-approved channel is
-[dsarno/godot-ai-release-attestations](https://github.com/dsarno/godot-ai-release-attestations),
-with `dsarno` as approver. Follow the
-[runbook's approved boundary](releasing.md#attestation-channel-and-approved-threat-boundary):
-no godot-ai automation write credential there, owner-only writes, Actions off,
-and commit-pinned approval records. This is independent of scoped release-asset
-mutation, not independent administration. The shared GitHub provider and owner
-account are explicit trust roots. Qualification must retain the permission
-checks and prove the release credential cannot write the attestation channel.
+The signing key and the same GitHub owner account (`dsarno`) are the trust
+roots. This is one human approval checkpoint, not independent administration;
+the shared GitHub provider and owner account are explicit trust roots, and
+their compromise is outside this guarantee.
 
 The verifier uses the user's Godot executable or another already-required
 runtime; it does not download executable dependencies during verification. It
@@ -263,8 +259,8 @@ Before publication:
 
 Both plugin manifests bind source SHA, repository, channel, tag/version,
 artifact name/size/digest, and exact plugin-tree inventory. Each candidate's
-approval digest set additionally binds its wheel and sdist plus every artifact
-in each qualification row's resolved Python distribution inventory.
+sealed record additionally binds its wheel, sdist, and verifier files, and
+every qualification row retains its resolved Python distribution inventory.
 
 ```text
 accepted green tranches
@@ -284,9 +280,9 @@ A + B digests
   |-> exact A -> B hot self-update
   |-> failure/lock/repair/storm evidence
   `-> pre-publication qualification bundle
-       `-> approval bound to sources, versions, channels, and every digest
+       `-> release-publish reviewer approves the exact digest set
             `-> publish A byte-for-byte
-                 `-> public redownload/hash attestation
+                 `-> publication receipt + public redownload/hash check
 ```
 
 Signing disposable and eventual artifacts under one stable identity is
@@ -324,7 +320,9 @@ substitution fails this gate.
 ### 6.3 Publication promotion
 
 1. create/protect final `v4.0.0` tag at SHA A;
-2. verify approval record, sources, identities, signer, and every digest;
+2. rebuild the expected record from the qualification artifacts and verify
+   sources, identities, signer, and every digest; the `release-publish`
+   reviewer is the approval;
 3. upload A's exact wheel/sdist to PyPI first;
 4. download public distributions and compare hashes with A;
 5. if the version already exists, compare hashes and fail on any mismatch;
@@ -675,9 +673,9 @@ reload churn, multi-editor, and post-quiescence resource cases. Missing,
 duplicate, unknown or failed cases invalidate the row even when a producer
 labels the surrounding result passed.
 
-Publication approval names the exact A/B digest set. Any source, workflow,
-document, manifest, package, or asset change after approval invalidates the
-affected rows and requires a new pre-publication bundle.
+The `release-publish` review approves the exact A/B digest set. Any source,
+workflow, document, manifest, package, or asset change after approval
+invalidates the affected rows and requires a new pre-publication bundle.
 
 ### 11.2 Post-publication attestation
 
@@ -689,7 +687,7 @@ containing:
   publication-smoke resolution on every supported OS/Python row;
 - public GitHub asset inventory, download URLs, and hash comparisons;
 - release/tag visibility and canonical migration-link checks;
-- the immutable pre-publication approval identifier and digest set;
+- the publication receipt's identity and digest set;
 - any interrupted-publication recovery transcript.
 
 The release is complete only when this attestation proves that every public

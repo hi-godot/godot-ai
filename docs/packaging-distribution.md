@@ -62,7 +62,7 @@ bearer capability.
 
 CI builds both wheel and sdist, installs them into clean environments on Linux,
 macOS, and Windows, and executes the installed CLI. Publication still requires
-the exact-candidate qualification and digest-bound approval in
+the exact-candidate qualification and reviewer-gated promotion in
 [releasing.md](releasing.md).
 
 ### Development checkout
@@ -92,18 +92,19 @@ installed.
 `script/v4-release` deliberately loads the exact sibling
 `src/godot_ai/release_verify.py` by file path. It does not trust an installed
 `godot-ai` package. GitHub release notes are mutable and cannot authenticate
-assets against a release publisher who can replace those notes. Before
-publication, the [owner-approved, separately permissioned attestation channel](releasing.md#attestation-channel-and-approved-threat-boundary)
-must bind:
+assets against a release publisher who can replace those notes. The required
+reviewer on `release-publish` is the approval, and the publication receipt
+artifact records:
 
-- both verifier file SHA-256 values;
-- their exact source commit;
+- both verifier file SHA-256 values and their exact source commit;
 - the exported RSA SPKI SHA-256 fingerprint;
-- all six plugin/migration asset names, sizes, hashes, and identity;
-- the `godot-ai` wheel and sdist names, sizes, hashes, version, and source
-  identity; and
-- for every qualification OS/Python row, the complete resolved distribution
-  inventory (normalized name, version, artifact filename, size, and SHA-256).
+- all six plugin/migration asset names, sizes, and hashes; and
+- the `godot-ai` wheel and sdist names, sizes, hashes, and version.
+
+For every qualification OS/Python row, the complete resolved distribution
+inventory (normalized name, version, artifact filename, size, and SHA-256) is
+retained in the qualification run's evidence artifact, which promotion
+verifies before any publication write.
 
 The behavior-defining runtime packages declared in `pyproject.toml` are exact
 pins and are checked again by `godot_ai.runtime_dependencies` before CLI
@@ -136,12 +137,12 @@ architecture rather than another self-reported hash. Exact critical pins still
 fail before FastMCP import when resolution merely drifts; noncritical
 transitive drift remains an accepted packaging risk.
 
-The channel authenticates approval through the known canonical attestation
-repository and the `dsarno` account, not a second cryptographic signing key.
-Compromise of that account or GitHub is outside the approved guarantee.
-Its bootstrap record is published; exact-candidate approval and verification
-of the permission boundary in retained qualification evidence remain required.
-Publication and public migration remain closed until those gates pass.
+Promotion consults no second repository and no second cryptographic signing
+key: the signing key and the same GitHub owner account are the trust roots,
+and compromise of that account or GitHub is outside the guarantee.
+Exact-candidate qualification and the `release-publish` review remain
+required. Publication and public migration remain closed until those gates
+pass.
 
 The v4 SPKI fingerprint compiled into both standalone and in-plugin verification
 is:
@@ -184,7 +185,7 @@ complete and reviewed.
 - [ ] Every qualification row records the complete resolved distribution
       artifact set; startup proves the exact behavior-defining dependency pins.
 - [ ] The embedded updater key and standalone verifier key are identical; the
-      SPKI fingerprint matches the separately permissioned attestation surface.
+      SPKI fingerprint is recorded in the publication receipt.
 - [ ] One-click final-v3-to-v4 migration proves both signature layers, an
       external retained backup, graceful editor restart/lease transfer,
       automatic client repin/server start, and the exact signed live tree.
@@ -196,8 +197,8 @@ complete and reviewed.
       line.
 - [ ] All mandatory Windows, macOS, Linux, Godot, and Python rows pass with no
       required skip.
-- [ ] Approval names the exact digest set. No source, docs, workflow, or artifact
-      is rebuilt after approval.
+- [ ] The `release-publish` reviewer approves the exact digest set. No source,
+      docs, workflow, or artifact is rebuilt after approval.
 - [ ] Publication uploads approved Python bytes first, verifies their public
       hashes, then uploads the already-approved plugin bytes.
 - [ ] Public redownload attestation proves every released byte and every
