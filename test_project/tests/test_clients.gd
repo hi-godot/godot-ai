@@ -1444,55 +1444,6 @@ func test_env_lookup_worker_thread_never_warmed_var_reads_empty() -> void:
 		"un-warmed worker read must degrade to \"\", never touch the live env")
 
 
-func test_startup_actor_discovery_warms_home_for_its_worker() -> void:
-	## GUI-launched editors often have a minimal PATH. The startup worker must
-	## still find uvx in the user's well-known home directory without reading
-	## the process environment off-main.
-	var saved_home := OS.get_environment("HOME")
-	var saved_profile := OS.get_environment("USERPROFILE")
-	var fake_home := _scratch_dir.path_join("startup_actor_home")
-	_remove_dir_recursive(fake_home)
-	var bin_dir := fake_home.path_join(".local/bin")
-	DirAccess.make_dir_recursive_absolute(bin_dir)
-	var exe_name := "uvx.exe" if OS.get_name() == "Windows" else "uvx"
-	var expected := bin_dir.path_join(exe_name)
-	var fixture := FileAccess.open(expected, FileAccess.WRITE)
-	assert_true(fixture != null, "must create the well-known uvx fixture")
-	if fixture == null:
-		_remove_dir_recursive(fake_home)
-		return
-	fixture.store_string("fixture")
-	fixture.close()
-
-	if OS.get_name() == "Windows":
-		OS.unset_environment("HOME")
-		OS.set_environment("USERPROFILE", fake_home)
-	else:
-		OS.set_environment("HOME", fake_home)
-	McpClientConfigurator.invalidate_uvx_cli_cache()
-	McpClientConfigurator.warm_update_actor_discovery_env()
-	var thread := Thread.new()
-	var start_err := thread.start(func() -> String:
-		return McpClientConfigurator.find_uvx()
-	)
-	var found := str(thread.wait_to_finish()) if start_err == OK else ""
-
-	if saved_home.is_empty():
-		OS.unset_environment("HOME")
-	else:
-		OS.set_environment("HOME", saved_home)
-	if saved_profile.is_empty():
-		OS.unset_environment("USERPROFILE")
-	else:
-		OS.set_environment("USERPROFILE", saved_profile)
-	McpClientConfigurator.invalidate_uvx_cli_cache()
-	McpClientConfigurator.warm_update_actor_discovery_env()
-	_remove_dir_recursive(fake_home)
-
-	assert_eq(start_err, OK, "startup actor discovery worker must start")
-	assert_eq(found, expected, "worker must use the main-thread-warmed home snapshot")
-
-
 func test_editor_setting_lookup_worker_thread_serves_snapshot() -> void:
 	## #691: mode_override() runs on the startup walk's discovery worker
 	## (via get_server_command) and EditorSettings is not thread-safe. A

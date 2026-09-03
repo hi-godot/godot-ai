@@ -669,16 +669,6 @@ static func warm_env_snapshot(endpoint_policy: Dictionary = {}) -> void:
 	capture_launch_context(endpoint_policy)
 
 
-## The installed-plugin startup barrier must locate its exact transaction actor
-## before the full client composition exists. Its worker may read only the
-## mutex-protected environment snapshot, so warm the fixed discovery variables
-## on main without prematurely touching EditorSettings, client descriptors, or
-## launch-context state.
-static func warm_update_actor_discovery_env() -> void:
-	McpPathTemplate.warm_env_snapshot()
-	UvResolution.warm_environment()
-
-
 static func client_status_probe_snapshot(id: String) -> Dictionary:
 	var client := ClientRegistry.get_by_id(id)
 	if client == null:
@@ -1581,40 +1571,6 @@ static func get_server_command() -> Array[String]:
 
 	push_warning("MCP | no server found — install uv or run: pip install godot-ai")
 	return []
-
-
-## Resolve the transaction actor from the exact same installed environment as
-## the current server. This is a separate console entry point so uvx never
-## guesses at a system Python, while dev checkouts still run the module through
-## their already-proven venv interpreter.
-static func get_update_transaction_command() -> Array[String]:
-	var server := get_server_command()
-	if server.is_empty():
-		return []
-	if server.size() >= 3 and server[1] == "-m":
-		return [server[0], "-m", "godot_ai.update_transaction"]
-	if str(server[0]).get_file().begins_with("uvx"):
-		var command: Array[String] = [str(server[0])]
-		command.append_array(UvResolution.args())
-		command.append_array([
-			"--from", "godot-ai==%s" % _pypi_pin_version(get_plugin_version()),
-			"godot-ai-update-transaction",
-		])
-		return command
-	var executable := str(server[0]).get_base_dir().path_join(
-		"godot-ai-update-transaction.exe"
-		if OS.get_name() == "Windows"
-		else "godot-ai-update-transaction"
-	)
-	## A ternary of array literals loses its element type at runtime even though
-	## this function declares Array[String]. Installed-mode startup then fails
-	## when the caller assigns the result to its typed command array.
-	var actor_command: Array[String] = []
-	if FileAccess.file_exists(executable):
-		actor_command.append(executable)
-	return actor_command
-static func update_actor_requires_uv_environment_isolation(command: Array[String]) -> bool:
-	return UvResolution.is_production_command(command)
 
 
 ## Which tier `get_server_command` would resolve to, without side-effects.
