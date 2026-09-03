@@ -98,6 +98,8 @@ environment. Applying the checkbox therefore also sends a `telemetry_opt_out`
 event over the WebSocket the plugin is already authenticated on (issue #913).
 The receiving server stops sending immediately.
 
+One timing caveat: the opt-out frame can only be sent after the WebSocket handshake, but the server records its `connected` telemetry event as part of publishing that connection. On an opted-out editor's *first* connect to a fresh adopted server, that single `connected` record (versions, hashed session id, session count) can therefore be enqueued before the opt-out is latched; every later record on that process is suppressed. Carrying the opt-out inside the authenticated handshake would close this window and is a planned follow-up.
+
 Four properties of that channel, since it is a privacy contract:
 
 - **Authenticated and instance-bound.** It rides the mutually authenticated
