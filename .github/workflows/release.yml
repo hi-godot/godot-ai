@@ -28,6 +28,11 @@ jobs:
   # PR description).
   publish-pypi:
     runs-on: ubuntu-latest
+    # PyPI's trusted publisher for godot-ai is bound to this environment
+    # (workflow release.yml + environment release-publish). The environment
+    # requires a reviewer approval and must allow the `v3.*` tag pattern
+    # for maintenance releases (docs/releasing.md).
+    environment: release-publish
     permissions:
       id-token: write  # required for PyPI OIDC
 
@@ -82,6 +87,10 @@ jobs:
   build-plugin-zip:
     runs-on: ubuntu-latest
     needs: publish-pypi
+    # RELEASE_SIGNING_KEY_PEM is an environment secret of release-signing,
+    # not a repository secret; the sign step below reads it from there.
+    # Same reviewer + `v3.*` tag policy requirement as release-publish.
+    environment: release-signing
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

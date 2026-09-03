@@ -7,6 +7,27 @@ Cutting a release, and the self-update install path with its smoke-test contract
 
 ## Releasing
 
+### The `release/v3` maintenance line
+
+`main` is the v4 line and its publication path is separate. v3 patch releases
+are cut from `release/v3`, which carries the v3 code plus the v3-applicable
+fixes cherry-picked from `main` (each cherry-pick records its origin with
+`-x`). To ship a v3 fix: open a PR against `release/v3` (CI runs there), then
+dispatch the bump workflow against that branch:
+
+```bash
+gh workflow run bump-and-release.yml --ref release/v3 -f bump=patch
+```
+
+The bump commits and tags on the dispatched branch and triggers `release.yml`
+on the new tag, exactly as on `main` before v4. Two GitHub settings are load-
+bearing for that run: the `release-signing` environment holds
+`RELEASE_SIGNING_KEY_PEM` (it is no longer a repository secret) and PyPI's
+trusted publisher is bound to the `release-publish` environment. Both
+environments require a reviewer approval in the Actions UI and must list the
+`v3.*` tag pattern in their deployment policy, or the signing and publish jobs
+are refused before they start.
+
 Use the GitHub Actions workflow to cut a release:
 ```bash
 gh workflow run bump-and-release.yml -f bump=patch   # or minor / major

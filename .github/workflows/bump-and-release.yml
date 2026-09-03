@@ -59,6 +59,16 @@ jobs:
           sed -i "s/version=\"${OLD}\"/version=\"${NEW}\"/" plugin/addons/godot_ai/plugin.cfg
           sed -i "s/^version = \"${OLD}\"/version = \"${NEW}\"/" pyproject.toml
 
+      - name: Require a branch ref
+        # The bump commits to whatever ref the workflow was dispatched on.
+        # `main` is the v4 line; v3 patch releases dispatch this against
+        # `release/v3` (see docs/releasing.md). Refuse a tag/detached ref.
+        run: |
+          case "$GITHUB_REF" in
+            refs/heads/*) echo "Bumping on branch $GITHUB_REF_NAME" ;;
+            *) echo "ERROR: dispatch bump-and-release against a branch, got $GITHUB_REF" >&2; exit 1 ;;
+          esac
+
       - name: Commit, tag, and push
         run: |
           NEW="${{ steps.next.outputs.version }}"
@@ -67,7 +77,7 @@ jobs:
           git add plugin/addons/godot_ai/plugin.cfg pyproject.toml
           git commit -m "Bump version to ${NEW}"
           git tag "v${NEW}"
-          git push origin main --tags
+          git push origin "HEAD:$GITHUB_REF_NAME" --tags
 
       - name: Trigger release workflow
         # The tag push above does NOT fire release.yml on its own — pushes
