@@ -50,6 +50,54 @@ handlers and an unchanged lifecycle after a busy preflight.
 
 ## Development validation
 
+### External actor-kill regression matrix
+
+Nine new command-line regression rows kill the actual activation subprocess
+only after observing its transaction-bound external barrier: after acquiring
+the activation lock; before/after the initial journal; before/after both tree
+renames; and before/after publishing `stage_live`. Each row pins the exact
+live/stage/backup hashes, journal phase and absence of premature terminal or
+completion records. Ordinary startup refuses without changing recovery
+evidence. Explicit repair also refuses without mutation while the separate
+editor-identity process remains alive. After that process exits, only an
+explicit repair command restores the exact old tree, quarantines an already
+activated new tree, claims the rolled-back result and releases the lock.
+The external crash barrier remains as evidence and its token is not persisted.
+
+These are real actor/process-death tests using a separate Python process as
+the editor identity, not real Godot composition or immutable-candidate proof.
+They extend development coverage of the existing adapter; the full section-8.1
+surface and two-Godot-editor qualification producer remain open. No production
+runtime, signing boundary or qualification gate was changed for this batch.
+
+Validation: the complete Python run with Godot 4.7 integration enabled passed
+**2,457 tests, four platform-inapplicable skips**, with the existing third-party
+Starlette/httpx deprecation warning. All nine new kill rows passed, including
+their startup-refusal and exact-repair assertions. The initial focused run
+failed on a test-authoring typo (`live` instead of the probe's `alive` value);
+that assertion was corrected, not removed. The full Godot 4.7.2 combined run
+passed **2,150 tests, zero failures, 11 conditional/platform skips, 71 suites**;
+authenticated read tools passed and the editor closed normally. Ruff,
+actionlint and all eleven architecture gates passed. Logs are retained at
+`/private/tmp/godot-ai-949-crash-matrix-full-pytest.log` and
+`/private/tmp/godot-ai-release-build.szEA2o/crash-matrix-godot-tests.log`.
+The previously completed manual Update remains evidence for the unchanged
+production tree; this test-only batch does not claim a new interactive run.
+
+Additional engine-only GLES controls retained under
+`/private/tmp/godot-ai-gles-sync-control.hasuIC` completed 40 path previews with
+forced draws and 40 edited-resource previews with retained results, without
+the texture warning. A separate native particle-scene control reproduced one
+unfreed `ParticlesShaderGLES3`, one shader RID and 39 unclaimed StringNames
+after leaving a particle scene in another editor tab. It contains no Godot AI
+code. The corrected `particle-tabs-clean.log` has no earlier scan/parse error;
+the first control attempt's deferred-scan errors are retained separately.
+The same particle diagnostic reproduced again in the completely fresh,
+native-only `/private/tmp/godot-native-particle-repro.8xZayJ` project.
+This isolates the extra particle diagnostics seen when the reused QA project
+opened its earlier storm scene at launch. It does **not** isolate or waive the
+two 349,524-byte texture warnings from the full combined suite.
+
 ### Restart follow-up
 
 The rerun of CI on `05c96d2` still timed out in Windows final-v3 migration
@@ -92,8 +140,12 @@ the Metal-renderer editor normally. The full Godot 4.7.2 run again passed all
 The final full Python run with Godot integration enabled passed **2,448 tests,
 four platform-inapplicable skips**, with the existing third-party
 Starlette/httpx deprecation warning. Ruff, actionlint and all eleven
-architecture gates passed. Windows CI on this follow-up is still required
-before treating #957 as resolved.
+architecture gates passed. The subsequent
+[CI run on `2589d41`](https://github.com/hi-godot/godot-ai/actions/runs/33715456363)
+passed all **32 jobs**, including Windows' **19 restart/bridge/upgrade regressions**
+and all **71 Godot suites** (2,152 passed, zero failed, 37 platform skips).
+The final-v3 Windows test completed in approximately 27 seconds. Issue #957
+remains open pending landing/review; no failed gate was rerun into a waiver.
 
 Exploratory stress also exposed an unclassified AnyIO closed-stream exception
 during reload. Typed transport classification now covers `BrokenResourceError`,

@@ -3152,6 +3152,196 @@ def test_activate_cli_uses_authenticated_environment_failpoint_without_secret_le
             assert token_hex.encode("ascii") not in data, path
 
 
+@pytest.mark.parametrize(
+    ("effect", "when", "occurrence", "live", "stage", "backup", "phase"),
+    [
+        ("activation_lock", "after", 1, "old", True, False, None),
+        ("journal_commit", "before", 1, "old", True, False, None),
+        ("journal_commit", "after", 1, "old", True, False, "prepared"),
+        ("live_to_backup", "before", 1, "old", True, False, "prepared"),
+        ("live_to_backup", "after", 1, None, True, True, "prepared"),
+        ("stage_to_live", "before", 1, None, True, True, "prepared"),
+        ("stage_to_live", "after", 1, "new", False, True, "prepared"),
+        ("journal_commit", "before", 2, "new", False, True, "prepared"),
+        ("journal_commit", "after", 2, "new", False, True, "stage_live"),
+    ],
+)
+def test_killed_cli_actor_requires_closed_editor_and_explicit_repair(
+    tmp_path: Path,
+    effect: str,
+    when: str,
+    occurrence: int,
+    live: str | None,
+    stage: bool,
+    backup: bool,
+    phase: str | None,
+) -> None:
+    """Kill the real CLI at an external barrier, not an in-process exception.
+
+    The editor identity is a separate real Python process. This tests actor
+    crash recovery, not Godot composition or the unchanged-candidate matrix.
+    """
+    editor = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    actor = None
+    token_hex = "47" * 32
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[2] / "src")}
+    for name in tx.QUALIFICATION_FAILPOINT_ENV:
+        environment.pop(name, None)
+    try:
+        _wait_until(lambda: tx.process_start_fingerprint(editor.pid) is not None, timeout=10)
+        identity = tx.ProcessIdentity(
+            editor.pid, tx.process_start_fingerprint(editor.pid), "crash-matrix-editor"
+        )
+        scenario = _scenario(tmp_path, editor=identity)
+        paths = _paths(scenario)
+        actor = subprocess.Popen(
+            [sys.executable, "-m", "godot_ai.update_transaction", *_activate_arguments(scenario)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={
+                **environment,
+                **_qualification_environment(token_hex, effect=effect, when=when, timeout="60"),
+                tx.QUALIFICATION_FAILPOINT_OCCURRENCE_ENV: str(occurrence),
+            },
+        )
+        barrier_path = scenario.recovery / "failpoint-barrier.json"
+        _wait_until(lambda: barrier_path.exists() or actor.poll() is not None, timeout=30)
+        assert actor.poll() is None, "actor exited before its external barrier"
+        barrier = tx.load_record(barrier_path)
+        assert (barrier["effect"], barrier["when"], barrier["sequence"]) == (
+            effect,
+            when,
+            occurrence,
+        )
+        actual_intent = tx.load_intent(paths)
+        assert barrier["intent_sha256"] == tx._intent_sha(actual_intent)
+        assert barrier["transaction"] == scenario.intent.transaction
+        assert barrier["project_root"] == str(scenario.project.resolve())
+        assert barrier["install_root"] == str(scenario.install.resolve())
+        assert barrier["recovery_root"] == str(scenario.recovery)
+        assert actual_intent.runner.pid == actor.pid
+        assert actual_intent.editor == identity
+
+        # The record is the synchronization boundary. Never infer it from logs
+        # or sleep an estimated time before killing the actor we launched.
+        actor.kill()
+        stdout, stderr = actor.communicate(timeout=10)
+        assert actor.returncode != 0
+        assert token_hex.encode() not in stdout + stderr
+        assert tx.probe_process(actual_intent.runner) in {"dead", "reused"}
+        assert tx.probe_process(identity) == "alive"
+        assert scenario.install.exists() == (live is not None)
+        if live is not None:
+            expected = actual_intent.old_tree if live == "old" else actual_intent.new_tree
+            assert tx.hash_tree(scenario.install) == expected
+        assert scenario.stage.exists() == stage
+        if stage:
+            assert tx.hash_tree(scenario.stage) == actual_intent.new_tree
+        assert actual_intent.backup_root.exists() == backup
+        if backup:
+            assert tx.hash_tree(actual_intent.backup_root) == actual_intent.old_tree
+        assert not actual_intent.quarantine_root.exists()
+        assert paths.journal.exists() == (phase is not None)
+        if phase is not None:
+            assert tx.load_journal(paths, actual_intent)["phase"] == phase
+        assert all(
+            not path.exists()
+            for path in (paths.readiness, paths.result, paths.claim, paths.migration_complete)
+        )
+        lock = tx.ActivationLock(scenario.recovery)
+        assert lock.validate(actual_intent)["runner"] == actual_intent.runner.record()
+
+        def recovery_snapshot():
+            return {
+                path.relative_to(scenario.recovery).as_posix(): (
+                    hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "directory"
+                )
+                for path in scenario.recovery.rglob("*")
+            }
+
+        frozen = recovery_snapshot()
+        startup = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "godot_ai.update_transaction",
+                "startup",
+                "--project",
+                str(scenario.project),
+                "--install",
+                str(scenario.install),
+                "--editor-pid",
+                str(os.getpid()),
+                "--editor-nonce",
+                "other-editor",
+            ],
+            env=environment,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        assert startup.returncode == 2
+        assert startup.stdout == b""
+        assert recovery_snapshot() == frozen
+        repair_command = [
+            sys.executable,
+            "-m",
+            "godot_ai.update_transaction",
+            "repair",
+            "--project",
+            str(scenario.project),
+            "--install",
+            str(scenario.install),
+            "--recovery-root",
+            str(scenario.recovery),
+            "--transaction",
+            actual_intent.transaction,
+        ]
+        refused = subprocess.run(
+            repair_command, env=environment, capture_output=True, timeout=30, check=False
+        )
+        assert refused.returncode == 2
+        assert b"repair requires runner and initiating editor identities gone" in refused.stderr
+        assert recovery_snapshot() == frozen
+
+        editor.terminate()
+        editor.wait(timeout=10)
+        assert tx.probe_process(identity) in {"dead", "reused"}
+        # Death by itself grants no takeover and changes no durable records.
+        assert recovery_snapshot() == frozen
+        repaired = subprocess.run(
+            repair_command, env=environment, capture_output=True, timeout=30, check=False
+        )
+        assert repaired.returncode == 0, repaired.stderr.decode()
+        claim = tx.validate_terminal(paths.claim, actual_intent)
+        assert tx.json.loads(repaired.stdout) == tx.actor_response(claim)
+        assert claim["outcome"] == "rolled_back"
+        assert claim["writer"] == "repair"
+        assert tx.hash_tree(scenario.install) == actual_intent.old_tree
+        assert not actual_intent.backup_root.exists()
+        assert not lock.path.exists()
+        assert not paths.result.exists()
+        assert not paths.readiness.exists()
+        assert not paths.migration_complete.exists()
+        assert tx.load_journal(paths, actual_intent)["phase"] == "rolled_back"
+        assert scenario.stage.exists() == stage
+        if stage:
+            assert tx.hash_tree(scenario.stage) == actual_intent.new_tree
+        assert actual_intent.quarantine_root.exists() == (live == "new")
+        if live == "new":
+            assert tx.hash_tree(actual_intent.quarantine_root) == actual_intent.new_tree
+        # Crash evidence survives; no secret is written into any record.
+        assert tx.load_record(barrier_path) == barrier
+        for path in scenario.recovery.rglob("*"):
+            if path.is_file():
+                assert token_hex.encode() not in path.read_bytes()
+    finally:
+        for process in (actor, editor):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+
 def test_write_readiness_rejects_changed_live_tree(tmp_path: Path) -> None:
     scenario = _scenario(tmp_path)
     reached = threading.Event()
