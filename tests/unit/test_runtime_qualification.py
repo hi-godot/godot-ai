@@ -57,8 +57,9 @@ def test_private_capability_scan_covers_nested_retained_files(tmp_path):
     (nested / "clean.bin").write_bytes(b"ordinary retained evidence")
     runtime._require_values_absent(tmp_path, ("private-token",))
     (nested / "leak.bin").write_bytes(b"prefix private-token suffix")
-    with pytest.raises(support.ReleaseError, match="persisted in nested/leak.bin"):
+    with pytest.raises(support.ReleaseError) as caught:
         runtime._require_values_absent(tmp_path, ("private-token",))
+    assert f"persisted in {Path('nested') / 'leak.bin'}" in str(caught.value)
 
 
 def test_private_index_path_capability_can_be_scanned_independently():
