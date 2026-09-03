@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from script import qualification_engine as engine
 from script import release_qualification as qualification
 from script import release_support as support
 from script import runtime_qualification as runtime
@@ -33,6 +34,25 @@ def test_runtime_engine_identity_rejects_a_different_patch(monkeypatch):
 
     with pytest.raises(support.ReleaseError, match="required official build"):
         runtime._validate_godot_version("godot", "4.7.2")
+
+
+def test_runtime_rejects_unpinned_bytes_before_executing_version(monkeypatch, tmp_path):
+    executable = tmp_path / "godot"
+    executable.write_bytes(b"untrusted executable")
+    monkeypatch.setattr(support, "verify_candidate", lambda *args: {})
+    monkeypatch.setattr(
+        runtime, "_validate_godot_version", lambda *args: pytest.fail("unverified binary executed")
+    )
+    with pytest.raises(support.ReleaseError, match="size/type differs"):
+        runtime.exact_a_to_b(tmp_path, tmp_path, [], str(executable), "4.7.2", tmp_path / "row")
+
+
+def test_runtime_rejects_a_row_labeled_as_another_platform(monkeypatch, tmp_path):
+    monkeypatch.setattr(engine, "host_row", lambda: "macos-latest")
+    with pytest.raises(support.ReleaseError, match="differs from actual host"):
+        runtime.runtime_row(
+            tmp_path, tmp_path, "godot", "4.7.2", tmp_path / "row", "windows-latest"
+        )
 
 
 def test_required_runtime_rows_distinguish_both_supported_godot_builds():
@@ -86,6 +106,12 @@ def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
             )
         if godot is not None:
             row["godot_version"] = godot
+            for case in row["cases"]:
+                if case["id"] == "exact-a-to-b-hot-update":
+                    case["godot"] = {
+                        **engine.build_pin(godot, os_label),
+                        "version": f"{godot.removesuffix('.0')}.stable.official.fixture",
+                    }
             if godot == "4.7.2":
                 omitted = directory / "row.json"
         (directory / "row.json").write_bytes(support.canonical(row))
@@ -94,6 +120,13 @@ def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
         qualification.required_row_keys()
     )
     assert omitted is not None
+    tampered = support.read_json(omitted)
+    for case in tampered["cases"]:
+        if case["id"] == "exact-a-to-b-hot-update":
+            case["godot"]["sha256"] = "f" * 64
+    omitted.write_bytes(support.canonical(tampered))
+    with pytest.raises(support.ReleaseError, match="Godot evidence differs"):
+        qualification.validate_rows(tmp_path, bindings)
     omitted.unlink()
     with pytest.raises(
         support.ReleaseError, match="missing mandatory qualification rows: runtime/.*/4.7.2"
@@ -185,6 +218,7 @@ def test_private_index_path_capability_can_be_scanned_independently():
 
 
 def _stub_candidate_validation(monkeypatch, candidates):
+    monkeypatch.setattr(runtime.engine, "host_row", lambda: "ubuntu-latest")
     records = {
         "a": {"version": "4.0.0", "tag": "v4.0.0", "source": "a" * 40},
         "b": {"version": "4.0.1", "tag": "v4.0.1", "source": "b" * 40},

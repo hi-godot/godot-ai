@@ -131,10 +131,15 @@ The pre-signing guard therefore remains closed.
 Runtime jobs and aggregate evidence keys distinguish Godot 4.7.0 and 4.7.2
 for each desktop OS at Python 3.11/3.14 (twelve runtime rows). The producer
 rejects a reported engine version that differs from its requested stable
-official identity and retains the executable SHA-256. This does not replace
-the reviewed per-platform binary-hash manifest required when release inputs
-freeze. Failpoint/stress engine-row expansion remains part of those incomplete
-producers.
+official identity. The checked-in
+[engine manifest](verification/godot-builds-v1.json) pins all six official
+executables by exact size and SHA-256, with their source archive digests.
+The runtime producer checks executable bytes before even running `--version`,
+rejects a row labeled for a different host OS, and retains the checked identity.
+Aggregate validation independently compares the exact A→B case's engine
+identity against that manifest; evidence cannot supply its own expected hash.
+These pins still require review with the frozen release inputs.
+Failpoint/stress engine-row expansion remains part of those incomplete producers.
 
 ## 4. Completed historical updater boundary proof
 

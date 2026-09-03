@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "source": "https://github.com/godotengine/godot-builds/releases",
+  "builds": {
+    "4.7.0": {
+      "ubuntu-latest": {
+        "archive": "Godot_v4.7-stable_linux.x86_64.zip",
+        "archive_sha256": "0b1a6c54c2c619c12e169fe9241edda4b81080b519451cec2984bf0d2c6cb73c",
+        "executable": "Godot_v4.7-stable_linux.x86_64",
+        "size": 144186224,
+        "sha256": "f85bbc6b15e22416c7d797cd60b63286dd67b9cb13498847056c18520ae55a75"
+      },
+      "macos-latest": {
+        "archive": "Godot_v4.7-stable_macos.universal.zip",
+        "archive_sha256": "a6708c336f690e0dd8abd3d587d661707f4f33ed436946a3ec000d2fb497fd6c",
+        "executable": "Godot.app/Contents/MacOS/Godot",
+        "size": 346722704,
+        "sha256": "445c6f95030e2ca767dd921be1e91bd99e50c3703f91d22a22cd31216c93a80f"
+      },
+      "windows-latest": {
+        "archive": "Godot_v4.7-stable_win64.exe.zip",
+        "archive_sha256": "02a5312236f4e0209c78bcb2f52135b1963e6b8888c873c9cee81459e60bcd71",
+        "executable": "Godot_v4.7-stable_win64.exe",
+        "size": 178485256,
+        "sha256": "b2ca888d5115a6cedee564764a2ee494a625f2ec2edbabd010fe33c9a88a6bf8"
+      }
+    },
+    "4.7.2": {
+      "ubuntu-latest": {
+        "archive": "Godot_v4.7.2-stable_linux.x86_64.zip",
+        "archive_sha256": "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4",
+        "executable": "Godot_v4.7.2-stable_linux.x86_64",
+        "size": 146414384,
+        "sha256": "8d106cbe6144c2dc7e881d61d2429c1a8a76e6b22ef48bd5e48dcf934953f71e"
+      },
+      "macos-latest": {
+        "archive": "Godot_v4.7.2-stable_macos.universal.zip",
+        "archive_sha256": "c58a24e31d720be9d62f60cb5627c4e695fb72f21b0cfe1bc9ccaa9a3b3ba63e",
+        "executable": "Godot.app/Contents/MacOS/Godot",
+        "size": 351312912,
+        "sha256": "c7cccbf8fb143e34e02fd6521e09be2c2b974f0d5db080b19071c9c570718ccf"
+      },
+      "windows-latest": {
+        "archive": "Godot_v4.7.2-stable_win64.exe.zip",
+        "archive_sha256": "731980f9608d61333e5baf54a2ef17210acc7a538446c0cb9969f002aca1e953",
+        "executable": "Godot_v4.7.2-stable_win64.exe",
+        "size": 180858888,
+        "sha256": "ab1824f85bfd8e0e4128182c000c4003a3e042245b2967848d089b2a04b22424"
+      }
+    }
+  }
+}

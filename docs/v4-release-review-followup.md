@@ -50,14 +50,50 @@ handlers and an unchanged lifecycle after a busy preflight.
 
 ## Development validation
 
+### Pinned qualification engine bytes — September 3
+
+The six official 4.7.0/4.7.2 engine binaries now have source-controlled exact
+size/SHA-256 pins in `docs/verification/godot-builds-v1.json`, with reproducible
+archive provenance alongside it. All six downloaded archive hashes matched
+the official release-asset digests, and each listed executable's size/hash
+was independently checked against its archive entry. Runtime checks happen
+before even executing `--version`; aggregate validation rejects a changed
+engine digest or missing identity. The workflow uses the setup action's
+explicit executable path, including its extensionless Windows hardlink.
+
+The initial real-binary smoke caught that the general release-file size limit
+is smaller than the macOS engine. Engine verification now streams the digest
+after checking its own exact pinned size, without relaxing release limits.
+The official macOS 4.7.2 executable passed the real identity/version check.
+All 27 focused engine/runtime regressions pass; the new pin verifier has 100%
+line coverage. The live headless suite passed 2,140 tests, zero failures,
+24 skips, all 71 suites, followed by normal editor/server shutdown. The clean
+full Python rerun passed **2,695 tests**, with **36 conditional/platform skips**
+and the existing Starlette/httpx deprecation warning. The broader focused
+release/security set passed **142 tests**; explicit real-Godot driver/updater
+checks passed **14 tests**. Ruff, actionlint, changed-file formatting, whitespace
+checks and all eleven architecture gates passed. No production code changed.
+
+This is executable identity evidence, not complete app-bundle/runner integrity
+or signed-candidate qualification. The final source/pin review and all
+remaining runtime/failpoint/stress gates still apply; preflight remains closed.
+
+A read-only configuration recheck confirmed both `release-signing` and
+`release-publish` allow only the `main` branch and require `dsarno` review.
+`RELEASE_SIGNING_KEY_PEM` is present in the signing environment (metadata only;
+its value was not read). The attestation repository is public, has Actions
+disabled, and lists only `dsarno` as a collaborator with write/admin access.
+This is a setup observation, not a key-fingerprint check, credential-scope
+negative test, signed-candidate approval, or renewed PyPI publisher check.
+
 ### Runtime setup and engine-row follow-up — September 3
 
 The first runtime slice is now expanded to separate 4.7.0 and 4.7.2 jobs on
 every desktop OS at Python 3.11/3.14. Artifact names and aggregate row keys
 retain the engine version, preventing one engine result from satisfying both
 required builds. The runtime checks the reported stable official version and
-retains the executable hash; the reviewed per-platform binary-hash manifest
-still has to be frozen before qualification.
+retains the executable hash; the later pinning follow-up above adds the
+per-platform expected binary identities for review before qualification.
 
 Review of the not-yet-signed path found three setup defects: the headless
 plugin opt-in was absent, the case attempted to recreate its parent row output
@@ -76,6 +112,10 @@ pass. The prior pushed commit's hosted run separately exposed a Windows 3.13
 two-second readiness-barrier failure in
 `test_write_readiness_rejects_changed_live_tree`; that timing investigation is
 being handled separately and is not represented as a green hosted gate here.
+The subsequent `ef2d53d` checkpoint passed all 32 jobs in
+[its hosted run](https://github.com/hi-godot/godot-ai/actions/runs/33793021903).
+That clean run does not resolve the earlier timing flake or validate the later
+engine-pinning changes.
 
 ### Exact-candidate A to B runtime producer — September 3
 

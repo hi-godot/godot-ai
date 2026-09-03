@@ -8,7 +8,6 @@ development Python code for the candidate server/update actor.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -32,6 +31,7 @@ from godot_ai.update_transaction import (  # noqa: E402
     validate_migration_complete,
     validate_terminal,
 )
+from script import qualification_engine as engine  # noqa: E402
 from script import release_qualification as qualification  # noqa: E402
 from script import release_support as support  # noqa: E402
 from script.qualification_https import ORIGIN, private_release_origin  # noqa: E402
@@ -484,6 +484,8 @@ def exact_a_to_b(
     support.require(
         executable is not None and Path(executable).is_file(), "Godot executable missing"
     )
+    engine_identity = engine.verify_executable(Path(executable), godot_version)
+    executable = engine_identity["path"]
     actual_godot_version = _validate_godot_version(str(executable), godot_version)
     support.require(_free_port(HTTP_PORT) and _free_port(WS_PORT), "qualification ports are busy")
     output.mkdir(parents=True)
@@ -595,8 +597,7 @@ def exact_a_to_b(
             **result,
             "id": "exact-a-to-b-hot-update",
             "godot": {
-                "path": str(Path(executable).resolve()),
-                "sha256": hashlib.sha256(Path(executable).read_bytes()).hexdigest(),
+                **engine_identity,
                 "version": actual_godot_version,
             },
             "index_artifacts_requested": sorted(set(index_requests)),
@@ -615,6 +616,7 @@ def runtime_row(
     os_label: str,
 ) -> None:
     support.require(os_label in support.PLATFORMS, "unknown platform row")
+    support.require(os_label == engine.host_row(), "runtime row differs from actual host")
     python_version = current_python_version()
     support.require(python_version in {"3.11", "3.14"}, "unsupported runtime Python row")
     support.require(godot_version in qualification.GODOT_BUILDS, "unsupported runtime Godot row")

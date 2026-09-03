@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
+from script import qualification_engine as engine
 from script import release_support as support
 
 TEST_REQUIREMENTS = (
@@ -152,6 +153,11 @@ def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
                 "required qualification test skipped",
             )
             validate_mandatory_cases(row["kind"], row.get("cases"))
+            if row["kind"] == "runtime":
+                hot_update = next(
+                    case for case in row["cases"] if case["id"] == "exact-a-to-b-hot-update"
+                )
+                engine.validate_identity(hot_update.get("godot"), row["godot_version"], row["os"])
         found[key] = row
     missing = required - set(found)
     support.require(
