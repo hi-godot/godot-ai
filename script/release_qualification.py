@@ -28,6 +28,7 @@ TEST_REQUIREMENTS = (
     "pyyaml==6.0.3",
     "psutil==7.2.2",
 )
+GODOT_BUILDS = ("4.7.0", "4.7.2")
 
 MANDATORY_CASES = {
     "runtime": frozenset(
@@ -86,24 +87,34 @@ def preflight() -> None:
     )
 
 
+def required_row_keys() -> set[tuple[str, str, str, str | None]]:
+    return {
+        (kind, os_label, python, godot)
+        for os_label in support.PLATFORMS
+        for kind, versions, godots in (
+            ("python", support.PYTHONS, (None,)),
+            ("runtime", ("3.11", "3.14"), GODOT_BUILDS),
+            ("failpoints", ("3.11", "3.14"), (None,)),
+            ("stress", ("3.14",), (None,)),
+        )
+        for python in versions
+        for godot in godots
+    }
+
+
 def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
     """A passing install smoke cannot substitute for the remaining release matrix."""
     preflight()
-    required = {
-        (kind, os_label, python)
-        for os_label in support.PLATFORMS
-        for kind, versions in (
-            ("python", support.PYTHONS),
-            ("runtime", ("3.11", "3.14")),
-            ("failpoints", ("3.11", "3.14")),
-            ("stress", ("3.14",)),
-        )
-        for python in versions
-    }
+    required = required_row_keys()
     found = {}
     for path in sorted(output.glob("*/row.json")):
         row = support.read_json(path)
-        key = (row.get("kind"), row.get("os"), row.get("python"))
+        key = (
+            row.get("kind"),
+            row.get("os"),
+            row.get("python"),
+            row.get("godot_version") if row.get("kind") == "runtime" else None,
+        )
         support.require(
             key in required and key not in found, "unexpected or duplicate evidence row"
         )
@@ -146,7 +157,9 @@ def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
     support.require(
         not missing,
         "missing mandatory qualification rows: "
-        + ", ".join("/".join(key) for key in sorted(missing)),
+        + ", ".join(
+            "/".join(value for value in key if value is not None) for key in sorted(missing)
+        ),
     )
     # Numeric ceilings must come from reviewed baseline evidence. A passing
     # row cannot bypass the locked storm contract by supplying its own caps.

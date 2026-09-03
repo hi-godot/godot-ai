@@ -46,6 +46,19 @@ def current_python_version() -> str:
     return f"{sys.version_info.major}.{sys.version_info.minor}"
 
 
+def _validate_godot_version(executable: str, expected: str) -> str:
+    actual = subprocess.run(
+        [executable, "--version"], capture_output=True, text=True, check=True, timeout=15
+    ).stdout.strip()
+    parts = expected.split(".")
+    display = ".".join(parts[:2]) if parts[2] == "0" else expected
+    support.require(
+        actual.startswith(f"{display}.stable.official."),
+        "Godot executable differs from the required official build",
+    )
+    return actual
+
+
 def _free_port(port: int) -> bool:
     family = socket.AF_INET
     with socket.socket(family, socket.SOCK_STREAM) as listener:
@@ -124,6 +137,7 @@ def _isolated_environment(root: Path, index: str) -> dict[str, str]:
             "XDG_CACHE_HOME": str(cache),
             "GODOT_AI_CAPABILITY_DIR": str(capabilities),
             "GODOT_AI_DISABLE_TELEMETRY": "true",
+            "GODOT_AI_ALLOW_HEADLESS": "1",
             "GODOT_AI_MODE": "user",
             "GODOT_AI_QUALIFICATION_PYTHON_INDEX": "1",
             "UV_INDEX": index,
@@ -364,8 +378,14 @@ func _capability() -> Dictionary:
 
 def _manifest_tree(candidate: Path) -> dict[str, dict[str, Any]]:
     manifest = support.read_json(candidate / "release/godot-ai-v4-plugin.manifest.json")
+    prefix = "addons/godot_ai/"
+    support.require(
+        all(row["path"].startswith(prefix) for row in manifest["inventory"]),
+        "candidate inventory is outside the managed add-on",
+    )
     return {
-        row["path"]: {"size": row["size"], "sha256": row["sha256"]} for row in manifest["inventory"]
+        row["path"][len(prefix) :]: {"size": row["size"], "sha256": row["sha256"]}
+        for row in manifest["inventory"]
     }
 
 
@@ -456,6 +476,7 @@ def exact_a_to_b(
     packages: Path,
     dependencies: list[dict[str, Any]],
     godot: str,
+    godot_version: str,
     output: Path,
 ) -> dict[str, Any]:
     records = {name: support.verify_candidate(candidates / name, name) for name in ("a", "b")}
@@ -463,6 +484,7 @@ def exact_a_to_b(
     support.require(
         executable is not None and Path(executable).is_file(), "Godot executable missing"
     )
+    actual_godot_version = _validate_godot_version(str(executable), godot_version)
     support.require(_free_port(HTTP_PORT) and _free_port(WS_PORT), "qualification ports are busy")
     output.mkdir(parents=True)
     with tempfile.TemporaryDirectory(prefix="godot-ai-exact-runtime-") as temporary:
@@ -575,9 +597,7 @@ def exact_a_to_b(
             "godot": {
                 "path": str(Path(executable).resolve()),
                 "sha256": hashlib.sha256(Path(executable).read_bytes()).hexdigest(),
-                "version": subprocess.run(
-                    [str(executable), "--version"], capture_output=True, text=True, check=True
-                ).stdout.strip(),
+                "version": actual_godot_version,
             },
             "index_artifacts_requested": sorted(set(index_requests)),
             "live_tree": support.inventory(live),
@@ -587,11 +607,17 @@ def exact_a_to_b(
 
 
 def runtime_row(
-    candidates: Path, python_row: Path, godot: str, output: Path, os_label: str
+    candidates: Path,
+    python_row: Path,
+    godot: str,
+    godot_version: str,
+    output: Path,
+    os_label: str,
 ) -> None:
     support.require(os_label in support.PLATFORMS, "unknown platform row")
     python_version = current_python_version()
     support.require(python_version in {"3.11", "3.14"}, "unsupported runtime Python row")
+    support.require(godot_version in qualification.GODOT_BUILDS, "unsupported runtime Godot row")
     support.require(not output.exists(), "qualification output already exists")
     records = {name: support.verify_candidate(candidates / name, name) for name in ("a", "b")}
     source_row = support.read_json(python_row / "row.json")
@@ -617,6 +643,7 @@ def runtime_row(
         "required_skips": 0,
         "os": os_label,
         "python": python_version,
+        "godot_version": godot_version,
         "python_build": sys.version,
         "machine": platform.machine(),
         "platform": platform.platform(),
@@ -625,7 +652,14 @@ def runtime_row(
     }
     try:
         report["cases"].append(
-            exact_a_to_b(candidates, python_row / "packages", dependencies, godot, output)
+            exact_a_to_b(
+                candidates,
+                python_row / "packages",
+                dependencies,
+                godot,
+                godot_version,
+                output / "exact-a-to-b",
+            )
         )
         report["status"] = "passed"
     finally:
@@ -638,6 +672,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--python-row", type=Path, required=True)
     parser.add_argument("--godot", default=os.environ.get("GODOT_BIN", "godot"))
+    parser.add_argument("--godot-version", choices=qualification.GODOT_BUILDS, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--os", choices=support.PLATFORMS, required=True)
     args = parser.parse_args(argv)
@@ -646,6 +681,7 @@ def main(argv: list[str] | None = None) -> int:
             args.candidates.resolve(),
             args.python_row.resolve(),
             args.godot,
+            args.godot_version,
             args.output.resolve(),
             args.os,
         )

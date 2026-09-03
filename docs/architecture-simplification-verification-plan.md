@@ -128,6 +128,14 @@ the runtime row pass: final-v3 migration, the complete functional/security
 case, reopen/backup restoration and repeated crash regressions remain mandatory.
 The pre-signing guard therefore remains closed.
 
+Runtime jobs and aggregate evidence keys distinguish Godot 4.7.0 and 4.7.2
+for each desktop OS at Python 3.11/3.14 (twelve runtime rows). The producer
+rejects a reported engine version that differs from its requested stable
+official identity and retains the executable SHA-256. This does not replace
+the reviewed per-platform binary-hash manifest required when release inputs
+freeze. Failpoint/stress engine-row expansion remains part of those incomplete
+producers.
+
 ## 4. Completed historical updater boundary proof
 
 The retained

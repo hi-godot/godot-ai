@@ -1,10 +1,125 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from script import release_qualification as qualification
 from script import release_support as support
 from script import runtime_qualification as runtime
+
+
+@pytest.mark.parametrize(
+    ("expected", "actual"),
+    [("4.7.0", "4.7.stable.official.deadbeef"), ("4.7.2", "4.7.2.stable.official.deadbeef")],
+)
+def test_runtime_engine_identity_accepts_only_the_pinned_official_patch(
+    monkeypatch, expected, actual
+):
+    monkeypatch.setattr(
+        runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout=actual + "\n"),
+    )
+
+    assert runtime._validate_godot_version("godot", expected) == actual
+
+
+def test_runtime_engine_identity_rejects_a_different_patch(monkeypatch):
+    monkeypatch.setattr(
+        runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="4.7.1.stable.official.deadbeef\n"),
+    )
+
+    with pytest.raises(support.ReleaseError, match="required official build"):
+        runtime._validate_godot_version("godot", "4.7.2")
+
+
+def test_required_runtime_rows_distinguish_both_supported_godot_builds():
+    runtime_keys = {key for key in qualification.required_row_keys() if key[0] == "runtime"}
+
+    assert len(runtime_keys) == 12
+    for os_label in support.PLATFORMS:
+        for python in ("3.11", "3.14"):
+            assert ("runtime", os_label, python, "4.7.0") in runtime_keys
+            assert ("runtime", os_label, python, "4.7.2") in runtime_keys
+
+
+def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
+    from script import stormtest_support
+
+    monkeypatch.setattr(qualification, "preflight", lambda: None)
+    monkeypatch.setattr(qualification, "dependency_inventory", lambda _root: [])
+    monkeypatch.setattr(
+        stormtest_support, "validate_locked_qualification_thresholds", lambda *_: None
+    )
+    bindings = {"a": "candidate-a", "b": "candidate-b"}
+    omitted = None
+    for number, (kind, os_label, python, godot) in enumerate(
+        sorted(qualification.required_row_keys())
+    ):
+        directory = tmp_path / str(number)
+        directory.mkdir()
+        row = {
+            "kind": kind,
+            "os": os_label,
+            "python": python,
+            "status": "passed",
+            "candidates": bindings,
+            "files": {},
+        }
+        if kind == "python":
+            row.update(
+                dependencies=[],
+                installs={
+                    name: {"status": "passed", "managed_tree": {"plugin.cfg": {}}}
+                    for name in bindings
+                },
+                tests={name: {"tests": 1, "failures": 0, "errors": 0} for name in bindings},
+            )
+        else:
+            row.update(
+                required_skips=0,
+                cases=[
+                    {"id": case, "status": "passed"} for case in qualification.MANDATORY_CASES[kind]
+                ],
+            )
+        if godot is not None:
+            row["godot_version"] = godot
+            if godot == "4.7.2":
+                omitted = directory / "row.json"
+        (directory / "row.json").write_bytes(support.canonical(row))
+
+    assert len(qualification.validate_rows(tmp_path, bindings)) == len(
+        qualification.required_row_keys()
+    )
+    assert omitted is not None
+    omitted.unlink()
+    with pytest.raises(
+        support.ReleaseError, match="missing mandatory qualification rows: runtime/.*/4.7.2"
+    ):
+        qualification.validate_rows(tmp_path, bindings)
+
+
+def test_manifest_tree_is_relative_to_the_managed_addon(tmp_path):
+    release = tmp_path / "release"
+    release.mkdir()
+    manifest = release / "godot-ai-v4-plugin.manifest.json"
+    manifest.write_bytes(
+        support.canonical(
+            {"inventory": [{"path": "addons/godot_ai/plugin.cfg", "size": 5, "sha256": "a" * 64}]}
+        )
+    )
+
+    assert runtime._manifest_tree(tmp_path) == {"plugin.cfg": {"size": 5, "sha256": "a" * 64}}
+
+    manifest.write_bytes(
+        support.canonical(
+            {"inventory": [{"path": "elsewhere/plugin.cfg", "size": 5, "sha256": "a" * 64}]}
+        )
+    )
+    with pytest.raises(support.ReleaseError, match="outside the managed add-on"):
+        runtime._manifest_tree(tmp_path)
 
 
 def test_isolated_environment_removes_package_source_poison(monkeypatch, tmp_path):
@@ -17,6 +132,7 @@ def test_isolated_environment_removes_package_source_poison(monkeypatch, tmp_pat
     assert "UV_EXTRA_INDEX_URL" not in environment
     assert "PIP_INDEX_URL" not in environment
     assert environment["GODOT_AI_MODE"] == "user"
+    assert environment["GODOT_AI_ALLOW_HEADLESS"] == "1"
     assert environment["GODOT_AI_QUALIFICATION_PYTHON_INDEX"] == "1"
     assert environment["UV_INDEX"] == environment["UV_DEFAULT_INDEX"]
     assert Path(environment["CODEX_HOME"]).is_dir()
@@ -108,18 +224,23 @@ def test_runtime_row_is_bound_to_matching_python_evidence(monkeypatch, tmp_path)
             }
         )
     )
-    monkeypatch.setattr(
-        runtime,
-        "exact_a_to_b",
-        lambda *args: {"status": "passed", "transaction": "test-transaction-0001"},
-    )
     output = tmp_path / "output"
 
-    runtime.runtime_row(candidates, python_row, "godot", output, "ubuntu-latest")
+    def run_case(*args):
+        case_output = args[-1]
+        assert case_output == output / "exact-a-to-b"
+        assert not case_output.exists()
+        case_output.mkdir()
+        return {"status": "passed", "transaction": "test-transaction-0001"}
+
+    monkeypatch.setattr(runtime, "exact_a_to_b", run_case)
+
+    runtime.runtime_row(candidates, python_row, "godot", "4.7.0", output, "ubuntu-latest")
 
     report = support.read_json(output / "row.json")
     assert report["status"] == "passed"
     assert report["required_skips"] == 0
+    assert report["godot_version"] == "4.7.0"
     assert report["candidates"] == bindings
     assert report["cases"] == [{"status": "passed", "transaction": "test-transaction-0001"}]
 
@@ -145,7 +266,14 @@ def test_runtime_row_rejects_different_candidate_binding(monkeypatch, tmp_path):
     )
 
     with pytest.raises(support.ReleaseError, match="matching exact Python evidence"):
-        runtime.runtime_row(candidates, python_row, "godot", tmp_path / "output", "ubuntu-latest")
+        runtime.runtime_row(
+            candidates,
+            python_row,
+            "godot",
+            "4.7.0",
+            tmp_path / "output",
+            "ubuntu-latest",
+        )
 
 
 def test_sparse_or_duplicate_non_python_rows_cannot_qualify():

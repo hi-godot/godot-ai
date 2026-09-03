@@ -97,6 +97,10 @@ def test_qualification_builds_and_signs_a_b_once_then_verifies_on_all_platforms(
         "3.11",
         "3.14",
     ]
+    assert workflow["jobs"]["runtime"]["strategy"]["matrix"]["godot"] == [
+        "4.7.0",
+        "4.7.2",
+    ]
     assert workflow["jobs"]["runtime"]["needs"] == ["sign", "python"]
     assert "script.runtime_qualification" in raw
     assert "environment: release-signing" in raw

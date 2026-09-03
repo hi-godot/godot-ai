@@ -50,6 +50,33 @@ handlers and an unchanged lifecycle after a busy preflight.
 
 ## Development validation
 
+### Runtime setup and engine-row follow-up — September 3
+
+The first runtime slice is now expanded to separate 4.7.0 and 4.7.2 jobs on
+every desktop OS at Python 3.11/3.14. Artifact names and aggregate row keys
+retain the engine version, preventing one engine result from satisfying both
+required builds. The runtime checks the reported stable official version and
+retains the executable hash; the reviewed per-platform binary-hash manifest
+still has to be frozen before qualification.
+
+Review of the not-yet-signed path found three setup defects: the headless
+plugin opt-in was absent, the case attempted to recreate its parent row output
+directory, and manifest paths retained their `addons/godot_ai/` prefix when
+compared with an add-on-relative live/backup inventory. Each is corrected with
+direct regression assertions. This remains development harness work, not an
+exact signed-candidate qualification result; the pre-signing guard stays closed.
+
+Validation: the full Python run passed **2,681 tests** with **36 conditional
+skips**; the final focused release/security set passed **129 tests**, including
+the subsequently added missing-engine-row aggregate regression. The real
+Godot 4.7.2 driver parse check passed. The full live headless corpus passed
+**2,140 tests**, **zero failures**, **24 skips**, all **71 suites**, followed by
+normal editor/server quit. Ruff, actionlint and all eleven architecture gates
+pass. The prior pushed commit's hosted run separately exposed a Windows 3.13
+two-second readiness-barrier failure in
+`test_write_readiness_rejects_changed_live_tree`; that timing investigation is
+being handled separately and is not represented as a green hosted gate here.
+
 ### Exact-candidate A to B runtime producer — September 3
 
 The qualification workflow now has its first immutable runtime producer slice.
