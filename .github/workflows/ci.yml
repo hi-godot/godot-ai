@@ -258,6 +258,8 @@ jobs:
           tail -n 500 godot-editor.log || echo "(log not found)"
           echo "===== godot-import.log (last 200 lines) ====="
           tail -n 200 godot-import.log || echo "(log not found)"
+          echo "===== mcp-server.log (last 300 lines) ====="
+          tail -n 300 mcp-server.log || echo "(log not found)"
 
   # Verifies the plugin's automatic kill+respawn flow when port 8000 is held
   # by a stale godot-ai server (different version). The unit tests in
@@ -621,6 +623,10 @@ jobs:
           tail -n 500 godot-editor.log || echo "(log not found)"
           echo "===== godot-import.log (last 200 lines) ====="
           tail -n 200 godot-import.log || echo "(log not found)"
+          ## The server's side of a bridge drop (#958): keepalive kills,
+          ## circuit-breaker trips, command timeouts, with timestamps.
+          echo "===== mcp-server.log (last 300 lines) ====="
+          tail -n 300 mcp-server.log || echo "(log not found)"
 
       - name: Upload capture diagnostics
         if: failure()
@@ -630,4 +636,5 @@ jobs:
           path: |
             capture-smoke-diag/
             godot-editor.log
+            mcp-server.log
           if-no-files-found: ignore
