@@ -408,33 +408,36 @@ static func process_parent(pid: int) -> int:
 	return int(raw) if raw.is_valid_int() else 0
 
 
-## One PowerShell spawn that walks a process's ancestry and returns one
-## record per hop, the process itself first: `{pid, parent, commandline}`.
-## Every Windows proof used to pay a ~1.2 s powershell.exe spawn per field
-## per hop: an ancestry check of depth three plus a brand check walked up
-## to ten spawns, twice per adoption, which is most of why a Windows editor
-## start ran 3-5x slower than Linux in the updater regression. Inside one
-## already-running PowerShell each Get-CimInstance costs tens of ms. The
-## walk stops exactly where the per-hop callers stopped: a parent of 0/1,
-## a self-parent, a missing record, or `max_depth` hops.
+## One PowerShell spawn that walks a process's ancestry towards `stop_at`
+## and returns one record per hop, the process itself first:
+## `{pid, parent, commandline}`. The per-hop `process_descends_from` paid a
+## ~1.2 s powershell.exe spawn per parent it read until it reached the
+## ancestor, typically one to three spawns, twice per adoption. Inside one
+## already-running PowerShell a Get-CimInstance query is cheaper than a
+## spawn but far from free on a loaded host, so the walk must stop exactly
+## where the per-hop walk stopped: it ends the moment the parent it just
+## read IS `stop_at` (the per-hop walk compared before fetching that
+## record), at a parent of 0/1, a self-parent, a missing record, or
+## `max_depth` hops. Never ask for the whole tree; a root-bound walk on a
+## CI runner is a dozen queries for nothing.
 const WINDOWS_PROCESS_CHAIN_DEPTH := 16
 
 
 static func windows_process_chain(
-	pid: int, max_depth := WINDOWS_PROCESS_CHAIN_DEPTH
+	pid: int, stop_at: int, max_depth := WINDOWS_PROCESS_CHAIN_DEPTH
 ) -> Array[Dictionary]:
 	if pid <= 1 or max_depth <= 0:
 		return []
 	var script := (
-		"$current = %d; $depth = 0; "
-		+ "while ($current -gt 1 -and $depth -lt %d) { "
+		"$current = %d; $stop = %d; $depth = 0; "
+		+ "while ($current -gt 1 -and $current -ne $stop -and $depth -lt %d) { "
 		+ "$p = Get-CimInstance Win32_Process -Filter \"ProcessId = $current\" "
 		+ "-ErrorAction SilentlyContinue; "
 		+ "if (-not $p) { break }; "
 		+ "\"$($p.ProcessId)|$($p.ParentProcessId)|$($p.CommandLine)\"; "
 		+ "if ($p.ParentProcessId -le 1 -or $p.ParentProcessId -eq $p.ProcessId) { break }; "
 		+ "$current = $p.ParentProcessId; $depth++ }"
-	) % [pid, max_depth]
+	) % [pid, stop_at, max_depth]
 	var output: Array = []
 	if execute_windows_powershell(script, output) != 0:
 		return []
@@ -496,25 +499,18 @@ static func chain_descends_from(chain: Array[Dictionary], pid: int, ancestor_pid
 	return false
 
 
-## `pid_cmdline_is_godot_ai` over a fetched chain: the brand may sit on the
-## process or on one of its first `max_depth - 1` ancestors (a wrapper shell
-## or launcher owns the branded server).
-static func chain_has_godot_ai_brand(chain: Array[Dictionary], max_depth := 5) -> bool:
-	var depth := 0
-	for record in chain:
-		if depth >= max_depth:
-			return false
-		if commandline_is_godot_ai_server(str(record.get("commandline", ""))):
-			return true
-		depth += 1
-	return false
-
-
 static func process_descends_from(pid: int, ancestor_pid: int) -> bool:
 	if pid <= 1 or ancestor_pid <= 1:
 		return false
 	if OS.get_name() == "Windows":
-		return chain_descends_from(windows_process_chain(pid), pid, ancestor_pid)
+		var chain := windows_process_chain(pid, ancestor_pid)
+		## An empty chain for a pid the caller believes alive means the
+		## batched walk could not run here (PowerShell absent or restricted,
+		## CIM unavailable). Fall through to the per-hop walk rather than
+		## answer "no" from a tool failure: that costs one wasted spawn, while
+		## a false negative refuses to adopt a healthy server.
+		if not chain.is_empty():
+			return chain_descends_from(chain, pid, ancestor_pid)
 	var current := pid
 	for _depth in range(16):
 		if current == ancestor_pid:
@@ -539,8 +535,6 @@ static func commandline_is_godot_ai_server(commandline: String) -> bool:
 
 
 static func pid_cmdline_is_godot_ai(pid: int) -> bool:
-	if OS.get_name() == "Windows":
-		return chain_has_godot_ai_brand(windows_process_chain(pid, 5), 5)
 	var current := pid
 	for _depth in range(5):
 		if current <= 1:

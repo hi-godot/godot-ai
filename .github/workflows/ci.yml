@@ -200,10 +200,15 @@ jobs:
         shell: bash
         timeout-minutes: 12
         run: |
+          # -v -s --durations=0: quiet pytest prints nothing until the step
+          # ends, so a step killed by its timeout leaves no trace of which
+          # test hung. Verbose output with the harness's phase lines makes a
+          # slow or hung Windows editor attributable from the log alone.
+          pytest_args=(-v -s --durations=0 tests/integration/test_self_update_upgrade_paths.py)
           if [ "${{ runner.os }}" = "Linux" ]; then
-            xvfb-run -a env GODOT_BIN=godot pytest -q tests/integration/test_self_update_upgrade_paths.py
+            xvfb-run -a env GODOT_BIN=godot pytest "${pytest_args[@]}"
           else
-            GODOT_BIN=godot pytest -q tests/integration/test_self_update_upgrade_paths.py
+            GODOT_BIN=godot pytest "${pytest_args[@]}"
           fi
 
       - name: Start MCP server
