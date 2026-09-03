@@ -45,6 +45,23 @@ DEFAULT_HANDSHAKE_TIMEOUT_SECONDS = 5.0
 DEFAULT_MAX_HANDSHAKE_FRAME_BYTES = 8 * 1024
 DEFAULT_MAX_MESSAGE_BYTES = 4 * 1024 * 1024
 DEFAULT_MAX_DECODED_MESSAGES = 4
+## Keepalive: `websockets` pings every editor peer and closes the session
+## with 1011 "keepalive ping timeout" when the pong is late. The editor can
+## only answer a ping from `McpConnection._process` → `WebSocketPeer.poll()`
+## on the Godot main thread, so any stall longer than the deadline reaps a
+## session whose editor is merely busy: a long synchronous editor operation
+## the exclusive-run servicing does not cover, or a CPU-starved CI runner
+## where the editor and the game subprocess both software-render under
+## lavapipe (#958 — the pong went missing for >20s right after
+## `run_project`, and the plugin's v4 lifecycle treats the resulting drop as
+## terminal, so one late pong killed the whole smoke). The interval keeps
+## the library default so ping cadence is unchanged; only the tolerance for
+## a late pong is widened, to a budget that comfortably exceeds the smoke's
+## 45s session-loss grace. A stall past this is a genuinely hung editor. A
+## dead editor process still closes the socket immediately — this deadline
+## only bounds how long a *silent* peer keeps its session.
+DEFAULT_KEEPALIVE_PING_INTERVAL_SECONDS = 20.0
+DEFAULT_KEEPALIVE_PING_TIMEOUT_SECONDS = 60.0
 
 ## RFC 6455 reserves 4000-4999 for application-defined close codes; we use
 ## 4001 to flag a handshake rejected for duplicate session_id so a debugging
@@ -382,6 +399,10 @@ class GodotWebSocketServer:
                 max_queue=DEFAULT_MAX_DECODED_MESSAGES,
                 open_timeout=DEFAULT_OPEN_TIMEOUT_SECONDS,
                 close_timeout=1.0,
+                ## Explicit, not the library default: see the constants'
+                ## rationale (#958). Pinned by tests/unit/test_websocket_keepalive.py.
+                ping_interval=DEFAULT_KEEPALIVE_PING_INTERVAL_SECONDS,
+                ping_timeout=DEFAULT_KEEPALIVE_PING_TIMEOUT_SECONDS,
                 compression=None,
                 create_connection=partial(
                     _BoundedOpeningServerConnection,

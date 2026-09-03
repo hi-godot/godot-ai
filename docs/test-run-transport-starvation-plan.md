@@ -16,9 +16,15 @@ Origin: Discord report (SloppyMayor, 2026-07-21/22, Godot 4.7.1 + plugin
 `run_tests` runs the whole suite synchronously on the editor main thread
 (`test_handler.gd:51` → `test_runner.gd:110-172`). The WebSocket is serviced
 only by `McpConnection._process` (`connection.gd:124-154`); the Python server
-uses `websockets` default heartbeats (20 s ping interval / 20 s timeout, no
-overrides at `websocket.py:140`). Any suite whose synchronous run exceeds
-~20–40 s starves the pong; the server closes the socket (1011), unregisters
+pings every editor peer and closes the session when the pong is late. At the
+time of this plan the server inherited the `websockets` defaults (20 s ping
+interval / 20 s pong deadline, so a ~20–40 s window); since #958 it pins the
+keepalive explicitly — `DEFAULT_KEEPALIVE_PING_INTERVAL_SECONDS` (20 s) and
+`DEFAULT_KEEPALIVE_PING_TIMEOUT_SECONDS` (60 s) in
+`transport/websocket.py` — so the window is now ~20–80 s. The numbers below
+were written against the historical 20/20 defaults; the servicing design is
+unchanged, only the threshold moved. Any suite whose synchronous run exceeds
+the window starves the pong; the server closes the socket (1011), unregisters
 the session (`websocket.py:354-374`), and fails the in-flight `test_run`
 future with `ConnectionError`. The 120 s `TEST_RUN_TIMEOUT_SEC` never fires —
 the heartbeat always wins. Threshold is duration, not count: our
@@ -150,7 +156,9 @@ success.
   checkpoints. **Best-effort, not a guarantee**: an atomic phase (test body,
   setup/teardown, one script load) that starts before the ceiling can
   overshoot it, and a hard main-thread block still dies by heartbeat
-  (~40 s) — which is the desired fail-fast for genuine hangs, and the
+  (~40 s under the historical 20/20 defaults, ~80 s with the 60 s pong
+  deadline pinned since #958) — which is the desired fail-fast for genuine
+  hangs, and the
   server fails the in-flight future immediately on that disconnect (#690).
   No cancel op in Phase 1 (nothing can be dispatched mid-run to deliver
   one); a client that cancels early leaves the plugin finishing a run
@@ -277,7 +285,8 @@ guidance actionable.
 - `run_tests` inside `batch_execute` is rejected with a clear error.
 - Per-test `duration_ms` in verbose results.
 - **Residual limitation:** any single non-serviced atomic phase longer than
-  the heartbeat window (~20–40 s) — a long test body, `suite_setup`/
+  the heartbeat window (~20–40 s historically, ~20–80 s since #958) — a long
+  test body, `suite_setup`/
   `suite_teardown`, `setup`/`teardown`, one huge script load, a pathological
   cleanup walk — can still starve the transport and end in a heartbeat
   disconnect (which doubles as the hang fail-fast). Servicing happens
