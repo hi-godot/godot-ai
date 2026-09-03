@@ -1,0 +1,11 @@
+config_version=5
+
+[application]
+config/name="Native environment undo control"
+config/features=PackedStringArray("4.7")
+
+[editor_plugins]
+enabled=PackedStringArray("res://addons/control/plugin.cfg")
+
+[rendering]
+renderer/rendering_method="gl_compatibility"

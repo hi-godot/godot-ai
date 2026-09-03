@@ -50,6 +50,50 @@ handlers and an unchanged lifecycle after a busy preflight.
 
 ## Development validation
 
+### Native GLES texture isolation — September 3 UTC
+
+The two 349,524-byte texture warnings now reproduce in a fresh, standalone
+Godot project with **no Godot AI code installed**. A single native
+WorldEnvironment with a procedural sky, an undoable environment assignment,
+node removal and immediate undo-history clearing emits two warnings on both
+official Godot **4.7.0 and 4.7.2** on macOS. Eight environments emit sixteen.
+The control exits normally with no earlier parse/scan error. Retaining undo
+history until exit, or waiting two frames before clearing it, emits no such
+warnings; immediate node freeing alone does not remove them.
+
+The [retained minimal project and control matrix](verification/native-gles-environment-undo/README.md)
+make this finding reproducible without this repository's runtime. It isolates
+an engine-native cleanup/timing interaction, not the internal engine cause
+or its long-session impact. No diagnostic was suppressed, and no arbitrary
+wait or split-suite workaround was added to production or the canonical tests.
+Engine review/disposition remains open; this is not a renderer-clean claim
+or a release-gate waiver.
+
+Diagnostic combined-suite bisection found the `environment` → `gridmap` pair:
+the former queues node cleanup and the latter clears their shared undo
+history. Other tested pairs and gridmap alone did not reproduce the warning.
+All temporary filters were removed from the disposable clone before the fresh
+full-suite regression run. The initial exploratory editor's stale particle-tab
+startup stalled before an authenticated session was available; its log and
+native process sample were retained, and its editor cache was moved aside
+recoverably before bisection. It is not counted as a successful test run.
+
+The latest code commit, `293f58c`, passed all **32 CI jobs** in
+[run 33719622995](https://github.com/hi-godot/godot-ai/actions/runs/33719622995).
+PR #949 remains open and unmerged; no final candidate has been signed.
+
+The fresh checkpoint gauntlet passed **2,457 Python tests, four platform
+skips** (469.45s, one existing Starlette/httpx deprecation) and the unchanged
+combined Godot 4.7.2 suite: **2,150 passed, zero failed, 11 conditional/platform
+skips, all 71 suites**. Authenticated editor/scene/node reads passed and the
+editor closed normally. Its exit retains exactly the two texture warnings
+and the single native-reproduced `Node` StringName, without the old particle
+shader/RID diagnostics. Ruff, actionlint and all eleven architecture gates
+passed. Logs: `/private/tmp/godot-ai-949-native-gles-full-pytest.log` and
+`/private/tmp/godot-ai-release-build.szEA2o/native-gles-full-{tests,editor,probe}.log`.
+This batch changes only the diagnostic project and documentation; the prior
+owner-operated manual Update covers the unchanged production update path.
+
 ### External actor-kill regression matrix
 
 Nine new command-line regression rows kill the actual activation subprocess
@@ -95,8 +139,9 @@ the first control attempt's deferred-scan errors are retained separately.
 The same particle diagnostic reproduced again in the completely fresh,
 native-only `/private/tmp/godot-native-particle-repro.8xZayJ` project.
 This isolates the extra particle diagnostics seen when the reused QA project
-opened its earlier storm scene at launch. It does **not** isolate or waive the
-two 349,524-byte texture warnings from the full combined suite.
+opened its earlier storm scene at launch. That particle control does **not**
+isolate or waive the two 349,524-byte texture warnings; the newer, separate
+environment/undo control above now reproduces those warnings natively.
 
 ### Restart follow-up
 
@@ -165,7 +210,8 @@ runs also emitted leaked `Image` instances. A fresh engine-only control using
 ten native noise-resource saves, UID publication and filesystem updates did
 not reproduce texture leaks, but **did** reproduce the single unclaimed `Node`
 StringName without Godot AI installed. That isolates the StringName diagnostic
-from this plugin; the texture warning is not yet similarly isolated.
+from this plugin. At that checkpoint the texture warning was not yet similarly
+isolated; the newer environment/undo control above closes that evidence gap.
 
 ### Earlier release review evidence
 
@@ -224,10 +270,11 @@ The full-suite/stress GLES3 editor still reports low-level texture allocations
 at exit, but no longer reports the handler-related ObjectDB/resource leaks.
 Minimal no-Godot-AI controls exercising gradient, material and noise resource
 previews, edited-preview regeneration and transient texture creation/resizing
-did not reproduce the texture warning. Its cause is therefore still
-unresolved; neither an upstream-engine attribution nor an all-renderers-clean
-shutdown claim is justified. The manual Metal fixture's clean exit is narrower
-evidence, not a waiver for this remaining investigation.
+did not reproduce the texture warning. The newer environment/undo control
+above now provides an engine-native reproduction, although internal cause,
+long-session impact and disposition remain unresolved. An all-renderers-clean
+shutdown claim is still unjustified. The manual Metal fixture's clean exit is
+narrower evidence, not a waiver for this remaining investigation.
 
 Further 4.7.2 isolation ran all 71 suites as individual `test_run` requests,
 split across two fresh editors; both exited without the texture or ObjectDB
