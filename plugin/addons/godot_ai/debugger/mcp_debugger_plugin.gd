@@ -3,6 +3,7 @@ class_name McpDebuggerPlugin
 extends EditorDebuggerPlugin
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const ScriptWork := preload("res://addons/godot_ai/utils/script_work.gd")
 
 ## Editor-side half of the game-process capture bridge.
 ##
@@ -141,6 +142,12 @@ func _init(log_buffer: McpLogBuffer = null, game_log_buffer: McpGameLogBuffer = 
 	_editor_log_buffer = editor_log_buffer
 	_surfaced_error_tracker = surfaced_error_tracker
 	self.vision_routing = vision_routing
+
+
+func quiesce_for_script_swap() -> Dictionary:
+	if not _pending.is_empty():
+		return {"ok": false, "error": "Wait for pending game debugger requests before updating."}
+	return ScriptWork.quiescence()
 
 
 func _has_capture(prefix: String) -> bool:
@@ -494,7 +501,10 @@ func _schedule_break_record_synthesis() -> void:
 	for i in BREAK_FRAME_SCRAPE_DELAYS_SEC.size():
 		var final := i == BREAK_FRAME_SCRAPE_DELAYS_SEC.size() - 1
 		var timer := tree.create_timer(BREAK_FRAME_SCRAPE_DELAYS_SEC[i])
-		timer.timeout.connect(func() -> void: _on_break_scrape_tick(token, final))
+		var work := ScriptWork.begin("debugger_break_scrape")
+		timer.timeout.connect(func() -> void:
+			_on_break_scrape_tick(token, final)
+			ScriptWork.finish(work))
 
 
 func _on_break_scrape_tick(run_token: int, final: bool) -> void:
@@ -940,6 +950,15 @@ func _wait_then_send(
 	connection: McpConnection,
 	timeout_sec: float,
 ) -> void:
+	var work := ScriptWork.begin("game_screenshot_ready")
+	await _settle_capture_ready(tree, request_id, max_resolution, connection, timeout_sec)
+	ScriptWork.finish(work)
+
+
+func _settle_capture_ready(
+	tree: SceneTree, request_id: String, max_resolution: int,
+	connection: McpConnection, timeout_sec: float,
+) -> void:
 	var deadline := Time.get_ticks_msec() + int(GAME_READY_WAIT_SEC * 1000.0)
 	## #645: always yield at least one frame — the dispatcher registers the
 	## deferred request only after the handler returns DEFERRED_RESPONSE, so a
@@ -1161,6 +1180,15 @@ func _wait_then_eval(
 	connection: McpConnection,
 	timeout_sec: float,
 	run_token: int,
+) -> void:
+	var work := ScriptWork.begin("game_eval_ready")
+	await _settle_eval_ready(tree, code, request_id, connection, timeout_sec, run_token)
+	ScriptWork.finish(work)
+
+
+func _settle_eval_ready(
+	tree: SceneTree, code: String, request_id: String,
+	connection: McpConnection, timeout_sec: float, run_token: int,
 ) -> void:
 	## #500: eval uses EVAL_READY_WAIT_SEC (not the 20s GAME_READY_WAIT_SEC) so
 	## the not-ready path returns its actionable error before the 15s server-side
@@ -1603,6 +1631,15 @@ func _wait_then_game_command(
 	request_id: String,
 	connection: McpConnection,
 	timeout_sec: float,
+) -> void:
+	var work := ScriptWork.begin("game_command_ready")
+	await _settle_game_command_ready(tree, op, params, request_id, connection, timeout_sec)
+	ScriptWork.finish(work)
+
+
+func _settle_game_command_ready(
+	tree: SceneTree, op: String, params: Dictionary, request_id: String,
+	connection: McpConnection, timeout_sec: float,
 ) -> void:
 	var deadline := Time.get_ticks_msec() + int(GAME_READY_WAIT_SEC * 1000.0)
 	## #645: the leading yield guarantees the dispatcher has registered the

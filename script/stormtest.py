@@ -97,6 +97,7 @@ from stormtest_support import (  # noqa: E402
     normalize_profile,
     parse_qualification_project_specs,
     parse_target_specs,
+    pinned_session_identity,
     project_tree_drift,
     project_tree_inventory,
     save_trace,
@@ -106,6 +107,7 @@ from stormtest_support import (  # noqa: E402
     threshold_exit_code,
     tool_domain,
     trace_entries_by_worker,
+    transport_exception_code,
     validate_canonical_trace,
     validate_locked_qualification_thresholds,
     validate_locked_target_ids,
@@ -533,6 +535,9 @@ def flush_report_json():
 
 def _err_code(exc: Exception) -> str:
     """Best-effort extraction of a godot/MCP error code from an exception."""
+    transport_code = transport_exception_code(exc)
+    if transport_code:
+        return transport_code
     data = getattr(exc, "data", None)
     if isinstance(data, dict):
         code = data.get("code") or data.get("error_code")
@@ -623,7 +628,8 @@ class Worker:
             RUN_SEED, target["id"], local_worker, "list-domain"
         ).randrange(6)
         # Administrative setup is always routed to an explicitly named
-        # session; each trace entry then controls whether its operation is pinned.
+        # session. Only locked qualification profiles can intentionally vary
+        # routing; an exploratory explicit target must never become unpinned.
         self.session_pinned = bool(target["session_id"])
 
     @property
@@ -642,7 +648,7 @@ class Worker:
 
     async def connect(self) -> bool:
         """(Re)establish this worker's MCP connection. Retries until timeout."""
-        if IS_LOCKED:
+        if IS_LOCKED or self.target["session_id"]:
             await TARGET_REPINNED[self.target["id"]].wait()
         await _hard_close(self.client)
         self.client = None
@@ -650,7 +656,7 @@ class Worker:
         attempt = 0
         while time.monotonic() < deadline and not STOP[0]:
             attempt += 1
-            if IS_LOCKED:
+            if IS_LOCKED or self.target["session_id"]:
                 await TARGET_REPINNED[self.target["id"]].wait()
             c = None
             try:
@@ -1129,16 +1135,24 @@ async def op_input_map(w: Worker):
         )
         return
     if op == "add_action":
+        # The small name pool deliberately repeats. Stress valid mutations;
+        # duplicate-add and missing-remove refusals belong to negative tests.
+        op = "ensure_action"
         params = {"action": action}
     elif op == "bind_event":
         # ensure the action exists first, else bind_event errors NOT_FOUND
         await w.call(
             "input_map_manage",
-            {"op": "add_action", "params": {"action": action}},
-            op_label="input_map_manage.add_action",
+            {"op": "ensure_action", "params": {"action": action}},
+            op_label="input_map_manage.ensure_action",
         )
         params = {"action": action, "event_type": "key", "keycode": "A"}
     elif op == "remove_action":
+        await w.call(
+            "input_map_manage",
+            {"op": "ensure_action", "params": {"action": action}},
+            op_label="input_map_manage.ensure_action",
+        )
         params = {"action": action}
     else:
         params = {}
@@ -1260,7 +1274,9 @@ async def worker_loop(w: Worker):
                     break
                 operation_name = TRACE[0]["operations"][entry[3]]
                 op = OPERATION_BY_NAME[operation_name]
-                w.session_pinned = bool(entry[4])
+                w.session_pinned = bool(entry[4]) or (
+                    not IS_LOCKED and bool(w.target["session_id"])
+                )
                 M["scheduled_operations"] += 1
                 try:
                     await op(w)
@@ -1469,7 +1485,10 @@ async def _do_locked_reload(w: Worker) -> None:
 
 
 async def do_reload(w: Worker):
-    if IS_LOCKED:
+    # An explicit session pin rotates on every plugin reload in exploratory
+    # runs too. Use the same immutable project/PID proof; never silently fall
+    # back to whichever editor became active on the endpoint.
+    if IS_LOCKED or w.target["session_id"]:
         await _do_locked_reload(w)
         return
     M["reloads_attempted"] += 1
@@ -1607,7 +1626,7 @@ async def health_monitor(target: dict[str, str]):
     misses = 0
     while not STOP[0]:
         await asyncio.sleep(3)
-        if IS_LOCKED:
+        if IS_LOCKED or target["session_id"]:
             await TARGET_REPINNED[target["id"]].wait()
             if STOP[0]:
                 return
@@ -1729,6 +1748,20 @@ async def setup(originals: dict[str, str]) -> None:
     for target in TARGETS:
         target_id = target["id"]
         async with _bounded_client(target["url"]) as c:
+            if not IS_LOCKED and target["session_id"]:
+                listing = await c.call_tool("session_manage", {"op": "list", "params": {}})
+                selected = pinned_session_identity(
+                    _sessions_from_result(listing), target["session_id"]
+                )
+                TARGET_IDENTITIES[target_id] = selected
+                # Routing evidence is useful even without claiming a locked
+                # qualification row or inventing a durable-tree baseline.
+                QUALIFICATION_EVIDENCE[target_id] = {
+                    **selected,
+                    "initial_session_id": target["session_id"],
+                    "current_session_id": target["session_id"],
+                    "repins": [],
+                }
             st = (await c.call_tool("editor_state", _target_params(target, {}))).data
             original = st.get("current_scene") or ""
             if IS_LOCKED:

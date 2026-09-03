@@ -1,5 +1,5 @@
 @tool
-extends RefCounted
+extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 ## Discovers and runs McpTestSuite scripts from res://tests/.
 ## Exposes run_tests and get_test_results as MCP commands.

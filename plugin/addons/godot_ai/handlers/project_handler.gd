@@ -1,5 +1,5 @@
 @tool
-extends RefCounted
+extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
@@ -362,6 +362,14 @@ func _run_project_current_liveness_response(base_data: Dictionary) -> Dictionary
 static func _finish_run_project_deferred(
 	request_id: String, base_data: Dictionary, connection, debugger_plugin
 ) -> void:
+	var work := ScriptWork.begin("run_project")
+	await _settle_run_project(request_id, base_data, connection, debugger_plugin)
+	ScriptWork.finish(work)
+
+
+static func _settle_run_project(
+	request_id: String, base_data: Dictionary, connection, debugger_plugin
+) -> void:
 	var tree: SceneTree = connection.get_tree()
 	while true:
 		await tree.process_frame
@@ -591,6 +599,12 @@ func stop_project(params: Dictionary) -> Dictionary:
 # server's 5s request timeout will surface the failure to the caller.
 # `static` is load-bearing (#712): see _finish_run_project_deferred.
 static func _finish_stop_project_deferred(request_id: String, connection) -> void:
+	var work := ScriptWork.begin("stop_project")
+	await _settle_stop_project(request_id, connection)
+	ScriptWork.finish(work)
+
+
+static func _settle_stop_project(request_id: String, connection) -> void:
 	var tree: SceneTree = connection.get_tree()
 	await tree.process_frame
 	await tree.process_frame

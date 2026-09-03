@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ast
+import asyncio
 import copy
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -430,6 +433,49 @@ def test_repin_requires_one_new_session_with_same_pid_and_project(tmp_path):
         )
 
 
+@pytest.mark.parametrize("invalid", [None, [], [None], [{"session_id": "missing"}]])
+def test_exploratory_pin_requires_exactly_one_real_session(invalid):
+    with pytest.raises(support.StormConfigError):
+        support.pinned_session_identity(invalid, "project@old")
+
+
+def test_exploratory_pin_records_identity_without_following_other_editor(tmp_path):
+    old = {"session_id": "old", "editor_pid": 42, "project_path": str(tmp_path)}
+    noise = {"session_id": "other", "editor_pid": 99, "project_path": str(tmp_path / "other")}
+    identity = support.pinned_session_identity([noise, old], "old")
+    assert identity == {"editor_pid": 42, "project_path": str(tmp_path.resolve())}
+    assert (
+        support.select_replacement_session(
+            [noise, {**old, "session_id": "new"}],
+            expected_project_path=identity["project_path"],
+            editor_pid=identity["editor_pid"],
+            previous_session_id="old",
+        )["session_id"]
+        == "new"
+    )
+    for rows in ([old, old], [{**old, "editor_pid": True}], [{**old, "project_path": "relative"}]):
+        with pytest.raises(support.StormConfigError):
+            support.pinned_session_identity(rows, "old")
+
+
+@pytest.mark.parametrize("envelope,code", [("error", 408), ("response", 401)])
+def test_transport_envelope_is_tolerated_only_during_measured_reload(envelope, code):
+    error = RuntimeError("SDK transport failure")
+    setattr(
+        error, envelope, SimpleNamespace(**{"code" if envelope == "error" else "status_code": code})
+    )
+    extracted = support.transport_exception_code(error)
+    assert extracted == "CONNECTION"
+    assert (
+        support.error_disposition(extracted, reload_window_open=True)
+        == "tolerated_reload_transient"
+    )
+    assert support.error_disposition(extracted, reload_window_open=False) == "unexpected"
+    error.error = SimpleNamespace(code=-32603)
+    error.response = SimpleNamespace(status_code=500)
+    assert support.transport_exception_code(error) is None
+
+
 def test_profile_validation_rejects_noncanonical_reload_mode():
     profile = _profile()
     profile["reload_mode"] = "anything"
@@ -437,5 +483,91 @@ def test_profile_validation_rejects_noncanonical_reload_mode():
         support.normalize_profile("test", profile)
 
 
+@pytest.mark.parametrize(
+    "operation,expected",
+    [
+        ("add_action", ["ensure_action"]),
+        ("bind_event", ["ensure_action", "bind_event"]),
+        ("remove_action", ["ensure_action", "remove_action"]),
+        ("list", ["list"]),
+    ],
+)
+def test_exploratory_input_stress_uses_valid_idempotent_preconditions(operation, expected):
+    tree = ast.parse((ROOT / "script/stormtest.py").read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "op_input_map"
+    )
+    namespace = {"Worker": object, "IS_LOCKED": False}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "stormtest.py", "exec"), namespace)
+    calls = []
+
+    async def call(_tool, arguments, **_kwargs):
+        calls.append(arguments["op"])
+
+    worker = SimpleNamespace(
+        wi=0, rng=SimpleNamespace(randint=lambda *_: 0, choice=lambda _: operation), call=call
+    )
+    asyncio.run(namespace["op_input_map"](worker))
+    assert calls == expected
+
+
 def test_canonical_sha_is_order_independent():
     assert support.canonical_sha256({"a": 1, "b": 2}) == support.canonical_sha256({"b": 2, "a": 1})
+
+
+@pytest.mark.parametrize(
+    "locked,explicit,trace_pin,expected",
+    [
+        (False, "project@one", 0, True),
+        (False, "project@one", 1, True),
+        (False, "", 0, False),
+        (True, "project@one", 0, False),
+        (True, "project@one", 1, True),
+    ],
+)
+def test_exploratory_explicit_route_cannot_be_unpinned_by_trace(
+    locked, explicit, trace_pin, expected
+):
+    from collections import defaultdict
+    from unittest.mock import AsyncMock
+
+    tree = ast.parse((ROOT / "script/stormtest.py").read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "worker_loop"
+    )
+    observed = []
+
+    async def operation(worker):
+        observed.append(worker.session_pinned)
+
+    namespace = {
+        "Worker": object,
+        "asyncio": asyncio,
+        "defaultdict": defaultdict,
+        "IS_LOCKED": locked,
+        "WAVES": 1,
+        "STOP": [False],
+        "TRACE_BY_WORKER": {0: [[0, 0, 0, 0, trace_pin]]},
+        "TRACE": [{"operations": ["test"]}],
+        "OPERATION_BY_NAME": {"test": operation},
+        "M": {"scheduled_operations": 0},
+        "_hard_close": AsyncMock(),
+    }
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "stormtest.py", "exec"), namespace)
+    worker = SimpleNamespace(
+        wi=0,
+        connect=AsyncMock(return_value=True),
+        ensure_container=AsyncMock(),
+        is_chaos=False,
+        client=object(),
+        target={"session_id": explicit},
+        session_pinned=False,
+    )
+    asyncio.run(namespace["worker_loop"](worker))
+    assert observed == [expected]
+    assert namespace["M"]["scheduled_operations"] == 1
+    assert worker.client is None

@@ -1431,14 +1431,14 @@ func _exit_tree() -> void:
 	if _connection:
 		_connection.teardown()
 
-	# Drop the dispatcher's Callables AND its lazily-constructed handler
-	# instances (#736: handlers live in the dispatcher's cache now). Handler
-	# destructors run here, while their scripts are still loaded.
-	if _dispatcher:
-		_dispatcher.clear()
 	if _vision_routing:
 		_vision_routing.shutdown()
 		_vision_routing = null
+	# Transport is stopped and both worker owners have joined. Release the
+	# ordinary plugin-lifetime graph; this is not the stronger hot script-swap
+	# authorization (prepare_for_update_reload still requires clear()).
+	if _dispatcher:
+		_dispatcher.release_after_teardown()
 
 	if _dock:
 		remove_control_from_docks(_dock)
@@ -1776,8 +1776,17 @@ func _resolve_ws_port(configured_port: int) -> int:
 
 
 func prepare_for_update_reload() -> Dictionary:
-	## Stop the exact managed process first: this is the only expected refusal
-	## point and leaves command/vision composition untouched on failure.
+	## Refuse while frame-yielding work is still live, before stopping any
+	## owner. These probes are non-mutating; retry after the work completes.
+	if _dispatcher != null:
+		var handlers_ready: Dictionary = _dispatcher.quiesce_for_script_swap()
+		if not bool(handlers_ready.get("ok", false)):
+			return handlers_ready
+	if _debugger_plugin != null:
+		var debugger_ready: Dictionary = _debugger_plugin.quiesce_for_script_swap()
+		if not bool(debugger_ready.get("ok", false)):
+			return debugger_ready
+	## Stop the exact managed process only after the non-mutating probes.
 	var lifecycle_quiesced: Dictionary = _lifecycle.prepare_for_update_reload()
 	if not bool(lifecycle_quiesced.get("ok", false)):
 		return lifecycle_quiesced

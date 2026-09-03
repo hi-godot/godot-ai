@@ -10,38 +10,80 @@ across the major-version boundary; it is not a second v4 runtime shape. See the
 
 ## Qualification and publication
 
-V4 publishes only immutable, qualified bytes. `release-qualification.yml`
-builds and signs the A/B candidates once, retains their SHA-256 inventories,
-and verifies those exact artifacts on Linux, macOS, and Windows. It creates no
-tag, GitHub Release, or PyPI upload.
+V4 may publish only immutable, qualified bytes. The workflow implementation is
+**not yet release-ready**: artifact verification, retained Python dependencies,
+offline wheel/sdist installation, and promotion safeguards exist, but the exact
+runtime, failpoint, and stress row producers are incomplete. Qualification
+preflight refuses **before building or signing** until those producers are
+implemented. Missing rows or unresolved storm ceilings also prevent approval.
+The full remaining contract is in the
+[verification plan](architecture-simplification-verification-plan.md).
+The [PR #949 follow-up](v4-release-review-followup.md) distinguishes the review
+fixes and actual development tests from that still-open release contract.
+
+`release-qualification.yml` separates credential-free packaging from protected
+signing. A must equal the reviewed `main` workflow commit. B must be its immediate
+single-parent child with only the two version edits and the bundled README
+deletion. The packager creates required version tags only in disposable local
+checkouts; it never pushes B's tag or publishes B. Python regression fixtures
+that patch sources remain development evidence, not exact-candidate runtime proof.
 
 After the independent attestation repository commits an approval JSON whose
-contents exactly match both candidate `evidence.json` files, dispatch
+contents exactly match both candidate `evidence.json` files and the complete
+qualification inventory, dispatch
 `release.yml`. Select **patch**, **minor**, or **major**, provide the previous
 published version, qualification run ID, and the immutable approval commit and
 path. The workflow computes the target version, verifies it matches A, publishes
 the already-qualified wheel and sdist first, then creates the tag and GitHub
-Release from A's already-qualified six assets. It never checks out or rebuilds
-the candidate. A duplicate PyPI version, changed artifact, missing B evidence,
-or mismatched approval fails closed.
+Release from A's already-qualified six assets. Publishing jobs check out trusted
+workflow tooling only; they never install, execute, check out, or rebuild the
+candidate. Before any artifact download, each job checks the qualification
+workflow path, canonical repository, `workflow_dispatch` event, `main` branch,
+successful run, and successful complete job set. Approval binds the source,
+run ID, attempt, signatures, and exact file inventories.
 
-The approval file is JSON with this exact object shape (the `candidates` value
-is copied without changing any generated evidence fields):
+Generate a canonical schema-2 approval **draft** from retained evidence, rather
+than hand-copying or replacing evidence objects with strings:
 
-```json
-{"schema":1,"bump":"minor","previous_version":"4.0.0","candidates":{"a":"A evidence object","b":"B evidence object"}}
+```bash
+python -m script.release_promotion make-approval \
+  --root /absolute/path/to/candidates \
+  --evidence /absolute/path/to/qualification \
+  --run-id QUALIFICATION_RUN_ID --bump major --previous 3.2.4 \
+  --output /absolute/path/to/approval.json
 ```
 
-Keep it in the attestation repository at a full commit SHA; the release
-workflow reads neither a branch nor a mutable release note. The attestation
+The draft contains `repository`, `bump`, `previous_version`, the full `a` and `b`
+candidate objects, and the qualification file inventory. Generating a draft is
+not approval. A human reviews it and commits it to the fixed canonical
+`dsarno/godot-ai-release-attestations` repository. Promotion accepts a full
+commit SHA reachable from its protected `main` and a bounded relative JSON path;
+the caller cannot choose a different approval repository. The attestation
 review must confirm the qualification run, sources, signed artifact hashes,
 and the separate repository's access boundary before creating that record.
+
+Existing public version data is a recovery case, not an automatic success:
+PyPI's existing files must match approved metadata **and downloaded bytes**.
+Only missing files are uploaded; `skip-existing` is disabled. Before any PyPI
+upload, a pre-existing GitHub tag/release must also match the approved source
+and asset inventory. A partial matching draft release can resume; mismatches
+fail without overwriting tags or clobbering assets. The GitHub job verifies
+public PyPI bytes again before publishing and re-downloads all six public
+assets afterward. This receipt does not yet replace the required cross-platform
+public dependency re-resolution and immutable post-publication attestation.
 
 The old `bump-and-release.yml` remains retired. Version changes are reviewed
 source changes: prepare A with the chosen next semantic version and B as its
 reserved qualification-only child before dispatching qualification. This keeps
 the familiar major/minor/patch release choice without letting a release button
 silently mutate a reviewed source tree.
+
+Each v4+ release reserves its immediate next patch version for B, permanently.
+The next **patch** publication therefore skips that test-only identity:
+`4.0.0` uses B `4.0.1`, the next publication is `4.0.2` with B `4.0.3`, then
+`4.0.4`. **Minor** and **major** choices still advance to `4.1.0` and `5.0.0`.
+B validation rejects a different minor/major or a non-adjacent patch, so an
+operator cannot accidentally reserve an unrelated future release number.
 
 `verify-signing.yml` is safe to dispatch separately: it exercises the protected
 `release-signing` environment against a synthetic payload and publishes
@@ -64,6 +106,12 @@ not establish that it is protected. The release operator must:
    able to obtain the key without the environment approval gate.
 4. Verify the separately permissioned attestation channel below before freezing
    A. A reviewer on the release repository alone does not establish that boundary.
+5. Protect `release-publish` with the designated required reviewer, no admin
+   bypass, and an explicit `main`-only branch policy. Both publishing jobs use
+   it. PyPI's trusted publisher must be owner `hi-godot`, repository `godot-ai`,
+   workflow `release.yml`, environment **`release-publish`**. Remove any older
+   matching publisher whose environment is `(Any)`; otherwise it still grants
+   the broader publishing authority.
 
 See GitHub's [environment protection model](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments).
 The synthetic signing check publishes no release. Its approval does not approve
@@ -99,6 +147,12 @@ The `release-signing` environment requires approval by `dsarno`, permits only
 the `main` and `v4/architecture-simplification` branches, and disallows admin
 bypass. Self-review remains allowed because dispatch and approval may both use
 `dsarno`; this is one human approval checkpoint, not a two-person rule.
+
+On 2026-09-02, `release-publish` was configured with reviewer `dsarno`, a
+`main`-only policy, and no admin bypass (self-review allowed). PyPI was visually
+verified to have exactly the environment-bound publisher above after the owner
+removed the old `(Any)` entry. These are setup checks, not a successful publish
+or approval of candidate bytes. Recheck the live settings before publication.
 
 ## Exact release asset set
 

@@ -127,7 +127,7 @@ def test_finish_text_write_deferred_polls_resourceloader_with_bounded_loop() -> 
         "the dispatcher timeout, a committed file can still surface to "
         "callers as DEFERRED_TIMEOUT."
     )
-    deferred_block = get_func_block(source, "static func finish_text_write_deferred")
+    deferred_block = get_func_block(source, "static func _settle_text_write")
     assert "var deadline_ms := Time.get_ticks_msec() + IMPORT_SETTLE_MAX_MSEC" in deferred_block
     assert "Time.get_ticks_msec() < deadline_ms" in deferred_block
     assert "ResourceLoader.exists(path)" in deferred_block, (
@@ -178,7 +178,7 @@ def test_writes_report_committed_status_even_when_import_wait_times_out() -> Non
     assert 'data["committed"] = true' in fs_source
     fs_settle_marker = 'data["import_settle"] = "already_known" if existed_before else "not_waited"'
     assert fs_settle_marker in fs_source
-    deferred_block = get_func_block(io_source, "static func finish_text_write_deferred")
+    deferred_block = get_func_block(io_source, "static func _settle_text_write")
     assert 'payload["import_settle"] = "settled" if settled else "timeout"' in deferred_block, (
         "Deferred completion must distinguish import success from import-settle "
         "timeout while still returning a success payload for the committed file."
@@ -187,6 +187,15 @@ def test_writes_report_committed_status_even_when_import_wait_times_out() -> Non
         "When import settling times out, callers need an explicit import_pending "
         "flag instead of interpreting a transport timeout as write failure."
     )
+
+
+def test_write_settle_is_tracked_until_the_actual_coroutine_returns() -> None:
+    source = RESOURCE_IO.read_text(encoding="utf-8")
+    wrapper = get_func_block(source, "static func finish_text_write_deferred")
+    assert wrapper.index('ledger.begin("write_file")') < wrapper.index("await _settle_text_write(")
+    assert wrapper.index("await _settle_text_write(") < wrapper.index("ledger.finish(work)")
+    assert "return" not in wrapper
+    assert "static func _settle_text_write(" in source
 
 
 def test_finish_text_write_deferred_is_static() -> None:

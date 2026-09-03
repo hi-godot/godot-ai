@@ -1,6 +1,6 @@
 # Godot AI v4 — Packaging and Distribution
 
-*Updated 2026-09-01*
+*Updated 2026-09-02*
 
 This document defines the supported v4 install surfaces and artifact shape.
 Release operation and self-update details live in [releasing.md](releasing.md);
@@ -170,8 +170,11 @@ oversized files/trees/archives, signature failure, and any exact-tree mismatch.
    platform/version rows, bound to immutable plugin, Python-package, and
    resolved-dependency artifact digests.
 
-The existence of Tier-6 tooling does not mean Tier 6 has run. Hosted rows and
-publication remain unqualified until their retained evidence is reviewed.
+Tier-6 tooling is partial: the exact runtime, failpoint, and stress row producers
+are not implemented. Qualification preflight refuses before candidate signing,
+and promotion cannot accept install smoke as a substitute for complete evidence.
+Hosted rows and publication remain unqualified until their retained evidence is
+complete and reviewed.
 
 ## Release readiness
 
@@ -201,7 +204,9 @@ publication remain unqualified until their retained evidence is reviewed.
       dependency artifact selected by each publication-smoke row equals its
       approved digest.
 
-The packaging, signing, verification, qualification, and promotion workflows
-are implemented. Publication remains fail-closed until an operator supplies a
-complete A/B qualification run and an independent immutable approval record
-that names its exact digest set; see [the release runbook](releasing.md).
+Packaging, signing, artifact verification, and protected promotion safeguards
+are implemented; full release qualification is not. The complete external
+failpoint surface, exact private-endpoint update matrix, reviewed stress
+baselines, candidate identity reservation/retry policy, and public per-row
+dependency attestation remain required. No final A/B digest set is approved.
+See [the release runbook](releasing.md) for the current fail-closed boundary.

@@ -13,6 +13,20 @@ func _init(spec: McpCustomToolSpec, locator: McpServiceLocator) -> void:
 	_spec = spec
 	_locator = locator
 
+
+func quiesce_for_script_swap() -> Dictionary:
+	if _handler_instance == null:
+		return {"ok": true}
+	if not _handler_instance.has_method("quiesce_for_script_swap"):
+		return {
+			"ok": false,
+			"error": "Custom tool '%s' must provide quiesce_for_script_swap() before hot updates." % _spec.name,
+		}
+	var result: Variant = _handler_instance.call("quiesce_for_script_swap")
+	if not result is Dictionary or result.get("ok") != true:
+		return {"ok": false, "error": "Custom tool '%s' still owns active work." % _spec.name}
+	return {"ok": true}
+
 ## Invoked by dispatcher._call_handler as .call(params) — SINGLE ARG.
 ## Internally splits into (clean_params, ctx) for the addon handler.
 func invoke(params: Dictionary) -> Dictionary:

@@ -242,6 +242,15 @@ static func finish_text_write_deferred(
 	path: String,
 	data: Dictionary,
 ) -> void:
+	var ledger := preload("res://addons/godot_ai/utils/script_work.gd")
+	var work: int = ledger.begin("write_file")
+	await _settle_text_write(connection, request_id, path, data)
+	ledger.finish(work)
+
+
+static func _settle_text_write(
+	connection: McpConnection, request_id: String, path: String, data: Dictionary,
+) -> void:
 	if not is_instance_valid(connection):
 		return
 	var tree := connection.get_tree()

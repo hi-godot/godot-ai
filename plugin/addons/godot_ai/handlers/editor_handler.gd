@@ -1,5 +1,5 @@
 @tool
-extends RefCounted
+extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const Telemetry := preload("res://addons/godot_ai/telemetry.gd")
@@ -952,7 +952,7 @@ func reload_plugin(_params: Dictionary) -> Dictionary:
 	## disable kills the live WebSocket. The re-enabled plugin's
 	## _enter_tree flushes via `_telemetry.flush_pending_plugin_reload()`.
 	Telemetry.record_pending_plugin_reload("mcp_tool")
-	_do_reload_plugin.call_deferred()
+	_do_reload_plugin.call_deferred(ScriptWork.begin("reload_plugin"))
 	return {"data": {"status": "reloading", "message": "Plugin reload initiated"}}
 
 
@@ -966,7 +966,14 @@ func reload_plugin(_params: Dictionary) -> Dictionary:
 # it survives even if the EditorHandler RefCounted is freed mid-await —
 # which is exactly what reload does to this handler's owner. An instance
 # coroutine here resumes on a freed object under reload churn.
-static func _do_reload_plugin() -> void:
+static func _do_reload_plugin(work: int = 0) -> void:
+	if work == 0:
+		work = ScriptWork.begin("reload_plugin")
+	await _reload_after_scan()
+	ScriptWork.finish(work)
+
+
+static func _reload_after_scan() -> void:
 	var fs := EditorInterface.get_resource_filesystem()
 	fs.scan()
 	var tree := Engine.get_main_loop() as SceneTree

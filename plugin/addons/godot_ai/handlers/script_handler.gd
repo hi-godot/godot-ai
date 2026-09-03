@@ -1,5 +1,5 @@
 @tool
-extends RefCounted
+extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const DiagnosticsCapture := preload("res://addons/godot_ai/utils/diagnostics_capture.gd")

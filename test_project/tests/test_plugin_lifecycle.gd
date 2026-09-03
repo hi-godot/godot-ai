@@ -144,6 +144,26 @@ func test_plugin_construction_is_inert_and_has_no_host_cycle() -> void:
 	plugin.free()
 
 
+func test_update_busy_probe_does_not_stop_the_live_composition() -> void:
+	var plugin := Plugin.new()
+	var lifecycle := _manual_lifecycle()
+	_ready_adopted(lifecycle)
+	plugin._lifecycle = lifecycle
+	var dispatcher := McpDispatcher.new(McpLogBuffer.new())
+	plugin._dispatcher = dispatcher
+	dispatcher._pending_deferred["still-running"] = {"command": "run_project"}
+	var before := lifecycle.episode_snapshot()
+	var result := plugin.prepare_for_update_reload()
+	assert_false(result.ok)
+	assert_false(result.get("reload_required", false))
+	assert_eq(lifecycle.episode_snapshot(), before)
+	assert_true(dispatcher._pending_deferred.has("still-running"))
+	dispatcher.release_after_teardown()
+	plugin._dispatcher = null
+	plugin._lifecycle = null
+	plugin.free()
+
+
 func test_root_applies_transport_values_without_retaining_connection_in_manager() -> void:
 	var plugin := Plugin.new()
 	var connection := FakeConnection.new()

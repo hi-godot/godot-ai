@@ -19,7 +19,10 @@ under load and across the disable-to-enable/session-replacement window.
 - Exploratory workers route to the **active session** by default. Locked
   profiles first prove the target's project path and editor PID; reload rows
   pause that target's workers and repin only to one new session with the same
-  immutable identity.
+  immutable identity. An exploratory `--target NAME=URL,SESSION_ID` instead
+  pins every operation to that editor, regardless of its trace's pin fraction.
+  It captures the project/PID before setup and uses the same identity-bound
+  replacement-session check after reload; it never follows another editor.
 - **Reads dominate** the op mix (like real traffic); **writes exercise most
   domains** — node/scene/script/batch/material/theme/resource/camera/particle/
   audio/animation/input_map/signal/filesystem.
@@ -52,6 +55,10 @@ under load and across the disable-to-enable/session-replacement window.
 - A hard process kill cannot run teardown. It deliberately leaves the owned
   scratch tree behind, causing the next locked preflight to refuse the project
   until an operator inspects and removes it.
+- After an interrupted exploratory run, close only its disposable editor,
+  inspect/archive its scratch tree, and restore its initial project settings
+  before restarting. Deleting files while the scratch scene is still open can
+  leave cached nodes/resources in memory and invalidate the next run.
 - `project_run` is not part of the operation mix.
 - A full JSON snapshot is flushed to `stormtest_report.json` (in `$TMPDIR`,
   overridable via `SS_REPORT`) **every few seconds**, so a crash or a kill mid-

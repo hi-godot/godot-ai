@@ -19,6 +19,13 @@ var _connection: McpConnection = null
 var _saved_disabled_meta: PackedStringArray = PackedStringArray()
 
 
+class DrainableTool:
+	extends RefCounted
+	var result: Variant = {"ok": true}
+	func quiesce_for_script_swap() -> Variant:
+		return result
+
+
 func suite_name() -> String:
 	return "custom_tools"
 
@@ -68,6 +75,20 @@ func _make_registry(dispatcher: McpDispatcher) -> McpToolRegistry:
 
 
 # ----- spec budgets -----
+
+func test_wrapper_requires_explicit_drain_contract_after_instantiation() -> void:
+	var wrapper := CustomToolWrapper.new(_make_spec(), _make_locator())
+	assert_true(wrapper.quiesce_for_script_swap().ok)
+	wrapper._handler_instance = RefCounted.new()
+	assert_false(wrapper.quiesce_for_script_swap().ok)
+	var handler := DrainableTool.new()
+	wrapper._handler_instance = handler
+	assert_true(wrapper.quiesce_for_script_swap().ok)
+	handler.result = {"ok": false}
+	assert_false(wrapper.quiesce_for_script_swap().ok)
+	handler.result = "malformed"
+	assert_false(wrapper.quiesce_for_script_swap().ok)
+
 
 func test_spec_validate_accepts_valid_spec() -> void:
 	assert_eq(_make_spec().validate().size(), 0, "valid spec must produce no errors")

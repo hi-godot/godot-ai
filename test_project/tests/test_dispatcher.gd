@@ -3,6 +3,7 @@ extends McpTestSuite
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.gd")
+const ScriptWork := preload("res://addons/godot_ai/utils/script_work.gd")
 
 ## Tests for McpDispatcher — specifically the crash-detection guardrail
 ## that catches handlers returning malformed results (null, empty dict,
@@ -19,6 +20,17 @@ class _FakeErrorTracker:
 			"debugger_promoted": 2,
 			"game_error_warn": 3,
 		}
+
+
+class _UntrackedHandler:
+	extends RefCounted
+	var owner
+
+
+class _RefusingHandler:
+	extends RefCounted
+	func quiesce_for_script_swap() -> Dictionary:
+		return {"ok": false, "error": "busy"}
 
 
 func suite_name() -> String:
@@ -532,6 +544,86 @@ func test_clear_quiesces_lazy_handlers_before_release() -> void:
 	assert_true(bool(result.get("ok", false)))
 	assert_eq(instance.teardown_calls, 1, "clear must invoke the worker-drain lifecycle hook")
 	assert_true(d._lazy_handler_cache.is_empty())
+
+
+func test_teardown_releases_cycle_without_authorizing_script_swap() -> void:
+	var d := _make_dispatcher()
+	d.register_lazy_handler("batch", "res://addons/godot_ai/handlers/batch_handler.gd", [d, null])
+	d.register_lazy("batch_execute", "batch", &"batch_execute")
+	assert_true(d._materialize_lazy_command("batch_execute").is_empty())
+	var handler_ref: WeakRef = weakref(d._lazy_handler_cache["batch"])
+	var dispatcher_ref: WeakRef = weakref(d)
+	d.enqueue({"command": "batch_execute", "request_id": "queued", "params": {}})
+	d._pending_deferred["waiting"] = {"command": "batch_execute"}
+	var result := d.clear()
+	assert_false(result.ok, "an unanswered request must still block hot replacement")
+	assert_true(d.has_command("batch_execute"), "failed hot-swap quiescence must retain the graph")
+	assert_true(handler_ref.get_ref() != null)
+	d.release_after_teardown()
+	assert_false(d.has_command("batch_execute"))
+	assert_true(d._command_queue.is_empty())
+	assert_eq(d.pending_deferred_count(), 0)
+	assert_eq(d._log_buffer, null)
+	assert_eq(handler_ref.get_ref(), null, "ordinary teardown must release cached handler cycles")
+	d = null
+	assert_eq(dispatcher_ref.get_ref(), null, "constructor args must not retain the dispatcher")
+
+
+func test_untracked_handler_still_refuses_hot_swap_but_can_be_released() -> void:
+	var d := _make_dispatcher()
+	var handler := _UntrackedHandler.new()
+	handler.owner = d
+	d._lazy_handler_cache["untracked"] = handler
+	var result := d.clear()
+	assert_false(result.ok)
+	assert_contains(result.error, "cannot prove quiescence")
+	d.release_after_teardown()
+	assert_true(d._lazy_handler_cache.is_empty())
+	handler.owner = null
+
+
+func test_handler_refusal_leaves_references_intact() -> void:
+	var d := _make_dispatcher()
+	d._lazy_handler_cache["busy"] = _RefusingHandler.new()
+	assert_false(d.clear().ok)
+	assert_true(d._lazy_handler_cache.has("busy"))
+	d.release_after_teardown()
+
+
+func test_work_ledger_outlives_response_timeout_and_ordinary_teardown() -> void:
+	var first := _make_dispatcher()
+	var second := _make_dispatcher()
+	var work := ScriptWork.begin("test-owned coroutine")
+	first._pending_deferred["request"] = {"command": "open_scene"}
+	first.clear_deferred_responses()
+	assert_false(first.quiesce_for_script_swap().ok)
+	first.release_after_teardown()
+	assert_false(second.quiesce_for_script_swap().ok,
+		"a new composition must not forget work in the old scripts")
+	ScriptWork.finish(work)
+	assert_true(second.quiesce_for_script_swap().ok)
+	ScriptWork.finish(work)
+	assert_true(ScriptWork.quiescence().ok, "completion is idempotent")
+
+
+func test_completed_builtin_handler_can_be_cleared_for_hot_swap() -> void:
+	var d := _make_dispatcher()
+	d.register_lazy_handler("batch", "res://addons/godot_ai/handlers/batch_handler.gd", [d, null])
+	d.register_lazy("batch_execute", "batch", &"batch_execute")
+	assert_true(d._materialize_lazy_command("batch_execute").is_empty())
+	var handler_ref: WeakRef = weakref(d._lazy_handler_cache["batch"])
+	assert_true(d.clear().ok)
+	assert_eq(handler_ref.get_ref(), null)
+	assert_false(d.has_command("batch_execute"))
+
+
+func test_coroutine_early_return_releases_its_work_entry() -> void:
+	var scene_script := load("res://addons/godot_ai/handlers/scene_handler.gd")
+	scene_script._finish_open_scene_deferred(null, "unused", "res://main.tscn", 0, {})
+	var filesystem_script := load("res://addons/godot_ai/handlers/filesystem_handler.gd")
+	filesystem_script._finish_scan_deferred(null, "unused", null)
+	McpResourceIO.finish_text_write_deferred(null, "unused", "res://unused.gd", {})
+	assert_true(ScriptWork.quiescence().ok)
 
 
 func test_lazy_command_dispatches_via_queue_tick() -> void:

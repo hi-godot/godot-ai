@@ -720,6 +720,12 @@ actual process matrix remain required before Phase 7. The phase bullets below
 stay as the approved execution contract rather than being rewritten as a
 release changelog.
 
+The [PR #949 follow-up](v4-release-review-followup.md) records the release
+workflow hardening, handler-quiescence/shutdown repair and development checks.
+Qualification now explicitly refuses before final signing while the remaining
+runtime/failure/stress producers and reviewed numeric ceilings are absent;
+these changes do not close Phase 6 or Phase 7.
+
 ### Phase 0 — approve and pin
 
 - review draft 3 and the verification companion;
