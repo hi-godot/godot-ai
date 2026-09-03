@@ -365,7 +365,22 @@ def _authenticated_tool_probe(
     asyncio.run(run())
 
 
-@pytest.fixture(params=("local-files", "private-https"))
+@pytest.fixture(
+    params=(
+        pytest.param(
+            "local-files",
+            marks=pytest.mark.skipif(
+                os.name == "nt",
+                reason=(
+                    "same signed-update-and-restart scenario as private-https "
+                    "through a different delivery transport; a Windows real-editor "
+                    "run costs ~105 s, Linux and macOS keep both variants"
+                ),
+            ),
+        ),
+        "private-https",
+    )
+)
 def signed_update_delivery(request):
     with contextlib.ExitStack() as stack:
 
