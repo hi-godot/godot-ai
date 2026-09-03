@@ -441,16 +441,25 @@ static func _read_file_text(path: String) -> Dictionary:
 	if file == null:
 		var open_err := FileAccess.get_open_error()
 		return {"exists": true, "ok": false, "error": "could not open for reading (error %d)" % open_err, "original_text": ""}
-	var content := file.get_as_text()
+	# Read bytes, not `get_as_text()`. Godot's UTF-8 decoder (both `get_as_text`
+	# and `get_string_from_utf8`) silently consumes a leading EF BB BF, so a
+	# text-only read dropped the BOM from `original_text` and the next Remove
+	# wrote it back out of the user's file — a byte mutation outside the entry
+	# we were asked to touch. Detect the marker on the raw buffer and restore
+	# U+FEFF when the decoder ate it.
+	var buf := file.get_buffer(file.get_length())
 	file.close()
-	if content.strip_edges().is_empty():
+	var had_bom := buf.size() >= 3 and buf[0] == 0xEF and buf[1] == 0xBB and buf[2] == 0xBF
+	var content := buf.get_string_from_utf8()
+	if had_bom and not content.begins_with("﻿"):
+		content = "﻿" + content
+	# Everything downstream of the BOM parses and measures the body: JSON.parse
+	# rejects a leading U+FEFF outright, and a BOM-only file is empty, not
+	# broken. `original_text` keeps the marker so writes round-trip it.
+	var body := content.substr(1) if content.begins_with("﻿") else content
+	if body.strip_edges().is_empty():
 		return {"exists": true, "ok": true, "data": {}, "original_text": content}
-	var parse_copy := content
-	# Strip a UTF-8 BOM if present — some editors (notably on Windows) save
-	# JSON with a leading ﻿, which Godot's JSON.parse rejects outright.
-	# Previously this landed on the "unparseable → wipe" path.
-	if parse_copy.begins_with("﻿"):
-		parse_copy = parse_copy.substr(1)
+	var parse_copy := body
 	var json := JSON.new()
 	if json.parse(parse_copy) != OK:
 		var msg := "JSON parse error on line %d: %s" % [json.get_error_line(), json.get_error_message()]
@@ -816,9 +825,13 @@ static func _text_remove_server_entry(text: String, key_path: PackedStringArray,
 	# itself stays in `text` so the byte-survival F5 contract still holds
 	# (codex round 3, F-3-6 — without it, files saved with a Windows BOM
 	# left the entry in place after Remove).
-	while cursor < text.length() and _is_json_ws(text[cursor]):
-		cursor += 1
+	# The BOM can only ever be byte 0, so it is skipped BEFORE the whitespace
+	# walk: a file saved as BOM + newline + `{` (common from Windows editors)
+	# otherwise leaves the cursor on the newline, the root `{` is never
+	# consumed, and the entry silently survives Remove.
 	if cursor < text.length() and text[cursor] == "﻿":
+		cursor += 1
+	while cursor < text.length() and _is_json_ws(text[cursor]):
 		cursor += 1
 	if cursor < text.length() and (text[cursor] == "{" or text[cursor] == "["):
 		cursor += 1

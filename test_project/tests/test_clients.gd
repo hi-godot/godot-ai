@@ -2633,6 +2633,105 @@ func test_json_strategy_tolerates_utf8_bom() -> void:
 	assert_true(parsed["mcpServers"].has("godot-ai"), "godot-ai entry not added")
 
 
+func test_json_strategy_remove_preserves_utf8_bom() -> void:
+	## Godot's UTF-8 decoder eats a leading EF BB BF, so a `get_as_text()` read
+	## dropped the BOM from `original_text` and Remove spliced-and-wrote a
+	## BOM-less file — a byte mutation outside the entry we were asked to
+	## touch, which is exactly what the byte-survival contract forbids.
+	## Asserted on raw bytes: decoding the result would hide the loss.
+	var path := _scratch_dir.path_join("bom_remove.json")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_buffer(PackedByteArray([0xEF, 0xBB, 0xBF]))
+	f.store_string(
+		"{\n\t\"mcpServers\": {\n\t\t\"godot-ai\": {\"url\": \"http://x\"},\n"
+		+ "\t\t\"other\": {\"url\": \"http://y\"}\n\t}\n}\n"
+	)
+	f.close()
+
+	var client := _make_test_json_client(path)
+	var removed := McpJsonStrategy.remove(client, "godot-ai")
+
+	var check := FileAccess.open(path, FileAccess.READ)
+	var after := check.get_buffer(check.get_length())
+	check.close()
+	_remove_if_exists(path)
+
+	assert_eq(removed.get("status"), "ok", str(removed.get("message", "")))
+	assert_true(
+		after.size() >= 3 and after[0] == 0xEF and after[1] == 0xBB and after[2] == 0xBF,
+		"BOM must survive Remove; got first bytes %s" % [Array(after.slice(0, 4))],
+	)
+	var text := after.get_string_from_utf8()
+	assert_false(text.contains("godot-ai"), "the entry must still be removed")
+	assert_true(text.contains("other"), "unrelated entries must survive")
+
+
+func test_json_strategy_remove_preserves_utf8_bom_before_leading_newline() -> void:
+	## Windows editors commonly write BOM + newline before the root object. The
+	## splice must skip the BOM before the whitespace walk, or the root `{` is
+	## never consumed and Remove reports ok while leaving the entry in place.
+	var path := _scratch_dir.path_join("bom_newline_remove.json")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_buffer(PackedByteArray([0xEF, 0xBB, 0xBF]))
+	f.store_string(
+		"\n{\n\t\"mcpServers\": {\n\t\t\"godot-ai\": {\"url\": \"http://x\"},\n"
+		+ "\t\t\"other\": {\"url\": \"http://y\"}\n\t}\n}\n"
+	)
+	f.close()
+
+	var client := _make_test_json_client(path)
+	var removed := McpJsonStrategy.remove(client, "godot-ai")
+
+	var check := FileAccess.open(path, FileAccess.READ)
+	var after := check.get_buffer(check.get_length())
+	check.close()
+	_remove_if_exists(path)
+
+	assert_eq(removed.get("status"), "ok", str(removed.get("message", "")))
+	assert_true(
+		after.size() >= 4 and after[0] == 0xEF and after[1] == 0xBB and after[2] == 0xBF and after[3] == 0x0A,
+		"BOM and the leading newline must survive; got first bytes %s" % [Array(after.slice(0, 4))],
+	)
+	var text := after.get_string_from_utf8()
+	assert_false(text.contains("godot-ai"), "the entry must be removed even behind BOM + newline")
+	assert_true(text.contains("other"), "unrelated entries must survive")
+
+
+func test_json_strategy_status_reads_bom_prefixed_file() -> void:
+	## The BOM now reaches `original_text`, which makes the parse-copy strip
+	## load-bearing rather than dead code: JSON.parse rejects a leading U+FEFF.
+	var path := _scratch_dir.path_join("bom_status.json")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_buffer(PackedByteArray([0xEF, 0xBB, 0xBF]))
+	f.store_string("{\"mcpServers\": {\"godot-ai\": {\"url\": \"http://x\"}}}")
+	f.close()
+
+	var client := _make_test_json_client(path)
+	var details := McpJsonStrategy.check_status_details(client, "godot-ai", "http://x")
+	_remove_if_exists(path)
+
+	assert_eq(
+		details.get("status"),
+		McpClient.Status.CONFIGURED,
+		"a BOM must not read as a broken file: %s" % String(details.get("error_msg", "")),
+	)
+
+
+func test_json_strategy_treats_bom_only_file_as_empty() -> void:
+	## A BOM-only file is empty, not broken — emptiness is measured on the body
+	## so Configure still seeds it instead of refusing with a parse error.
+	var path := _scratch_dir.path_join("bom_only.json")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_buffer(PackedByteArray([0xEF, 0xBB, 0xBF]))
+	f.close()
+
+	var client := _make_test_json_client(path)
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://x")
+	_remove_if_exists(path)
+
+	assert_eq(configured.get("status"), "ok", str(configured.get("message", "")))
+
+
 func test_json_strategy_remove_refuses_unparseable_file() -> void:
 	## remove() has the same wipe-risk as configure() — it also round-trips
 	## through _read_or_init and writes back. Must refuse on bad input.
