@@ -441,18 +441,28 @@ def test_exploratory_pin_requires_exactly_one_real_session(invalid):
 
 
 def test_exploratory_pin_records_identity_without_following_other_editor(tmp_path):
-    old = {"session_id": "old", "editor_pid": 42, "project_path": str(tmp_path)}
+    project = tmp_path / "MiXeD-Project"
+    project.mkdir()
+    reported_path = str(project)
+    replacement_path = reported_path
+    if os.name == "nt":
+        reported_path = reported_path.upper()
+        replacement_path = str(project).lower()
+        assert reported_path != os.path.normcase(reported_path)
+        assert Path(reported_path).samefile(project)
+        assert Path(replacement_path).samefile(project)
+    old = {"session_id": "old", "editor_pid": 42, "project_path": reported_path}
     noise = {"session_id": "other", "editor_pid": 99, "project_path": str(tmp_path / "other")}
     identity = support.pinned_session_identity([noise, old], "old")
-    # Windows project identities are deliberately case-normalized. Retain the
-    # exact PID/path assertion without requiring the original path's casing.
+    # Deliberately vary Windows input casing; neither the initial identity nor
+    # the replacement session may depend on the spelling an editor reports.
     assert identity == {
         "editor_pid": 42,
-        "project_path": os.path.normcase(str(tmp_path.resolve())),
+        "project_path": os.path.normcase(str(project.resolve())),
     }
     assert (
         support.select_replacement_session(
-            [noise, {**old, "session_id": "new"}],
+            [noise, {**old, "session_id": "new", "project_path": replacement_path}],
             expected_project_path=identity["project_path"],
             editor_pid=identity["editor_pid"],
             previous_session_id="old",

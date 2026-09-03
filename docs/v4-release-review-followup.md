@@ -51,7 +51,7 @@ handlers and an unchanged lifecycle after a busy preflight.
 ## Development validation
 
 - Final expanded Python suite with Godot integration enabled:
-  **2,423 passed, four platform-inapplicable skips**, one third-party
+  **2,426 passed, four platform-inapplicable skips**, one third-party
   Starlette/httpx deprecation warning. All 135 focused release workflow,
   approval, candidate and private-index tests also passed separately.
 - Live suites on Godot **4.7 and 4.7.2**: each **2,150 passed, zero failed,
@@ -90,6 +90,13 @@ handlers and an unchanged lifecycle after a busy preflight.
   metadata, so legitimate vendored metadata (for example in setuptools) does
   not produce a false duplicate. Installed-package checks canonicalize macOS
   path aliases while still rejecting imports outside the isolated environment.
+- Follow-up review regressions cover percent-encoded wheel filenames and
+  deliberately varied Windows project-path casing. The index decodes paths
+  once before exact inventory lookup; encoded separators, double decoding and
+  NUL suffixes remain refused. All 62 focused index/storm tests passed, with
+  100% line coverage of the index, and a real isolated `uv` install consumed
+  the retained `1.0+cpu` wheel through its generated `%2B` link. This is a
+  disposable resolver smoke, not a production-candidate qualification row.
 - All eleven architecture gates pass. The production Python/GDScript tree is
   **64,854 physical lines**; this measurement is not a claim of a smaller
   codebase or completed release qualification.
@@ -109,6 +116,8 @@ warnings. The single combined `test_run` still produced two 349,524-byte GL
 texture warnings on both 4.7 and 4.7.2. This narrows the remaining reproduction
 to combined-run timing/state; it does not justify changing assertions or
 splitting the required full-suite gate to conceal the warning.
+The verbose 4.7.2 combined-run exits also report one unclaimed `Node`
+StringName; that diagnostic remains unresolved too.
 
 Local diagnostic evidence is retained under
 `/private/tmp/godot-ai-release-build.szEA2o`,

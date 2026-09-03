@@ -11,14 +11,14 @@ from script import release_support as support
 from script.qualification_index import retained_index
 
 
-def wheel_fixture(tmp_path):
+def wheel_fixture(tmp_path, version="1.0"):
     payload = b"retained qualification bytes"
-    name = "example-1.0-py3-none-any.whl"
+    name = f"example-{version}-py3-none-any.whl"
     (tmp_path / name).write_bytes(payload)
     return payload, [
         {
             "name": "example",
-            "version": "1.0",
+            "version": version,
             "filename": name,
             "size": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
@@ -26,13 +26,19 @@ def wheel_fixture(tmp_path):
     ]
 
 
-def test_index_serves_only_hashed_retained_bytes_and_does_not_log_capability(tmp_path, capsys):
-    payload, rows = wheel_fixture(tmp_path)
+@pytest.mark.parametrize("version", ["1.0", "1.0+cpu"])
+def test_index_serves_only_hashed_retained_bytes_and_does_not_log_capability(
+    tmp_path, capsys, version
+):
+    payload, rows = wheel_fixture(tmp_path, version)
     with retained_index(tmp_path, rows) as (index, requested):
         with urllib.request.urlopen(index + "example/") as response:
             listing = response.read().decode()
         assert "#sha256=" + rows[0]["sha256"] in listing
-        artifact = urllib.parse.urljoin(index, "../files/" + rows[0]["filename"])
+        assert urllib.parse.quote(rows[0]["filename"]) in listing
+        # Follow the generated PEP 503 link, including escaped local versions.
+        href = listing.split('href="', 1)[1].split('"', 1)[0]
+        artifact = urllib.parse.urljoin(index + "example/", href)
         for url in (index + "example/", artifact):
             with urllib.request.urlopen(urllib.request.Request(url, method="HEAD")) as response:
                 assert int(response.headers["Content-Length"]) > 0
@@ -52,6 +58,25 @@ def test_index_serves_only_hashed_retained_bytes_and_does_not_log_capability(tmp
     with pytest.raises(urllib.error.URLError):
         urllib.request.urlopen(index, timeout=1)
     assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_index_rejects_encoded_path_escape_and_double_decoding(tmp_path, method):
+    _payload, rows = wheel_fixture(tmp_path, "1.0+cpu")
+    filename = rows[0]["filename"]
+    with retained_index(tmp_path, rows) as (index, requested):
+        for name in (
+            "nested%2f" + filename,
+            "..%2f" + filename,
+            "..%5c" + filename,
+            filename.replace("+", "%252B"),
+            filename + "%00",
+        ):
+            artifact = urllib.parse.urljoin(index, "../files/" + name)
+            with pytest.raises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(urllib.request.Request(artifact, method=method))
+            assert error.value.code == 404
+        assert requested == []
 
 
 def test_index_rejects_changed_files_before_and_after_startup(tmp_path):

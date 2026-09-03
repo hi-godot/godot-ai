@@ -16,7 +16,7 @@ import stat
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from script import release_support as support
 
@@ -68,7 +68,9 @@ def retained_index(packages: Path, dependencies: list[dict]):
             self.serve_artifact(head_only=True)
 
         def serve_artifact(self, *, head_only):
-            path = urlsplit(self.path).path
+            # Decode once: generated links encode local-version '+' as '%2B'.
+            # The exact inventory lookup below still rejects decoded separators.
+            path = unquote(urlsplit(self.path).path)
             if path in routes:
                 payload = routes[path]
                 self.send_response(200)
