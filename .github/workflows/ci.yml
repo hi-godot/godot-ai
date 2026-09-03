@@ -239,66 +239,25 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
-      - name: Decide whether this OS runs the full updater regression
-        id: updater_gate
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          # The real-editor updater/migration suite below costs ~3 min on
-          # Linux but ~8 min on Windows and ~4 min on macOS (PowerShell
-          # process-identity probes and slower editor spawns), and it was the
-          # whole reason a PR run took 11 minutes instead of 3. Linux always
-          # runs the full suite, so every PR still proves the logic once.
-          # Windows and macOS run it in full only when the PR touches the
-          # code those tests exercise, and always on pushes to main and manual
-          # dispatches; otherwise they run the light restart check only.
-          full=true
-          if [ "$EVENT_NAME" = pull_request ] && [ "${{ runner.os }}" != Linux ]; then
-            git fetch --no-tags --quiet origin "$BASE_SHA" || true
-            touched=$(git diff --name-only "$BASE_SHA" HEAD | grep -E \
-              '^(plugin/addons/godot_ai/(plugin\.gd|connection\.gd|mcp_dock\.gd|client_configurator\.gd|utils/|clients/)|src/godot_ai/(transport/|sessions/|update_transaction\.py|release_verify\.py|runtime_dependencies\.py|server\.py|__init__\.py|__main__\.py)|script/(v4-release|release_|runtime_qualification|qualification_|ci-start-server|_ci_|_transport_auth|_plugin_junction|verify-worktree)|tests/(conftest\.py|_qualification_https_fixture\.py|integration/(_self_update_fixture|test_godot_editor_restart|test_migration_bridge_failures|test_self_update_upgrade_paths|test_qualification_https|test_plugin_reload_persistence|test_runtime_qualification_driver))|\.github/workflows/ci\.yml|pyproject\.toml)' \
-              || true)
-            if [ -z "$touched" ]; then
-              full=false
-            else
-              echo "Full updater regression on ${{ runner.os }}: PR touches"
-              printf '%s\n' "$touched" | sed 's/^/  /'
-            fi
-          fi
-          echo "full=$full" >> "$GITHUB_OUTPUT"
-          echo "updater regression on ${{ runner.os }}: full=$full"
-
-      - name: Self-update forward upgrade regression
+      - name: Real-editor updater scenarios
+        # Linux only on pull requests and pushes: the lean updater's real-editor
+        # scenarios (signed update, v3 capsule crossing, post-swap rollback) plus
+        # the restart, bridge, reload-persistence and qualification-fixture
+        # suites. Windows and macOS run the same files nightly
+        # (nightly-diagnostics.yml); their editor starts are 3-5x slower and the
+        # per-OS Godot and smoke jobs already prove the plugin and server start
+        # on every OS. See docs/self-update.md.
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         timeout-minutes: 12
-        env:
-          FULL: ${{ steps.updater_gate.outputs.full }}
         run: |
-          # Same short --basetemp as the Python matrix (see that job); the
-          # editor projects these tests build are hashed through the same
-          # ancestor-enumerating canonicalization. --durations=0 lists every
-          # test's time so per-platform editor costs are visible in the log.
-          pytest_args=(-v -s --durations=0 --basetemp="${RUNNER_TEMP}/pytest-basetemp")
-          if [ "$FULL" = true ]; then
-            pytest_args+=(
-              tests/integration/test_godot_editor_restart.py
-              tests/integration/test_migration_bridge_failures.py
-              tests/integration/test_self_update_upgrade_paths.py
-              tests/integration/test_qualification_https.py
-              tests/integration/test_plugin_reload_persistence.py
-              tests/integration/test_runtime_qualification_driver.py)
-          else
-            # Light check: the restart-forwarding regression alone (~10 s)
-            # still proves a real editor restarts on this OS.
-            pytest_args+=(tests/integration/test_godot_editor_restart.py)
-          fi
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            xvfb-run -a env GODOT_BIN=godot pytest "${pytest_args[@]}"
-          else
-            GODOT_BIN=godot pytest "${pytest_args[@]}"
-          fi
+          xvfb-run -a env GODOT_BIN=godot pytest -v -s --durations=0 --basetemp="${RUNNER_TEMP}/pytest-basetemp" \
+            tests/integration/test_godot_editor_restart.py \
+            tests/integration/test_migration_bridge_failures.py \
+            tests/integration/test_self_update_upgrade_paths.py \
+            tests/integration/test_qualification_https.py \
+            tests/integration/test_plugin_reload_persistence.py \
+            tests/integration/test_runtime_qualification_driver.py
 
       - name: Start MCP server
         shell: bash

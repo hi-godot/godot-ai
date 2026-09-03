@@ -135,7 +135,9 @@ def test_nightly_diagnostics_are_credential_free_and_not_a_release_gate() -> Non
     assert set(triggers) == {"schedule", "workflow_dispatch"}
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["env"]["GODOT_AI_DISABLE_TELEMETRY"] == "true"
-    assert set(workflow["jobs"]) == {"failpoint-recovery", "storm-baseline"}
+    assert set(workflow["jobs"]) == {"updater-scenarios", "storm-baseline"}
+    matrix = workflow["jobs"]["updater-scenarios"]["strategy"]["matrix"]["include"]
+    assert {row["os"] for row in matrix} == {"ubuntu-latest", "macos-latest", "windows-latest"}
     # Diagnostics only: no signing/publishing environment, secret, or
     # release tooling, and nothing that release promotion reads.
     for forbidden in ("secrets.", "environment:", "release_promotion", "release_support sign"):
@@ -143,8 +145,11 @@ def test_nightly_diagnostics_are_credential_free_and_not_a_release_gate() -> Non
     assert "chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789" in raw
     assert "--measure-baseline" in raw
     assert "script.qualification_resources" in raw
-    for job in workflow["jobs"].values():
-        assert job["runs-on"] == "ubuntu-latest"
+    for name, job in workflow["jobs"].items():
+        if name == "updater-scenarios":
+            assert job["runs-on"] == "${{ matrix.os }}"
+        else:
+            assert job["runs-on"] == "ubuntu-latest"
         for step in job["steps"]:
             if step.get("uses", "").startswith("actions/checkout@"):
                 assert step["with"]["persist-credentials"] is False
