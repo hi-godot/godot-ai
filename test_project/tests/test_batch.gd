@@ -59,6 +59,18 @@ func suite_setup(ctx: Dictionary) -> void:
 	_handler = BatchHandler.new(_dispatcher, _undo_redo)
 
 
+func suite_teardown() -> void:
+	## Registered callbacks capture this suite. Break the dispatcher ->
+	## callback -> suite cycle before releasing the suite's handler graph.
+	if _dispatcher != null:
+		_dispatcher.clear()
+	_handler = null
+	_dispatcher = null
+	_node_handler = null
+	_undo_redo = null
+	_call_log.clear()
+
+
 func setup() -> void:
 	_call_log.clear()
 

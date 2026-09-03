@@ -63,6 +63,7 @@ func suite_setup(_ctx: Dictionary) -> void:
 
 
 func suite_teardown() -> void:
+	_clear_seq_action()
 	if _root != null:
 		_root.queue_free()
 		_root = null
@@ -86,16 +87,16 @@ func setup() -> void:
 func test_object_has_property_caches_property_lists_by_script() -> void:
 	_helper._property_name_cache.clear()
 	PropertyProbe.property_list_calls = 0
-	var probe := PropertyProbe.new()
+	var probe := track(PropertyProbe.new())
 
 	assert_true(_helper.call("_object_has_property", probe, "probe_value"))
 	assert_true(_helper.call("_object_has_property", probe, "probe_value"))
 	assert_eq(PropertyProbe.property_list_calls, 1)
 
-	assert_true(_helper.call("_object_has_property", AlphaProbe.new(), "alpha_value"))
-	assert_false(_helper.call("_object_has_property", AlphaProbe.new(), "beta_value"))
-	assert_true(_helper.call("_object_has_property", BetaProbe.new(), "beta_value"))
-	assert_false(_helper.call("_object_has_property", BetaProbe.new(), "alpha_value"))
+	assert_true(_helper.call("_object_has_property", track(AlphaProbe.new()), "alpha_value"))
+	assert_false(_helper.call("_object_has_property", track(AlphaProbe.new()), "beta_value"))
+	assert_true(_helper.call("_object_has_property", track(BetaProbe.new()), "beta_value"))
+	assert_false(_helper.call("_object_has_property", track(BetaProbe.new()), "alpha_value"))
 
 
 func test_get_ui_elements_returns_controls_with_text_and_rects() -> void:
@@ -512,9 +513,22 @@ func _register_seq_action() -> void:
 
 
 func _clear_seq_action() -> void:
-	Input.action_release(_SEQ_ACTION)
 	if InputMap.has_action(_SEQ_ACTION):
+		Input.action_release(_SEQ_ACTION)
 		InputMap.erase_action(_SEQ_ACTION)
+
+
+func test_clear_seq_action_is_repeatable_and_releases_pressed_input() -> void:
+	_register_seq_action()
+	Input.action_press(_SEQ_ACTION)
+	assert_true(Input.is_action_pressed(_SEQ_ACTION))
+	_clear_seq_action()
+	assert_false(InputMap.has_action(_SEQ_ACTION))
+	_clear_seq_action()
+	assert_false(InputMap.has_action(_SEQ_ACTION))
+	_register_seq_action()
+	assert_false(Input.is_action_pressed(_SEQ_ACTION), "cleanup must release before erasing")
+	_clear_seq_action()
 
 
 func test_run_input_sequence_applies_steps_across_frames() -> void:
@@ -572,7 +586,7 @@ func test_run_input_sequence_unknown_action_fails_fast() -> void:
 	var reply: Dictionary = helper._last_game_command_reply
 	assert_eq(reply.kind, "error", "an unknown action must error, not apply partially")
 	assert_contains(reply.message, absent)
-	assert_false(Input.is_action_pressed(absent))
+	assert_false(InputMap.has_action(absent), "refusing input must not create an unknown action")
 
 
 func test_run_input_sequence_invalid_plan_replies_error() -> void:
