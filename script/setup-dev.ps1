@@ -60,31 +60,12 @@ if (-not (Test-Path -LiteralPath $addonsDir)) {
 $linkPath = Join-Path $addonsDir 'godot_ai'
 $targetPath = Join-Path $repoRoot 'plugin\addons\godot_ai'
 
-# If something already exists at the link path (stale junction, leftover
-# text file from an old clone, or a copy), remove it so we can build fresh.
-if (Test-Path -LiteralPath $linkPath) {
-    $existing = Get-Item -LiteralPath $linkPath -Force
-    $isReparse = ($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
-    if ($isReparse) {
-        # Use cmd /c rmdir so Windows treats the junction as a pointer and
-        # does NOT recurse into the target directory — avoids the Windows
-        # junction-deletion data-loss footgun that motivated #185.
-        & cmd /c rmdir (($linkPath) -replace '/', '\')
-    } else {
-        Remove-Item -LiteralPath $linkPath -Force -Recurse
-    }
-}
-
-& cmd /c mklink /J (($linkPath) -replace '/', '\') (($targetPath) -replace '/', '\') | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "mklink /J failed for $linkPath -> $targetPath" }
-
-$item = Get-Item -LiteralPath $linkPath -Force
-$isSymlinkOrJunction = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
-if ($isSymlinkOrJunction -and (Test-Path -LiteralPath (Join-Path $linkPath 'plugin.gd'))) {
-    Write-Host "[ok] test_project\addons\godot_ai -> plugin\addons\godot_ai (junction)"
-} else {
-    throw "test_project\addons\godot_ai did not materialize as a working junction."
-}
+# One shared implementation with script/verify-worktree (#935): a verified
+# junction is accepted or repaired (pointer removed with rmdir, never recursed
+# into); a REAL directory at the link path is moved to a timestamped .stale.*
+# sibling instead of deleted, because it may hold uncommitted plugin edits.
+& (Join-Path $PSScriptRoot '_plugin_junction.ps1') -LinkPath $linkPath -TargetPath $targetPath
+if ($LASTEXITCODE -ne 0) { throw "could not establish test_project\addons\godot_ai junction (exit $LASTEXITCODE)" }
 
 # --- 3. Python venv via uv ------------------------------------------------
 $uv = Get-Command uv -ErrorAction SilentlyContinue

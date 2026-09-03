@@ -48,6 +48,19 @@ case "${OS:-}${OSTYPE:-}" in
     *Windows_NT*|*msys*|*cygwin*) is_windows=1 ;;
 esac
 
+# Windows only: shared junction policy (accept/repair/move-aside) — see
+# script/_plugin_junction.ps1. Paths are converted to Windows form because
+# PowerShell resolves them; MSYS path conversion is left on since no argument
+# begins with a slash.
+_junction_ps() {
+    local link_win target_win
+    link_win="$(cygpath -w "$repo_root/$link" 2>/dev/null || echo "$repo_root\\test_project\\addons\\godot_ai")"
+    target_win="$(cygpath -w "$expected_target_abs" 2>/dev/null || echo "$expected_target_abs")"
+    powershell.exe -NoProfile -ExecutionPolicy Bypass \
+        -File "$(cygpath -w "$repo_root/script/_plugin_junction.ps1" 2>/dev/null || echo "$repo_root/script/_plugin_junction.ps1")" \
+        -LinkPath "$link_win" -TargetPath "$target_win" "$@"
+}
+
 link_ok=0
 if [ -L "$link" ]; then
     # POSIX symlink — resolve and compare
@@ -55,13 +68,13 @@ if [ -L "$link" ]; then
     if [ "$resolved" = "$expected_target_abs" ]; then
         link_ok=1
     fi
-elif [ "$is_windows" = "1" ] && [ -d "$link" ]; then
-    # On Windows, directory junctions appear as plain directories to bash and
-    # can't be told apart from real dirs the way `-L` distinguishes symlinks.
-    # Accept a junction-shaped dir via plugin.gd presence. (Not reachable on
-    # macOS/Linux: there, a real dir here is a stale copy and falls through to
-    # the rm -rf + recreate path below.)
-    if [ -f "$link/plugin.gd" ]; then
+elif [ "$is_windows" = "1" ]; then
+    # On Windows, directory junctions appear as plain directories to bash, so
+    # `-L`/`-d` cannot tell a junction from a stale real copy. Ask PowerShell,
+    # which reads the reparse target and compares it to this worktree's
+    # plugin/ (#935). A real directory here is a stale copy holding possibly
+    # uncommitted edits and must never be accepted — nor deleted (see below).
+    if _junction_ps -CheckOnly >/dev/null 2>&1; then
         link_ok=1
     fi
 fi
@@ -76,22 +89,17 @@ mkdir -p "$(dirname "$link")"
 
 case "${OS:-}${OSTYPE:-}" in
     *Windows_NT*|*msys*|*cygwin*)
-        # Remove whatever's there (text file, empty dir, broken link)
-        rm -rf "$link" 2>/dev/null || true
-        # cmd.exe mklink /J doesn't need admin or Developer Mode.
-        # IMPORTANT: mklink /J resolves a RELATIVE target against cmd.exe's
-        # cwd, not the link's parent dir. Use absolute paths to avoid that
-        # footgun. Junctions store the absolute target anyway.
-        link_win="$(cygpath -w "$repo_root/test_project/addons/godot_ai" 2>/dev/null || echo "$repo_root\\test_project\\addons\\godot_ai")"
-        target_win="$(cygpath -w "$expected_target_abs" 2>/dev/null || echo "$expected_target_abs")"
-        # MSYS_NO_PATHCONV=1 prevents git-bash from rewriting /J and /C as paths.
-        if MSYS_NO_PATHCONV=1 cmd.exe /C mklink /J "$link_win" "$target_win" >/dev/null 2>&1; then
-            green "[ok] Created $link as a directory junction."
+        # Delegate to the shared policy (#935): a wrong/dangling junction is
+        # removed with rmdir (pointer only) and recreated; a REAL directory is
+        # moved to test_project/addons/godot_ai.stale.<timestamp> — never
+        # rm -rf'd — because it may hold uncommitted plugin edits. mklink /J
+        # needs no admin rights or Developer Mode.
+        if _junction_ps; then
+            green "[ok] $link -> plugin/addons/godot_ai (junction verified)"
             exit 0
         else
-            red "[FAIL] Could not create junction. Run manually from PowerShell:"
-            echo "       Remove-Item -LiteralPath test_project\\addons\\godot_ai -Force -ErrorAction SilentlyContinue"
-            echo "       New-Item -ItemType Junction -Path test_project\\addons\\godot_ai -Target ..\\..\\plugin\\addons\\godot_ai"
+            red "[FAIL] Could not establish the junction. Run manually from PowerShell:"
+            echo "       .\\script\\_plugin_junction.ps1 -LinkPath test_project\\addons\\godot_ai -TargetPath plugin\\addons\\godot_ai"
             exit 2
         fi
         ;;
