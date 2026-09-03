@@ -4,8 +4,21 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+
+## One run per PR at a time: a new push cancels the previous run's 30-odd
+## jobs instead of letting two full matrices race. Pushes to main are never
+## cancelled, so every merged commit keeps a complete record.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 ## Stop CI from injecting fake "installs" into the telemetry dashboard or
 ## burning streaming-insert quota on the backend. Opt-out is fully
