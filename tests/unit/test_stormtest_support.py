@@ -7,6 +7,7 @@ import asyncio
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -443,7 +444,12 @@ def test_exploratory_pin_records_identity_without_following_other_editor(tmp_pat
     old = {"session_id": "old", "editor_pid": 42, "project_path": str(tmp_path)}
     noise = {"session_id": "other", "editor_pid": 99, "project_path": str(tmp_path / "other")}
     identity = support.pinned_session_identity([noise, old], "old")
-    assert identity == {"editor_pid": 42, "project_path": str(tmp_path.resolve())}
+    # Windows project identities are deliberately case-normalized. Retain the
+    # exact PID/path assertion without requiring the original path's casing.
+    assert identity == {
+        "editor_pid": 42,
+        "project_path": os.path.normcase(str(tmp_path.resolve())),
+    }
     assert (
         support.select_replacement_session(
             [noise, {**old, "session_id": "new"}],

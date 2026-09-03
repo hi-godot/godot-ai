@@ -103,6 +103,13 @@ unresolved; neither an upstream-engine attribution nor an all-renderers-clean
 shutdown claim is justified. The manual Metal fixture's clean exit is narrower
 evidence, not a waiver for this remaining investigation.
 
+Further 4.7.2 isolation ran all 71 suites as individual `test_run` requests,
+split across two fresh editors; both exited without the texture or ObjectDB
+warnings. The single combined `test_run` still produced two 349,524-byte GL
+texture warnings on both 4.7 and 4.7.2. This narrows the remaining reproduction
+to combined-run timing/state; it does not justify changing assertions or
+splitting the required full-suite gate to conceal the warning.
+
 Local diagnostic evidence is retained under
 `/private/tmp/godot-ai-release-build.szEA2o`,
 `/private/tmp/godot-ai-release-949-quiescence-manual`, and

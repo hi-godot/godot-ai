@@ -144,8 +144,10 @@ remains outside this guarantee; GitHub account identity and the known canonical
 attestation repository are accepted bootstrap trust roots.
 
 The `release-signing` environment requires approval by `dsarno`, permits only
-the `main` and `v4/architecture-simplification` branches, and disallows admin
-bypass. Self-review remains allowed because dispatch and approval may both use
+`main`, and disallows admin bypass. The obsolete
+`v4/architecture-simplification` branch policy was removed on 2026-09-02 after
+that branch merged; no signing key was changed. Self-review remains allowed
+because dispatch and approval may both use
 `dsarno`; this is one human approval checkpoint, not a two-person rule.
 
 On 2026-09-02, `release-publish` was configured with reviewer `dsarno`, a
