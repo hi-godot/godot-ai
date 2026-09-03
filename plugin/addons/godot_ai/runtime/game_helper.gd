@@ -222,7 +222,7 @@ func _debug_status_snapshot() -> Dictionary:
 	return {
 		"probe_version": 1,
 		"helper_found": true,
-		"suspended": not can_process(),
+		"suspended": is_zero_approx(Engine.time_scale),
 		"loop_live": not _main_loop_appears_stalled(),
 		"loop_tick_msec": _last_loop_tick_msec,
 		"process_ticks": _mcp_runtime_process_ticks,

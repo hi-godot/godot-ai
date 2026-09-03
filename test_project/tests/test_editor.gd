@@ -475,6 +475,22 @@ class _StubConnection:
 		captured.append({"request_id": request_id, "payload": payload})
 
 
+func test_game_debug_control_guard_reply_waits_for_deferred_registration() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		skip("No SceneTree available")
+		return
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	plugin.request_game_debug_control("not_an_action", "rid-debug-guard", conn)
+	assert_eq(conn.captured.size(), 0, "guard reply must not race the dispatcher registration")
+	await tree.process_frame
+	assert_eq(conn.captured.size(), 1, "deferred guard should reply on a later editor turn")
+	assert_eq(conn.captured[0].request_id, "rid-debug-guard")
+	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.VALUE_OUT_OF_RANGE)
+	conn.free()
+
+
 ## Records the positive liveness transition without requiring a real debugger
 ## session. The production method is still covered end-to-end by live smoke.
 class _RecordingEvalPlugin:

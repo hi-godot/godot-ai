@@ -9,7 +9,9 @@ from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
 
 GAME_COMMAND_TIMEOUT_SEC = 15.0
-GAME_DEBUG_TIMEOUT_SEC = 5.0
+# The editor owns a 5s action timer and the dispatcher allows 6.5s. The MCP
+# client must outlive both so their structured result wins over transport timeout.
+GAME_DEBUG_TIMEOUT_SEC = 8.0
 
 ## input_sequence drives the game forward one frame per step, so its reply
 ## legitimately takes seconds — it gets a wider client timeout than the

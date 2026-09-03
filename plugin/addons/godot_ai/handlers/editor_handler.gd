@@ -1027,7 +1027,7 @@ func game_debug_control(params: Dictionary) -> Dictionary:
 	var request_id := str(params.get("_request_id", ""))
 	if request_id.is_empty():
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
-			"Missing request_id — cannot correlate deferred response")
+			"Missing internal _request_id — cannot correlate deferred response")
 	_debugger_plugin.request_game_debug_control(action, request_id, _connection)
 	return McpDispatcher.DEFERRED_RESPONSE
 

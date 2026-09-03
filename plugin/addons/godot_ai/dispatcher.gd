@@ -43,6 +43,9 @@ const DEFERRED_TIMEOUT_MS_BY_COMMAND := {
 	"check_client_status": 30000,
 	"game_eval": 15000,
 	"game_command": 15000,
+	## The editor-side runtime-control timer owns 5s; keep the dispatcher
+	## outside it so the actionable control result wins before DEFERRED_TIMEOUT.
+	"game_debug_control": 6500,
 	"scan_filesystem": 30000,
 }
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")

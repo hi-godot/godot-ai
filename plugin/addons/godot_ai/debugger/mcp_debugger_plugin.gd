@@ -1610,6 +1610,18 @@ func request_game_debug_control(
 	if request_id.is_empty():
 		push_warning("MCP debugger: game debug control missing request_id")
 		return
+	## The dispatcher registers the deferred request only after the handler returns.
+	## Start the entire guard/control flow deferred so even fast failures cannot race
+	## that registration and get dropped as an expired response.
+	_begin_game_debug_control.call_deferred(action, request_id, connection, timeout_sec)
+
+
+func _begin_game_debug_control(
+	action: String,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float,
+) -> void:
 	if action not in ["suspend", "resume", "next_frame", "debug_status"]:
 		_send_error(connection, request_id, ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Unsupported game debug action: %s" % action)

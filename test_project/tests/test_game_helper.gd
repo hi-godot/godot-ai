@@ -324,6 +324,31 @@ func test_debug_status_probe_reports_tick_counter() -> void:
 	helper.free()
 
 
+func test_debug_status_suspended_tracks_native_zero_time_scale() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		skip("No SceneTree available")
+		return
+	var helper := GameHelper.new()
+	helper.process_mode = Node.PROCESS_MODE_ALWAYS
+	tree.root.add_child(helper)
+	var was_paused := tree.paused
+	var was_time_scale := Engine.time_scale
+	tree.paused = false
+	Engine.time_scale = 1.0
+	var running_state: Dictionary = helper._debug_status_snapshot()
+	Engine.time_scale = 0.0
+	var can_process_at_zero_scale := helper.can_process()
+	var suspended_state: Dictionary = helper._debug_status_snapshot()
+	Engine.time_scale = was_time_scale
+	tree.paused = was_paused
+	helper.free()
+	assert_true(can_process_at_zero_scale, "PROCESS_MODE_ALWAYS cannot identify native Game View suspension")
+	assert_false(running_state.suspended)
+	assert_true(suspended_state.suspended, "native Game View suspend is exposed as Engine.time_scale == 0")
+	assert_false(suspended_state.tree_paused, "native Game View suspend does not pause SceneTree")
+
+
 func test_rendering_appears_stalled_false_before_first_advance() -> void:
 	## A game that has never presented (booting, render-less) has no
 	## trustworthy frame — the -1 sentinel must read as NOT render-stalled so

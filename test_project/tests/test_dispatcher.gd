@@ -231,6 +231,15 @@ func test_run_project_has_deferred_timeout_budget() -> void:
 	)
 
 
+func test_game_debug_control_deferred_timeout_outlives_editor_timer() -> void:
+	assert_has_key(McpDispatcher.DEFERRED_TIMEOUT_MS_BY_COMMAND, "game_debug_control")
+	assert_gt(
+		int(McpDispatcher.DEFERRED_TIMEOUT_MS_BY_COMMAND.game_debug_control),
+		int(McpDebuggerPlugin.GAME_DEBUG_CONTROL_TIMEOUT_SEC * 1000.0),
+		"dispatcher timeout must outlive the editor-side runtime-control timer",
+	)
+
+
 func test_client_status_has_30_second_deferred_timeout_budget() -> void:
 	assert_has_key(McpDispatcher.DEFERRED_TIMEOUT_MS_BY_COMMAND, "check_client_status")
 	assert_eq(
