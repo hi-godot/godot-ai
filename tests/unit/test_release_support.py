@@ -35,13 +35,46 @@ def distribution(root: Path, version: str) -> None:
         archive.addfile(info, io.BytesIO(metadata))
 
 
-@pytest.fixture
-def pair(tmp_path, signing_key, monkeypatch):
+def _trust_fixture_key(patch: pytest.MonkeyPatch, public: str) -> None:
+    patch.setattr(v4_release, "PUBLIC_KEY_PEM", public)
+    patch.setattr(v4_release._verify, "PUBLIC_KEY_PEM", public)
+    patch.setattr(support, "verifier", lambda: v4_release._verify)
+
+
+@pytest.fixture(scope="module")
+def pair_template(tmp_path_factory, signing_key):
+    """Build the signed A/B candidate pair once per module.
+
+    Building a pair runs about thirty git and openssl subprocesses (two
+    commits, two tags, two release sets, two capsules). Process spawn is cheap
+    on Linux but each spawn costs well over 100 ms on the hosted Windows
+    runner, which made this fixture 4-13 s per test there against 0.3 s on
+    Linux. Every test still receives its own private copy from ``pair`` and
+    mutates only that copy, so per-test isolation is unchanged; only the
+    construction is shared.
+    """
     key, public = signing_key
-    monkeypatch.setattr(v4_release, "PUBLIC_KEY_PEM", public)
-    monkeypatch.setattr(v4_release._verify, "PUBLIC_KEY_PEM", public)
-    monkeypatch.setattr(support, "verifier", lambda: v4_release._verify)
-    repo, _ = _repository(tmp_path, public)
+    root = tmp_path_factory.mktemp("promotion-pair")
+    with pytest.MonkeyPatch.context() as patch:
+        _trust_fixture_key(patch, public)
+        repo, candidates, a, b = _build_pair(root, key, public)
+    return repo, candidates, a, b
+
+
+@pytest.fixture
+def pair(tmp_path, signing_key, monkeypatch, pair_template):
+    _, public = signing_key
+    _trust_fixture_key(monkeypatch, public)
+    template_repo, template_candidates, a, b = pair_template
+    repo = tmp_path / "repo"
+    candidates = tmp_path / "candidates"
+    shutil.copytree(template_repo, repo, symlinks=True)
+    shutil.copytree(template_candidates, candidates, symlinks=True)
+    return repo, candidates, a, b
+
+
+def _build_pair(root: Path, key: Path, public: str) -> tuple[Path, Path, str, str]:
+    repo, _ = _repository(root, public)
     readme = repo / "plugin/addons/godot_ai/README.md"
     readme.write_text("runtime-inert documentation\n")
     # Source pair checks use the production canonical version line format.
@@ -60,20 +93,20 @@ def pair(tmp_path, signing_key, monkeypatch):
     _run("git", "commit", "-qm", "qualification B", cwd=repo)
     b = _run("git", "rev-parse", "HEAD", cwd=repo).decode().strip()
     _run("git", "tag", "v4.0.1", cwd=repo)
-    candidates = tmp_path / "candidates"
+    candidates = root / "candidates"
     for name, source, version in (("a", a, "4.0.0"), ("b", b, "4.0.1")):
-        root = candidates / name
+        candidate = candidates / name
         _run("git", "switch", "--detach", source, cwd=repo)
         v4_release.build_release_set(
-            repo, root / "release", key, "stable", "v" + version, version, source
+            repo, candidate / "release", key, "stable", "v" + version, version, source
         )
-        distribution(root / "dist", version)
+        distribution(candidate / "dist", version)
         for file in support.VERIFIER_PATHS:
-            target = root / "verifier" / file
+            target = candidate / "verifier" / file
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(support.ROOT / file, target)
-        record = support.candidate_record(root, name, source, version, a, "123", 1)
-        (root / "evidence.json").write_bytes(support.canonical(record))
+        record = support.candidate_record(candidate, name, source, version, a, "123", 1)
+        (candidate / "evidence.json").write_bytes(support.canonical(record))
     return repo, candidates, a, b
 
 
