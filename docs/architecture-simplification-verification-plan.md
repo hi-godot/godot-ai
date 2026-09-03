@@ -254,8 +254,10 @@ Before publication:
   minimal child of A whose only runtime change is version/package identity. It
   also removes the bundled, runtime-inert `addons/godot_ai/README.md`, proving
   that activation deletes an A-only managed-tree file instead of overlaying B.
-  `4.0.1` is permanently reserved for qualification: B is never relabeled or
-  published, and no future release may reuse that version.
+  B is never relabeled or published. Its patch number is not reserved: the
+  next patch release publishes a fresh reviewed A under `4.0.1`, and the
+  retained test-only B is the accepted residual recorded in the
+  [release runbook](releasing.md#qualification-and-publication).
 
 Both plugin manifests bind source SHA, repository, channel, tag/version,
 artifact name/size/digest, and exact plugin-tree inventory. Each candidate's
@@ -285,8 +287,10 @@ A + B digests
                  `-> publication receipt + public redownload/hash check
 ```
 
-Signing disposable and eventual artifacts under one stable identity is
-forbidden.
+Signing two different artifact sets under A's published identity is
+forbidden. The retained test-only B that shares the next patch number with a
+later reviewed A is the accepted residual recorded in the runbook; it is never
+published and the updater consumes only GitHub Releases.
 
 ### 6.2 Private release and Python-package path
 
@@ -335,8 +339,6 @@ substitution fails this gate.
 If GitHub publication fails after PyPI, resume with the immutable A artifacts.
 Before a future stable v4.1 release, public v4.0 must qualify the exact private
 v4.1 candidate that will be published byte-for-byte; B cannot stand in for it.
-The next publishable stable patch after v4.0.0 is at least v4.0.2 because the
-v4.0.1 identity has been burned by qualification.
 
 ## 7. Interprocess activation-lock matrix
 

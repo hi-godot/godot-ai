@@ -1,5 +1,5 @@
 name: Qualify v4 release candidates
-run-name: Qualify ${{ inputs.version_a }} and reserved ${{ inputs.version_b }}
+run-name: Qualify ${{ inputs.version_a }} with test-only ${{ inputs.version_b }}
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       version_b:
-        description: "Permanently reserved B version (4.0.1 for initial v4)"
+        description: "Qualification-only B version: A's next patch, never published"
         required: true
         type: string
 

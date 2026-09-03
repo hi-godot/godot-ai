@@ -130,8 +130,12 @@ def version_tuple(version: str) -> tuple[int, int, int]:
     return tuple(map(int, version.split(".")))
 
 
-def next_version(previous: str, bump: str, reserved: tuple[str, ...] = ("4.0.1",)) -> str:
-    """Advance a published version without reusing its qualification-only B."""
+def next_version(previous: str, bump: str) -> str:
+    """Advance a published version by exactly one semantic step.
+
+    B carries A's next patch number during qualification, but that number is
+    not reserved: the next patch publication is a fresh reviewed A under it.
+    """
     major, minor, patch = version_tuple(previous)
     require(bump in {"patch", "minor", "major"}, "unknown semantic bump")
     if bump == "major":
@@ -139,10 +143,6 @@ def next_version(previous: str, bump: str, reserved: tuple[str, ...] = ("4.0.1",
     elif bump == "minor":
         minor, patch = minor + 1, 0
     else:
-        # Every v4+ A is qualified with its immediate next patch as B. That
-        # identity stays private and burned, not just the initial v4.0.1.
-        patch += 2 if major >= 4 else 1
-    while f"{major}.{minor}.{patch}" in reserved:
         patch += 1
     return f"{major}.{minor}.{patch}"
 
@@ -159,11 +159,8 @@ def validate_sources(repo: Path, a: str, b: str, va: str, vb: str) -> None:
     major, minor, patch = version_tuple(va)
     require(
         version_tuple(vb) == (major, minor, patch + 1),
-        "B must be the immediately following reserved patch version",
+        "B must be the immediately following patch version",
     )
-    require(va != "4.0.1", "4.0.1 is permanently reserved and cannot be candidate A")
-    if va == "4.0.0":
-        require(vb == "4.0.1", "v4.0.0 must qualify the reserved v4.0.1 child")
     require(
         git(repo, "rev-list", "--parents", "-n", "1", b).decode().split() == [b, a],
         "B must be an immediate, single-parent child of A",

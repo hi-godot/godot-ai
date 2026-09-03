@@ -129,15 +129,17 @@ def run_record(a):
     ("previous", "bump", "expected"),
     [
         ("3.2.4", "major", "4.0.0"),
-        ("4.0.0", "patch", "4.0.2"),
-        ("4.0.2", "patch", "4.0.4"),
-        ("4.1.0", "patch", "4.1.2"),
-        ("5.0.0", "patch", "5.0.2"),
+        ("4.0.0", "patch", "4.0.1"),
+        ("4.0.1", "patch", "4.0.2"),
+        ("4.1.0", "patch", "4.1.1"),
+        ("5.0.0", "patch", "5.0.1"),
         ("4.0.2", "minor", "4.1.0"),
         ("4.1.3", "major", "5.0.0"),
     ],
 )
-def test_semantic_bumps_respect_burned_qualification_identity(previous, bump, expected):
+def test_semantic_bumps_advance_exactly_one_step(previous, bump, expected):
+    # B's patch number is not reserved: the version a candidate B carried
+    # during qualification is the next patch publication's identity.
     assert support.next_version(previous, bump) == expected
 
 
@@ -258,9 +260,9 @@ def test_b_must_be_immediate_child(pair):
 
 
 @pytest.mark.parametrize("version", ["4.0.0", "4.0.2", "4.1.0", "5.0.0"])
-def test_b_cannot_burn_an_arbitrary_future_release_identity(pair, version):
+def test_b_must_be_the_immediately_following_patch(pair, version):
     repo, _, a, b = pair
-    with pytest.raises(support.ReleaseError, match="following reserved patch"):
+    with pytest.raises(support.ReleaseError, match="following patch"):
         support.validate_sources(repo, a, b, "4.0.0", version)
 
 

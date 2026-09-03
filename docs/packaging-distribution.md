@@ -208,6 +208,6 @@ complete and reviewed.
 Packaging, signing, artifact verification, and protected promotion safeguards
 are implemented; full release qualification is not. The complete external
 failpoint surface, exact private-endpoint update matrix, reviewed stress
-baselines, candidate identity reservation/retry policy, and public per-row
-dependency attestation remain required. No final A/B digest set is approved.
+baselines, and public per-row dependency attestation remain required. No
+final A/B digest set is approved.
 See [the release runbook](releasing.md) for the current fail-closed boundary.

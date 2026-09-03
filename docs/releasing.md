@@ -65,16 +65,23 @@ public dependency re-resolution and immutable post-publication attestation.
 
 The old `bump-and-release.yml` remains retired. Version changes are reviewed
 source changes: prepare A with the chosen next semantic version and B as its
-reserved qualification-only child before dispatching qualification. This keeps
-the familiar major/minor/patch release choice without letting a release button
-silently mutate a reviewed source tree.
+qualification-only child carrying A's next patch number before dispatching
+qualification. This keeps the familiar major/minor/patch release choice
+without letting a release button silently mutate a reviewed source tree.
 
-Each v4+ release reserves its immediate next patch version for B, permanently.
-The next **patch** publication therefore skips that test-only identity:
-`4.0.0` uses B `4.0.1`, the next publication is `4.0.2` with B `4.0.3`, then
-`4.0.4`. **Minor** and **major** choices still advance to `4.1.0` and `5.0.0`.
+B's patch number is **not** reserved. `4.0.0` qualifies with B `4.0.1`; the
+next **patch** publication is `4.0.1` (a fresh reviewed A, qualified with B
+`4.0.2`), and **minor** and **major** choices advance to `4.1.0` and `5.0.0`.
 B validation rejects a different minor/major or a non-adjacent patch, so an
-operator cannot accidentally reserve an unrelated future release number.
+operator cannot accidentally label B with an unrelated release number.
+
+Accepted residual: a signed, test-only build carrying the next patch identity
+exists in the qualification run's Actions artifacts (`v4-candidate-b`) for
+the retention window. It is byte-equivalent to A except the two version
+fields and the removed bundled README, it is never published to PyPI or
+GitHub Releases, and the plugin's updater consumes only GitHub Releases, so
+no installation can discover or select it. When that patch number is later
+published, the published bytes are a fresh reviewed A, not the retained B.
 
 `verify-signing.yml` is safe to dispatch separately: it exercises the protected
 `release-signing` environment against a synthetic payload and publishes

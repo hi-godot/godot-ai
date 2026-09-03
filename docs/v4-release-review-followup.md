@@ -19,12 +19,14 @@ still applies in full.
 | 7: download action | Correct `download-artifact` SHA and explicit `actions: read` for cross-run downloads; both revised workflows pass actionlint. |
 | 8: artifact exercise | Portable exact-tree/hash checks, signatures for all six release assets, exact wheel/sdist identities, retained dependency inventory, offline A/B installs/tests, and the actual documented installer for both A and B. A package version probe alone cannot authorize promotion. Full runtime/failure/stress qualification remains incomplete, as detailed below. |
 
-Every v4+ B reserves the immediately following patch number permanently.
-Patch publication skips it (`4.0.0` → `4.0.2` → `4.0.4`); minor and major
-publication retain their normal semantics. B cannot reserve an arbitrary
-future minor or major version. Signing any failed final candidate is still an
-identity-consuming event, not permission to replace signed bytes under that
-identity; final signing remains blocked until the missing producers exist.
+B carries the immediately following patch number and that number is not
+reserved: the next patch publication is a fresh reviewed A under it, and the
+retained test-only B is the accepted residual recorded in the
+[release runbook](releasing.md#qualification-and-publication). B cannot claim
+an arbitrary future minor or major version. Signing any failed final
+candidate is still an identity-consuming event, not permission to replace
+signed bytes under that identity; final signing remains blocked until the
+missing producers exist.
 
 ## Update and shutdown fix
 
