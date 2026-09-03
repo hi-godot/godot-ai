@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from godot_ai.transport.capability import CAPABILITY_DIR_ENV, read_capabilities
+from tests._qualification_https_fixture import signed_smoke_https_delivery
 from tests.conftest import allocate_free_ports
 from tests.integration._self_update_fixture import (
     CLEAN_MAJOR_MARKER_RELATIVE,
@@ -363,8 +365,25 @@ def _authenticated_tool_probe(
     asyncio.run(run())
 
 
+@pytest.fixture(params=("local-files", "private-https"))
+def signed_update_delivery(request):
+    with contextlib.ExitStack() as stack:
+
+        def configure(project, version, environment):
+            if request.param == "local-files":
+                return None
+            endpoint, transport_environment = stack.enter_context(
+                signed_smoke_https_delivery(project, version)
+            )
+            environment.update(transport_environment)
+            return endpoint
+
+        yield configure
+
+
 def test_signed_update_restarts_matching_live_server_without_parse_errors(
     tmp_path: Path,
+    signed_update_delivery,
 ) -> None:
     """Drive signed verification, actor activation, reload, and server B."""
     godot_bin = godot_bin_or_skip()
@@ -397,6 +416,7 @@ def test_signed_update_restarts_matching_live_server_without_parse_errors(
         project,
         http_port=http_port,
         version=base_version,
+        reload_before_quit=True,
     )
     environment = {
         "CODEX_HOME": str(codex_home),
@@ -413,6 +433,7 @@ def test_signed_update_restarts_matching_live_server_without_parse_errors(
         capability_dir = isolated / "capabilities"
         environment[CAPABILITY_DIR_ENV] = str(capability_dir)
 
+    delivery = signed_update_delivery(project, next_version, environment)
     prep_environment = dict(environment)
     prep_environment.update(
         {
@@ -429,6 +450,9 @@ def test_signed_update_restarts_matching_live_server_without_parse_errors(
         phase="configure",
     )
     assert f"SELF_UPDATE_TEST | production-configured Codex command pin={base_version}" in prep_log
+    assert (
+        "SELF_UPDATE_TEST | ordinary reload restored backend and persisted enablement" in prep_log
+    )
     assert f"godot-ai=={base_version}" in (codex_home / "config.toml").read_text(encoding="utf-8")
     remove_configure_client_driver(project)
 
@@ -489,8 +513,11 @@ def test_signed_update_restarts_matching_live_server_without_parse_errors(
     ordered_markers = [
         f"SELF_UPDATE_TEST | configured Codex command pin={base_version}",
         "SELF_UPDATE_TEST | requesting canonical signed install",
-        "MCP | self-update smoke: staged signed local bundle",
-        "MCP | stopped server",
+        # The HTTPS observer runs after the existing activation listener, which
+        # synchronously stops A. It observes handoff, not an earlier I/O callback.
+        *(["MCP | stopped server", "SELF_UPDATE_TEST | HTTPS canonical triple downloaded"]
+          if delivery is not None else
+          ["MCP | self-update smoke: staged signed local bundle", "MCP | stopped server"]),
         COORDINATOR_DISABLE_MARKER,
         "MCP | update coordinator enabling verified plugin",
         f"SELF_UPDATE_TEST | repinned Codex command pin={next_version}",
@@ -521,6 +548,26 @@ def test_signed_update_restarts_matching_live_server_without_parse_errors(
     )
     pre_id = pre_line.split("=", 1)[1]
     assert post_id != pre_id
+    if delivery is not None:
+        assert delivery.downloads == [
+            smoke.SMOKE_ARCHIVE_NAME,
+            smoke.SMOKE_MANIFEST_NAME,
+            smoke.SMOKE_SIGNATURE_NAME,
+        ]
+        canonical_manager = (PLUGIN_ROOT / "utils/update_manager.gd").read_bytes()
+        assert (base_addon / "utils/update_manager.gd").read_bytes() == canonical_manager
+        assert (backup / "utils/update_manager.gd").read_bytes() == canonical_manager
+        for retained in (
+            prep_log,
+            log,
+            client_config,
+            json.dumps(intent.record()),
+            json.dumps(claim),
+            json.dumps(completion),
+            (project / "project.godot").read_text(encoding="utf-8"),
+        ):
+            assert delivery.token not in retained
+            assert "https://release.qualification.invalid" not in retained
 
 
 def test_final_v3_capsule_automatically_replaces_tree_repins_and_starts(

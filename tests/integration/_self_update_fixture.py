@@ -431,7 +431,9 @@ def append_driver_autoload(project_file: Path) -> None:
     project_file.write_text(text, encoding="utf-8")
 
 
-def write_configure_client_driver(project_dir: Path, *, http_port: int, version: str) -> None:
+def write_configure_client_driver(
+    project_dir: Path, *, http_port: int, version: str, reload_before_quit: bool = False
+) -> None:
     """Configure Codex in a disposable editor process before the update run."""
     project_file = project_dir / "project.godot"
     project_file.write_text(
@@ -448,6 +450,7 @@ const HTTP_PORT := {http_port}
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 const DriverSupport := preload("res://_test_self_update_driver_support.gd")
 const OWNERSHIP_WAIT_MS := 120000
+const RELOAD_BEFORE_QUIT := {str(reload_before_quit).lower()}
 
 var _frames := 0
 var _configured := false
@@ -468,7 +471,8 @@ func _process(_delta: float) -> void:
 \t\tif plugin == null:
 \t\t\treturn
 \t\tif bool(plugin.call("has_managed_server")):
-\t\t\tget_tree().quit(0)
+\t\t\tset_process(false)
+\t\t\t_finish_prep()
 \t\t\treturn
 \t\tif _ownership_wait_started_ms == 0:
 \t\t\t_ownership_wait_started_ms = Time.get_ticks_msec()
@@ -494,6 +498,33 @@ func _process(_delta: float) -> void:
 \t\treturn
 \tprint("SELF_UPDATE_TEST | production-configured Codex command pin=%s" % VERSION)
 \t_configured = true
+
+
+func _finish_prep() -> void:
+\tif RELOAD_BEFORE_QUIT:
+\t\tvar handler = load("res://addons/godot_ai/handlers/editor_handler.gd")
+\t\tvar old_plugin_id := DriverSupport.find_godot_ai_plugin().get_instance_id()
+\t\thandler._do_reload_plugin()
+\t\tvar deadline := Time.get_ticks_msec() + OWNERSHIP_WAIT_MS
+\t\twhile Time.get_ticks_msec() < deadline:
+\t\t\tvar plugin := DriverSupport.find_godot_ai_plugin()
+\t\t\tif (plugin != null and plugin.get_instance_id() != old_plugin_id
+\t\t\t\tand bool(plugin.call("has_managed_server"))):
+\t\t\t\tvar saved := ConfigFile.new()
+\t\t\t\tif saved.load("res://project.godot") != OK or not (
+\t\t\t\t\t"res://addons/godot_ai/plugin.cfg" in saved.get_value(
+\t\t\t\t\t\t"editor_plugins", "enabled", PackedStringArray())):
+\t\t\t\t\tpush_error("SELF_UPDATE_TEST | reload did not persist plugin enablement")
+\t\t\t\t\tget_tree().quit(33)
+\t\t\t\t\treturn
+\t\t\t\tprint("SELF_UPDATE_TEST | ordinary reload restored backend and persisted enablement")
+\t\t\t\tget_tree().quit(0)
+\t\t\t\treturn
+\t\t\tawait get_tree().process_frame
+\t\tpush_error("SELF_UPDATE_TEST | ordinary reload did not restore managed backend")
+\t\tget_tree().quit(34)
+\t\treturn
+\tget_tree().quit(0)
 
 
 func _has_pin() -> bool:

@@ -208,9 +208,58 @@ def _phase(scenario: Scenario) -> str | None:
     try:
         return tx.load_journal(paths, scenario.intent)["phase"]
     except tx.TransactionError as exc:
-        if str(exc).endswith("record changed before reading"):
+        # This is a bounded phase poll, not admission of a journal. A replace
+        # can retire the inode between stat/open (including its final link).
+        # Require a later fully validated read; durable rejection still times
+        # out, and the production reader never accepts the rejected record.
+        if str(exc).endswith(
+            ("record changed before reading", "record has an unexpected hard link")
+        ):
             return None
         raise
+
+
+@pytest.mark.parametrize(
+    "message", ["record changed before reading", "record has an unexpected hard link"]
+)
+def test_phase_poll_requires_valid_read_after_transient_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+) -> None:
+    scenario = _scenario(tmp_path)
+    tx.publish_record(_paths(scenario).journal, tx._journal_record(scenario.intent, "prepared", 0))
+    original = tx.load_journal
+
+    def transient(*args):
+        monkeypatch.setattr(tx, "load_journal", original)
+        raise tx.TransactionError(message)
+
+    monkeypatch.setattr(tx, "load_journal", transient)
+    assert _phase(scenario) is None
+    assert _phase(scenario) == "prepared"
+
+
+def test_phase_poll_does_not_admit_persistent_or_unrelated_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(tmp_path)
+    tx.publish_record(_paths(scenario).journal, tx._journal_record(scenario.intent, "prepared", 0))
+
+    def reject(*args):
+        raise tx.TransactionError("record has an unexpected hard link")
+
+    monkeypatch.setattr(tx, "load_journal", reject)
+    with pytest.raises(pytest.fail.Exception, match="timed out waiting"):
+        _wait_until(lambda: _phase(scenario) == "prepared", timeout=0.01)
+
+    def malformed(*args):
+        raise tx.TransactionError("invalid journal schema")
+
+    monkeypatch.setattr(tx, "load_journal", malformed)
+    with pytest.raises(tx.TransactionError, match="invalid journal schema"):
+        _phase(scenario)
 
 
 def test_tree_identity_parse_round_trips_its_exact_record() -> None:
@@ -2802,6 +2851,279 @@ def _activate_arguments(scenario: Scenario) -> list[str]:
     ]
 
 
+def _migration_arguments(scenario: Scenario) -> list[str]:
+    return [
+        "complete-migration",
+        "--project",
+        str(scenario.project),
+        "--install",
+        str(scenario.install),
+        "--recovery-root",
+        str(scenario.recovery),
+        "--transaction",
+        scenario.intent.transaction,
+        "--editor-pid",
+        str(scenario.intent.editor.pid),
+        "--editor-nonce",
+        scenario.intent.editor.nonce,
+    ]
+
+
+@pytest.mark.parametrize("effect", sorted(tx.MIGRATION_FAILPOINT_EFFECTS))
+@pytest.mark.parametrize("when", ["before", "after"])
+@pytest.mark.parametrize("action", ["continue", "fail", "kill"])
+def test_complete_migration_cli_external_barrier_preserves_authority_and_retries(
+    tmp_path: Path,
+    effect: str,
+    when: str,
+    action: str,
+) -> None:
+    scenario = _scenario(tmp_path)
+    assert _claim_success_without_migration(scenario)["outcome"] == "success"
+    tx.EditorLeases(scenario.recovery, scenario.project, scenario.install).acquire(
+        scenario.intent.editor
+    )
+    paths = _paths(scenario)
+    authoritative = {
+        path: path.read_bytes()
+        for path in (paths.intent, paths.journal, paths.claim, paths.readiness)
+    }
+    token_hex = "37" * 32
+    token = bytes.fromhex(token_hex)
+    command = [sys.executable, "-m", "godot_ai.update_transaction", *_migration_arguments(scenario)]
+    assert token_hex not in command
+    environment = {
+        **{
+            key: value
+            for key, value in os.environ.items()
+            if key not in tx.QUALIFICATION_FAILPOINT_ENV
+        },
+        **_qualification_environment(token_hex, effect=effect, when=when, timeout="30"),
+        "PYTHONPATH": str(Path(__file__).parents[2] / "src"),
+    }
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment
+    )
+    barrier = scenario.recovery / "failpoint-barrier.json"
+    capability = scenario.recovery / "qualification-capability.json"
+    committed = effect == "migration_complete" and when == "after"
+    try:
+        _wait_until(lambda: barrier.exists() or process.poll() is not None, timeout=30)
+        assert barrier.exists(), process.communicate(timeout=5)
+        row = tx.load_record(barrier)
+        assert (row["effect"], row["when"], row["sequence"]) == (effect, when, 1)
+        assert row["intent_sha256"] == tx._intent_sha(scenario.intent)
+        assert row["project_root"] == str(scenario.project)
+        assert row["install_root"] == str(scenario.install)
+        assert row["recovery_root"] == str(scenario.recovery)
+        assert paths.migration_complete.exists() == committed
+        temporaries = list(paths.directory.glob(".record-*.tmp"))
+        assert len(temporaries) == (
+            1 if effect.endswith("temporary_write") and when == "after" else 0
+        )
+        if temporaries:
+            assert tx.load_record(temporaries[0]) == tx._migration_complete_record(
+                scenario.intent,
+                tx.validate_terminal(paths.claim, scenario.intent),
+                scenario.intent.editor,
+            )
+        if action == "kill":
+            process.kill()
+        else:
+            with pytest.raises(tx.TransactionError, match="token does not match"):
+                tx.write_failpoint_decision(
+                    scenario.recovery, token=bytes.fromhex("38" * 32), action=action
+                )
+            assert not (scenario.recovery / "failpoint-decision.json").exists()
+            tx.write_failpoint_decision(scenario.recovery, token=token, action=action)
+        stdout, stderr = process.communicate(timeout=30)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+    if action == "continue":
+        assert process.returncode == 0, stderr
+        assert tx.json.loads(stdout)["status"] == "migration_complete"
+        assert stderr == b""
+    elif action == "fail":
+        assert process.returncode == 2
+        assert f"qualification failpoint: {effect}:{when}".encode() in stderr
+        assert stdout == b""
+    else:
+        assert process.returncode != 0
+    assert paths.migration_complete.exists() == (committed or action == "continue")
+    assert capability.exists() == (action == "kill")
+    assert barrier.exists() == (action == "kill")
+    retained = {
+        path: path.read_bytes() for path in (capability, barrier, *temporaries) if path.exists()
+    }
+    assert len(list(paths.directory.glob(".record-*.tmp"))) == (
+        len(temporaries) if action == "kill" else 0
+    )
+    startup = tx.startup_barrier(
+        scenario.project,
+        scenario.install,
+        editor_pid=scenario.intent.editor.pid,
+        editor_nonce=scenario.intent.editor.nonce,
+    )
+    if committed or action == "continue":
+        assert startup == {"status": "none"}
+    else:
+        assert startup["status"] == "migration_pending"
+        assert startup["transaction"] == scenario.intent.transaction
+
+    # Retry without qualification controls. Neither an orphan temp nor the
+    # killed controller's retained records can impersonate completion.
+    for name in tx.QUALIFICATION_FAILPOINT_ENV:
+        environment.pop(name, None)
+    retry = subprocess.run(command, capture_output=True, env=environment, timeout=30)
+    assert retry.returncode == 0, retry.stderr
+    assert tx.json.loads(retry.stdout)["status"] == "migration_complete"
+    tx.validate_migration_complete(paths, scenario.intent)
+    for path, data in {**authoritative, **retained}.items():
+        assert path.read_bytes() == data
+    assert tx.hash_tree(scenario.install) == scenario.intent.new_tree
+    assert tx.hash_tree(scenario.intent.backup_root) == scenario.intent.old_tree
+    assert not tx.ActivationLock(scenario.recovery).path.exists()
+    assert not paths.result.exists()
+    assert tx.startup_barrier(
+        scenario.project,
+        scenario.install,
+        editor_pid=scenario.intent.editor.pid,
+        editor_nonce=scenario.intent.editor.nonce,
+    ) == {"status": "none"}
+    output = stdout + stderr + retry.stdout + retry.stderr
+    assert token not in output and token_hex.encode() not in output
+    for path in scenario.recovery.rglob("*"):
+        if path.is_file():
+            data = path.read_bytes()
+            assert token not in data and token_hex.encode() not in data, path
+
+
+@pytest.mark.parametrize("state", ["unleased", "tampered", "already_complete", "unreachable"])
+def test_complete_migration_cli_never_arms_before_validation_or_after_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    state: str,
+) -> None:
+    scenario = _scenario(tmp_path)
+    assert _claim_success_without_migration(scenario)["outcome"] == "success"
+    if state != "unleased":
+        tx.EditorLeases(scenario.recovery, scenario.project, scenario.install).acquire(
+            scenario.intent.editor
+        )
+    if state == "already_complete":
+        assert tx.main(_migration_arguments(scenario)) == 0
+    if state == "tampered":
+        (scenario.install / "plugin.cfg").write_text("version=tampered\n")
+    token_hex = "39" * 32
+    for name, value in _qualification_environment(
+        token_hex,
+        effect="intent_commit" if state == "unreachable" else "migration_complete",
+    ).items():
+        monkeypatch.setenv(name, value)
+    assert tx.main(_migration_arguments(scenario)) == (
+        0 if state in {"already_complete", "unreachable"} else 2
+    )
+    output = capfd.readouterr()
+    assert token_hex not in output.out + output.err
+    assert all(name not in os.environ for name in tx.QUALIFICATION_FAILPOINT_ENV)
+    assert not (scenario.recovery / "qualification-capability.json").exists()
+    assert not (scenario.recovery / "failpoint-barrier.json").exists()
+
+
+def test_complete_migration_library_is_environment_inert_and_rejects_two_controllers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _claim_success_without_migration(scenario)
+    tx.EditorLeases(scenario.recovery, scenario.project, scenario.install).acquire(
+        scenario.intent.editor
+    )
+    for name, value in _qualification_environment(effect="migration_complete").items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(tx.TransactionError, match="only one failpoint controller"):
+        tx.complete_migration(
+            scenario.project,
+            scenario.install,
+            scenario.recovery,
+            scenario.intent.transaction,
+            scenario.intent.editor,
+            failpoints=CrashAfter("migration_complete", "after"),
+            qualification_factory=lambda intent: tx.command_failpoints(
+                intent, tx.MIGRATION_FAILPOINT_EFFECTS
+            ),
+        )
+    assert (
+        tx.complete_migration(
+            scenario.project,
+            scenario.install,
+            scenario.recovery,
+            scenario.intent.transaction,
+            scenario.intent.editor,
+        )["status"]
+        == "migration_complete"
+    )
+    assert os.environ[tx.QUALIFICATION_FAILPOINT_EFFECT_ENV] == "migration_complete"
+    assert not (scenario.recovery / "qualification-capability.json").exists()
+
+
+def test_activate_consumes_but_does_not_arm_migration_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _scenario(tmp_path)
+    for effect in tx.MIGRATION_FAILPOINT_EFFECTS | tx.REPAIR_FAILPOINT_EFFECTS:
+        for name, value in _qualification_environment(effect=effect).items():
+            monkeypatch.setenv(name, value)
+        assert tx.activate_failpoints_from_environment(scenario.intent) is None
+        assert all(name not in os.environ for name in tx.QUALIFICATION_FAILPOINT_ENV)
+        assert not (scenario.recovery / "qualification-capability.json").exists()
+
+
+@pytest.mark.parametrize("mode", ["incomplete", "timeout", "unreached_occurrence"])
+def test_migration_cli_cleans_failed_or_unspent_environment_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+    mode: str,
+) -> None:
+    scenario = _scenario(tmp_path)
+    _claim_success_without_migration(scenario)
+    tx.EditorLeases(scenario.recovery, scenario.project, scenario.install).acquire(
+        scenario.intent.editor
+    )
+    for name in tx.QUALIFICATION_FAILPOINT_ENV:
+        monkeypatch.delenv(name, raising=False)
+    environment = _qualification_environment(
+        effect="migration_complete", when="before", timeout="0.01"
+    )
+    if mode == "incomplete":
+        del environment[tx.QUALIFICATION_FAILPOINT_TIMEOUT_ENV]
+    if mode == "unreached_occurrence":
+        environment[tx.QUALIFICATION_FAILPOINT_OCCURRENCE_ENV] = "2"
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    assert tx.main(_migration_arguments(scenario)) == (0 if mode == "unreached_occurrence" else 2)
+    assert _paths(scenario).migration_complete.exists() == (mode == "unreached_occurrence")
+    assert all(name not in os.environ for name in tx.QUALIFICATION_FAILPOINT_ENV)
+    for name in (
+        "qualification-capability.json",
+        "failpoint-barrier.json",
+        "failpoint-decision.json",
+    ):
+        assert not (scenario.recovery / name).exists()
+    captured = capfd.readouterr()
+    assert environment[tx.QUALIFICATION_FAILPOINT_TOKEN_ENV] not in captured.out + captured.err
+    if mode == "incomplete":
+        assert "environment is incomplete" in captured.err
+    if mode == "timeout":
+        assert "external failpoint decision" in captured.err
+
+
 def test_python_and_gdscript_qualification_vocabulary_is_exactly_synchronized() -> None:
     path = (
         Path(__file__).parents[2]
@@ -2821,7 +3143,7 @@ def test_python_and_gdscript_qualification_vocabulary_is_exactly_synchronized() 
     coordinator = string_set("COORDINATOR_EFFECTS")
     known = string_set("KNOWN_EFFECTS") | coordinator
     assert coordinator == tx.COORDINATOR_FAILPOINT_EFFECTS
-    assert known == tx.ACTIVATE_FAILPOINT_EFFECTS | tx.COORDINATOR_FAILPOINT_EFFECTS
+    assert known == tx.ACTOR_FAILPOINT_EFFECTS | tx.COORDINATOR_FAILPOINT_EFFECTS
 
     timeout_match = re.search(r'^const TIMEOUT_PATTERN := "(.*)"$', source, re.MULTILINE)
     maximum_match = re.search(r"^const MAX_TIMEOUT_SECONDS := ([0-9.]+)$", source, re.MULTILINE)
@@ -2876,7 +3198,7 @@ def test_direct_actor_capability_writer_rejects_unknown_and_coordinator_effects(
 ) -> None:
     scenario = _scenario(tmp_path)
     for effect in ("intent_commti", "coordinator_enable"):
-        with pytest.raises(tx.TransactionError, match="not reachable from activate"):
+        with pytest.raises(tx.TransactionError, match="not reachable from an actor command"):
             tx.write_failpoint_capability(
                 scenario.intent,
                 effect=effect,
@@ -3051,14 +3373,30 @@ def test_activate_cli_cleans_capability_when_prepared_state_rejects_intent(
 
 
 @pytest.mark.parametrize(
-    ("effect", "expect_barrier", "occurrence"),
-    [("intent_commit", True, 1), ("quarantine_live", False, 1), ("journal_commit", True, 2)],
+    ("effect", "expect_barrier", "occurrence", "when"),
+    [
+        (effect, True, occurrence, when)
+        for effect, occurrences in (
+            ("intent_commit", (1,)),
+            ("intent_temporary_write", (1,)),
+            ("activation_lock", (1,)),
+            ("journal_commit", (1, 2, 3)),
+            ("journal_temporary_write", (1, 2, 3)),
+            ("live_to_backup", (1,)),
+            ("stage_to_live", (1,)),
+            ("result_commit", (1,)),
+            ("terminal_temporary_write", (1,)),
+        )
+        for occurrence in occurrences
+        for when in ("before", "after")
+    ] + [("quarantine_live", False, 1, "after")],
 )
 def test_activate_cli_uses_authenticated_environment_failpoint_without_secret_leak(
     tmp_path: Path,
     effect: str,
     expect_barrier: bool,
     occurrence: int,
+    when: str,
 ) -> None:
     scenario = _scenario(tmp_path)
     token_hex = "31" * 32
@@ -3072,7 +3410,7 @@ def test_activate_cli_uses_authenticated_environment_failpoint_without_secret_le
     assert token_hex not in command
     environment = {
         **os.environ,
-        **_qualification_environment(token_hex, effect=effect, timeout="30"),
+        **_qualification_environment(token_hex, effect=effect, when=when, timeout="30"),
         tx.QUALIFICATION_FAILPOINT_OCCURRENCE_ENV: str(occurrence),
         "PYTHONPATH": str(Path(__file__).parents[2] / "src"),
     }
@@ -3087,9 +3425,15 @@ def test_activate_cli_uses_authenticated_environment_failpoint_without_secret_le
         capability = scenario.recovery / "qualification-capability.json"
         _wait_until(lambda: os.path.lexists(capability), timeout=30)
         assert token_hex.encode("ascii") not in capability.read_bytes()
-        if expect_barrier:
+        terminal_barrier = effect in {"result_commit", "terminal_temporary_write"} or (
+            effect in {"journal_commit", "journal_temporary_write"} and occurrence == 3
+        )
+        if expect_barrier and not terminal_barrier:
             _wait_until(lambda: os.path.lexists(barrier), timeout=30)
-            assert tx.load_record(barrier)["sequence"] == occurrence
+            observed = tx.load_record(barrier)
+            assert (observed["sequence"], observed["effect"], observed["when"]) == (
+                occurrence, effect, when
+            )
             assert token not in barrier.read_bytes()
             tx.write_failpoint_decision(scenario.recovery, token=token, action="continue")
         else:
@@ -3126,6 +3470,27 @@ def test_activate_cli_uses_authenticated_environment_failpoint_without_secret_le
         actual_intent = tx.load_intent(paths)
         assert tx.load_journal(paths, actual_intent)["phase"] == "stage_live"
         tx.write_readiness(actual_intent)
+        if terminal_barrier:
+            _wait_until(lambda: os.path.lexists(barrier), timeout=30)
+            observed = tx.load_record(barrier)
+            assert (observed["sequence"], observed["effect"], observed["when"]) == (
+                occurrence, effect, when
+            )
+            success_committed = effect not in {"journal_commit", "journal_temporary_write"} or (
+                effect == "journal_commit" and when == "after"
+            )
+            assert tx.load_journal(paths, actual_intent)["phase"] == (
+                "success" if success_committed else "stage_live"
+            )
+            assert paths.result.exists() == (effect == "result_commit" and when == "after")
+            if effect == "terminal_temporary_write":
+                temporaries = list(paths.directory.glob(".record-*.tmp"))
+                assert len(temporaries) == (1 if when == "after" else 0)
+                if temporaries:
+                    assert tx.load_record(temporaries[0]) == tx._terminal_record(
+                        actual_intent, outcome="success", writer="normal"
+                    )
+            tx.write_failpoint_decision(scenario.recovery, token=token, action="continue")
         _wait_until(lambda: os.path.lexists(paths.result), timeout=30)
         claimed = tx.claim_result(actual_intent)
         stdout, stderr = process.communicate(timeout=30)
@@ -3141,6 +3506,15 @@ def test_activate_cli_uses_authenticated_environment_failpoint_without_secret_le
     assert process.returncode == 0
     assert stderr == b""
     assert tx.json.loads(stdout) == tx.actor_response(claimed)
+    assert claimed["outcome"] == "success"
+    assert tx.load_journal(paths, actual_intent)["phase"] == "success"
+    assert tx.hash_tree(actual_intent.install_root) == actual_intent.new_tree
+    assert tx.hash_tree(actual_intent.backup_root) == actual_intent.old_tree
+    assert not actual_intent.stage_root.exists()
+    assert not paths.result.exists()
+    assert tx.validate_terminal(paths.claim, actual_intent) == claimed
+    assert not paths.migration_complete.exists()
+    assert not tx.ActivationLock(actual_intent.recovery_root).path.exists()
     assert token not in stdout + stderr
     assert token_hex.encode("ascii") not in stdout + stderr
     assert not os.path.lexists(scenario.recovery / "qualification-capability.json")
@@ -3164,6 +3538,18 @@ def test_activate_cli_uses_authenticated_environment_failpoint_without_secret_le
         ("stage_to_live", "after", 1, "new", False, True, "prepared"),
         ("journal_commit", "before", 2, "new", False, True, "prepared"),
         ("journal_commit", "after", 2, "new", False, True, "stage_live"),
+        ("journal_temporary_write", "before", 1, "old", True, False, None),
+        ("journal_temporary_write", "after", 1, "old", True, False, None),
+        ("journal_temporary_write", "before", 2, "new", False, True, "prepared"),
+        ("journal_temporary_write", "after", 2, "new", False, True, "prepared"),
+        ("journal_commit", "before", 3, "new", False, True, "stage_live"),
+        ("journal_commit", "after", 3, "new", False, True, "success"),
+        ("journal_temporary_write", "before", 3, "new", False, True, "stage_live"),
+        ("journal_temporary_write", "after", 3, "new", False, True, "stage_live"),
+        ("result_commit", "before", 1, "new", False, True, "success"),
+        ("result_commit", "after", 1, "new", False, True, "success"),
+        ("terminal_temporary_write", "before", 1, "new", False, True, "success"),
+        ("terminal_temporary_write", "after", 1, "new", False, True, "success"),
     ],
 )
 def test_killed_cli_actor_requires_closed_editor_and_explicit_repair(
@@ -3205,6 +3591,27 @@ def test_killed_cli_actor_requires_closed_editor_and_explicit_repair(
             },
         )
         barrier_path = scenario.recovery / "failpoint-barrier.json"
+        after_readiness = effect in {"result_commit", "terminal_temporary_write"} or (
+            effect in {"journal_commit", "journal_temporary_write"} and occurrence == 3
+        )
+        if after_readiness:
+            def ready_to_acknowledge() -> bool:
+                if not paths.journal.exists():
+                    return False
+                try:
+                    return tx.load_record(paths.journal)["phase"] == "stage_live"
+                except PermissionError:
+                    # Windows atomic publication may briefly deny the phase poll.
+                    return False
+                except tx.TransactionError as error:
+                    if str(error).endswith((
+                        "record changed before reading", "record has an unexpected hard link"
+                    )):
+                        return False
+                    raise
+
+            _wait_until(ready_to_acknowledge, timeout=30)
+            tx.write_readiness(tx.load_intent(paths))
         _wait_until(lambda: barrier_path.exists() or actor.poll() is not None, timeout=30)
         assert actor.poll() is None, "actor exited before its external barrier"
         barrier = tx.load_record(barrier_path)
@@ -3244,10 +3651,32 @@ def test_killed_cli_actor_requires_closed_editor_and_explicit_repair(
         assert paths.journal.exists() == (phase is not None)
         if phase is not None:
             assert tx.load_journal(paths, actual_intent)["phase"] == phase
-        assert all(
-            not path.exists()
-            for path in (paths.readiness, paths.result, paths.claim, paths.migration_complete)
-        )
+        temporaries = list(paths.directory.glob(".record-*.tmp"))
+        if effect in {"journal_temporary_write", "terminal_temporary_write"} and when == "after":
+            assert len(temporaries) == 1
+            temporary = temporaries[0]
+            if effect == "journal_temporary_write":
+                pending_phase = {1: "prepared", 2: "stage_live", 3: "success"}[occurrence]
+                expected_temporary = tx._journal_record(
+                    actual_intent, pending_phase, occurrence - 1
+                )
+            else:
+                expected_temporary = tx._terminal_record(
+                    actual_intent, outcome="success", writer="normal"
+                )
+            assert tx.load_record(temporary) == expected_temporary
+            temporary_bytes = temporary.read_bytes()
+        else:
+            assert temporaries == []
+        assert paths.readiness.exists() == after_readiness
+        result_published = effect == "result_commit" and when == "after"
+        assert paths.result.exists() == result_published
+        assert not paths.claim.exists() and not paths.migration_complete.exists()
+        if after_readiness:
+            tx.validate_readiness(paths, actual_intent)
+            readiness_bytes = paths.readiness.read_bytes()
+        if result_published:
+            assert tx.validate_terminal(paths.result, actual_intent)["outcome"] == "success"
         lock = tx.ActivationLock(scenario.recovery)
         assert lock.validate(actual_intent)["runner"] == actual_intent.runner.record()
 
@@ -3315,23 +3744,39 @@ def test_killed_cli_actor_requires_closed_editor_and_explicit_repair(
         assert repaired.returncode == 0, repaired.stderr.decode()
         claim = tx.validate_terminal(paths.claim, actual_intent)
         assert tx.json.loads(repaired.stdout) == tx.actor_response(claim)
-        assert claim["outcome"] == "rolled_back"
-        assert claim["writer"] == "repair"
-        assert tx.hash_tree(scenario.install) == actual_intent.old_tree
-        assert not actual_intent.backup_root.exists()
+        preserve_success = phase == "success"
+        expected_outcome = "success" if preserve_success else "rolled_back"
+        assert claim["outcome"] == expected_outcome
+        assert claim["writer"] == ("normal" if result_published else "repair")
+        assert tx.hash_tree(scenario.install) == (
+            actual_intent.new_tree if preserve_success else actual_intent.old_tree
+        )
+        assert actual_intent.backup_root.exists() == preserve_success
+        if preserve_success:
+            assert tx.hash_tree(actual_intent.backup_root) == actual_intent.old_tree
         assert not lock.path.exists()
         assert not paths.result.exists()
-        assert not paths.readiness.exists()
+        assert paths.readiness.exists() == after_readiness
+        if after_readiness:
+            # Readiness is retained evidence, not authority to override the
+            # committed journal or to claim the quarantined tree is still live.
+            assert paths.readiness.read_bytes() == readiness_bytes
         assert not paths.migration_complete.exists()
-        assert tx.load_journal(paths, actual_intent)["phase"] == "rolled_back"
+        assert tx.load_journal(paths, actual_intent)["phase"] == expected_outcome
         assert scenario.stage.exists() == stage
         if stage:
             assert tx.hash_tree(scenario.stage) == actual_intent.new_tree
-        assert actual_intent.quarantine_root.exists() == (live == "new")
-        if live == "new":
+        quarantined = live == "new" and not preserve_success
+        assert actual_intent.quarantine_root.exists() == quarantined
+        if quarantined:
             assert tx.hash_tree(actual_intent.quarantine_root) == actual_intent.new_tree
         # Crash evidence survives; no secret is written into any record.
         assert tx.load_record(barrier_path) == barrier
+        # A killed writer's uncommitted bytes are evidence, never authority:
+        # repair follows the committed journal and retains the orphan temp.
+        if temporaries:
+            assert temporary.read_bytes() == temporary_bytes
+            assert list(paths.directory.glob(".record-*.tmp")) == temporaries
         for path in scenario.recovery.rglob("*"):
             if path.is_file():
                 assert token_hex.encode() not in path.read_bytes()
@@ -3340,6 +3785,202 @@ def test_killed_cli_actor_requires_closed_editor_and_explicit_repair(
             if process is not None and process.poll() is None:
                 process.kill()
                 process.wait(timeout=10)
+
+
+@pytest.fixture
+def repair_process_fixture(tmp_path: Path):
+    """Prepared crash fixture with two real, independently probed owner PIDs.
+
+    Initial activation is an in-process crash fixture, not a Godot/candidate
+    qualification run. The repair command and its crash boundary are real.
+    """
+    owners = [subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+              for _ in range(2)]
+    try:
+        for process in owners:
+            _wait_until(lambda: tx.process_start_fingerprint(process.pid) is not None, timeout=10)
+        editor, runner = [tx.ProcessIdentity(
+            process.pid, tx.process_start_fingerprint(process.pid), f"repair-owner-{index:016d}"
+        ) for index, process in enumerate(owners)]
+        scenario = _scenario(tmp_path, editor=editor)
+        scenario.intent = replace(scenario.intent, runner=runner)
+        with pytest.raises(SimulatedCrash, match="stage_to_live:after"):
+            tx.run_activation(scenario.intent, failpoints=CrashAfter("stage_to_live", "after"))
+        assert tx.hash_tree(scenario.install) == scenario.intent.new_tree
+        assert tx.hash_tree(scenario.intent.backup_root) == scenario.intent.old_tree
+        assert tx.load_journal(_paths(scenario), scenario.intent)["phase"] == "prepared"
+        yield scenario, owners
+    finally:
+        for process in owners:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+
+def _repair_arguments(scenario: Scenario) -> list[str]:
+    return ["repair", "--project", str(scenario.project), "--install", str(scenario.install),
+            "--recovery-root", str(scenario.recovery), "--transaction", scenario.intent.transaction]
+
+
+@pytest.mark.parametrize("when", ["before", "after"])
+@pytest.mark.parametrize("action", ["continue", "fail", "kill"])
+def test_repair_cli_external_claim_barrier_preserves_crash_and_retry(repair_process_fixture,
+                                                                   when, action):
+    scenario, owners = repair_process_fixture
+    paths = _paths(scenario)
+    for process in owners:
+        process.terminate()
+        process.wait(timeout=10)
+    assert tx.probe_process(scenario.intent.editor) in {"dead", "reused"}
+    assert tx.probe_process(scenario.intent.runner) in {"dead", "reused"}
+    token_hex = "63" * 32
+    clean_environment = {key: value for key, value in os.environ.items()
+                         if key not in tx.QUALIFICATION_FAILPOINT_ENV}
+    clean_environment["PYTHONPATH"] = str(Path(__file__).parents[2] / "src")
+    command = [sys.executable, "-m", "godot_ai.update_transaction", *_repair_arguments(scenario)]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={
+        **clean_environment,
+        **_qualification_environment(token_hex, effect="repair_claim", when=when, timeout="30"),
+    })
+    barrier_path = scenario.recovery / "failpoint-barrier.json"
+    capability = scenario.recovery / "qualification-capability.json"
+    repair_claim = paths.directory / "repair-claim.json"
+    intent_bytes = paths.intent.read_bytes()
+    try:
+        _wait_until(lambda: barrier_path.exists() or process.poll() is not None, timeout=30)
+        assert barrier_path.exists(), process.communicate(timeout=5)
+        barrier = tx.load_record(barrier_path)
+        assert (barrier["effect"], barrier["when"], barrier["sequence"]) == (
+            "repair_claim", when, 1)
+        assert barrier["intent_sha256"] == tx._intent_sha(scenario.intent)
+        assert barrier["project_root"] == str(scenario.project)
+        assert barrier["install_root"] == str(scenario.install)
+        assert barrier["recovery_root"] == str(scenario.recovery)
+        assert repair_claim.exists() == (when == "after")
+        if repair_claim.exists():
+            claim_row = tx.load_record(repair_claim)
+            assert claim_row["prior_runner"] == scenario.intent.runner.record()
+            assert claim_row["repairer"]["pid"] == process.pid
+        assert tx.hash_tree(scenario.install) == scenario.intent.new_tree
+        assert tx.hash_tree(scenario.intent.backup_root) == scenario.intent.old_tree
+        assert not scenario.stage.exists() and not scenario.intent.quarantine_root.exists()
+        assert tx.load_journal(paths, scenario.intent)["phase"] == "prepared"
+        assert not paths.result.exists() and not paths.claim.exists()
+        assert not paths.readiness.exists() and not paths.migration_complete.exists()
+        assert tx.ActivationLock(scenario.recovery).validate(scenario.intent)
+        if action == "kill":
+            process.kill()
+        else:
+            with pytest.raises(tx.TransactionError, match="token does not match"):
+                tx.write_failpoint_decision(scenario.recovery, token=b"x" * 32, action=action)
+            assert not (scenario.recovery / "failpoint-decision.json").exists()
+            tx.write_failpoint_decision(scenario.recovery,
+                                       token=bytes.fromhex(token_hex), action=action)
+        stdout, stderr = process.communicate(timeout=30)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+    assert process.returncode == 0 if action == "continue" else process.returncode != 0
+    if action == "fail":
+        assert process.returncode == 2 and b"qualification failpoint: repair_claim:" in stderr
+    assert capability.exists() == barrier_path.exists() == (action == "kill")
+    retained = {path: path.read_bytes() for path in (capability, barrier_path) if path.exists()}
+    if action != "continue":
+        assert tx.hash_tree(scenario.install) == scenario.intent.new_tree
+        assert tx.hash_tree(scenario.intent.backup_root) == scenario.intent.old_tree
+        assert tx.load_journal(paths, scenario.intent)["phase"] == "prepared"
+        assert not paths.result.exists() and not paths.claim.exists()
+        assert tx.ActivationLock(scenario.recovery).validate(scenario.intent)
+        def recovery_snapshot():
+            return {path.relative_to(scenario.recovery).as_posix(): (
+                path.read_bytes() if path.is_file() else None
+            ) for path in scenario.recovery.rglob("*")}
+
+        frozen = recovery_snapshot()
+        startup = subprocess.run([
+            sys.executable, "-m", "godot_ai.update_transaction", "startup",
+            "--project", str(scenario.project), "--install", str(scenario.install),
+            "--editor-pid", str(os.getpid()), "--editor-nonce", "repair-other-editor",
+        ], capture_output=True, env=clean_environment, timeout=30)
+        assert startup.returncode == 2 and startup.stdout == b""
+        assert recovery_snapshot() == frozen
+        retry = subprocess.run(command, capture_output=True, env=clean_environment, timeout=30)
+        assert retry.returncode == 0, retry.stderr
+        stdout += retry.stdout
+        stderr += retry.stderr
+        assert len(list(paths.directory.glob("repair-claim-*.json"))) == (when == "after")
+    terminal = tx.validate_terminal(paths.claim, scenario.intent)
+    assert terminal["outcome"] == "rolled_back" and terminal["writer"] == "repair"
+    assert tx.hash_tree(scenario.install) == scenario.intent.old_tree
+    assert tx.hash_tree(scenario.intent.quarantine_root) == scenario.intent.new_tree
+    assert not scenario.intent.backup_root.exists() and not scenario.stage.exists()
+    assert tx.load_journal(paths, scenario.intent)["phase"] == "rolled_back"
+    assert not tx.ActivationLock(scenario.recovery).path.exists()
+    assert not paths.result.exists() and not paths.migration_complete.exists()
+    assert paths.intent.read_bytes() == intent_bytes
+    for path, data in retained.items():
+        assert path.read_bytes() == data
+    assert token_hex.encode() not in stdout + stderr
+    for path in scenario.recovery.rglob("*"):
+        if path.is_file():
+            assert token_hex.encode() not in path.read_bytes(), path
+
+
+@pytest.mark.parametrize("mode", [
+    "owners-alive", "prior-alive", "wrong-root", "bad-token", "unreachable",
+    "timeout", "unreached-occurrence", "library",
+])
+def test_repair_cli_claim_control_refusal_cleanup_and_library_inertness(
+    repair_process_fixture, monkeypatch, capfd, mode,
+):
+    scenario, owners = repair_process_fixture
+    if mode != "owners-alive":
+        for process in owners:
+            process.terminate()
+            process.wait(timeout=10)
+    if mode == "prior-alive":
+        tx._claim_repair(_paths(scenario), scenario.intent, scenario.intent.runner,
+                         tx.ProcessIdentity.current(), tx.probe_process, None)
+    environment = _qualification_environment(effect="repair_claim", when="before", timeout="0.01")
+    if mode == "bad-token":
+        environment[tx.QUALIFICATION_FAILPOINT_TOKEN_ENV] = "not-a-token"
+    if mode == "unreachable":
+        environment[tx.QUALIFICATION_FAILPOINT_EFFECT_ENV] = "migration_complete"
+    if mode == "unreached-occurrence":
+        environment[tx.QUALIFICATION_FAILPOINT_OCCURRENCE_ENV] = "2"
+    for name in tx.QUALIFICATION_FAILPOINT_ENV:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    if mode == "library":
+        assert tx.repair_transaction(scenario.recovery, scenario.intent.transaction)[
+            "outcome"] == "rolled_back"
+        assert os.environ[tx.QUALIFICATION_FAILPOINT_EFFECT_ENV] == "repair_claim"
+    else:
+        arguments = _repair_arguments(scenario)
+        if mode == "wrong-root":
+            arguments[arguments.index("--recovery-root") + 1] = str(scenario.recovery.parent)
+        assert tx.main(arguments) == (0 if mode in {"unreachable", "unreached-occurrence"} else 2)
+        assert all(name not in os.environ for name in tx.QUALIFICATION_FAILPOINT_ENV)
+    for name in ("qualification-capability.json", "failpoint-barrier.json",
+                 "failpoint-decision.json"):
+        assert not (scenario.recovery / name).exists()
+    if mode in {"owners-alive", "prior-alive", "wrong-root", "bad-token", "timeout"}:
+        assert (_paths(scenario).directory / "repair-claim.json").exists() == (
+            mode == "prior-alive")
+        assert tx.hash_tree(scenario.install) == scenario.intent.new_tree
+        assert tx.hash_tree(scenario.intent.backup_root) == scenario.intent.old_tree
+        assert tx.load_journal(_paths(scenario), scenario.intent)["phase"] == "prepared"
+        assert tx.ActivationLock(scenario.recovery).validate(scenario.intent)
+    output = capfd.readouterr()
+    assert environment[tx.QUALIFICATION_FAILPOINT_TOKEN_ENV] not in output.out + output.err
+
+
+def test_repair_rejects_two_failpoint_controllers(tmp_path):
+    with pytest.raises(tx.TransactionError, match="only one failpoint controller"):
+        tx.repair_transaction(tmp_path, "0123456789abcdef", failpoints=object(),
+                              qualification_factory=lambda intent: None)
 
 
 def test_write_readiness_rejects_changed_live_tree(tmp_path: Path) -> None:
@@ -3576,6 +4217,105 @@ def test_exact_tree_rejects_empty_directories_and_hardlinks(tmp_path: Path) -> N
     _mkdir(root / "empty")
     with pytest.raises(tx.TransactionError, match="empty directories"):
         tx.hash_tree(root)
+
+
+@pytest.mark.parametrize("kind", ["intent", "journal", "terminal"])
+@pytest.mark.parametrize("when", ["before", "after"])
+@pytest.mark.parametrize("action", ["continue", "fail"])
+def test_record_temporary_write_has_authenticated_external_barriers(
+    tmp_path: Path, kind: str, when: str, action: str
+) -> None:
+    scenario = _scenario(tmp_path)
+    paths = _paths(scenario)
+    row = {
+        "intent": scenario.intent.record(),
+        "journal": tx._journal_record(scenario.intent, "stage_live", 1),
+        "terminal": tx._terminal_record(scenario.intent, outcome="success", writer="normal"),
+    }[kind]
+    path = {"intent": paths.intent, "journal": paths.journal, "terminal": paths.result}[kind]
+    previous = tx._journal_record(scenario.intent, "prepared", 0) if kind == "journal" else None
+    if previous is not None:
+        tx.publish_record(path, previous)
+    token = bytes.fromhex("53" * 32)
+    effect = f"{kind}_temporary_write"
+    capability = tx.write_failpoint_capability(
+        scenario.intent, effect=effect, when=when, token=token
+    )
+    controls = tx.Failpoints(capability, token, scenario.intent, timeout=10)
+    errors: list[BaseException] = []
+
+    def write() -> None:
+        try:
+            store = tx.replace_record if kind == "journal" else tx.publish_record
+            store(path, row, failpoints=controls)
+        except BaseException as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=write, daemon=True)
+    worker.start()
+    barrier_path = scenario.recovery / "failpoint-barrier.json"
+    try:
+        _wait_until(lambda: barrier_path.exists() or errors, timeout=5)
+        assert errors == []
+        barrier = tx.load_record(barrier_path)
+        assert (barrier["effect"], barrier["when"], barrier["sequence"]) == (effect, when, 1)
+        assert barrier["intent_sha256"] == tx._intent_sha(scenario.intent)
+        assert path.exists() == (previous is not None)
+        if previous is not None:
+            assert tx.load_record(path) == previous
+        temporaries = list(paths.directory.glob(".record-*.tmp"))
+        assert len(temporaries) == (1 if when == "after" else 0)
+        if temporaries:
+            assert temporaries[0].read_bytes() == tx.canonical_json(row)
+            assert tx.load_record(temporaries[0]) == row
+            if os.name != "nt":
+                assert stat.S_IMODE(temporaries[0].stat().st_mode) == 0o600
+        tx.write_failpoint_decision(scenario.recovery, token=token, action=action)
+    finally:
+        worker.join(12)
+    assert not worker.is_alive()
+    if action == "fail":
+        assert len(errors) == 1 and isinstance(errors[0], tx.InjectedFailure)
+        assert path.exists() == (previous is not None)
+        if previous is not None:
+            assert tx.load_record(path) == previous
+    else:
+        assert errors == []
+        assert tx.load_record(path) == row
+    assert not list(paths.directory.glob(".record-*.tmp"))
+    assert not capability.exists()
+    assert not barrier_path.exists()
+    assert not (scenario.recovery / "failpoint-decision.json").exists()
+    for retained in scenario.recovery.rglob("*"):
+        if retained.is_file():
+            assert token.hex().encode() not in retained.read_bytes()
+
+
+def test_temporary_write_io_failure_preserves_prior_record_and_original_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = _mkdir(tmp_path / "private")
+    path = directory / "journal.json"
+    previous = {"record": "journal", "value": "old"}
+    tx.publish_record(path, previous)
+    observed = []
+
+    class Observe:
+        def barrier(self, effect: str, when: str) -> None:
+            observed.append((effect, when))
+
+    def fail_write(_parent, _data):
+        raise OSError("temporary write fixture failure")
+
+    monkeypatch.setattr(tx, "_write_temp", fail_write)
+    with pytest.raises(OSError, match="temporary write fixture failure"):
+        tx.replace_record(
+            path, {"record": "journal", "value": "new"},
+            failpoints=Observe(),  # type: ignore[arg-type]
+        )
+    assert tx.load_record(path) == previous
+    assert observed == [("journal_temporary_write", "before")]
+    assert not list(directory.glob(".record-*.tmp"))
 
 
 def test_publish_is_immutable_and_journal_replace_is_atomic(tmp_path: Path) -> None:

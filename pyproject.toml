@@ -76,6 +76,8 @@ dev = [
     # Used by script/ci-game-capture-smoke to decode PNG frames from the
     # running game and assert the expected colored quadrants are present.
     "pillow>=10.0",
+    # Reviewed harness only: identity-bound release resource measurements.
+    "psutil==7.2.2",
 ]
 build = [
     "build==1.6.0",

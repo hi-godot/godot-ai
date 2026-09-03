@@ -1,9 +1,11 @@
 """Exercise the real, token-scoped local index used by artifact installs."""
 
 import hashlib
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -144,3 +146,53 @@ def test_empty_index_is_refused(tmp_path):
     with pytest.raises(support.ReleaseError, match="empty"):
         with retained_index(tmp_path, []):
             pytest.fail("empty index started")
+
+
+@pytest.mark.parametrize("replace_file", [False, True])
+def test_index_freezes_retained_identity_against_caller_mutation(tmp_path, replace_file):
+    payload, rows = wheel_fixture(tmp_path)
+    filename = rows[0]["filename"]
+    replacement = b"different retained bytes"
+    with retained_index(tmp_path, rows) as (index, requested):
+        rows[0]["size"] = len(replacement)
+        rows[0]["sha256"] = hashlib.sha256(replacement).hexdigest()
+        if replace_file:
+            (tmp_path / filename).write_bytes(replacement)
+        artifact = urllib.parse.urljoin(index, "../files/" + filename)
+        if replace_file:
+            with pytest.raises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(artifact, timeout=2)
+            assert error.value.code == 409 and requested == []
+        else:
+            with urllib.request.urlopen(artifact, timeout=2) as response:
+                assert response.read() == payload
+            assert requested == [filename]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO replacement race")
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_index_rejects_a_fifo_replacement_without_blocking(tmp_path, monkeypatch, method):
+    _payload, rows = wheel_fixture(tmp_path)
+    target = tmp_path / rows[0]["filename"]
+    original_stat = Path.lstat
+    original_open = os.open
+    with retained_index(tmp_path, rows) as (index, requested):
+
+        def replace_after_check(path, *args, **kwargs):
+            info = original_stat(path, *args, **kwargs)
+            if path == target:
+                path.unlink()
+                os.mkfifo(path)
+            return info
+
+        def checked_open(path, flags, *args):
+            if path == target:
+                assert flags & os.O_NONBLOCK, "never open a raced FIFO in blocking mode"
+            return original_open(path, flags, *args)
+
+        monkeypatch.setattr(Path, "lstat", replace_after_check)
+        monkeypatch.setattr(os, "open", checked_open)
+        artifact = urllib.parse.urljoin(index, "../files/" + rows[0]["filename"])
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(urllib.request.Request(artifact, method=method), timeout=2)
+        assert error.value.code == 409 and requested == []

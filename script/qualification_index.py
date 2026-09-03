@@ -37,7 +37,10 @@ def retained_index(packages: Path, dependencies: list[dict]):
             and re.fullmatch(r"[a-f0-9]{64}", row["sha256"]),
             "invalid private index artifact identity",
         )
-    files = {row["filename"]: row for row in dependencies}
+    # Keep startup's retained identity even if the caller later reuses/mutates
+    # its report dictionaries. Replacing both that row and the file must not
+    # turn different bytes into an authorized artifact.
+    files = {row["filename"]: dict(row) for row in dependencies}
     support.require(len(files) == len(dependencies), "duplicate index filenames")
     support.require(
         support.inventory(packages)
@@ -86,7 +89,10 @@ def retained_index(packages: Path, dependencies: list[dict]):
                 try:
                     if not stat.S_ISREG(target.lstat().st_mode):
                         raise OSError("artifact is no longer a regular file")
-                    descriptor = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                    descriptor = os.open(
+                        target,
+                        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+                    )
                     with os.fdopen(descriptor, "rb") as stream:
                         current = os.fstat(stream.fileno())
                         if not stat.S_ISREG(current.st_mode) or current.st_size != expected["size"]:

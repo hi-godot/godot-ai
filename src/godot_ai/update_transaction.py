@@ -24,7 +24,7 @@ import sys
 import time
 import unicodedata
 from collections.abc import Callable, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, NoReturn
@@ -85,12 +85,22 @@ ACTIVATE_FAILPOINT_EFFECTS = frozenset(
         "activation_lock",
         "backup_to_live",
         "intent_commit",
+        "intent_temporary_write",
         "journal_commit",
+        "journal_temporary_write",
         "live_to_backup",
         "quarantine_live",
         "result_commit",
         "stage_to_live",
+        "terminal_temporary_write",
     }
+)
+MIGRATION_FAILPOINT_EFFECTS = frozenset({
+    "migration_complete", "migration_complete_temporary_write",
+})
+REPAIR_FAILPOINT_EFFECTS = frozenset({"repair_claim"})
+ACTOR_FAILPOINT_EFFECTS = (
+    ACTIVATE_FAILPOINT_EFFECTS | MIGRATION_FAILPOINT_EFFECTS | REPAIR_FAILPOINT_EFFECTS
 )
 COORDINATOR_FAILPOINT_EFFECTS = frozenset(
     {
@@ -465,40 +475,54 @@ def _write_temp(parent: Path, data: bytes) -> Path:
     return path
 
 
-def _store_record(path: Path, row: Mapping[str, Any], *, replace: bool) -> None:
+def _store_record(
+    path: Path,
+    row: Mapping[str, Any],
+    *,
+    replace: bool,
+    failpoints: Failpoints | None = None,
+) -> None:
     if _lexists(path) and not replace:
         _fail(f"{path}: immutable record already exists")
     if _lexists(path):
         _secure_file(path)
-    temporary = _write_temp(path.parent, canonical_json(row))
+    temporary = None
     try:
-        if replace:
-            _retry_windows_sharing_denial(lambda: os.replace(temporary, path))
-        else:
-            os.link(temporary, path)
-            temporary.unlink()
-        _sync_dir(path.parent)
-    except FileExistsError as exc:
-        raise TransactionError(f"{path}: immutable record already exists") from exc
-    except OSError as exc:
-        raise TransactionError(f"{path}: cannot store record: {exc}") from exc
-    finally:
+        with _mutation(failpoints, f"{row.get('record', 'untyped')}_temporary_write"):
+            temporary = _write_temp(path.parent, canonical_json(row))
         try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+            if replace:
+                _retry_windows_sharing_denial(lambda: os.replace(temporary, path))
+            else:
+                os.link(temporary, path)
+                temporary.unlink()
+            _sync_dir(path.parent)
+        except FileExistsError as exc:
+            raise TransactionError(f"{path}: immutable record already exists") from exc
+        except OSError as exc:
+            raise TransactionError(f"{path}: cannot store record: {exc}") from exc
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
 
-def publish_record(path: Path, row: Mapping[str, Any]) -> None:
+def publish_record(
+    path: Path, row: Mapping[str, Any], *, failpoints: Failpoints | None = None
+) -> None:
     """Publish an immutable record without overwriting an existing name."""
 
-    _store_record(path, row, replace=False)
+    _store_record(path, row, replace=False, failpoints=failpoints)
 
 
-def replace_record(path: Path, row: Mapping[str, Any]) -> None:
+def replace_record(
+    path: Path, row: Mapping[str, Any], *, failpoints: Failpoints | None = None
+) -> None:
     """Atomically replace the reducer's single mutable journal record."""
 
-    _store_record(path, row, replace=True)
+    _store_record(path, row, replace=True, failpoints=failpoints)
 
 
 @dataclass(frozen=True)
@@ -1321,7 +1345,7 @@ def _advance(
         _fail(f"impossible journal transition: {phase} -> {next_phase}")
     row = _journal_record(intent, next_phase, current["sequence"] + 1)
     with _mutation(failpoints, "journal_commit"):
-        replace_record(paths.journal, row)
+        replace_record(paths.journal, row, failpoints=failpoints)
     return row
 
 
@@ -2105,9 +2129,14 @@ def complete_migration(
     editor: ProcessIdentity,
     *,
     failpoints: Failpoints | None = None,
+    qualification_factory: Callable[
+        [Intent], AbstractContextManager[Failpoints | None]
+    ] | None = None,
 ) -> dict[str, Any]:
     """Durably acknowledge M6 only from the leased editor on the exact new tree."""
 
+    if failpoints is not None and qualification_factory is not None:
+        _fail("migration completion accepts only one failpoint controller")
     root = _bound_recovery_root(project, install, recovery)
     paths = TransactionPaths.for_transaction(root, transaction)
     intent = load_intent(paths)
@@ -2128,11 +2157,16 @@ def complete_migration(
         validate_migration_complete(paths, intent)
         election.release(intent, editor)
         return {"status": "migration_complete", "transaction": transaction}
-    with _mutation(failpoints, "migration_complete"):
-        publish_record(
-            paths.migration_complete,
-            _migration_complete_record(intent, claim, editor),
-        )
+    # Arm CLI controls only after exact tree, successful claim and editor
+    # lease/election validation. Library callers remain environment-inert.
+    scope = qualification_factory(intent) if qualification_factory else nullcontext(failpoints)
+    with scope as controls:
+        with _mutation(controls, "migration_complete"):
+            publish_record(
+                paths.migration_complete,
+                _migration_complete_record(intent, claim, editor),
+                failpoints=controls,
+            )
     validate_migration_complete(paths, intent)
     election.release(intent, editor)
     return {"status": "migration_complete", "transaction": transaction}
@@ -2153,7 +2187,7 @@ def _result_once(
         return existing
     row = _terminal_record(intent, outcome=outcome, writer=writer)
     with _mutation(failpoints, "result_commit"):
-        publish_record(paths.result, row)
+        publish_record(paths.result, row, failpoints=failpoints)
     return row
 
 
@@ -2249,7 +2283,7 @@ def run_activation(
     if _lexists(paths.intent):
         _fail("transaction intent already exists; use inspect or explicit repair")
     with _mutation(failpoints, "intent_commit"):
-        publish_record(paths.intent, intent.record())
+        publish_record(paths.intent, intent.record(), failpoints=failpoints)
     lock = ActivationLock(root)
     lock_acquired = False
     journal_started = False
@@ -2259,7 +2293,9 @@ def run_activation(
             lock_acquired = True
         EditorLeases(root, intent.project_root, intent.install_root).assert_exclusive(intent.editor)
         with _mutation(failpoints, "journal_commit"):
-            replace_record(paths.journal, _journal_record(intent, "prepared", 0))
+            replace_record(
+                paths.journal, _journal_record(intent, "prepared", 0), failpoints=failpoints
+            )
             journal_started = True
         lock.validate(intent)
         if hash_tree(intent.install_root) != intent.old_tree:
@@ -2384,8 +2420,8 @@ class Failpoints:
     def _capability(value: Any) -> dict[str, Any]:
         row = _typed(value, "qualification_capability")
         effect = _string(row["effect"], name="capability.effect", pattern=EFFECT)
-        if effect not in ACTIVATE_FAILPOINT_EFFECTS:
-            _fail("qualification capability effect is not reachable from activate")
+        if effect not in ACTOR_FAILPOINT_EFFECTS:
+            _fail("qualification capability effect is not reachable from an actor command")
         _integer(row["occurrence"], name="capability.occurrence", minimum=1)
         _string(row["intent_sha256"], name="capability.intent_sha256", pattern=HEX64)
         _string(row["token_sha256"], name="capability.token_sha256", pattern=HEX64)
@@ -2484,8 +2520,8 @@ def write_failpoint_capability(
     """Arm one local barrier without storing or returning its secret token."""
 
     _string(effect, name="effect", pattern=EFFECT)
-    if effect not in ACTIVATE_FAILPOINT_EFFECTS:
-        _fail("qualification capability effect is not reachable from activate")
+    if effect not in ACTOR_FAILPOINT_EFFECTS:
+        _fail("qualification capability effect is not reachable from an actor command")
     if when not in {"before", "after"} or len(token) < 32:
         _fail("failpoint capability requires before/after and a 32-byte token")
     _integer(occurrence, name="occurrence", minimum=1)
@@ -2507,6 +2543,12 @@ def write_failpoint_capability(
 
 
 def activate_failpoints_from_environment(intent: Intent) -> Failpoints | None:
+    return actor_failpoints_from_environment(intent, effects=ACTIVATE_FAILPOINT_EFFECTS)
+
+
+def actor_failpoints_from_environment(
+    intent: Intent, *, effects: frozenset[str]
+) -> Failpoints | None:
     """Consume one complete process-local qualification tuple, or stay inert."""
 
     values = {name: os.environ.pop(name, None) for name in QUALIFICATION_FAILPOINT_ENV}
@@ -2532,7 +2574,7 @@ def activate_failpoints_from_environment(intent: Intent) -> Failpoints | None:
     if HEX64.fullmatch(token_hex) is None:
         _fail("qualification failpoint token must be 64 lowercase hexadecimal digits")
     _string(effect, name="qualification effect", pattern=EFFECT)
-    if effect not in ACTIVATE_FAILPOINT_EFFECTS | COORDINATOR_FAILPOINT_EFFECTS:
+    if effect not in ACTOR_FAILPOINT_EFFECTS | COORDINATOR_FAILPOINT_EFFECTS:
         _fail("qualification effect is unknown")
     if when not in {"before", "after"}:
         _fail("qualification failpoint timing must be before or after")
@@ -2543,7 +2585,7 @@ def activate_failpoints_from_environment(intent: Intent) -> Failpoints | None:
         _fail(
             f"qualification failpoint timeout must be between 0 and {MAX_QUALIFICATION_TIMEOUT:g}s"
         )
-    if effect in COORDINATOR_FAILPOINT_EFFECTS:
+    if effect not in effects:
         return None
     token = bytes.fromhex(token_hex)
     capability = write_failpoint_capability(
@@ -2555,6 +2597,20 @@ def activate_failpoints_from_environment(intent: Intent) -> Failpoints | None:
         capability.unlink(missing_ok=True)
         _sync_dir(intent.recovery_root)
         raise
+
+
+@contextmanager
+def command_failpoints(intent: Intent, effects: frozenset[str]) -> Iterator[Failpoints | None]:
+    """Keep one command's explicit environment capability within its lifetime."""
+    controls = None
+    try:
+        controls = actor_failpoints_from_environment(intent, effects=effects)
+        yield controls
+    finally:
+        for name in QUALIFICATION_FAILPOINT_ENV:
+            os.environ.pop(name, None)
+        if controls is not None:
+            controls.close()
 
 
 def write_failpoint_decision(recovery: Path, *, token: bytes, action: str) -> None:
@@ -2741,9 +2797,14 @@ def repair_transaction(
     repairer: ProcessIdentity | None = None,
     process_probe: Callable[[ProcessIdentity], str] = probe_process,
     failpoints: Failpoints | None = None,
+    qualification_factory: Callable[
+        [Intent], AbstractContextManager[Failpoints | None]
+    ] | None = None,
 ) -> dict[str, Any]:
     """Explicitly finish or roll back work only after proving both owners dead."""
 
+    if failpoints is not None and qualification_factory is not None:
+        _fail("repair accepts only one failpoint controller")
     paths = TransactionPaths.for_transaction(recovery, transaction)
     intent = load_intent(paths)
     lock = ActivationLock(intent.recovery_root)
@@ -2761,7 +2822,12 @@ def repair_transaction(
         )
 
     repairer = repairer or ProcessIdentity.current()
-    _claim_repair(paths, intent, runner, repairer, process_probe, failpoints)
+    # The CLI's repair-claim control arms only after bound intent/lock and
+    # positive owner-death checks. Other repair effects remain library-only;
+    # this narrow hook is not the complete external recovery matrix.
+    scope = qualification_factory(intent) if qualification_factory else nullcontext(failpoints)
+    with scope as controls:
+        _claim_repair(paths, intent, runner, repairer, process_probe, controls)
 
     if not _lexists(paths.journal):
         with _mutation(failpoints, "journal_commit"):
@@ -3575,13 +3641,20 @@ def main(argv: list[str] | None = None) -> int:
             _write_actor_response(result)
             return 0
         if args.command == "complete-migration":
-            result = complete_migration(
-                args.project,
-                args.install,
-                args.recovery_root,
-                args.transaction,
-                editor_identity(args.editor_pid, args.editor_nonce),
-            )
+            try:
+                result = complete_migration(
+                    args.project,
+                    args.install,
+                    args.recovery_root,
+                    args.transaction,
+                    editor_identity(args.editor_pid, args.editor_nonce),
+                    qualification_factory=lambda intent: command_failpoints(
+                        intent, MIGRATION_FAILPOINT_EFFECTS
+                    ),
+                )
+            finally:
+                for name in QUALIFICATION_FAILPOINT_ENV:
+                    os.environ.pop(name, None)
             _write_actor_response(result)
             return 0
         if args.command == "complete-manual-migration":
@@ -3610,20 +3683,31 @@ def main(argv: list[str] | None = None) -> int:
             )
             _write_actor_response(result)
             return 0
-        root = (
-            _bound_recovery_root(
-                args.project,
-                args.install,
-                args.recovery_root,
-                allow_missing_install=True,
-            )
-            if args.command == "repair"
-            else recovery_root(
-                args.project,
-                args.install,
-                override=args.recovery_base,
-                create=args.command == "root" and args.create,
-            )
+        if args.command == "repair":
+            try:
+                root = _bound_recovery_root(
+                    args.project,
+                    args.install,
+                    args.recovery_root,
+                    allow_missing_install=True,
+                )
+                result = repair_transaction(
+                    root,
+                    args.transaction,
+                    qualification_factory=lambda intent: command_failpoints(
+                        intent, REPAIR_FAILPOINT_EFFECTS
+                    ),
+                )
+            finally:
+                for name in QUALIFICATION_FAILPOINT_ENV:
+                    os.environ.pop(name, None)
+            _write_actor_response(result)
+            return 0
+        root = recovery_root(
+            args.project,
+            args.install,
+            override=args.recovery_base,
+            create=args.command == "root" and args.create,
         )
         if args.command == "root":
             _write_actor_response({"recovery_root": str(root), "status": "root"})
@@ -3637,9 +3721,6 @@ def main(argv: list[str] | None = None) -> int:
                 override=args.recovery_base,
                 timeout=args.timeout,
             )
-            _write_actor_response(result)
-        else:
-            result = repair_transaction(root, args.transaction)
             _write_actor_response(result)
         return 0
     except (OSError, ReleaseError, TransactionError) as exc:

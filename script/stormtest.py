@@ -132,6 +132,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, help="deterministic run seed (locked: 41001-41003)")
     parser.add_argument("--profile", help="steady, reload-churn, or multi-editor")
     parser.add_argument(
+        "--measure-baseline", action="store_true",
+        help=("measure a canonical workload before ceilings are reviewed; retains all "
+              "identity/cleanup/error checks but always fails qualification and exits nonzero"),
+    )
+    parser.add_argument(
         "--config",
         type=Path,
         default=Path(os.environ.get("SS_CONFIG", DEFAULT_PROFILE_CONFIG)),
@@ -173,6 +178,8 @@ try:
         REPLAY_TRACE = load_trace(ARGS.replay_trace)
     requested_profile = ARGS.profile or os.environ.get("SS_PROFILE", "").strip()
     replay_profile = str(REPLAY_TRACE["profile"]["id"]) if REPLAY_TRACE else ""
+    if ARGS.measure_baseline and (requested_profile or replay_profile) not in LOCKED_PROFILES:
+        raise StormConfigError("baseline measurement requires a canonical locked profile")
     if requested_profile and requested_profile not in LOCKED_PROFILES:
         raise StormConfigError(
             f"unknown profile {requested_profile!r}; choose from "
@@ -189,9 +196,10 @@ try:
                 "locked profiles require docs/verification/storm-profiles-v1.json"
             )
         PROFILE_CONFIG = load_profile_config(ARGS.config)
-        validate_locked_qualification_thresholds(
-            PROFILE_CONFIG, requested_profile or replay_profile
-        )
+        if not ARGS.measure_baseline:
+            validate_locked_qualification_thresholds(
+                PROFILE_CONFIG, requested_profile or replay_profile
+            )
 except StormConfigError as error:
     CONFIG_ERROR = str(error)
 
@@ -481,6 +489,8 @@ def flush_report_json():
     all_lat = [d for v in LAT.values() for d in v]
     routed_calls = M["session_pinned_calls"] + M["session_unpinned_calls"]
     snap = {
+        "baseline_measurement": ARGS.measure_baseline,
+        "unresolved_baseline_fields": PROFILE_CONFIG.get("unresolved_baseline_fields", []),
         "profile": PROFILE["id"],
         "seed": RUN_SEED,
         "trace_sha256": TRACE[0]["trace_sha256"] if TRACE[0] else None,
@@ -525,7 +535,7 @@ def flush_report_json():
             for op in sorted(set(M["by_op_ok"]) | set(M["by_op_err"]))
         },
     }
-    snap["contract_failures"] = evaluate_contract(snap, THRESHOLDS) if THRESHOLDS else []
+    snap["contract_failures"] = evaluate_contract(snap, THRESHOLDS)
     tmp = REPORT_JSON + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(snap, f, indent=2)
@@ -1574,6 +1584,15 @@ async def run_isolated_reload() -> None:
     if not await w.connect():
         _abort("could not reach the editor — is it running with the plugin enabled?")
         return
+    if not IS_LOCKED and w.target["session_id"]:
+        try:
+            await _capture_pinned_target(w.client, w.target)
+        except Exception as error:
+            _record_admin_error(_err_code(error), "isolated.identity")
+            _abort("isolated reload could not prove the explicitly pinned editor identity")
+            await _hard_close(w.client)
+            w.client = None
+            return
 
     for i in range(ISOLATED_ITERS):
         if STOP[0]:
@@ -1593,7 +1612,10 @@ async def run_isolated_reload() -> None:
         w.client = None
         t0 = time.monotonic()
         await asyncio.sleep(2.0)
-        ok = await w.connect()
+        if w.target["session_id"]:
+            ok = await _repin_locked_target(w, before)
+        else:
+            ok = await w.connect()
         dt = time.monotonic() - t0
         if not ok:
             _abort(
@@ -1739,6 +1761,58 @@ async def preflight_locked(originals: dict[str, str]) -> None:
         }
 
 
+async def _capture_pinned_target(client, target: dict[str, str]) -> None:
+    """Bind an exploratory explicit pin before any reload can rotate it."""
+    async with asyncio.timeout(CALL_TIMEOUT):
+        listing = await client.call_tool("session_manage", {"op": "list", "params": {}})
+    selected = pinned_session_identity(_sessions_from_result(listing), target["session_id"])
+    target_id = target["id"]
+    TARGET_IDENTITIES[target_id] = selected
+    # Routing evidence alone is not a locked qualification or durable-tree baseline.
+    QUALIFICATION_EVIDENCE[target_id] = {
+        **selected,
+        "initial_session_id": target["session_id"],
+        "current_session_id": target["session_id"],
+        "repins": [],
+    }
+
+
+async def _fresh_scratch_root(client, target: dict) -> str:
+    """Replace a retained editor tab from the newly written empty scene.
+
+    Removing scratch files does not close Godot's scene tab. A later create
+    writes fresh bytes but opening the same path can select the old in-memory
+    scene. Settle that tab first, then explicitly reload and prove it is empty
+    before any save or worker mutation can persist stale nodes again.
+    """
+    await client.call_tool("scene_open", _target_params(target, {"path": SCRATCH_SCENE}))
+    result = await client.call_tool(
+        "scene_open", _target_params(target, {"path": SCRATCH_SCENE, "force_reload": True})
+    )
+    data = getattr(result, "data", None)
+    if (
+        not isinstance(data, dict)
+        or data.get("switched") is not True
+        or data.get("reloaded_from_disk") is not True
+    ):
+        raise StormConfigError(f"target {target['id']}: fresh scratch reload was not proved")
+    hierarchy = await client.call_tool(
+        "scene_get_hierarchy", _target_params(target, {"depth": 1})
+    )
+    tree = getattr(hierarchy, "data", None)
+    nodes = tree.get("nodes") if isinstance(tree, dict) else None
+    if (
+        not isinstance(nodes, list)
+        or len(nodes) != 1
+        or not isinstance(nodes[0], dict)
+        or nodes[0].get("path") != "/Root"
+        or nodes[0].get("children_count") != 0
+        or tree.get("has_more") is not False
+    ):
+        raise StormConfigError(f"target {target['id']}: scratch scene is not a fresh empty root")
+    return "/Root"
+
+
 async def setup(originals: dict[str, str]) -> None:
     print(
         f"stormtest  workers={WORKERS} waves={WAVES} calls/wave={CALLS_PER_WAVE} "
@@ -1749,19 +1823,7 @@ async def setup(originals: dict[str, str]) -> None:
         target_id = target["id"]
         async with _bounded_client(target["url"]) as c:
             if not IS_LOCKED and target["session_id"]:
-                listing = await c.call_tool("session_manage", {"op": "list", "params": {}})
-                selected = pinned_session_identity(
-                    _sessions_from_result(listing), target["session_id"]
-                )
-                TARGET_IDENTITIES[target_id] = selected
-                # Routing evidence is useful even without claiming a locked
-                # qualification row or inventing a durable-tree baseline.
-                QUALIFICATION_EVIDENCE[target_id] = {
-                    **selected,
-                    "initial_session_id": target["session_id"],
-                    "current_session_id": target["session_id"],
-                    "repins": [],
-                }
+                await _capture_pinned_target(c, target)
             st = (await c.call_tool("editor_state", _target_params(target, {}))).data
             original = st.get("current_scene") or ""
             if IS_LOCKED:
@@ -1791,18 +1853,7 @@ async def setup(originals: dict[str, str]) -> None:
                     },
                 ),
             )
-            await asyncio.sleep(0.4)
-            hierarchy = await c.call_tool(
-                "scene_get_hierarchy", _target_params(target, {"depth": 1})
-            )
-            # The hierarchy contract is the paginated node list; the old
-            # top-level `root` passthrough never came from the real plugin.
-            nodes = hierarchy.data.get("nodes", [])
-            root = nodes[0].get("path") if nodes and isinstance(nodes[0], dict) else None
-            if root:
-                ROOT_PATHS[target_id] = root if str(root).startswith("/") else f"/{root}"
-            else:
-                raise StormConfigError(f"target {target_id}: scratch scene has no root")
+            ROOT_PATHS[target_id] = await _fresh_scratch_root(c, target)
             print(f"  [{target_id}] scratch scene ready, root path = {ROOT_PATHS[target_id]}")
             await c.call_tool("scene_save", _target_params(target, {}))
             if IS_LOCKED:

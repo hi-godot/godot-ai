@@ -83,6 +83,38 @@ The most expensive manual/failure rows may use Python 3.11 and 3.14, provided
 ordinary CI covers 3.12 and 3.13 and the exact-candidate server path is proven
 at both the floor and ceiling.
 
+### Private HTTPS transport adapter
+
+`script/qualification_https.py` supplies a loopback-only, authenticated release
+origin for harness integration. A bounded CONNECT listener terminates TLS only
+for `release.qualification.invalid:443`; it does not forward traffic. Release
+and asset URLs retain ordinary HTTPS/default-port semantics. A harness-created
+request adapter supplies the loopback proxy and a disposable trusted certificate
+using Godot's per-request APIs, without changing system DNS, root certificates,
+the production URL allowlist or candidate source. Bearer authorization is checked
+inside TLS for metadata and every GET/HEAD; only the exact retained six-asset
+inventory is served, with fresh regular-file, size and digest checks.
+An absolute connection deadline also bounds trickling headers both before and
+after TLS; a per-read timeout alone is not treated as that bound.
+
+Real Godot transport regressions prove successful metadata/asset retrieval and
+refusal of a wrong token, an untrusted certificate and a wrong certificate
+hostname. These tests use a native HTTPRequest driver and synthetic bytes, not
+installed A/B candidates or an updater bypass. A separate development regression
+copies the production addon without changing any GDScript/config bytes and
+exercises the actual UpdateManager's discovery, three-asset download and package
+handoff through this origin. A wrong token yields no candidate or download. The
+driver observes that handoff but never activates it: synthetic manifest/signature
+bytes do not qualify an update and are not submitted as candidate evidence.
+The signed development updater regression separately exercises the whole
+activation/repin/backend/tool/recovery path over this transport, with unchanged
+manager bytes in its live and backup trees. Its disposable signing key and
+local server/client substitutions still exclude it from immutable-candidate
+qualification; its retained shutdown-resource diagnostics also remain open.
+Connecting this adapter to the
+complete unchanged-candidate lifecycle, final-v3 migration, retained package
+resolution and cross-platform runtime evidence producer remains required.
+
 ## 4. Completed historical updater boundary proof
 
 The retained
@@ -341,6 +373,46 @@ not advance the counter. The selector is one-shot and never arms a barrier
 without the complete capability tuple. This closes repeated-effect ambiguity;
 it does not complete the command-path coverage listed below.
 
+The activation actor also exposes `intent_temporary_write`,
+`journal_temporary_write` and `terminal_temporary_write`, each before creation
+and after the private temporary file is fully written, fsynced and closed but
+before its record name is published/replaced. The existing `*_commit` barriers
+still bracket the whole publication operation. The in-memory intent is already
+validated before these controls can arm; this is not a pre-prepare or
+recovery-root-creation hook. A handled failure removes its own unpublished
+temporary. A killed writer leaves that temporary as evidence; repair must use
+the committed journal, never promote the pending bytes to authority, and retain
+the orphan temporary. The coordinator recognizes these actor effects without
+claiming or consuming their execution. The rest of the surface below remains
+required, including preparation and the separate startup/repair command paths.
+
+The separate `complete-migration` CLI now accepts the same explicit tuple for
+`migration_complete` and `migration_complete_temporary_write`. It arms only
+after validating the exact live tree, successful claim/journal, current editor
+lease and migration election. An already validated completion is idempotent
+and does not re-arm. Library calls remain environment-inert. Handled failures
+scrub the tuple and remove their own capability/temporary; a killed command
+retains its barrier and unpublished bytes without granting startup authority.
+Activation and coordinator adapters recognize these names but do not execute
+them. This is a separately launched command boundary, **not** an end-to-end
+Godot M6 handoff proof: the coordinator currently clears its inherited tuple
+after launching activation, so qualification must explicitly provision the
+completion command. Full candidate lifecycle/controller integration remains
+required alongside the other missing command paths.
+
+The explicit `repair` CLI now externally addresses `repair_claim` before and
+after publication. Its optional control arms only after validating the bound
+intent/activation lock and positively proving the initiating editor and runner
+dead or PID-reused. A still-live prior repairer still refuses takeover. Library
+calls remain environment-inert; all CLI exits scrub the tuple, handled exits
+remove their capability, and a killed repair process preserves its barrier.
+Six real repair-subprocess continue/fail/kill rows prove exact pre-claim tree
+state, barred ordinary startup and explicit subsequent rollback/quarantine.
+Their initial activation is a development crash fixture with two separate
+Python owner-identity processes, not two Godot editors or an immutable candidate.
+The remaining repair effects/reclamation boundaries and other command paths
+below are still required; recognizing an effect name does not execute it.
+
 Every updater/recovery reducer effect has stable `before_*` and `after_*`
 barrier IDs, including:
 
@@ -524,8 +596,26 @@ ceilings as unresolved baseline fields; those values must be reviewed and
 checked in before these profiles can grant final release approval.
 The locked-profile preflight enforces that boundary: it refuses while any
 baseline field remains explicitly unresolved or while overall/per-operation
-p95 and p99 ceilings are absent. Non-locked exploratory runs remain available
-to collect the missing evidence but cannot satisfy this release gate.
+p95 and p99 ceilings are absent. Explicit `--measure-baseline` permits the
+canonical schedule to run before that numeric review while retaining all
+identity/error/coverage/cleanup checks. Every such report permanently carries
+`baseline_measurement: true` and the contract failure `baseline measurement is
+not qualification`, with a nonzero exit even if every other check passes.
+Neither this mode nor non-locked exploratory runs can satisfy this release
+gate. After review, fresh unflagged immutable-candidate runs remain required.
+
+`script/qualification_resources.py` now supplies an identity-bound measurement
+primitive for that surrounding harness: immediate retained JSONL observations
+of explicit editor/backend PIDs, RSS, threads and native open-resource counts.
+It refuses death/reuse/access failures, never reads process arguments or
+environment, and reports `measured` rather than a qualification pass. Its
+psutil dependency is pinned only in development/qualification test tooling.
+Windows handles are recorded separately from Unix descriptors, with the other
+field explicitly unavailable; choosing corresponding Windows ceilings requires
+review, not relabeling handles as descriptors. The ownership/census proof,
+60-second quiescence assertions, five actual baseline workload repetitions,
+numeric ceilings and candidate-bound producer integration remain required.
+See the [measurement companion](STRESS_TESTING.md#resource-measurement-companion).
 
 ## 11. Evidence and release approval
 

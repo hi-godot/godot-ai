@@ -170,14 +170,43 @@ func test_posix_timeout_reports_a_surviving_descendant_as_unproven() -> void:
 		"a dead shell does not prove its background sleep stopped")
 	assert_true(elapsed_msec < 3000,
 		"an inherited descendant must not keep pipe draining blocked (%dms)" % elapsed_msec)
-	var marker_deadline := Time.get_ticks_msec() + 2500
-	while not FileAccess.file_exists(marker_path) and Time.get_ticks_msec() < marker_deadline:
-		OS.delay_msec(25)
+	var marker_text := _wait_for_descendant_marker(marker_path, 2500)
 	assert_true(FileAccess.file_exists(marker_path),
 		"the background child must finish after its launcher was killed")
 	if FileAccess.file_exists(marker_path):
-		assert_contains(FileAccess.get_file_as_string(marker_path), "descendant-survived")
+		assert_contains(marker_text, "descendant-survived")
 		DirAccess.remove_absolute(marker_path)
+
+
+func _wait_for_descendant_marker(path: String, timeout_ms: int, read_marker := Callable()) -> String:
+	if not read_marker.is_valid():
+		read_marker = func() -> String:
+			return FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
+	var deadline := Time.get_ticks_msec() + timeout_ms
+	var content: String = read_marker.call()
+	# Shell redirection creates the file before echo writes it. Existence alone
+	# is not completion; retain the same bounded wait and final content assertion.
+	while content.is_empty() and Time.get_ticks_msec() < deadline:
+		OS.delay_msec(25)
+		content = read_marker.call()
+	return content
+
+
+func test_descendant_marker_waits_for_content_after_file_creation() -> void:
+	var reads := [0]
+	var read_marker := func() -> String:
+		reads[0] += 1
+		return "" if reads[0] == 1 else "descendant-survived\n"
+	assert_eq(_wait_for_descendant_marker("unused", 1000, read_marker), "descendant-survived\n")
+	assert_eq(reads[0], 2, "an empty created file must not finish the observation")
+
+
+func test_descendant_marker_wait_is_bounded_and_preserves_wrong_content() -> void:
+	var started := Time.get_ticks_msec()
+	assert_eq(_wait_for_descendant_marker("unused", 50, func() -> String: return ""), "")
+	assert_true(Time.get_ticks_msec() - started < 1000, "empty marker must time out")
+	assert_eq(_wait_for_descendant_marker("unused", 50, func() -> String: return "wrong"), "wrong",
+		"unexpected nonempty content must reach the caller's assertion unchanged")
 
 
 func test_run_wraps_cmd_files_through_cmd_exe_on_windows() -> void:

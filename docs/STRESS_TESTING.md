@@ -52,6 +52,12 @@ under load and across the disable-to-enable/session-replacement window.
   already-open saved original scene, restore and observe that exact scene,
   remove only the scratch directory created by the run, and fail if the final
   tree differs at any path.
+- Setup settles the scratch tab, explicitly reloads the newly created scene
+  from disk and proves a single empty `/Root` before saving or starting workers.
+  Removing scratch files does not close a retained Godot tab; without this
+  reload, a later run can select old in-memory nodes at the same path and
+  silently save them over the new scene. A failed fresh-root proof aborts; it
+  does not rename around collisions or tolerate their errors.
 - A hard process kill cannot run teardown. It deliberately leaves the owned
   scratch tree behind, causing the next locked preflight to refuse the project
   until an operator inspects and removes it.
@@ -146,6 +152,13 @@ lifecycle contract, but still needs an equivalent live locked-profile matrix;
 the harness must report a failure rather than explaining it away if the server
 or replacement session does not return.
 
+An explicitly pinned isolated run captures its project/PID before the first
+reload, then proves exactly one distinct replacement with that same identity
+after each reload. It shares this proof with the concurrent runner; reconnecting
+to the obsolete session ID or falling back to another active editor is not a
+successful isolated reload. Identity-capture failures stop before requesting
+reload, and missing/ambiguous replacements fail the run.
+
 ### Locked and replayable runs
 
 Use the checked-in profile, approved seed, explicit target route, and exact
@@ -178,9 +191,63 @@ into the report. Exploratory non-locked runs may use a threshold file. Changing
 a locked threshold requires a reviewed change to the checked-in manifest, not
 a per-run override. A locked run also refuses before contacting an editor while
 that manifest declares any unresolved baseline gate or lacks positive finite
-overall and per-operation p95/p99 ceilings. Use non-locked exploratory runs to
-collect baseline evidence; those reports are not qualification evidence until
-the reviewed ceilings are checked into the manifest.
+overall and per-operation p95/p99 ceilings.
+
+To measure the exact canonical schedule before those ceilings are reviewed,
+add `--measure-baseline` to the locked command above. This explicit mode keeps
+the fixed profile, seed, trace, target identity, error, coverage, original-scene
+and exact-tree cleanup checks. It permits unresolved numeric baselines but
+always records `baseline_measurement: true`, adds the contract failure
+`baseline measurement is not qualification`, and exits nonzero. It cannot pass
+qualification even after numeric ceilings are supplied. Threshold overrides
+and noncanonical configurations remain forbidden.
+
+A completed baseline observation must have exactly that one contract failure,
+the exact scheduled-operation count, and successful cleanup; preserve and
+investigate every additional failure. Do not interpret any nonzero exit as a
+successful measurement. Baseline reports are developmental inputs to reviewed
+ceilings, not promotion evidence. After review, collect fresh qualification
+reports without the flag and against the required immutable candidates.
+
+### Resource measurement companion
+
+`python -m script.qualification_resources` collects read-only observations
+outside the storm runner. Install the development extras first; `psutil==7.2.2`
+is a pinned harness dependency, not a production server dependency. Supply
+explicit editor/backend PIDs only after the surrounding harness proves their
+project/session/process ownership. This collector does not discover processes
+by name, establish that ownership itself, follow children, or automatically
+repin a restarted backend.
+
+```bash
+python -m script.qualification_resources \
+  --process editor-a=12345 --process backend=12346 \
+  --count 5 --interval 15 \
+  --output /absolute/external/evidence/resources.jsonl
+```
+
+Replace the example PIDs with the verified targets. The output must not already
+exist. Each JSONL header/sample/completion is flushed and fsynced immediately;
+an interrupted stream retains its earlier observations but lacks a successful
+completion. A handled identity/access failure retains an error record and exits
+nonzero. File-write failure also exits nonzero. Consumers must require both a
+complete stream and a zero collector exit code.
+
+Samples record the bound PID and creation time, RSS bytes, thread count and
+platform-specific open-resource counts. Fresh process objects recheck identity
+after collection because [psutil caches creation times](https://psutil.io/7.2/#psutil.Process.create_time).
+PID reuse, death, denied access or invalid counts fail rather than becoming
+zero values. Unix file descriptors and Windows handles are distinct fields;
+the unavailable counterpart is `null`, never zero or an alias. Windows handle
+ceilings still need an explicit reviewed disposition in the platform contract.
+Measurements span their recorded monotonic start/end times; they are not an
+atomic OS snapshot and do not certify process-tree completeness or quiescence.
+No process arguments, environment, filenames or capabilities are collected.
+
+The terminal status is `measured`, **not** release approval. Five idle samples
+are not the five required workload repetitions. This helper does not choose
+ceilings, alter the locked manifest, or replace the surrounding 60-second
+quiescence/pending-request/session/process/capability/lock assertions.
 
 ### Knobs (env)
 

@@ -286,6 +286,26 @@ func test_qualification_barrier_selects_second_occurrence() -> void:
 	assert_false(OS.has_environment(QualificationBarrier.OCCURRENCE_ENV))
 
 
+func test_external_actor_barriers_remain_actor_owned() -> void:
+	for effect in ["intent_temporary_write", "journal_temporary_write", "terminal_temporary_write",
+		"migration_complete", "migration_complete_temporary_write", "repair_claim"]:
+		_clear_qualification_environment()
+		OS.set_environment(QualificationBarrier.TOKEN_ENV, "ab".repeat(32))
+		OS.set_environment(QualificationBarrier.EFFECT_ENV, effect)
+		OS.set_environment(QualificationBarrier.WHEN_ENV, "after")
+		OS.set_environment(QualificationBarrier.TIMEOUT_ENV, "5")
+		var barrier := QualificationBarrier.new()
+		assert_true(barrier.configure(_prepared_fixture()), barrier.error)
+		assert_false(barrier.is_coordinator_effect())
+		assert_false(barrier.begin(effect, "after"), "the editor must not steal an actor barrier")
+		assert_eq(OS.get_environment(QualificationBarrier.EFFECT_ENV), effect,
+			"the complete tuple remains available for actor launch")
+		assert_false(FileAccess.file_exists(_scratch_dir.path_join(QualificationBarrier.BARRIER_NAME)))
+		barrier.clear_environment()
+		assert_false(OS.has_environment(QualificationBarrier.TOKEN_ENV))
+	_clear_qualification_environment()
+
+
 func test_qualification_barrier_rejects_invalid_occurrence() -> void:
 	for value in ["", "0", "-1", "01", "1.0", "10000", "9".repeat(400)]:
 		_clear_qualification_environment()

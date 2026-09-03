@@ -186,8 +186,11 @@ def transport_exception_code(error: Exception) -> str | None:
     # Keep schedule/threshold validation stdlib-only. The live MCP path already
     # depends on AnyIO, whose closed stream is another transport disconnect.
     from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
+    from httpx import ReadError
 
-    if isinstance(error, (BrokenResourceError, ClosedResourceError, EndOfStream)):
+    # A backend shutdown can sever HTTP reads without an error message. Match
+    # the concrete transport type, not text or all HTTP/protocol exceptions.
+    if isinstance(error, (BrokenResourceError, ClosedResourceError, EndOfStream, ReadError)):
         return "CONNECTION"
     if getattr(getattr(error, "response", None), "status_code", None) == 401:
         return "CONNECTION"
@@ -706,6 +709,8 @@ def trace_entries_by_worker(trace: dict[str, Any]) -> dict[int, list[list[int]]]
 def evaluate_contract(report: dict[str, Any], thresholds: dict[str, Any]) -> list[str]:
     """Return every acceptance failure; an empty list passes."""
     failures: list[str] = []
+    if report.get("baseline_measurement"):
+        failures.append("baseline measurement is not qualification")
     maximum_errors = thresholds.get("unexpected_errors")
     errors = int(report.get("unexpected_errors", report.get("err", 0)))
     if maximum_errors is not None and errors > int(maximum_errors):

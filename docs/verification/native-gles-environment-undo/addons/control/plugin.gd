@@ -25,6 +25,43 @@ func _run() -> void:
 	assert(root.name == "Main")
 	var count := int(OS.get_environment("CONTROL_COUNT")) if OS.has_environment("CONTROL_COUNT") else 8
 	var clear_mode := OS.get_environment("CONTROL_CLEAR")
+	var batches := int(OS.get_environment("CONTROL_BATCHES")) if OS.has_environment("CONTROL_BATCHES") else 1
+	var idle := float(OS.get_environment("CONTROL_IDLE")) if OS.has_environment("CONTROL_IDLE") else 3.0
+	assert(count >= 1 and count <= 16)
+	assert(batches >= 1 and batches <= 10)
+	assert(idle >= 0.0 and idle <= 60.0)
+	_report(0)
+	for batch in range(batches):
+		await _batch(root, count, clear_mode)
+		await get_tree().create_timer(0.25).timeout
+		_report(batch + 1)
+	await get_tree().create_timer(idle).timeout
+	_report(batches + 1)
+	print("CONTROL COMPLETE: count=%s batches=%s clear=%s free=%s direct_sky=%s idle=%s" % [count, batches, clear_mode, OS.get_environment("CONTROL_FREE"), OS.get_environment("CONTROL_DIRECT_SKY"), idle])
+	get_tree().quit()
+
+func _report(batch: int) -> void:
+	# These are engine accounting counters, not independent GPU-driver measurements.
+	print("CONTROL MEMORY ", JSON.stringify({"batch": batch,
+		"texture_bytes": RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TEXTURE_MEM_USED),
+		"video_bytes": RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_VIDEO_MEM_USED),
+		"resource_count": Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT),
+		"object_count": Performance.get_monitor(Performance.OBJECT_COUNT)}))
+
+func _batch(root: Node, count: int, clear_mode: String) -> void:
+	if OS.get_environment("CONTROL_DIRECT_SKY") == "1":
+		# No Environment, material, node or undo action participates in this control.
+		var skies: Array[RID] = []
+		for index in range(count):
+			var sky_rid := RenderingServer.sky_create()
+			RenderingServer.sky_set_radiance_size(sky_rid, 128)
+			skies.append(sky_rid)
+		if clear_mode == "deferred":
+			await get_tree().process_frame
+			await get_tree().process_frame
+		for sky_rid in skies:
+			RenderingServer.free_rid(sky_rid)
+		return
 	for index in range(count):
 		var node := WorldEnvironment.new()
 		node.name = "Environment%s" % index
@@ -55,6 +92,3 @@ func _run() -> void:
 		await get_tree().process_frame
 	if clear_mode != "none":
 		get_undo_redo().clear_history()
-	await get_tree().create_timer(3).timeout
-	print("CONTROL COMPLETE: count=%s clear=%s free=%s" % [count, clear_mode, OS.get_environment("CONTROL_FREE")])
-	get_tree().quit()

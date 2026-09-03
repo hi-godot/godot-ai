@@ -10,6 +10,7 @@ const GAME_HELPER_AUTOLOAD_PATH := "res://addons/godot_ai/runtime/game_helper.gd
 const EditorLogger := preload("res://addons/godot_ai/runtime/editor_logger.gd")
 
 const UpdateCoordinator := preload("res://addons/godot_ai/utils/update_coordinator.gd")
+const PluginReload := preload("res://addons/godot_ai/utils/plugin_reload.gd")
 const UPDATE_TRANSACTION_ENV := "GODOT_AI_UPDATE_TRANSACTION"
 const UPDATE_EDITOR_NONCE_ENV := "GODOT_AI_UPDATE_EDITOR_NONCE"
 const UPDATE_ACTOR_HANDOFF_ENV := "GODOT_AI_UPDATE_ACTOR_HANDOFF"
@@ -714,8 +715,7 @@ func _on_dock_settings_apply_requested(changes: Dictionary, reload: bool) -> voi
 
 
 func _reload_plugin_from_dock() -> void:
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
+	PluginReload.reload_enabled_plugin()
 
 
 func _on_dock_update_requested() -> void:
@@ -1885,8 +1885,7 @@ func _reload_plugin_after_failed_update() -> void:
 	## The signed prepared tree was aborted before mutation. Reconstruct the
 	## unchanged old composition if any later quiescence step had already
 	## stopped vision or released handler references.
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
+	PluginReload.reload_enabled_plugin()
 
 
 func _abort_prepared_update(prepared: Dictionary, command: Array[String]) -> bool:

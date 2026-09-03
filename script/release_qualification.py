@@ -26,6 +26,7 @@ TEST_REQUIREMENTS = (
     "setuptools==84.0.0",
     "wheel==0.46.3",
     "pyyaml==6.0.3",
+    "psutil==7.2.2",
 )
 
 

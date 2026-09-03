@@ -120,6 +120,25 @@ according to the rules above. The Python handler waits for a distinct
 authenticated replacement session; it never treats the old session entry as a
 successful reload.
 
+The editor tool first waits for the filesystem's main-thread completion
+notification, not merely `is_scanning() == false`: that worker flag can clear
+before Godot applies resource/script reloads. One bounded native-signal handoff
+survives those script reloads without retaining a suspended handler coroutine.
+A real-time five-second deadline leaves the plugin unchanged on timeout;
+duplicate requests are refused, stale callbacks cannot consume a later request,
+and direct reload cancels pending scan work. The script-work ledger remains
+busy until this handoff actually completes or is cancelled. The transaction
+coordinator already has its own notification-driven scan state and is unchanged.
+
+Ordinary reloads from the editor tool, Dock, and pre-mutation update-abort
+recovery share `utils/plugin_reload.gd`. It requires an enabled plugin, toggles
+it, verifies re-enablement, then saves project settings **after** the engine's
+enable call has completed. Startup/autoload callbacks may save the temporary
+disabled list during that call; without the final save, a working reloaded
+plugin can be disabled on the next editor start. Enable/save failures are
+reported, not treated as persisted success. This helper does not replace or
+relax the transaction coordinator's separate quiescence and readiness protocol.
+
 The Dock's managed-server control is visible only in developer mode. It starts,
 restarts, or stops only the lifecycle's exact fingerprinted child. If the port
 belongs to any external process—including `serve-this-worktree`—the control

@@ -3,6 +3,7 @@ extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const Telemetry := preload("res://addons/godot_ai/telemetry.gd")
+const PluginReload := preload("res://addons/godot_ai/utils/plugin_reload.gd")
 const VisionRoutingScript := preload("res://addons/godot_ai/vision_routing.gd")
 
 ## Handles editor state, selection, log, screenshot, and performance commands.
@@ -962,27 +963,12 @@ func reload_plugin(_params: Dictionary) -> Dictionary:
 ## fail with "Could not find type X" when new class_name scripts are on disk
 ## but not yet registered, leaving the plugin disabled with no recovery path
 ## short of killing the editor. See issue #83.
-# `static` is load-bearing: the deferred coroutine captures no `self`, so
-# it survives even if the EditorHandler RefCounted is freed mid-await —
-# which is exactly what reload does to this handler's owner. An instance
-# coroutine here resumes on a freed object under reload churn.
+# The deferred entry captures no handler. The helper owns the bounded native
+# signal handoff: is_scanning() can become false before resource reloads and
+# filesystem_changed run on the main thread. No suspended GDScript frame may
+# span a scan which can recompile that very frame's script.
 static func _do_reload_plugin(work: int = 0) -> void:
-	if work == 0:
-		work = ScriptWork.begin("reload_plugin")
-	await _reload_after_scan()
-	ScriptWork.finish(work)
-
-
-static func _reload_after_scan() -> void:
-	var fs := EditorInterface.get_resource_filesystem()
-	fs.scan()
-	var tree := Engine.get_main_loop() as SceneTree
-	# Cap the wait so a long scan (huge project) doesn't hang reload.
-	var deadline_ms := Time.get_ticks_msec() + 5000
-	while fs.is_scanning() and Time.get_ticks_msec() < deadline_ms:
-		await tree.process_frame
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", false)
-	EditorInterface.set_plugin_enabled("res://addons/godot_ai/plugin.cfg", true)
+	PluginReload.reload_after_scan(work)
 
 
 func quit_editor(_params: Dictionary) -> Dictionary:

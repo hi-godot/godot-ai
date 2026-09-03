@@ -19,13 +19,19 @@ const COORDINATOR_EFFECTS := [
 ]
 const KNOWN_EFFECTS := [
 	"intent_commit",
+	"intent_temporary_write",
 	"activation_lock",
 	"journal_commit",
+	"journal_temporary_write",
 	"live_to_backup",
 	"stage_to_live",
 	"quarantine_live",
 	"backup_to_live",
 	"result_commit",
+	"terminal_temporary_write",
+	"migration_complete",
+	"migration_complete_temporary_write",
+	"repair_claim",
 ] + COORDINATOR_EFFECTS
 const CAPABILITY_NAME := "coordinator-qualification-capability.json"
 const BARRIER_NAME := "coordinator-failpoint-barrier.json"
