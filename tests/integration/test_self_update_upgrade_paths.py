@@ -800,11 +800,16 @@ func _process(_delta: float) -> void:
 
     environment = smoke.godot_child_environment(project)
     capability_dir = smoke.fixture_environment_paths(project)["capability_dir"]
+    # A cold Windows hosted runner can spend more than four minutes rebuilding
+    # Godot's class cache after the bridge restarts the editor (#957). Keep the
+    # test's own 180-second post-start migration deadline unchanged: this only
+    # gives the replacement editor enough time to reach its first _ready().
+    editor_start_timeout = 360 if os.name == "nt" else 240
     log = run_godot_editor(
         project,
         godot_bin,
         allow_headless=True,
-        timeout=240,
+        timeout=editor_start_timeout,
         environment=environment,
         live_probe=lambda: _authenticated_tool_probe(
             http_port,
