@@ -87,6 +87,13 @@ func create_script(params: Dictionary) -> Dictionary:
 	if efs != null:
 		efs.update_file(path)
 
+	# An overwrite can target a script that is already loaded (attached to a
+	# node, preloaded, open in the script editor). update_file() registers the
+	# bytes but leaves that live GDScript on the old source (#937), so the very
+	# next call would run stale code after a "successful" write. Refresh it.
+	if existed_before:
+		_refresh_loaded_gdscript(data, path, content)
+
 	# `.gd.uid` is the sidecar Godot generates on scan; list both so the caller
 	# can rm the full set in one go.
 	McpResourceIO.attach_cleanup_hint(data, existed_before, [path, path + ".uid"])
@@ -197,6 +204,46 @@ func _attach_gdscript_diagnostics(data: Dictionary, path: String, content: Strin
 	data["diagnostics_detail"] = diagnostics_detail
 	data["diagnostics_scope"] = "this_file"
 	data["diagnostics_status"] = diagnostics_status
+
+
+## Bring an already-loaded GDScript back in step with the bytes just written.
+##
+## ResourceLoader caches GDScript by path, and EditorFileSystem.update_file()
+## does not touch that cache — so after a successful write, a script that a
+## node, a preload(), or the script editor already holds keeps executing the
+## previous source (#937). When the path is cached and the new source parsed,
+## push the source into the live object and reload it in place (keep_state so
+## existing instances survive). Reports `reloaded` plus a `reload_reason` when
+## it did not, so a caller can tell "the file changed" from "the code changed".
+##
+## Skipped when validation failed: the diagnostics capture above has already
+## reloaded the shared GDScriptCache entry with the broken source, so there is
+## no good code to push; `reload_reason: parse_error` tells the caller the
+## loaded code did NOT change to something runnable.
+static func _refresh_loaded_gdscript(data: Dictionary, path: String, content: String) -> void:
+	data["reloaded"] = false
+	if _script_has_error_diagnostics(data):
+		data["reload_reason"] = "parse_error"
+		return
+	if not ResourceLoader.has_cached(path):
+		data["reload_reason"] = "not_loaded"
+		return
+	var loaded := ResourceLoader.load(path)
+	if not (loaded is GDScript):
+		data["reload_reason"] = "not_gdscript"
+		return
+	var script := loaded as GDScript
+	if script.source_code == content:
+		data["reloaded"] = true
+		data["reload_reason"] = "already_current"
+		return
+	script.source_code = content
+	var err := script.reload(true)
+	if err != OK:
+		data["reload_reason"] = "reload_failed"
+		data["reload_error"] = err
+		return
+	data["reloaded"] = true
 
 
 static func _validate_gdscript_source(content: String) -> Dictionary:
@@ -322,6 +369,9 @@ func patch_script(params: Dictionary) -> Dictionary:
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs != null:
 		efs.update_file(path)
+	# The file is fresh but any already-loaded GDScript for it is not (#937);
+	# make "patch succeeded" mean the loaded code changed, not just the bytes.
+	_refresh_loaded_gdscript(data, path, new_content)
 
 	return {"data": data}
 

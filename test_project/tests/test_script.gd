@@ -778,3 +778,107 @@ func test_find_symbols_class_name_with_extends_tail() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.class_name, "_McpCnFormProbe",
 		"the `extends` tail must not leak into the class_name symbol")
+
+
+# ----- #937: refresh an already-loaded GDScript after a write -----
+
+## A GDScript stays in GDScriptCache (keyed by path) while any reference is
+## alive, and ResourceLoader cache modes do not refresh it — so a reused
+## fixture path hands the next test, or the next test_run in the same editor
+## session (CI reruns the suite after reload churn), the previous body or a
+## broken parse: the very staleness under test. Every invocation therefore
+## gets a path that has never been loaded.
+const RELOAD_RETURN_PARSE_ERROR := "Expected end of statement after return statement"
+
+
+func _unique_reload_path(tag: String) -> String:
+	return "res://tests/_mcp_test_reload_%s_%d.gd" % [tag, Time.get_ticks_usec()]
+
+
+func _reload_helper_source(value: String) -> String:
+	return "extends RefCounted\nstatic func value() -> String:\n\treturn \"%s\"\n" % value
+
+
+func _write_reload_helper(value: String, path: String) -> void:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(file != null, "helper fixture must be writable")
+	file.store_string(_reload_helper_source(value))
+	file.close()
+
+
+## Load a never-before-loaded fixture path so the object IS the cache entry.
+func _load_reload_helper(path: String) -> GDScript:
+	var loaded: GDScript = ResourceLoader.load(path)
+	assert_true(loaded != null, "fixture must load")
+	return loaded
+
+
+func test_patch_script_refreshes_loaded_gdscript() -> void:
+	## Regression for #937: a loaded GDScript kept the old body after a patch.
+	var path := _unique_reload_path("patch")
+	_write_reload_helper("old", path)
+	var loaded: GDScript = _load_reload_helper(path)
+	assert_eq(loaded.new().value(), "old")
+	var result := _handler.patch_script({
+		"path": path, "old_text": "\"old\"", "new_text": "\"new\"",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.replacements, 1)
+	assert_eq(result.data.reloaded, true)
+	assert_false(result.data.has("reload_reason"), "a reloaded script carries no skip reason")
+	# The SAME object an agent (or a node) already holds now runs the new code.
+	assert_eq(loaded.new().value(), "new")
+	assert_eq(ResourceLoader.load(path).new().value(), "new")
+	DirAccess.remove_absolute(path)
+
+
+func test_create_script_overwrite_refreshes_loaded_gdscript() -> void:
+	var path := _unique_reload_path("overwrite")
+	_write_reload_helper("old", path)
+	var loaded: GDScript = _load_reload_helper(path)
+	assert_eq(loaded.new().value(), "old")
+	var result := _handler.create_script({
+		"path": path, "content": _reload_helper_source("newer"),
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.import_settle, "already_known")
+	assert_eq(result.data.reloaded, true)
+	assert_eq(loaded.new().value(), "newer")
+	DirAccess.remove_absolute(path)
+
+
+func test_patch_script_reports_not_loaded_when_nothing_cached() -> void:
+	## A script nobody has loaded has nothing to refresh; say so explicitly.
+	var path := _unique_reload_path("cold")
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(_reload_helper_source("old"))
+	file.close()
+	assert_false(ResourceLoader.has_cached(path), "fixture must start uncached")
+	var result := _handler.patch_script({"path": path, "old_text": "\"old\"", "new_text": "\"new\""})
+	assert_has_key(result, "data")
+	assert_eq(result.data.reloaded, false)
+	assert_eq(result.data.reload_reason, "not_loaded")
+	DirAccess.remove_absolute(path)
+
+
+func test_patch_script_skips_reload_on_parse_error() -> void:
+	## A broken patch reports reload_reason=parse_error instead of claiming the
+	## loaded code changed. (The handler's diagnostics capture reloads the shared
+	## cache entry with the broken source, so the live object is already in an
+	## error state here — the point is the honest signal, not preservation.)
+	var path := _unique_reload_path("parse")
+	_write_reload_helper("old", path)
+	var loaded: GDScript = _load_reload_helper(path)
+	assert_eq(loaded.new().value(), "old")
+	# Godot 4.7 surfaces the parse diagnostic through several logger copies.
+	for _i in 4:
+		expect_script_error_containing(RELOAD_RETURN_PARSE_ERROR)
+	var result := _handler.patch_script({
+		"path": path, "old_text": "return \"old\"", "new_text": "return if",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.reloaded, false)
+	assert_eq(result.data.reload_reason, "parse_error")
+	assert_eq(result.data.diagnostics_status, "checked")
+	assert_true(result.data.diagnostics.size() >= 1, "the parse error is reported as a diagnostic")
+	DirAccess.remove_absolute(path)

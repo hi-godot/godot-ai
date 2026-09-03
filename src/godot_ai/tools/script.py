@@ -63,7 +63,9 @@ def register_script_tools(mcp: FastMCP) -> None:
 
         Finds an exact ``old_text`` and replaces with ``new_text``. Fails
         on multiple matches unless ``replace_all=True``; fails on zero matches.
-        Exact byte match (whitespace significant). Triggers filesystem scan.
+        Exact byte match (whitespace significant). Triggers filesystem scan and
+        refreshes an already-loaded GDScript in place so the next call runs the
+        new code (response reloaded=true; otherwise reload_reason says why).
         Not undoable via Ctrl+Z.
 
         Args:
