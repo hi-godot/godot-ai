@@ -1601,6 +1601,17 @@ static func game_debug_verification(
 	return {"status": "failed", "reason": "unsupported_action", "ticks_advanced": ticks_advanced}
 
 
+func _active_game_debug_mutation() -> Dictionary:
+	for raw_request_id in _pending.keys():
+		var pending_entry: Dictionary = _pending.get(raw_request_id, {})
+		if str(pending_entry.get("kind", "")) != "game_debug_control":
+			continue
+		var active_action := str(pending_entry.get("action", ""))
+		if active_action in ["suspend", "resume", "next_frame"]:
+			return {"request_id": str(raw_request_id), "action": active_action}
+	return {}
+
+
 func request_game_debug_control(
 	action: String,
 	request_id: String,
@@ -1635,6 +1646,20 @@ func _begin_game_debug_control(
 		_send_error_response(connection, request_id,
 			_explain_not_live(get_game_status(-1, GAME_READY_WAIT_SEC), ErrorCodes.INTERNAL_ERROR))
 		return
+	if action != "debug_status":
+		var active_mutation := _active_game_debug_mutation()
+		if not active_mutation.is_empty():
+			var busy := ErrorCodes.make(
+				ErrorCodes.EDITOR_NOT_READY,
+				"Another game runtime-control mutation is already in flight — retry after it completes."
+			)
+			busy["error"]["data"] = {
+				"action": action,
+				"active_action": str(active_mutation.get("action", "")),
+				"retryable": true,
+			}
+			_send_error_response(connection, request_id, busy)
+			return
 	var session := _first_active_session()
 	if session == null:
 		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
@@ -1655,6 +1680,8 @@ func _begin_game_debug_control(
 				"state_before": pending_entry.get("state_before", {}),
 				"state_after": pending_entry.get("state_after", {}),
 				"focus_handoff": pending_entry.get("focus_handoff", {}),
+				"path": pending_entry.get("path", ""),
+				"game_view_ui_synced": pending_entry.get("game_view_ui_synced", false),
 			}
 			_send_error_response(conn, request_id, err)
 	timer.timeout.connect(timeout_callable)
@@ -1736,11 +1763,16 @@ func _handle_game_debug_before(
 		return
 	if action == "next_frame":
 		focus_handoff = _focus_embedded_game_view()
-	var native_action := "next_frame" if action == "next_frame" else "toggle_suspend"
-	if not _emit_embedded_runtime_action(native_action):
+	var desired_suspended := action == "suspend"
+	var control := _emit_game_debug_runtime_action(action, desired_suspended)
+	if not bool(control.get("ok", false)):
 		var err := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
-			"Embedded Game View debugger is unavailable — no connected ScriptEditorDebugger accepted the action")
-		err["error"]["data"] = {"action": action, "focus_handoff": focus_handoff}
+			"No active debugger path accepted the native game runtime action")
+		err["error"]["data"] = {
+			"action": action,
+			"reason": control.get("reason", "runtime_control_unavailable"),
+			"focus_handoff": focus_handoff,
+		}
 		_clear_pending(request_id)
 		if connection != null and is_instance_valid(connection):
 			_send_error_response(connection, request_id, err)
@@ -1748,6 +1780,8 @@ func _handle_game_debug_before(
 	pending_entry["phase"] = "verify"
 	pending_entry["state_before"] = state
 	pending_entry["focus_handoff"] = focus_handoff
+	pending_entry["path"] = str(control.get("path", ""))
+	pending_entry["game_view_ui_synced"] = bool(control.get("game_view_ui_synced", false))
 	_request_game_debug_verify.call_deferred(request_id)
 
 
@@ -1793,6 +1827,8 @@ func _handle_game_debug_verify(
 				"state_before": state_before,
 				"state_after": state_after,
 				"focus_handoff": pending_entry.get("focus_handoff", {}),
+				"path": pending_entry.get("path", ""),
+				"game_view_ui_synced": pending_entry.get("game_view_ui_synced", false),
 			}
 			_clear_pending(request_id)
 			if connection != null and is_instance_valid(connection):
@@ -1805,6 +1841,8 @@ func _handle_game_debug_verify(
 		"state_before": state_before,
 		"state_after": state_after,
 		"focus_handoff": pending_entry.get("focus_handoff", {}),
+		"path": pending_entry.get("path", ""),
+		"game_view_ui_synced": pending_entry.get("game_view_ui_synced", false),
 	}
 	if action == "next_frame":
 		payload["ticks_advanced"] = int(verdict.get("ticks_advanced", -1))
@@ -1836,21 +1874,39 @@ func _focus_embedded_game_view() -> Dictionary:
 	return result
 
 
-func _emit_embedded_runtime_action(action: String) -> bool:
+static func direct_game_debug_message(action: String, desired_suspended: bool) -> Dictionary:
+	match action:
+		"suspend", "resume":
+			return {"message": "scene:suspend_changed", "data": [desired_suspended]}
+		"next_frame":
+			return {"message": "scene:next_frame", "data": []}
+	return {}
+
+
+func _emit_game_debug_runtime_action(action: String, desired_suspended: bool) -> Dictionary:
 	var embed_action := EMBED_NEXT_FRAME if action == "next_frame" else EMBED_SUSPEND_TOGGLE
 	var base := EditorInterface.get_base_control()
-	if base == null:
-		return false
-	var debuggers: Array[Node] = []
-	_collect_nodes_of_class(base, "ScriptEditorDebugger", debuggers)
-	for debugger in debuggers:
-		if not debugger.has_signal("embed_shortcut_requested"):
-			continue
-		if debugger.get_signal_connection_list("embed_shortcut_requested").is_empty():
-			continue
-		debugger.emit_signal("embed_shortcut_requested", embed_action)
-		return true
-	return false
+	if base != null:
+		var debuggers: Array[Node] = []
+		_collect_nodes_of_class(base, "ScriptEditorDebugger", debuggers)
+		for debugger in debuggers:
+			if not debugger.has_signal("embed_shortcut_requested"):
+				continue
+			if debugger.get_signal_connection_list("embed_shortcut_requested").is_empty():
+				continue
+			debugger.emit_signal("embed_shortcut_requested", embed_action)
+			return {"ok": true, "path": "embed_signal", "game_view_ui_synced": true}
+
+	var session := _first_active_session()
+	if session == null or not session.is_active():
+		return {"ok": false, "reason": "no_active_debugger_session"}
+	var direct := direct_game_debug_message(action, desired_suspended)
+	if direct.is_empty():
+		return {"ok": false, "reason": "unsupported_action"}
+	session.send_message(str(direct.message), direct.data as Array)
+	## The direct debugger-session path works without embedding, but bypasses
+	## Game View's suspend button, so its visual pressed state is not synchronized.
+	return {"ok": true, "path": "direct_session", "game_view_ui_synced": false}
 
 
 func _fail_pending_game_debug_controls_not_ready(message: String) -> void:

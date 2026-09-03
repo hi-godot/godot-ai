@@ -311,8 +311,9 @@ func test_debug_status_probe_reports_tick_counter() -> void:
 	helper._mcp_runtime_process_ticks = 7
 	helper._last_loop_tick_msec = Time.get_ticks_msec()
 	var state: Dictionary = helper._debug_status_snapshot()
+	assert_eq(state.probe_version, 1)
 	assert_eq(state.process_ticks, 7)
-	assert_has_key(state, "suspended")
+	assert_false(state.suspended, "a detached helper must not report debugger suspension")
 	assert_has_key(state, "time_scale")
 	assert_true(helper._on_debug_message("mcp:debug_status", ["rid-status"]),
 		"the helper should capture suspended-runtime status probes")
@@ -324,7 +325,7 @@ func test_debug_status_probe_reports_tick_counter() -> void:
 	helper.free()
 
 
-func test_debug_status_suspended_tracks_native_zero_time_scale() -> void:
+func test_debug_status_suspend_signal_ignores_pause_and_user_time_scale() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
 		skip("No SceneTree available")
@@ -334,19 +335,19 @@ func test_debug_status_suspended_tracks_native_zero_time_scale() -> void:
 	tree.root.add_child(helper)
 	var was_paused := tree.paused
 	var was_time_scale := Engine.time_scale
-	tree.paused = false
-	Engine.time_scale = 1.0
-	var running_state: Dictionary = helper._debug_status_snapshot()
+	tree.paused = true
 	Engine.time_scale = 0.0
-	var can_process_at_zero_scale := helper.can_process()
-	var suspended_state: Dictionary = helper._debug_status_snapshot()
+	var state: Dictionary = helper._debug_status_snapshot()
+	var can_process_without_suspend := helper.can_process()
 	Engine.time_scale = was_time_scale
 	tree.paused = was_paused
 	helper.free()
-	assert_true(can_process_at_zero_scale, "PROCESS_MODE_ALWAYS cannot identify native Game View suspension")
-	assert_false(running_state.suspended)
-	assert_true(suspended_state.suspended, "native Game View suspend is exposed as Engine.time_scale == 0")
-	assert_false(suspended_state.tree_paused, "native Game View suspend does not pause SceneTree")
+	assert_true(can_process_without_suspend,
+		"PROCESS_MODE_ALWAYS stays processable through pause and user time_scale=0")
+	assert_false(state.suspended,
+		"debugger suspension must not be inferred from pause or project-writable time scale")
+	assert_true(state.tree_paused)
+	assert_eq(state.time_scale, 0.0)
 
 
 func test_rendering_appears_stalled_false_before_first_advance() -> void:

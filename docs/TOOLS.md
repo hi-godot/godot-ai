@@ -258,6 +258,13 @@ network round-trip happens to complete on, so the timing drifts and the run
 isn't reproducible. The game applies each step's action on its scheduled frame,
 awaits `settle_frames` more, then replies once.
 
+`game_manage(op="suspend"|"resume"|"next_frame")` uses Godot's native debugger
+control path. Successful mutations report `path="embed_signal"` when Embedded
+Game View accepted the shortcut, or `path="direct_session"` when the plugin
+sent the native scene debugger message directly. The direct fallback works for
+standalone/non-embedded runs, but `game_view_ui_synced=false` warns that the
+Game View suspend button's visual pressed state was not updated.
+
 Each step is `{at_frame, action, pressed=True, strength=1.0}`. Steps must be
 ordered by non-decreasing `at_frame`; two steps sharing a frame is a valid
 combo. Frames (not milliseconds) are the timing basis — that's what reproduces

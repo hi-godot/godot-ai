@@ -94,6 +94,7 @@ COMMAND_DRIVERS: dict[str, Callable[[DirectRuntime], Awaitable[object]]] = {
     "check_client_status": lambda rt: client_handlers.client_status(rt),
     "game_eval": lambda rt: editor_handlers.game_eval(rt, "return 1"),
     "game_command": lambda rt: game_handlers.game_get_scene_tree(rt),
+    "game_debug_control": lambda rt: game_handlers.game_debug_status(rt),
     ## Only source="game" defers plugin-side (editor_handler.gd's game branch
     ## hands off to the debugger); viewport/cinematic captures reply inline, so
     ## the 30 s budget belongs to the game path. The one exception — a

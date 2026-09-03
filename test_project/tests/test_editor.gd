@@ -475,6 +475,37 @@ class _StubConnection:
 		captured.append({"request_id": request_id, "payload": payload})
 
 
+func test_game_debug_direct_session_message_mapping() -> void:
+	var suspend := McpDebuggerPlugin.direct_game_debug_message("suspend", true)
+	assert_eq(suspend.message, "scene:suspend_changed")
+	assert_eq(suspend.data, [true])
+	var resume := McpDebuggerPlugin.direct_game_debug_message("resume", false)
+	assert_eq(resume.message, "scene:suspend_changed")
+	assert_eq(resume.data, [false])
+	var step := McpDebuggerPlugin.direct_game_debug_message("next_frame", false)
+	assert_eq(step.message, "scene:next_frame")
+	assert_eq(step.data, [])
+	assert_true(McpDebuggerPlugin.direct_game_debug_message("bad", false).is_empty())
+
+
+func test_game_debug_control_rejects_overlapping_mutation() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	_mark_game_live(plugin)
+	plugin._pending["rid-active-suspend"] = {
+		"kind": "game_debug_control",
+		"action": "suspend",
+	}
+	plugin._begin_game_debug_control("resume", "rid-overlap", conn, 5.0)
+	assert_eq(conn.captured.size(), 1, "overlapping mutation must fail before another native toggle")
+	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(conn.captured[0].payload.error.data.active_action, "suspend")
+	assert_eq(conn.captured[0].payload.error.data.action, "resume")
+	assert_true(conn.captured[0].payload.error.data.retryable)
+	plugin._pending.erase("rid-active-suspend")
+	conn.free()
+
+
 func test_game_debug_control_guard_reply_waits_for_deferred_registration() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:

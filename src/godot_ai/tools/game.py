@@ -25,13 +25,15 @@ Ops:
         Inspect visible runtime Control nodes for UI testing. Includes path,
         type, text where present, disabled state, and rect metadata.
   - suspend()
-        Suspend the running game through Godot's embedded Game View debugger.
+        Suspend the running game through Godot's native debugger path.
   - resume()
         Resume a suspended game. Idempotent when it is already running.
   - next_frame()
-        Advance exactly one process tick while suspended. Returns the tick
-        target to verify with debug_status(). May focus the embedded Game View;
-        any focus handoff is reported explicitly in the response.
+        Advance exactly one process tick while suspended. The response reports
+        verification and any Embedded Game View focus handoff. Runtime-control
+        mutations also report path="embed_signal" or "direct_session"; the
+        direct fallback works without embedding but cannot synchronize the
+        Game View suspend button's visual pressed state.
   - debug_status()
         Probe suspend state and the game-helper process tick counter through
         the debugger capture, including while SceneTree processing is suspended.

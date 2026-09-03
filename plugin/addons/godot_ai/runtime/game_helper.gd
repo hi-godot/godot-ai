@@ -218,11 +218,15 @@ func _reply_eval_liveness(data: Array) -> void:
 
 
 func _debug_status_snapshot() -> Dictionary:
-	var tree := get_tree()
+	var inside_tree := is_inside_tree()
+	var tree := get_tree() if inside_tree else null
 	return {
 		"probe_version": 1,
 		"helper_found": true,
-		"suspended": is_zero_approx(Engine.time_scale),
+		## GameHelper is PROCESS_MODE_ALWAYS, so pause does not stop it; native
+		## SceneTree suspension does. This exposes Godot's debugger-owned suspend
+		## bit through Node::can_process() without conflating it with pause/time scale.
+		"suspended": inside_tree and not can_process(),
 		"loop_live": not _main_loop_appears_stalled(),
 		"loop_tick_msec": _last_loop_tick_msec,
 		"process_ticks": _mcp_runtime_process_ticks,
