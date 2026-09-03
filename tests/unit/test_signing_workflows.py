@@ -124,5 +124,32 @@ def test_release_workflow_shells_never_interpolate_dispatch_inputs():
                     )
 
 
+def test_nightly_diagnostics_are_credential_free_and_not_a_release_gate() -> None:
+    raw = (WORKFLOWS / "nightly-diagnostics.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(raw)
+    triggers = workflow.get(True, workflow.get("on"))
+    assert set(triggers) == {"schedule", "workflow_dispatch"}
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["env"]["GODOT_AI_DISABLE_TELEMETRY"] == "true"
+    assert set(workflow["jobs"]) == {"failpoint-recovery", "storm-baseline"}
+    # Diagnostics only: no signing/publishing environment, secret, or
+    # release tooling, and nothing that release promotion reads.
+    for forbidden in ("secrets.", "environment:", "release_promotion", "release_support sign"):
+        assert forbidden not in raw
+    assert "chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789" in raw
+    assert "--measure-baseline" in raw
+    assert "script.qualification_resources" in raw
+    for job in workflow["jobs"].values():
+        assert job["runs-on"] == "ubuntu-latest"
+        for step in job["steps"]:
+            if step.get("uses", "").startswith("actions/checkout@"):
+                assert step["with"]["persist-credentials"] is False
+            if step.get("uses", "").startswith("actions/upload-artifact@"):
+                assert step["with"]["retention-days"] == 14
+        assert any(
+            step.get("uses", "").startswith("actions/upload-artifact@") for step in job["steps"]
+        )
+
+
 def test_legacy_auto_bump_tag_push_workflow_is_retired() -> None:
     assert not (WORKFLOWS / "bump-and-release.yml").exists()
