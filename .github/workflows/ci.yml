@@ -41,11 +41,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Process, path, lease, and updater behavior is platform-specific.
-        # Exercise the supported Python floor, default, and ceiling on every
-        # required desktop platform rather than inferring six combinations.
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Two independent axes, not their product. Interpreter-version
+        # behavior is the same on every OS, so every supported version runs
+        # on Linux, where a cell costs ~4 minutes. Process, path, lease, and
+        # updater behavior is OS-specific, so Windows (the platform with the
+        # most platform-specific code: kernel32 process identity, junctions,
+        # sharing-violation retries) runs the floor and the ceiling, and macOS
+        # runs the ceiling; 3.14 is what uvx hands users (#746). The full
+        # 3x4 product cost twelve cells, four of them Windows at 10+ minutes
+        # each and four macOS cells that queued behind the runner limit, for
+        # no class of regression these seven cells do not catch.
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.14"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
