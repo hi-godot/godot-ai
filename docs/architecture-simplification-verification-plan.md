@@ -115,6 +115,19 @@ Connecting this adapter to the
 complete unchanged-candidate lifecycle, final-v3 migration, retained package
 resolution and cross-platform runtime evidence producer remains required.
 
+The qualification workflow now contains a fail-closed first runtime slice for
+the exact A -> B path. It consumes the matching retained Python-row inventory,
+installs unmodified signed A through the documented verifier, serves unmodified
+signed B through the private HTTPS origin, resolves both exact server/actor
+wheels through the retained private index, and drives one real editor update
+from a harness-owned autoload. The retained case verifies the changed backend
+identity, automatic client repin, exact B live tree, exact A backup, successful
+claim, migration completion, released lock, engine hash/version and absence of
+private endpoint credentials in retained output. It is not sufficient to make
+the runtime row pass: final-v3 migration, the complete functional/security
+case, reopen/backup restoration and repeated crash regressions remain mandatory.
+The pre-signing guard therefore remains closed.
+
 ## 4. Completed historical updater boundary proof
 
 The retained
@@ -638,6 +651,16 @@ The bundle required for publication approval contains:
 - simplification-gate before/after values;
 - production/test LOC additions/deletions/net per tranche;
 - every skip (required count: zero).
+
+Non-Python rows also have exact required case IDs. Runtime evidence must include
+`final-v3-to-a-one-click`, `exact-a-to-b-hot-update`,
+`exact-candidate-functional-security`, `reopen-and-retained-backup-restore` and
+`repeated-update-crash-regression`. Failpoint evidence must include the real
+interprocess activation-lock matrix, deterministic failpoint/crash matrix and
+corrupt-record matrix. Stress evidence must include steady, managed and adopted
+reload churn, multi-editor, and post-quiescence resource cases. Missing,
+duplicate, unknown or failed cases invalidate the row even when a producer
+labels the surrounding result passed.
 
 Publication approval names the exact A/B digest set. Any source, workflow,
 document, manifest, package, or asset change after approval invalidates the

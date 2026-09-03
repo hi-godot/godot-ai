@@ -80,6 +80,7 @@ def test_qualification_builds_and_signs_a_b_once_then_verifies_on_all_platforms(
         "build",
         "sign",
         "python",
+        "runtime",
         "complete-qualification",
     }
     assert "environment" not in workflow["jobs"]["build"]
@@ -92,6 +93,12 @@ def test_qualification_builds_and_signs_a_b_once_then_verifies_on_all_platforms(
         "3.13",
         "3.14",
     ]
+    assert workflow["jobs"]["runtime"]["strategy"]["matrix"]["python"] == [
+        "3.11",
+        "3.14",
+    ]
+    assert workflow["jobs"]["runtime"]["needs"] == ["sign", "python"]
+    assert "script.runtime_qualification" in raw
     assert "environment: release-signing" in raw
     assert "RELEASE_SIGNING_KEY_PEM" in raw
     assert "script.release_support package" in raw

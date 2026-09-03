@@ -29,6 +29,51 @@ TEST_REQUIREMENTS = (
     "psutil==7.2.2",
 )
 
+MANDATORY_CASES = {
+    "runtime": frozenset(
+        {
+            "final-v3-to-a-one-click",
+            "exact-a-to-b-hot-update",
+            "exact-candidate-functional-security",
+            "reopen-and-retained-backup-restore",
+            "repeated-update-crash-regression",
+        }
+    ),
+    "failpoints": frozenset(
+        {
+            "interprocess-activation-lock-matrix",
+            "deterministic-failpoint-crash-matrix",
+            "corrupt-record-matrix",
+        }
+    ),
+    "stress": frozenset(
+        {
+            "steady",
+            "reload-churn-managed",
+            "reload-churn-adopted",
+            "multi-editor",
+            "post-quiescence-resources",
+        }
+    ),
+}
+
+
+def validate_mandatory_cases(kind: str, cases: Any) -> None:
+    required = MANDATORY_CASES.get(kind)
+    support.require(required is not None, "unknown qualification case kind")
+    support.require(isinstance(cases, list) and cases, "mandatory runtime cases are missing")
+    found: dict[str, dict[str, Any]] = {}
+    for case in cases:
+        support.require(isinstance(case, dict), "qualification case must be an object")
+        case_id = case.get("id")
+        support.require(
+            isinstance(case_id, str) and case_id in required and case_id not in found,
+            "unexpected or duplicate qualification case",
+        )
+        support.require(case.get("status") == "passed", "mandatory runtime case failed")
+        found[case_id] = case
+    support.require(set(found) == required, "mandatory qualification cases are missing")
+
 
 def preflight() -> None:
     """Do not spend final signing identities while required producers are absent."""
@@ -95,10 +140,7 @@ def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
                 type(row.get("required_skips")) is int and row["required_skips"] == 0,
                 "required qualification test skipped",
             )
-            support.require(
-                row.get("cases") and all(case.get("status") == "passed" for case in row["cases"]),
-                "mandatory runtime cases are missing or failed",
-            )
+            validate_mandatory_cases(row["kind"], row.get("cases"))
         found[key] = row
     missing = required - set(found)
     support.require(

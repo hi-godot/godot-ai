@@ -201,9 +201,9 @@ jobs:
         timeout-minutes: 12
         run: |
           if [ "${{ runner.os }}" = "Linux" ]; then
-            xvfb-run -a env GODOT_BIN=godot pytest -v -s tests/integration/test_godot_editor_restart.py tests/integration/test_migration_bridge_failures.py tests/integration/test_self_update_upgrade_paths.py tests/integration/test_qualification_https.py tests/integration/test_plugin_reload_persistence.py
+            xvfb-run -a env GODOT_BIN=godot pytest -v -s tests/integration/test_godot_editor_restart.py tests/integration/test_migration_bridge_failures.py tests/integration/test_self_update_upgrade_paths.py tests/integration/test_qualification_https.py tests/integration/test_plugin_reload_persistence.py tests/integration/test_runtime_qualification_driver.py
           else
-            GODOT_BIN=godot pytest -v -s tests/integration/test_godot_editor_restart.py tests/integration/test_migration_bridge_failures.py tests/integration/test_self_update_upgrade_paths.py tests/integration/test_qualification_https.py tests/integration/test_plugin_reload_persistence.py
+            GODOT_BIN=godot pytest -v -s tests/integration/test_godot_editor_restart.py tests/integration/test_migration_bridge_failures.py tests/integration/test_self_update_upgrade_paths.py tests/integration/test_qualification_https.py tests/integration/test_plugin_reload_persistence.py tests/integration/test_runtime_qualification_driver.py
           fi
 
       - name: Start MCP server

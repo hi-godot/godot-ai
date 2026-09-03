@@ -50,6 +50,48 @@ handlers and an unchanged lifecycle after a busy preflight.
 
 ## Development validation
 
+### Exact-candidate A to B runtime producer — September 3
+
+The qualification workflow now has its first immutable runtime producer slice.
+`script/runtime_qualification.py` binds to the matching retained Python evidence
+row, installs signed A with the documented verifier, supplies exact A/B wheels
+through the private PEP 503 index, serves B's retained six-asset release over the
+authenticated private HTTPS origin, and drives a real Godot editor with only
+project-owned transport/automation scripts. Neither candidate add-on is patched.
+The case verifies a distinct matching B backend, automatic client repin, exact B
+live inventory, exact A retained backup, successful claim, durable migration
+completion, released activation lock and secret-free retained output.
+
+The row validator now requires explicit complete case sets for runtime,
+failpoint and stress evidence. A sparse row containing only this A -> B case is
+rejected even if it claims `passed`; the remaining named runtime cases are the
+final-v3 one-click path, complete candidate functional/security checks,
+reopen/backup restoration and repeated crash regression. The workflow's
+pre-signing guard remains closed while those cases, the complete failpoint row
+and the complete stress row are absent.
+
+Focused release/security verification passed **123 tests**. Eight direct new
+tests cover package-source environment isolation, an external-only driver,
+secret-free logging/persistence scanning (including the opaque private-index
+path capability), exact Python-row/candidate binding and
+sparse/duplicate/failed-case rejection. A real Godot 4.7.2 parse-only
+control passed for the two harness scripts with the candidate plugin
+deliberately disabled; it proves harness parsing, not an exact-candidate runtime
+result. Disposable
+unsigned A/B packages were built to
+exercise the producer setup. A throwaway key generated for the planned local
+control was never passed to the signer because exact candidates accept only the
+production trust root; it was deleted. No production key was retrieved, no
+candidate was signed, and no qualification or publication claim was made.
+
+The full Python suite passed **2,675 tests** with **36 conditional/platform
+skips**. The complete live headless Godot 4.7.2 suite then passed **2,140 of
+2,164 tests**, with **zero failures**, **24 headless/renderer skips**, all **71
+suites** discovered and the 2,153-test total floor enforced. The explicit
+Godot-backed updater/migration/HTTPS/reload/restart set passed **38 tests**.
+Ruff, shell syntax, actionlint 1.7.7, bytecode compilation, whitespace checks
+and all eleven architecture simplification gates pass.
+
 ### #961 integration on the release branch — September 3
 
 The accumulated batch was committed as `84097d7`. The exact changes from
@@ -1199,9 +1241,9 @@ development results or the Python row alone into an approved release.
 
 1. Implement the remaining external failpoint surface and complete real-process
    recovery/lock matrix required by sections 7–8 of the verification contract.
-2. Complete unchanged-candidate runtime producers: authenticated private HTTPS
-   release discovery, final-v3 one-click migration, repeated A→B updates,
-   matching frozen backends, tool/client/reopen/backup checks, on every required
+2. Complete the remaining unchanged-candidate runtime cases around the new
+   exact A→B slice: final-v3 one-click migration, functional/security tools,
+   reopen/backup restoration and required update repetitions, on every required
    OS and pinned Godot build.
 3. Collect and review the required platform baselines; check in numeric latency
    and resource ceilings, then run all locked profiles and seeds. The passing
