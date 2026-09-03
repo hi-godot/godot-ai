@@ -279,3 +279,88 @@ func test_find_all_pids_sees_live_listener_via_netstat_windows() -> void:
 	holder.stop()
 	assert_true(pids.has(OS.get_process_id()), "the editor's own listener should be reported")
 	assert_false(counters.has("powershell"), "netstat found the listener; PowerShell must not run")
+
+
+# ----- Windows ancestry chain (one PowerShell spawn per proof) ---------
+
+
+func test_windows_process_chain_parser_reads_pipe_delimited_hops() -> void:
+	## `pid|parent|commandline` per hop; the command line is last because it
+	## may itself contain `|`.
+	var output := [
+		"4242|3100|python -m godot_ai --transport streamable-http | tee log\n"
+		+ "3100|2000|cmd.exe /c uvx --from godot-ai==4.0.0 godot-ai\n"
+		+ "2000|0|C:\\Windows\\explorer.exe\n"
+	]
+	var chain := McpPortResolver.parse_windows_process_chain(output, 4242)
+	assert_eq(chain.size(), 3)
+	assert_eq(chain[0]["pid"], 4242)
+	assert_eq(chain[0]["parent"], 3100)
+	assert_eq(chain[0]["commandline"], "python -m godot_ai --transport streamable-http | tee log")
+	assert_eq(chain[1]["pid"], 3100)
+	assert_eq(chain[2]["parent"], 0)
+
+
+func test_windows_process_chain_parser_stops_at_garbage_and_wrong_hop() -> void:
+	var garbage := McpPortResolver.parse_windows_process_chain(
+		["4242|3100|a\nnot a record\n3100|1|b"], 4242
+	)
+	assert_eq(garbage.size(), 1, "a malformed line ends the chain; nothing after it is trusted")
+	var wrong_hop := McpPortResolver.parse_windows_process_chain(["4242|3100|a\n9999|1|b"], 4242)
+	assert_eq(wrong_hop.size(), 1, "a hop whose pid is not the promised parent ends the chain")
+	var wrong_root := McpPortResolver.parse_windows_process_chain(["4243|3100|a"], 4242)
+	assert_eq(wrong_root.size(), 0, "the first record must be the requested pid")
+	var capped := McpPortResolver.parse_windows_process_chain(["5|4|a\n4|3|b\n3|2|c"], 5, 2)
+	assert_eq(capped.size(), 2, "max_depth bounds the chain")
+	assert_eq(McpPortResolver.parse_windows_process_chain([], 4242).size(), 0)
+
+
+func test_chain_descends_from_matches_self_ancestors_and_last_parent() -> void:
+	var chain: Array[Dictionary] = [
+		{"pid": 4242, "parent": 3100, "commandline": "python"},
+		{"pid": 3100, "parent": 2000, "commandline": "cmd"},
+	]
+	assert_true(McpPortResolver.chain_descends_from(chain, 4242, 4242), "a process descends from itself")
+	assert_true(McpPortResolver.chain_descends_from(chain, 4242, 3100))
+	assert_true(
+		McpPortResolver.chain_descends_from(chain, 4242, 2000),
+		"the last resolved parent id counts, as the per-hop walk compared it before fetching it"
+	)
+	assert_false(McpPortResolver.chain_descends_from(chain, 4242, 7777))
+	assert_false(McpPortResolver.chain_descends_from(chain, 4242, 1), "sentinel ancestors never match")
+	assert_false(McpPortResolver.chain_descends_from([], 4242, 3100), "no chain, no ancestry")
+
+
+func test_chain_has_godot_ai_brand_within_depth() -> void:
+	var branded := "python -m godot_ai --transport streamable-http --pid-file C:\\x\\server.pid"
+	var chain: Array[Dictionary] = [
+		{"pid": 5, "parent": 4, "commandline": "conhost.exe"},
+		{"pid": 4, "parent": 3, "commandline": branded},
+	]
+	assert_true(McpPortResolver.chain_has_godot_ai_brand(chain))
+	assert_false(
+		McpPortResolver.chain_has_godot_ai_brand(chain, 1),
+		"the brand sits one hop up; depth 1 sees only the process itself"
+	)
+	var unbranded: Array[Dictionary] = [{"pid": 5, "parent": 0, "commandline": "notepad.exe"}]
+	assert_false(McpPortResolver.chain_has_godot_ai_brand(unbranded))
+
+
+func test_windows_process_chain_walks_editor_ancestry_in_one_spawn_windows() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows-only PowerShell ancestry walk")
+		return
+	var editor_pid := OS.get_process_id()
+	var chain := McpPortResolver.windows_process_chain(editor_pid)
+	assert_true(chain.size() >= 1, "the editor's own record must resolve")
+	assert_eq(chain[0]["pid"], editor_pid)
+	assert_true(
+		str(chain[0]["commandline"]).to_lower().contains("godot"),
+		"the editor's command line should name the engine"
+	)
+	var parent := int(chain[0]["parent"])
+	if parent > 1:
+		assert_true(
+			McpPortResolver.process_descends_from(editor_pid, parent),
+			"the batched walk must agree with the public ancestry check"
+		)

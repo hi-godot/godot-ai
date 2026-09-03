@@ -408,9 +408,113 @@ static func process_parent(pid: int) -> int:
 	return int(raw) if raw.is_valid_int() else 0
 
 
+## One PowerShell spawn that walks a process's ancestry and returns one
+## record per hop, the process itself first: `{pid, parent, commandline}`.
+## Every Windows proof used to pay a ~1.2 s powershell.exe spawn per field
+## per hop: an ancestry check of depth three plus a brand check walked up
+## to ten spawns, twice per adoption, which is most of why a Windows editor
+## start ran 3-5x slower than Linux in the updater regression. Inside one
+## already-running PowerShell each Get-CimInstance costs tens of ms. The
+## walk stops exactly where the per-hop callers stopped: a parent of 0/1,
+## a self-parent, a missing record, or `max_depth` hops.
+const WINDOWS_PROCESS_CHAIN_DEPTH := 16
+
+
+static func windows_process_chain(
+	pid: int, max_depth := WINDOWS_PROCESS_CHAIN_DEPTH
+) -> Array[Dictionary]:
+	if pid <= 1 or max_depth <= 0:
+		return []
+	var script := (
+		"$current = %d; $depth = 0; "
+		+ "while ($current -gt 1 -and $depth -lt %d) { "
+		+ "$p = Get-CimInstance Win32_Process -Filter \"ProcessId = $current\" "
+		+ "-ErrorAction SilentlyContinue; "
+		+ "if (-not $p) { break }; "
+		+ "\"$($p.ProcessId)|$($p.ParentProcessId)|$($p.CommandLine)\"; "
+		+ "if ($p.ParentProcessId -le 1 -or $p.ParentProcessId -eq $p.ProcessId) { break }; "
+		+ "$current = $p.ParentProcessId; $depth++ }"
+	) % [pid, max_depth]
+	var output: Array = []
+	if execute_windows_powershell(script, output) != 0:
+		return []
+	return parse_windows_process_chain(output, pid, max_depth)
+
+
+## Pure parser for `windows_process_chain` output: `pid|parent|commandline`
+## per line, command line last because it may itself contain `|`. Parsing
+## stops at the first malformed line, at a line whose pid is not the hop
+## the previous line's parent promised, or at `max_depth` records, so a
+## partial or garbled dump can only shorten the chain, never invent
+## ancestry.
+static func parse_windows_process_chain(
+	output: Array, root_pid: int, max_depth := WINDOWS_PROCESS_CHAIN_DEPTH
+) -> Array[Dictionary]:
+	var chain: Array[Dictionary] = []
+	var expected := root_pid
+	for raw in output:
+		for line in str(raw).split("\n"):
+			var trimmed: String = line.strip_edges()
+			if trimmed.is_empty():
+				continue
+			if chain.size() >= max_depth:
+				return chain
+			var parts := trimmed.split("|", true, 2)
+			if parts.size() < 2 or not parts[0].is_valid_int() or not parts[1].is_valid_int():
+				return chain
+			var record_pid := int(parts[0])
+			if record_pid != expected:
+				return chain
+			var parent := int(parts[1])
+			chain.append(
+				{
+					"pid": record_pid,
+					"parent": parent,
+					"commandline": parts[2].strip_edges() if parts.size() > 2 else "",
+				}
+			)
+			if parent <= 1 or parent == record_pid:
+				return chain
+			expected = parent
+	return chain
+
+
+## `process_descends_from` over a fetched chain. Mirrors the per-hop walk:
+## the process itself counts, then each ancestor the chain resolved. The
+## last record's parent also counts, exactly as the per-hop walk compared
+## the parent id it had just read before fetching that parent's record.
+static func chain_descends_from(chain: Array[Dictionary], pid: int, ancestor_pid: int) -> bool:
+	if pid <= 1 or ancestor_pid <= 1:
+		return false
+	if pid == ancestor_pid:
+		return true
+	for record in chain:
+		if int(record.get("pid", 0)) == ancestor_pid:
+			return true
+		if int(record.get("parent", 0)) == ancestor_pid:
+			return true
+	return false
+
+
+## `pid_cmdline_is_godot_ai` over a fetched chain: the brand may sit on the
+## process or on one of its first `max_depth - 1` ancestors (a wrapper shell
+## or launcher owns the branded server).
+static func chain_has_godot_ai_brand(chain: Array[Dictionary], max_depth := 5) -> bool:
+	var depth := 0
+	for record in chain:
+		if depth >= max_depth:
+			return false
+		if commandline_is_godot_ai_server(str(record.get("commandline", ""))):
+			return true
+		depth += 1
+	return false
+
+
 static func process_descends_from(pid: int, ancestor_pid: int) -> bool:
 	if pid <= 1 or ancestor_pid <= 1:
 		return false
+	if OS.get_name() == "Windows":
+		return chain_descends_from(windows_process_chain(pid), pid, ancestor_pid)
 	var current := pid
 	for _depth in range(16):
 		if current == ancestor_pid:
@@ -435,6 +539,8 @@ static func commandline_is_godot_ai_server(commandline: String) -> bool:
 
 
 static func pid_cmdline_is_godot_ai(pid: int) -> bool:
+	if OS.get_name() == "Windows":
+		return chain_has_godot_ai_brand(windows_process_chain(pid, 5), 5)
 	var current := pid
 	for _depth in range(5):
 		if current <= 1:
