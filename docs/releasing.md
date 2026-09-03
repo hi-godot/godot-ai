@@ -10,16 +10,29 @@ across the major-version boundary; it is not a second v4 runtime shape. See the
 
 ## Qualification and publication
 
-V4 may publish only immutable, qualified bytes. The workflow implementation is
-**not yet release-ready**: artifact verification, retained Python dependencies,
-offline wheel/sdist installation, and promotion safeguards exist, but the exact
-runtime, failpoint, and stress row producers are incomplete. Qualification
-preflight refuses **before building or signing** until those producers are
-implemented. Missing rows or unresolved storm ceilings also prevent approval.
-The full remaining contract is in the
-[verification plan](architecture-simplification-verification-plan.md).
-The [PR #949 follow-up](v4-release-review-followup.md) distinguishes the review
-fixes and actual development tests from that still-open release contract.
+V4 may publish only immutable, qualified bytes. `release-qualification.yml`
+builds and signs the A/B candidate pair once, then runs the release gate on
+those exact bytes:
+
+- **Python rows** — `ubuntu-latest`, `macos-latest`, `windows-latest` × Python
+  3.11 and 3.14 (the floor and ceiling interpreters; ordinary CI covers 3.12
+  and 3.13): retained dependency resolution, offline wheel/sdist installs of
+  A and B, the installed test suites, and the documented closed-editor
+  installer for both candidates.
+- **Runtime rows** — the same three operating systems × Godot 4.7.0 × Python
+  3.11: one real-editor exact A -> B hot update through the private HTTPS
+  origin and the retained package index, with the engine executable checked
+  against its reviewed pin.
+
+`complete-qualification` requires every one of those rows to be present,
+passed, and bound to the same candidate pair; the runtime row's required case
+set is exactly `exact-a-to-b-hot-update`. Failpoint/crash-recovery and storm
+matrices are **nightly diagnostics** (`nightly-diagnostics.yml`), not release
+gates: they fail visibly and upload their outputs, but promotion does not
+read them. The full contract is in the
+[verification plan](architecture-simplification-verification-plan.md); the
+[PR #949 follow-up](v4-release-review-followup.md) records the development
+evidence behind it.
 
 `release-qualification.yml` separates credential-free packaging from protected
 signing. A must equal the reviewed `main` workflow commit. B must be its immediate

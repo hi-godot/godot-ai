@@ -2,9 +2,9 @@
 
 - Date: 2026-08-30
 - Status: approved executable release contract; the ownership redesign and
-  core update reducer have a local checkpoint, but the complete section-8.1
-  failpoint surface is not implemented and no final Phase-7 qualification
-  bundle or publication approval is recorded
+  core update reducer have a local checkpoint. The section-8 failpoint and
+  storm matrices are nightly diagnostics rather than release gates, and no
+  final qualification bundle or publication approval is recorded
 - Purpose: make migration, updater, security, release, crash, and stress gates
   executable against exact bytes
 - Release range: Godot 4.7+ within the 4.x line
@@ -60,17 +60,15 @@ qualification bundle. The immutable pre-v4 investigation is distilled into
 
 Pin exact current-stable patch/build hashes at implementation start. At minimum:
 
-| Platform | Primary architecture | Godot rows | Python rows |
+| Platform | Primary architecture | Godot runtime row | Python package rows |
 |---|---|---|---|
-| Windows | x86_64 | 4.7.0, current stable 4.x if byte-distinct | 3.11, 3.12, 3.13, 3.14 |
-| macOS | arm64 | 4.7.0, current stable 4.x if byte-distinct | 3.11, 3.12, 3.13, 3.14 |
-| Linux | x86_64 | 4.7.0, current stable 4.x if byte-distinct | 3.11, 3.12, 3.13, 3.14 |
+| Windows | x86_64 | 4.7.0 (Python 3.11) | 3.11, 3.14 |
+| macOS | arm64 | 4.7.0 (Python 3.11) | 3.11, 3.14 |
+| Linux | x86_64 | 4.7.0 (Python 3.11) | 3.11, 3.14 |
 
-Each platform/Godot row is keyed by the pinned binary hash. If current stable 4.x
-is byte-identical to 4.7.0 when inputs freeze, deduplicate it rather than
-pretending to have two builds; every gate derives its row count from the unique
-pinned manifest. A newer-development Godot can run as a non-blocking Linux
-canary; it does not replace a required stable row.
+The runtime row is keyed by the pinned binary hash of the reviewed 4.7.0
+executable for that platform. The nightly diagnostics workflow exercises the
+newer 4.7.2 engine on Linux; it does not replace or add a required row.
 
 Godot 4.5 and 4.6 run explicit refusal/documentation checks: v4 does not enable,
 the user sees the 4.7 floor, and no tree mutation occurs. Recurring hosted CI
@@ -78,10 +76,10 @@ runs this unsupported-engine floor guard on Linux only; it is not a supported
 Windows/macOS qualification row. Every supported Godot 4.7+ row still runs on
 all three required platforms.
 
-Core Python unit/integration suites run all listed versions on all platforms.
-The most expensive manual/failure rows may use Python 3.11 and 3.14, provided
-ordinary CI covers 3.12 and 3.13 and the exact-candidate server path is proven
-at both the floor and ceiling.
+Ordinary CI runs the core Python unit/integration suites on 3.11 through 3.14
+on all platforms. The exact-candidate package rows run at the floor and
+ceiling interpreters (3.11 and 3.14) so the exact server path is proven at
+both ends; the runtime row runs at 3.11.
 
 ### Private HTTPS transport adapter
 
@@ -115,31 +113,30 @@ Connecting this adapter to the
 complete unchanged-candidate lifecycle, final-v3 migration, retained package
 resolution and cross-platform runtime evidence producer remains required.
 
-The qualification workflow now contains a fail-closed first runtime slice for
-the exact A -> B path. It consumes the matching retained Python-row inventory,
-installs unmodified signed A through the documented verifier, serves unmodified
-signed B through the private HTTPS origin, resolves both exact server/actor
-wheels through the retained private index, and drives one real editor update
-from a harness-owned autoload. The retained case verifies the changed backend
+The qualification workflow's runtime row is the exact A -> B path. It
+consumes the matching retained Python-row inventory, installs unmodified
+signed A through the documented verifier, serves unmodified signed B through
+the private HTTPS origin, resolves both exact server/actor wheels through the
+retained private index, and drives one real editor update from a
+harness-owned autoload. The retained case verifies the changed backend
 identity, automatic client repin, exact B live tree, exact A backup, successful
 claim, migration completion, released lock, engine hash/version and absence of
-private endpoint credentials in retained output. It is not sufficient to make
-the runtime row pass: final-v3 migration, the complete functional/security
-case, reopen/backup restoration and repeated crash regressions remain mandatory.
-The pre-signing guard therefore remains closed.
+private endpoint credentials in retained output. Its required case set is
+exactly `exact-a-to-b-hot-update`; final-v3 migration is the release-blocking
+manual smoke in the runbook, and the functional/security, reopen/backup and
+repeated-crash cases are nightly diagnostics.
 
-Runtime jobs and aggregate evidence keys distinguish Godot 4.7.0 and 4.7.2
-for each desktop OS at Python 3.11/3.14 (twelve runtime rows). The producer
+Runtime jobs and aggregate evidence keys carry the engine version: one row per
+desktop OS at Godot 4.7.0 / Python 3.11 (three runtime rows). The producer
 rejects a reported engine version that differs from its requested stable
 official identity. The checked-in
-[engine manifest](verification/godot-builds-v1.json) pins all six official
-executables by exact size and SHA-256, with their source archive digests.
-The runtime producer checks executable bytes before even running `--version`,
-rejects a row labeled for a different host OS, and retains the checked identity.
-Aggregate validation independently compares the exact A→B case's engine
-identity against that manifest; evidence cannot supply its own expected hash.
-These pins still require review with the frozen release inputs.
-Failpoint/stress engine-row expansion remains part of those incomplete producers.
+[engine manifest](verification/godot-builds-v1.json) pins the official 4.7.0
+and 4.7.2 executables by exact size and SHA-256, with their source archive
+digests; only 4.7.0 is a required row. The runtime producer checks executable
+bytes before even running `--version`, rejects a row labeled for a different
+host OS, and retains the checked identity. Aggregate validation independently
+compares the exact A→B case's engine identity against that manifest; evidence
+cannot supply its own expected hash.
 
 ## 4. Completed historical updater boundary proof
 
@@ -279,8 +276,8 @@ SHA A / 4.0.0
 A + B digests
   |-> retained historical boundary decision + signed bridge-shape gate
   |-> one-click final-v3 migration to exact A
-  |-> exact A -> B hot self-update
-  |-> failure/lock/repair/storm evidence
+  |-> exact A -> B hot self-update (release gate)
+  |-> failure/lock/repair/storm evidence (nightly diagnostics, not a gate)
   `-> pre-publication qualification bundle
        `-> release-publish reviewer approves the exact digest set
             `-> publish A byte-for-byte
@@ -386,9 +383,21 @@ Required cases:
 
 Use two real Godot editor processes, not mocked consumers.
 
-## 8. Failpoint and crash matrix
+## 8. Nightly diagnostics (not release gates)
 
-### 8.1 Deterministic barriers
+The failpoint/crash matrix and the locked storm profiles below are **nightly
+diagnostics**, not release gates. `nightly-diagnostics.yml` runs the
+deterministic failpoint/crash-recovery suites and the real-editor recovery
+tests on Linux at Godot 4.7.2, runs the locked `steady` storm profile in
+`--measure-baseline` mode, samples post-quiescence editor/backend resources,
+uploads every output as a 14-day artifact, and fails visibly on any failure
+beyond the one expected `baseline measurement is not qualification` contract
+line. `complete-qualification` does not read these results and promotion does
+not wait for them; a red nightly is a bug to investigate, not a waived gate.
+
+### 8.1 Failpoint and crash matrix
+
+#### 8.1.1 Deterministic barriers
 
 The current activation/coordinator adapter accepts optional process-local
 `GODOT_AI_QUALIFICATION_FAILPOINT_OCCURRENCE` (1–9999, default 1) alongside
@@ -475,7 +484,7 @@ Failpoint control is disabled by default, requires an explicit local
 qualification capability, cannot be armed by release metadata/project data,
 and never leaks its token.
 
-### 8.2 Assertions per injected boundary
+#### 8.1.2 Assertions per injected boundary
 
 Each before/after failure and process-kill case declares:
 
@@ -496,7 +505,7 @@ explicit rows.
 The normal successful backup is never auto-deleted, so no post-success cleanup
 failpoint exists.
 
-### 8.3 Repeated crash regression smoke
+#### 8.1.3 Repeated crash regression smoke
 
 The user observed multiple macOS Godot crashes during prior updater testing.
 Qualification therefore runs repeated fresh-snapshot cycles:
@@ -510,33 +519,9 @@ Qualification therefore runs repeated fresh-snapshot cycles:
 
 Before and after each run, capture platform crash-report directories, Godot
 logs, process trees, and tree hashes. Any new Godot crash, abort, parse cascade,
-or unexplained process death fails the candidate.
+or unexplained process death fails the nightly run and must be investigated.
 
-## 9. Functional and security matrix
-
-At exact A and after A -> B, run:
-
-- all Python unit/integration suites;
-- all GDScript suites and pre-launch parse/import validation;
-- protocol schema/error-code synchronization;
-- transport challenge, transcript tamper, replay, wrong-scope, wrong-project,
-  timeout, size, connection, and pending-budget cases;
-- duplicate/pending session race and ACK-send failure;
-- immutable session snapshots and atomic peer/session removal;
-- managed, adopted, mismatched, lost, recovered, and explicitly replaced server
-  lifecycle rows;
-- capability path/permission/link/reparse rows within each platform claim;
-- client configure/remove/repin/restart and private-index non-persistence;
-- representative tool domains, resources, batches, reads, writes, undoable and
-  non-undoable outcomes;
-- release ZIP/manifest/signing/workflow contracts;
-- telemetry opt-out before/after server start and update outcome exactly once;
-- graceful editor/server/client restart and stale-artifact absence.
-
-No test may enable the removed v3 transport as a success path. Mixed pairs must
-fail closed within the locked timeout and point to matching-version migration.
-
-## 10. Locked storm profiles
+### 8.2 Locked storm profiles
 
 Phase 1 executes five baseline repetitions per platform and checks the numeric
 thresholds into the verification manifest before Phase 2. The operation traces
@@ -551,7 +536,7 @@ Target IDs are also RNG inputs and therefore locked: single-editor profiles use
 is a different schedule and is rejected rather than compared to canonical
 coverage floors.
 
-### 10.1 Steady profile
+#### 8.2.1 Steady profile
 
 - 8 workers;
 - 20 waves;
@@ -564,7 +549,7 @@ coverage floors.
   disposable project root and captured editor PID;
 - every unique pinned platform/Godot row.
 
-### 10.2 Reload-churn profile
+#### 8.2.2 Reload-churn profile
 
 - 12 workers;
 - 30 waves;
@@ -578,7 +563,7 @@ coverage floors.
 - minimum 180 calls per supported domain and 60 for project;
 - latest-stable Godot on all platforms plus Linux 4.7.0.
 
-### 10.3 Multi-editor profile
+#### 8.2.3 Multi-editor profile
 
 - two distinct project roots plus a separate same-root activation-refusal row;
 - four workers per editor;
@@ -589,7 +574,7 @@ coverage floors.
 - focus, Dock, plugin, client, and server churn;
 - all three platforms at current stable Godot.
 
-### 10.4 Acceptance
+#### 8.2.4 Acceptance
 
 - zero unexpected errors;
 - `CONNECTION`/`EDITOR_NOT_READY` only inside recorded reload windows and zero
@@ -619,7 +604,7 @@ operation trace, routes multiple explicit editors, records p99, enforces the
 checked-in contract, proves reload replacement identity, and gates cleanup and
 tree equality. The verification manifest still lists latency and resource
 ceilings as unresolved baseline fields; those values must be reviewed and
-checked in before these profiles can grant final release approval.
+checked in before these profiles could become a release gate.
 The locked-profile preflight enforces that boundary: it refuses while any
 baseline field remains explicitly unresolved or while overall/per-operation
 p95 and p99 ceilings are absent. Explicit `--measure-baseline` permits the
@@ -627,8 +612,10 @@ canonical schedule to run before that numeric review while retaining all
 identity/error/coverage/cleanup checks. Every such report permanently carries
 `baseline_measurement: true` and the contract failure `baseline measurement is
 not qualification`, with a nonzero exit even if every other check passes.
-Neither this mode nor non-locked exploratory runs can satisfy this release
-gate. After review, fresh unflagged immutable-candidate runs remain required.
+Neither this mode nor non-locked exploratory runs is release evidence. The
+nightly workflow runs the steady profile in this measurement mode and fails
+only when the report carries any failure other than that expected contract
+line.
 
 `script/qualification_resources.py` now supplies an identity-bound measurement
 primitive for that surrounding harness: immediate retained JSONL observations
@@ -640,12 +627,37 @@ Windows handles are recorded separately from Unix descriptors, with the other
 field explicitly unavailable; choosing corresponding Windows ceilings requires
 review, not relabeling handles as descriptors. The ownership/census proof,
 60-second quiescence assertions, five actual baseline workload repetitions,
-numeric ceilings and candidate-bound producer integration remain required.
+numeric ceilings and candidate-bound producer integration remain open
+diagnostics work, not release gates.
 See the [measurement companion](STRESS_TESTING.md#resource-measurement-companion).
 
-## 11. Evidence and release approval
+## 9. Functional and security matrix
 
-### 11.1 Pre-publication qualification bundle
+At exact A and after A -> B, run:
+
+- all Python unit/integration suites;
+- all GDScript suites and pre-launch parse/import validation;
+- protocol schema/error-code synchronization;
+- transport challenge, transcript tamper, replay, wrong-scope, wrong-project,
+  timeout, size, connection, and pending-budget cases;
+- duplicate/pending session race and ACK-send failure;
+- immutable session snapshots and atomic peer/session removal;
+- managed, adopted, mismatched, lost, recovered, and explicitly replaced server
+  lifecycle rows;
+- capability path/permission/link/reparse rows within each platform claim;
+- client configure/remove/repin/restart and private-index non-persistence;
+- representative tool domains, resources, batches, reads, writes, undoable and
+  non-undoable outcomes;
+- release ZIP/manifest/signing/workflow contracts;
+- telemetry opt-out before/after server start and update outcome exactly once;
+- graceful editor/server/client restart and stale-artifact absence.
+
+No test may enable the removed v3 transport as a success path. Mixed pairs must
+fail closed within the locked timeout and point to matching-version migration.
+
+## 10. Evidence and release approval
+
+### 10.1 Pre-publication qualification bundle
 
 The bundle required for publication approval contains:
 
@@ -659,27 +671,23 @@ The bundle required for publication approval contains:
 - the compact one-time pre-v4 updater evidence record;
 - all platform/Godot/Python results;
 - migration transcripts and verifier output;
-- interprocess/failpoint/crash reports;
-- storm traces, thresholds, and summaries;
+- the latest nightly diagnostics run (failpoint/crash and storm outputs),
+  informational and not a required row;
 - simplification-gate before/after values;
 - production/test LOC additions/deletions/net per tranche;
 - every skip (required count: zero).
 
-Non-Python rows also have exact required case IDs. Runtime evidence must include
-`final-v3-to-a-one-click`, `exact-a-to-b-hot-update`,
-`exact-candidate-functional-security`, `reopen-and-retained-backup-restore` and
-`repeated-update-crash-regression`. Failpoint evidence must include the real
-interprocess activation-lock matrix, deterministic failpoint/crash matrix and
-corrupt-record matrix. Stress evidence must include steady, managed and adopted
-reload churn, multi-editor, and post-quiescence resource cases. Missing,
-duplicate, unknown or failed cases invalidate the row even when a producer
-labels the surrounding result passed.
+Runtime rows also have an exact required case ID: runtime evidence must
+include exactly `exact-a-to-b-hot-update`. Missing, duplicate, unknown or
+failed cases invalidate the row even when a producer labels the surrounding
+result passed. Failpoint and storm results are nightly diagnostics (section 8)
+and are not required rows of this bundle.
 
 The `release-publish` review approves the exact A/B digest set. Any source,
 workflow, document, manifest, package, or asset change after approval
 invalidates the affected rows and requires a new pre-publication bundle.
 
-### 11.2 Post-publication attestation
+### 10.2 Post-publication attestation
 
 After publishing the already-approved A bytes, append a separate attestation
 containing:

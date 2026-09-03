@@ -93,21 +93,14 @@ def test_qualification_builds_and_signs_a_b_once_then_verifies_on_all_platforms(
     assert "secrets." not in str(workflow["jobs"]["build"])
     assert workflow["jobs"]["sign"]["environment"] == "release-signing"
     assert "pip install" not in str(workflow["jobs"]["sign"])
-    assert workflow["jobs"]["python"]["strategy"]["matrix"]["python"] == [
-        "3.11",
-        "3.12",
-        "3.13",
-        "3.14",
-    ]
-    assert workflow["jobs"]["runtime"]["strategy"]["matrix"]["python"] == [
-        "3.11",
-        "3.14",
-    ]
-    assert workflow["jobs"]["runtime"]["strategy"]["matrix"]["godot"] == [
-        "4.7.0",
-        "4.7.2",
-    ]
+    # Trimmed release gate: package rows at the floor/ceiling interpreters on
+    # every desktop OS; one real-editor A -> B row per OS at Godot 4.7.0.
+    assert workflow["jobs"]["python"]["strategy"]["matrix"]["python"] == ["3.11", "3.14"]
+    assert workflow["jobs"]["runtime"]["strategy"]["matrix"]["python"] == ["3.11"]
+    assert workflow["jobs"]["runtime"]["strategy"]["matrix"]["godot"] == ["4.7.0"]
     assert workflow["jobs"]["runtime"]["needs"] == ["sign", "python"]
+    assert "--preflight" not in raw
+    assert "release_qualification --complete" in raw
     assert "script.runtime_qualification" in raw
     assert "environment: release-signing" in raw
     assert "RELEASE_SIGNING_KEY_PEM" in raw

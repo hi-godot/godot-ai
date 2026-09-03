@@ -53,9 +53,6 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$SOURCE_A" = "$GITHUB_SHA"
-          # Refuse before consuming a final signing identity while mandatory
-          # qualification producers remain unimplemented.
-          python -m script.release_qualification --preflight
           python -m script.release_support validate-sources --a "$SOURCE_A" --b "$SOURCE_B" --version-a "$VERSION_A" --version-b "$VERSION_B"
 
   build:
@@ -169,7 +166,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -210,8 +207,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        godot: ["4.7.0", "4.7.2"]
-        python: ["3.11", "3.14"]
+        godot: ["4.7.0"]
+        python: ["3.11"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

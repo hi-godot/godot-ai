@@ -55,24 +55,31 @@ def test_runtime_rejects_a_row_labeled_as_another_platform(monkeypatch, tmp_path
         )
 
 
-def test_required_runtime_rows_distinguish_both_supported_godot_builds():
-    runtime_keys = {key for key in qualification.required_row_keys() if key[0] == "runtime"}
+def test_required_rows_are_the_trimmed_release_matrix():
+    keys = qualification.required_row_keys()
+    runtime_keys = {key for key in keys if key[0] == "runtime"}
+    python_keys = {key for key in keys if key[0] == "python"}
 
-    assert len(runtime_keys) == 12
-    for os_label in support.PLATFORMS:
-        for python in ("3.11", "3.14"):
-            assert ("runtime", os_label, python, "4.7.0") in runtime_keys
-            assert ("runtime", os_label, python, "4.7.2") in runtime_keys
+    # Release gate: Python rows on every desktop OS at the floor and ceiling
+    # interpreters, plus one real-editor A -> B row per OS at the pinned
+    # Godot 4.7.0 / Python 3.11. Failpoint and stress rows are nightly
+    # diagnostics, not completion requirements.
+    assert keys == python_keys | runtime_keys
+    assert support.PYTHONS == ("3.11", "3.14")
+    assert python_keys == {
+        ("python", os_label, python, None)
+        for os_label in support.PLATFORMS
+        for python in support.PYTHONS
+    }
+    assert runtime_keys == {
+        ("runtime", os_label, "3.11", "4.7.0") for os_label in support.PLATFORMS
+    }
+    assert qualification.MANDATORY_CASES == {"runtime": frozenset({"exact-a-to-b-hot-update"})}
+    assert not hasattr(qualification, "preflight")
 
 
 def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
-    from script import stormtest_support
-
-    monkeypatch.setattr(qualification, "preflight", lambda: None)
     monkeypatch.setattr(qualification, "dependency_inventory", lambda _root: [])
-    monkeypatch.setattr(
-        stormtest_support, "validate_locked_qualification_thresholds", lambda *_: None
-    )
     bindings = {"a": "candidate-a", "b": "candidate-b"}
     omitted = None
     for number, (kind, os_label, python, godot) in enumerate(
@@ -112,7 +119,7 @@ def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
                         **engine.build_pin(godot, os_label),
                         "version": f"{godot.removesuffix('.0')}.stable.official.fixture",
                     }
-            if godot == "4.7.2":
+            if os_label == "windows-latest":
                 omitted = directory / "row.json"
         (directory / "row.json").write_bytes(support.canonical(row))
 
@@ -129,7 +136,8 @@ def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
         qualification.validate_rows(tmp_path, bindings)
     omitted.unlink()
     with pytest.raises(
-        support.ReleaseError, match="missing mandatory qualification rows: runtime/.*/4.7.2"
+        support.ReleaseError,
+        match="missing mandatory qualification rows: runtime/windows-latest/3.11/4.7.0",
     ):
         qualification.validate_rows(tmp_path, bindings)
 

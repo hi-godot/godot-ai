@@ -43,7 +43,7 @@ VERIFIER_PATHS = ("script/v4-release", "src/godot_ai/release_verify.py")
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_JSON_BYTES = 8 * 1024 * 1024
 PLATFORMS = ("ubuntu-latest", "macos-latest", "windows-latest")
-PYTHONS = ("3.11", "3.12", "3.13", "3.14")
+PYTHONS = ("3.11", "3.14")
 
 
 class ReleaseError(ValueError):

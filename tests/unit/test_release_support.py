@@ -736,12 +736,6 @@ def test_promotion_preflight_refuses_without_ever_using_a_publishing_command(mon
     assert calls == ["123"]
 
 
-def test_incomplete_qualification_producers_block_before_signing():
-    with pytest.raises(support.ReleaseError, match="failpoints, runtime, stress"):
-        qualification.preflight()
-    assert qualification.main(["--preflight"]) == 1
-
-
 def test_loaders_use_trusted_checkout_not_downloaded_candidate():
     assert Path(support.verifier().__file__).resolve() == support.ROOT / support.VERIFIER_PATHS[1]
     assert Path(support.release_producer().__file__).resolve() == support.ROOT / "script/v4-release"

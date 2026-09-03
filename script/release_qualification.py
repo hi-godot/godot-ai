@@ -29,35 +29,14 @@ TEST_REQUIREMENTS = (
     "pyyaml==6.0.3",
     "psutil==7.2.2",
 )
-GODOT_BUILDS = ("4.7.0", "4.7.2")
+GODOT_BUILDS = ("4.7.0",)
+RUNTIME_PYTHONS = ("3.11",)
 
-MANDATORY_CASES = {
-    "runtime": frozenset(
-        {
-            "final-v3-to-a-one-click",
-            "exact-a-to-b-hot-update",
-            "exact-candidate-functional-security",
-            "reopen-and-retained-backup-restore",
-            "repeated-update-crash-regression",
-        }
-    ),
-    "failpoints": frozenset(
-        {
-            "interprocess-activation-lock-matrix",
-            "deterministic-failpoint-crash-matrix",
-            "corrupt-record-matrix",
-        }
-    ),
-    "stress": frozenset(
-        {
-            "steady",
-            "reload-churn-managed",
-            "reload-churn-adopted",
-            "multi-editor",
-            "post-quiescence-resources",
-        }
-    ),
-}
+# The release gate is the exact-artifact Python rows plus one real-editor
+# A -> B hot update per desktop OS. Failpoint/crash and storm matrices are
+# nightly diagnostics (.github/workflows/nightly-diagnostics.yml), not rows
+# that complete-qualification requires.
+MANDATORY_CASES = {"runtime": frozenset({"exact-a-to-b-hot-update"})}
 
 
 def validate_mandatory_cases(kind: str, cases: Any) -> None:
@@ -77,26 +56,13 @@ def validate_mandatory_cases(kind: str, cases: Any) -> None:
     support.require(set(found) == required, "mandatory qualification cases are missing")
 
 
-def preflight() -> None:
-    """Do not spend final signing identities while required producers are absent."""
-    required = {"python", "runtime", "failpoints", "stress"}
-    implemented = {"python"}
-    support.require(
-        implemented == required,
-        "release qualification is not implemented for: "
-        + ", ".join(sorted(required - implemented)),
-    )
-
-
 def required_row_keys() -> set[tuple[str, str, str, str | None]]:
     return {
         (kind, os_label, python, godot)
         for os_label in support.PLATFORMS
         for kind, versions, godots in (
             ("python", support.PYTHONS, (None,)),
-            ("runtime", ("3.11", "3.14"), GODOT_BUILDS),
-            ("failpoints", ("3.11", "3.14"), (None,)),
-            ("stress", ("3.14",), (None,)),
+            ("runtime", RUNTIME_PYTHONS, GODOT_BUILDS),
         )
         for python in versions
         for godot in godots
@@ -104,8 +70,7 @@ def required_row_keys() -> set[tuple[str, str, str, str | None]]:
 
 
 def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
-    """A passing install smoke cannot substitute for the remaining release matrix."""
-    preflight()
+    """Every required row must be present, passed, and bound to these candidates."""
     required = required_row_keys()
     found = {}
     for path in sorted(output.glob("*/row.json")):
@@ -167,15 +132,6 @@ def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
             "/".join(value for value in key if value is not None) for key in sorted(missing)
         ),
     )
-    # Numeric ceilings must come from reviewed baseline evidence. A passing
-    # row cannot bypass the locked storm contract by supplying its own caps.
-    from script.stormtest_support import validate_locked_qualification_thresholds
-
-    config = support.read_json(
-        support.ROOT / "docs/verification/storm-profiles-v1.json", canonical_required=False
-    )
-    for profile in ("steady", "reload-churn", "multi-editor"):
-        validate_locked_qualification_thresholds(config, profile)
     return found
 
 
@@ -578,12 +534,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--os", choices=support.PLATFORMS)
     parser.add_argument("--complete", action="store_true")
-    parser.add_argument("--preflight", action="store_true")
     args = parser.parse_args(argv)
     try:
-        if args.preflight:
-            preflight()
-            return 0
         support.require(args.candidates and args.output, "candidates and output are required")
         if args.complete:
             complete(args.candidates.resolve(), args.output.resolve())

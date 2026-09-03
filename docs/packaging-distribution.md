@@ -165,17 +165,19 @@ oversized files/trees/archives, signature failure, and any exact-tree mismatch.
 4. Retained one-time historical boundary evidence: all 104 tags were
    source-classified into 24 behavior classes, with 29 selected runtime rows on
    macOS/Godot 4.7. This is not a recurring candidate or cross-platform tier.
-5. Signed plugin packaging, verifier, one-click bridge migration, v4-to-v4 transactional
-   update, crash/failpoint, two-editor, reload, stale-server, and stress proof.
-6. Exact private source-A/source-B candidate qualification on all required
-   platform/version rows, bound to immutable plugin, Python-package, and
-   resolved-dependency artifact digests.
+5. Signed plugin packaging, verifier, one-click bridge migration, v4-to-v4
+   transactional update, two-editor, reload, and stale-server proof in
+   ordinary CI; crash/failpoint-recovery and storm matrices as nightly
+   diagnostics (`nightly-diagnostics.yml`) that fail visibly but do not gate
+   promotion.
+6. Exact private source-A/source-B candidate qualification: package rows on
+   Linux, macOS, and Windows at Python 3.11 and 3.14, plus one real-editor
+   A -> B hot-update row per OS at Godot 4.7.0 / Python 3.11, bound to
+   immutable plugin, Python-package, and resolved-dependency artifact digests.
 
-Tier-6 tooling is partial: the exact runtime, failpoint, and stress row producers
-are not implemented. Qualification preflight refuses before candidate signing,
-and promotion cannot accept install smoke as a substitute for complete evidence.
-Hosted rows and publication remain unqualified until their retained evidence is
-complete and reviewed.
+Tier 6 is the release gate. Promotion cannot accept install smoke as a
+substitute for its complete evidence, and hosted rows and publication remain
+unqualified until that retained evidence is complete and reviewed.
 
 ## Release readiness
 
@@ -205,9 +207,9 @@ complete and reviewed.
       dependency artifact selected by each publication-smoke row equals its
       approved digest.
 
-Packaging, signing, artifact verification, and protected promotion safeguards
-are implemented; full release qualification is not. The complete external
-failpoint surface, exact private-endpoint update matrix, reviewed stress
-baselines, and public per-row dependency attestation remain required. No
-final A/B digest set is approved.
+Packaging, signing, artifact verification, the release qualification matrix,
+and protected promotion safeguards are implemented. The external failpoint
+surface and storm baselines are nightly diagnostics rather than release
+gates; public per-row dependency attestation after publication remains a
+follow-up. No final A/B digest set is approved.
 See [the release runbook](releasing.md) for the current fail-closed boundary.

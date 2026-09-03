@@ -25,8 +25,7 @@ retained test-only B is the accepted residual recorded in the
 [release runbook](releasing.md#qualification-and-publication). B cannot claim
 an arbitrary future minor or major version. Signing any failed final
 candidate is still an identity-consuming event, not permission to replace
-signed bytes under that identity; final signing remains blocked until the
-missing producers exist.
+signed bytes under that identity.
 
 ## Update and shutdown fix
 
@@ -1304,23 +1303,22 @@ was retrieved, no final candidate was signed, and nothing was published.
 
 ## Remaining release gates
 
-Qualification preflight fails **before build/sign** while exact runtime,
-failpoint and stress producers are missing. The workflow cannot turn these
-development results or the Python row alone into an approved release.
+Maintainer decision, 2026-09-03: the release gate is the trimmed matrix in
+the [release runbook](releasing.md#qualification-and-publication) — package
+rows on every desktop OS at Python 3.11/3.14 and one real-editor exact A→B
+hot-update row per OS at Godot 4.7.0 / Python 3.11. The pre-signing preflight
+refusal was removed with that decision. The failpoint/lock/repair matrix
+(sections 7–8) and the locked storm profiles are nightly diagnostics
+(`nightly-diagnostics.yml`), not release gates. The workflow cannot turn
+development results or the Python rows alone into an approved release.
 
-1. Implement the remaining external failpoint surface and complete real-process
-   recovery/lock matrix required by sections 7–8 of the verification contract.
-2. Complete the remaining unchanged-candidate runtime cases around the new
-   exact A→B slice: final-v3 one-click migration, functional/security tools,
-   reopen/backup restoration and required update repetitions, on every required
-   OS and pinned Godot build.
-3. Collect and review the required platform baselines; check in numeric latency
-   and resource ceilings, then run all locked profiles and seeds. The passing
-   exploratory run above is not a substitute.
-4. Freeze reviewed A/B source identities, execute the complete matrix, approve
-   the `release-publish` environment, then promote the same bytes. Public
-   dependency re-resolution and immutable post-publication attestation remain
-   required after publication.
+1. Freeze reviewed A/B source identities, run `release-qualification.yml` to
+   completion, approve the `release-publish` environment, then promote the
+   same bytes. Public dependency re-resolution and immutable post-publication
+   attestation remain required after publication.
+2. Keep the nightly diagnostics green: the remaining external failpoint
+   surface, the real-process recovery/lock matrix, and the reviewed storm
+   baselines are tracked there and fail visibly, but do not block promotion.
 
-Do not remove the preflight guard, mark the complete contract satisfied, or
-sign a final stable identity just to obtain a green workflow.
+Do not mark the complete contract satisfied or sign a final stable identity
+just to obtain a green workflow.
