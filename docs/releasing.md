@@ -244,10 +244,15 @@ existing outer signature/checksum verification. Its updater overlays the
 temporary bridge only long enough to load it. The bridge prepares the embedded
 canonical triple with the target v4 transaction actor, then disables itself and
 uses the same exact-tree activation protocol described below. After the swap,
-Godot performs one graceful automatic editor restart; the new process proves
-the prior editor closed and transfers the inherited nonce-bound lease before
-claiming the transaction. This clean process boundary prevents loaded v3
-`class_name` resources from contaminating v4 startup. The
+the bridge persists the v4 plugin in the next-start enabled list without
+enabling its scripts in the old process, then Godot performs one graceful
+automatic editor restart. Failure to save that intent refuses restart and
+requires explicit recovery. The new process proves the prior editor closed
+and transfers the inherited nonce-bound lease before claiming the transaction.
+A temporarily unverifiable predecessor is retried within the existing bounded
+wait, never treated as permission to transfer; persistent uncertainty refuses
+startup and leaves the predecessor lease intact. This clean process boundary
+prevents loaded v3 `class_name` resources from contaminating v4 startup. The
 complete mixed temporary tree is retained as the old backup; only the verified
 canonical tree becomes live.
 
@@ -257,6 +262,9 @@ owned mismatched client entries before durable completion and managed-server
 startup. It does not wait for an unverifiable global client-restart
 confirmation. Unsupported old updater generations are not carried forward as
 permanent v4 runtime branches.
+
+Bridge failure status is scoped to the canonical project path, so failure in
+one project cannot block migration in another.
 
 ## V4 self-update transaction
 

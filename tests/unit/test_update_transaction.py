@@ -276,6 +276,59 @@ def test_editor_lease_transfers_only_after_nonce_bound_predecessor_is_gone(
         leases.validate(previous)
 
 
+@pytest.mark.parametrize("states", [
+    ["alive", "unknown", "dead"],
+    ["unknown", "reused"],
+    ["unknown", "alive", "dead"],
+])
+def test_restart_waits_through_transient_unknown_without_transferring_early(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, states: list[str],
+) -> None:
+    scenario = _scenario(tmp_path)
+    leases = tx.EditorLeases(scenario.recovery, scenario.project, scenario.install)
+    previous = scenario.intent.editor
+    current = tx.ProcessIdentity(previous.pid + 1, "new-editor", previous.nonce)
+    leases.acquire(previous)
+    pending = iter(states)
+    observed = []
+
+    def probe(identity):
+        assert identity == previous
+        leases.validate(previous)
+        state = next(pending)
+        observed.append(state)
+        return state
+
+    monkeypatch.setattr(tx.time, "sleep", lambda _delay: None)
+    leases.transfer_restart(previous, current, timeout=1, process_probe=probe)
+    assert observed == states
+    leases.validate(current)
+
+
+@pytest.mark.parametrize("state", ["alive", "unknown"])
+def test_restart_deadline_preserves_predecessor_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str,
+) -> None:
+    scenario = _scenario(tmp_path)
+    leases = tx.EditorLeases(scenario.recovery, scenario.project, scenario.install)
+    previous = scenario.intent.editor
+    current = tx.ProcessIdentity(previous.pid + 1, "new-editor", previous.nonce)
+    leases.acquire(previous)
+    clock = [0.0]
+    monkeypatch.setattr(tx.time, "monotonic", lambda: clock[0])
+    waits = []
+
+    def sleep(delay):
+        waits.append(delay)
+        clock[0] += 0.5
+
+    monkeypatch.setattr(tx.time, "sleep", sleep)
+    with pytest.raises(tx.LockBusy, match="predecessor"):
+        leases.transfer_restart(previous, current, timeout=1, process_probe=lambda _: state)
+    assert waits == [tx.POLL_SECONDS, tx.POLL_SECONDS]
+    leases.validate(previous)
+
+
 def test_identity_command_reports_exact_actor_identity_without_inputs(
     capfd: pytest.CaptureFixture[str],
 ) -> None:

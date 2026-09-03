@@ -7,7 +7,6 @@ extends EditorPlugin
 
 const MigrationBridge := preload("res://addons/godot_ai/migration_bridge.gd")
 const MigrationCoordinator := preload("res://addons/godot_ai/migration_coordinator.gd")
-const BRIDGE_STATUS_SETTING := "godot_ai/v4_migration_bridge_status"
 const FLOOR_REFUSAL := "Godot AI v4 migration requires Godot 4.7 or newer; bridge remains inactive."
 const RESTART_REQUIRED := "Migration actor termination could not be proved. Restart Godot before retrying."
 
@@ -131,13 +130,15 @@ func _on_retry() -> void:
 
 static func _bridge_status() -> Dictionary:
 	var settings := EditorInterface.get_editor_settings()
-	if settings == null or not settings.has_setting(BRIDGE_STATUS_SETTING):
+	var key := MigrationCoordinator.status_setting()
+	if settings == null or not settings.has_setting(key):
 		return {}
-	var parsed: Variant = JSON.parse_string(str(settings.get_setting(BRIDGE_STATUS_SETTING)))
+	var parsed: Variant = JSON.parse_string(str(settings.get_setting(key)))
 	return parsed if parsed is Dictionary else {}
 
 
 static func _clear_bridge_status() -> void:
 	var settings := EditorInterface.get_editor_settings()
-	if settings != null and settings.has_setting(BRIDGE_STATUS_SETTING):
-		settings.erase(BRIDGE_STATUS_SETTING)
+	var key := MigrationCoordinator.status_setting()
+	if settings != null and settings.has_setting(key):
+		settings.erase(key)

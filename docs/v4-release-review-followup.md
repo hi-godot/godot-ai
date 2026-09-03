@@ -50,6 +50,73 @@ handlers and an unchanged lifecycle after a busy preflight.
 
 ## Development validation
 
+### Restart follow-up
+
+The rerun of CI on `05c96d2` still timed out in Windows final-v3 migration
+([run 33712066792, attempt 2](https://github.com/hi-godot/godot-ai/actions/runs/33712066792/attempts/2));
+31 of 32 jobs passed. Increasing the timeout had not fixed
+[issue #957](https://github.com/hi-godot/godot-ai/issues/957). Investigation found
+three independently reproducible problems:
+
+- Godot 4.7 does not forward the `--headless` shorthand across its own editor
+  restart. A minimal real-engine regression first failed with `headless` in
+  the first process and `macOS` in its replacement. The test harness now uses
+  restart-forwarded display/audio driver arguments; the same test passes with
+  distinct process IDs and two headless receipts. This changes test launch
+  arguments, not production editor rendering.
+- Disabling the bridge removes its enabled-plugin entry. Before restart it
+  now durably enables the next start without loading v4 scripts in the old
+  process. Real-engine cases cover absent/already-listed entries, companion
+  plugin preservation, save failure and malformed settings. Bridge error
+  state is project-scoped instead of poisoning other projects.
+- During graceful exit, predecessor liveness may be observable briefly while
+  its start fingerprint is unavailable. The existing bounded lease-transfer
+  wait now tolerates that transient observation, but only positive dead/PID-
+  reused proof permits transfer. Deadline and nonce regressions verify that
+  persistent uncertainty preserves the predecessor's lease and refuses startup.
+
+CI now runs the engine restart and bridge failure regressions alongside the
+forward-upgrade suite, with per-test output and bounded progress messages.
+The final-v3 development fixture retains replacement-process diagnostics
+(Windows detaches that process from the parent's stdout). Neither its timeout
+nor its positive tree/lease/backend assertions were weakened. This fixture
+already substitutes development keys and launch plumbing; it remains distinct
+from the required unchanged-candidate qualification producer.
+
+The fresh manual Update check passed after real tool handlers were loaded:
+plugin/backend `4.0.1`, durable transaction
+`db7a9044810bed6f9023485a225016ee`, retained external backup, no early vNext
+exit hook and no new Godot crash report. The owner clicked Update and closed
+the Metal-renderer editor normally. The full Godot 4.7.2 run again passed all
+71 suites: **2,150 passed, zero failed, 11 conditional/platform skips**.
+The final full Python run with Godot integration enabled passed **2,448 tests,
+four platform-inapplicable skips**, with the existing third-party
+Starlette/httpx deprecation warning. Ruff, actionlint and all eleven
+architecture gates passed. Windows CI on this follow-up is still required
+before treating #957 as resolved.
+
+Exploratory stress also exposed an unclassified AnyIO closed-stream exception
+during reload. Typed transport classification now covers `BrokenResourceError`,
+`ClosedResourceError` and `EndOfStream`; regressions prove these are tolerated
+only inside the affected target's recorded reload window. The original failed
+run is retained. A second run recovered both reloads but collided with scratch
+files/nodes from the aborted run; it is not counted as a clean result.
+After preserving that scratch tree outside the project and starting a fresh
+editor, the complete exploratory rerun passed: **1,223 explicitly pinned calls,
+zero unexpected errors, seven reload-transient transport errors, two of two
+reloads survived** (2.4s and 3.0s recovery), original scene restored and editor
+alive. These are development results, not locked-profile approval.
+
+GLES shutdown diagnostics remain open. The clean stress-only editor emitted
+ten 349,524-byte texture warnings; the earlier combined suite plus two stress
+runs also emitted leaked `Image` instances. A fresh engine-only control using
+ten native noise-resource saves, UID publication and filesystem updates did
+not reproduce texture leaks, but **did** reproduce the single unclaimed `Node`
+StringName without Godot AI installed. That isolates the StringName diagnostic
+from this plugin; the texture warning is not yet similarly isolated.
+
+### Earlier release review evidence
+
 - Final expanded Python suite with Godot integration enabled:
   **2,426 passed, four platform-inapplicable skips**, one third-party
   Starlette/httpx deprecation warning. All 135 focused release workflow,
@@ -98,7 +165,7 @@ handlers and an unchanged lifecycle after a busy preflight.
   the retained `1.0+cpu` wheel through its generated `%2B` link. This is a
   disposable resolver smoke, not a production-candidate qualification row.
 - All eleven architecture gates pass. The production Python/GDScript tree is
-  **64,854 physical lines**; this measurement is not a claim of a smaller
+  **64,859 physical lines**; this measurement is not a claim of a smaller
   codebase or completed release qualification.
 
 The full-suite/stress GLES3 editor still reports low-level texture allocations
@@ -117,12 +184,16 @@ texture warnings on both 4.7 and 4.7.2. This narrows the remaining reproduction
 to combined-run timing/state; it does not justify changing assertions or
 splitting the required full-suite gate to conceal the warning.
 The verbose 4.7.2 combined-run exits also report one unclaimed `Node`
-StringName; that diagnostic remains unresolved too.
+StringName; the newer engine-only control above reproduces that diagnostic
+without Godot AI installed.
 
 Local diagnostic evidence is retained under
 `/private/tmp/godot-ai-release-build.szEA2o`,
 `/private/tmp/godot-ai-release-949-quiescence-manual`, and
-`/private/tmp/godot-ai-exact-install.G8FHUT`. These temporary development logs
+`/private/tmp/godot-ai-exact-install.G8FHUT`. The restart follow-up also retains
+`/private/tmp/godot-ai-release-949-restart-manual` and
+`/private/tmp/godot-ai-release-949-restart-final-pytest.log`.
+These temporary development logs
 are not the immutable cross-platform qualification bundle. No production key
 was retrieved, no final candidate was signed, and nothing was published.
 

@@ -1439,14 +1439,19 @@ class EditorLeases:
                 replace_record(path, self._record(current))
                 self.validate(current)
                 return
-            if state == "unknown":
-                raise LockBusy(
-                    f"restarted editor cannot prove its predecessor closed: pid={previous.pid}"
-                )
             if time.monotonic() >= deadline:
+                if state == "unknown":
+                    raise LockBusy(
+                        f"restarted editor cannot prove its predecessor closed: pid={previous.pid}"
+                    )
                 raise LockBusy(
                     f"restarted editor timed out waiting for its predecessor: pid={previous.pid}"
                 )
+            # During graceful exit, liveness can remain observable while the
+            # start fingerprint has already disappeared (e.g. an unreaped
+            # Darwin process). Unknown is not permission to transfer, but one
+            # transient observation must not defeat this bounded wait. Only
+            # positively dead/reused observations above may change the lease.
             time.sleep(POLL_SECONDS)
 
     def release(self, editor: ProcessIdentity) -> None:

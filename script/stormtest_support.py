@@ -183,6 +183,12 @@ def transport_exception_code(error: Exception) -> str | None:
     raising asyncio.TimeoutError. A restarted managed server rotates its HTTP
     capability, so an old client's in-flight request may receive HTTP 401.
     """
+    # Keep schedule/threshold validation stdlib-only. The live MCP path already
+    # depends on AnyIO, whose closed stream is another transport disconnect.
+    from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
+
+    if isinstance(error, (BrokenResourceError, ClosedResourceError, EndOfStream)):
+        return "CONNECTION"
     if getattr(getattr(error, "response", None), "status_code", None) == 401:
         return "CONNECTION"
     if getattr(getattr(error, "error", None), "code", None) == 408:

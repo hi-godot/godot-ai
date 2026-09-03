@@ -120,10 +120,30 @@ func _restart_into_v4() -> void:
 	## shapes cannot be made equivalent to v4 by a filesystem scan. Godot's
 	## own graceful restart preserves the transaction environment while giving
 	## the authenticated v4 tree a clean script VM.
+	## Disabling the capsule also removes it from editor_plugins/enabled. Persist
+	## the next-start intent before restarting, but DO NOT enable the plugin in
+	## this process: that would load v4 scripts into the old class cache.
+	var enabled: Variant = ProjectSettings.get_setting("editor_plugins/enabled", PackedStringArray())
+	if not enabled is PackedStringArray:
+		_fail("The enabled-plugin settings are invalid; explicit recovery is required.")
+		return
+	var next_enabled: PackedStringArray = enabled.duplicate()
+	if not next_enabled.has(PLUGIN_CFG):
+		next_enabled.append(PLUGIN_CFG)
+	ProjectSettings.set_setting("editor_plugins/enabled", next_enabled)
+	var saved := _save_project_settings()
+	if saved != OK:
+		ProjectSettings.set_setting("editor_plugins/enabled", enabled)
+		_fail("Could not save v4 startup settings (%s); explicit recovery is required." % error_string(saved))
+		return
 	print("MCP | v3 bridge restarting editor into canonical v4 tree")
 	_phase = Phase.DONE
 	set_process(false)
 	EditorInterface.restart_editor(true)
+
+
+func _save_project_settings() -> Error:
+	return ProjectSettings.save()
 
 
 func _enable_after_scan() -> void:
@@ -159,7 +179,12 @@ func _fail(message: String) -> void:
 static func _set_status(error: String) -> void:
 	var settings := EditorInterface.get_editor_settings()
 	if settings != null:
-		settings.set_setting(STATUS_SETTING, JSON.stringify({"error": error}))
+		settings.set_setting(status_setting(), JSON.stringify({"error": error}))
+
+
+static func status_setting() -> String:
+	## A failed migration in one project must not block a different project.
+	return STATUS_SETTING + "_" + ProjectSettings.globalize_path("res://").sha256_text()
 
 
 static func _clear_environment() -> void:

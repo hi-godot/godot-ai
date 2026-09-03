@@ -578,6 +578,25 @@ def test_final_v3_capsule_automatically_replaces_tree_repins_and_starts(
         capsule_config.read_text(encoding="utf-8").replace("@VERSION@", target_version),
         encoding="utf-8",
     )
+    # Godot does not forward --log-file on restart; Windows also disconnects
+    # the replacement process's stdout. Redirect only its diagnostics, without
+    # changing the restart, activation or startup-barrier implementation.
+    coordinator = capsule_tree / "migration_coordinator.gd"
+    restart_log = json.dumps(str(project / "_test_restarted_editor.log"))
+    coordinator.write_text(
+        smoke.replace_once(
+            coordinator,
+            coordinator.read_text(encoding="utf-8"),
+            "\tEditorInterface.restart_editor(true)",
+            "\tEditorInterface.restart_editor(true)\n"
+            "\tvar diagnostics_args := OS.get_restart_on_exit_arguments()\n"
+            '\tdiagnostics_args.append("--log-file")\n'
+            f"\tdiagnostics_args.append({restart_log})\n"
+            "\tOS.set_restart_on_exit(true, diagnostics_args)",
+            "retain replacement-editor diagnostics",
+        ),
+        encoding="utf-8",
+    )
     payload = capsule_tree / "migration_payload"
     payload.mkdir()
     for name in (
@@ -750,6 +769,18 @@ func _ready() -> void:
 \tif not Engine.is_editor_hint():
 \t\tqueue_free()
 \t\treturn
+\tvar initial := "res://_test_v3_initial_editor.json"
+\tvar receipt_path := (
+\t\t"res://_test_v3_restarted_editor.json" if FileAccess.file_exists(initial) else initial
+\t)
+\tvar receipt := FileAccess.open(receipt_path, FileAccess.WRITE)
+\tif receipt == null:
+\t\tget_tree().quit(43)
+\t\treturn
+\treceipt.store_string(JSON.stringify({{
+\t\t"pid": OS.get_process_id(), "display": DisplayServer.get_name(),
+\t}}))
+\treceipt.close()
 \t_deadline = Time.get_ticks_msec() + DEADLINE_MSEC
 \tset_process(true)
 
@@ -800,10 +831,9 @@ func _process(_delta: float) -> void:
 
     environment = smoke.godot_child_environment(project)
     capability_dir = smoke.fixture_environment_paths(project)["capability_dir"]
-    # A cold Windows hosted runner can spend more than four minutes rebuilding
-    # Godot's class cache after the bridge restarts the editor (#957). Keep the
-    # test's own 180-second post-start migration deadline unchanged: this only
-    # gives the replacement editor enough time to reach its first _ready().
+    # Preserve the existing outer budget while #957 is investigated; a longer
+    # timeout did not cure its restart failure. The fixture now preserves the
+    # headless drivers and the receipts below prove a real headless restart.
     editor_start_timeout = 360 if os.name == "nt" else 240
     log = run_godot_editor(
         project,
@@ -818,6 +848,17 @@ func _process(_delta: float) -> void:
             content="v3 bridge authenticated write\n",
         ),
         restart_completion_file="_test_v3_bridge_complete.done",
+    )
+
+    initial_editor = json.loads(
+        (project / "_test_v3_initial_editor.json").read_text(encoding="utf-8")
+    )
+    restarted_editor = json.loads(
+        (project / "_test_v3_restarted_editor.json").read_text(encoding="utf-8")
+    )
+    assert initial_editor["pid"] != restarted_editor["pid"], (initial_editor, restarted_editor)
+    assert initial_editor["display"] == restarted_editor["display"] == "headless", (
+        initial_editor, restarted_editor
     )
 
     disable = log.find("MCP | v3 bridge disabling transition plugin")

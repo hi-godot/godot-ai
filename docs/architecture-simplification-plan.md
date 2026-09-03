@@ -721,7 +721,10 @@ stay as the approved execution contract rather than being rewritten as a
 release changelog.
 
 The [PR #949 follow-up](v4-release-review-followup.md) records the release
-workflow hardening, handler-quiescence/shutdown repair and development checks.
+workflow hardening, handler-quiescence/shutdown repair, restart handoff fixes
+and development checks. Restart now persists the next-start enabled list
+without loading v4 in the old editor, and waits through transient predecessor
+uncertainty without transferring its lease until positive closure proof.
 Qualification now explicitly refuses before final signing while the remaining
 runtime/failure/stress producers and reviewed numeric ceilings are absent;
 these changes do not close Phase 6 or Phase 7.

@@ -995,7 +995,10 @@ def run_godot_editor(
         env.update(environment)
     command = [godot_bin]
     if headless:
-        command.append("--headless")
+        # EditorInterface.restart_editor forwards the explicit display/audio
+        # driver options, but not the --headless shorthand (Godot 4.7). Without
+        # these, the replacement unexpectedly needs a desktop/GPU on CI.
+        command.extend(["--display-driver", "headless", "--audio-driver", "Dummy"])
     command.extend(
         [
             "--path",
@@ -1019,6 +1022,7 @@ def run_godot_editor(
     # use `> log 2>&1`. Do not change without also fixing those scans.
     capture_path = project_dir.parent / f".{project_dir.name}-{phase}-combined.log"
     deadline = time.monotonic() + timeout
+    next_progress = time.monotonic() + 15
     probe_ran = False
     crash_reports = load_smoke_script().diagnostic_reports_snapshot
     crash_baseline = crash_reports()
@@ -1033,6 +1037,10 @@ def run_godot_editor(
             stderr=subprocess.STDOUT,
         )
         _godot_log_path(project_dir, f"{phase}-pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+        print(
+            f"SELF_UPDATE_HARNESS | {project_dir.name}/{phase}: started editor pid={proc.pid}",
+            flush=True,
+        )
         try:
             completion_path = (
                 project_dir / restart_completion_file
@@ -1052,8 +1060,20 @@ def run_godot_editor(
                         "authenticated read/write probe passed\n", encoding="utf-8"
                     )
                     probe_ran = True
-                if time.monotonic() >= deadline:
+                now = time.monotonic()
+                if now >= deadline:
                     raise subprocess.TimeoutExpired(command, timeout)
+                if now >= next_progress:
+                    state = "running" if proc.poll() is None else f"exited({proc.returncode})"
+                    complete = completion_path.is_file() if completion_path else "n/a"
+                    print(
+                        f"SELF_UPDATE_HARNESS | {project_dir.name}/{phase}: "
+                        f"initial editor {state}; authenticated_probe={probe_ran}; "
+                        f"restart_complete={complete}; "
+                        f"remaining={max(0, int(deadline - now))}s",
+                        flush=True,
+                    )
+                    next_progress = now + 15
                 time.sleep(0.05)
             if completion_path is not None:
                 time.sleep(0.25)
@@ -1071,6 +1091,10 @@ def run_godot_editor(
             capture.seek(0)
             output = capture.read()
             failure = exc
+    restarted_log = project_dir / "_test_restarted_editor.log"
+    if restarted_log.is_file():
+        output += "\nSELF_UPDATE_HARNESS | replacement editor log:\n"
+        output += restarted_log.read_text(encoding="utf-8", errors="replace")
     new_crashes = crash_reports() - crash_baseline
     assert not new_crashes, "Godot crash report(s) appeared during the isolated lane: " + ", ".join(
         map(str, sorted(new_crashes))

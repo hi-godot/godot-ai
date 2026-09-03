@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "docs" / "verification" / "storm-profiles-v1.json"
@@ -472,6 +473,15 @@ def test_exploratory_pin_records_identity_without_following_other_editor(tmp_pat
     for rows in ([old, old], [{**old, "editor_pid": True}], [{**old, "project_path": "relative"}]):
         with pytest.raises(support.StormConfigError):
             support.pinned_session_identity(rows, "old")
+
+
+@pytest.mark.parametrize("error_type", [BrokenResourceError, ClosedResourceError, EndOfStream])
+def test_closed_sdk_stream_is_tolerated_only_during_measured_reload(error_type):
+    code = support.transport_exception_code(error_type())
+    assert code == "CONNECTION"
+    assert support.error_disposition(code, reload_window_open=True) == "tolerated_reload_transient"
+    assert support.error_disposition(code, reload_window_open=False) == "unexpected"
+    assert support.transport_exception_code(RuntimeError("BrokenResourceError")) is None
 
 
 @pytest.mark.parametrize("envelope,code", [("error", 408), ("response", 401)])
