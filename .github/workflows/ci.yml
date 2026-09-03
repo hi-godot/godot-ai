@@ -51,13 +51,24 @@ jobs:
 
       # Keep these conditions complementary so every matrix cell runs pytest
       # exactly once: with coverage on the Codecov cell, plain everywhere else.
+      #
+      # --basetemp keeps every tmp_path under the runner's short temp directory
+      # (D:\a\_temp on Windows) instead of the deep per-user Temp tree. The
+      # updater canonicalizes paths by enumerating each ancestor directory on
+      # Windows and macOS, so ancestor fan-out is a per-call cost for the
+      # transaction, updater and qualification suites; together with the
+      # failed-only tmp_path retention in pyproject.toml this keeps that walk
+      # short for the whole run. --durations reports the slowest tests so a
+      # regression in a single test is visible in the hosted log.
       - name: Run tests
         if: matrix.os != 'ubuntu-latest' || matrix.python-version != '3.13'
-        run: pytest -v
+        run: pytest -v --durations=25 --basetemp="${{ runner.temp }}/pytest-basetemp"
 
       - name: Run tests with coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
-        run: pytest --cov=godot_ai --cov-report=xml -v
+        run: >-
+          pytest --cov=godot_ai --cov-report=xml -v --durations=25
+          --basetemp="${{ runner.temp }}/pytest-basetemp"
 
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
@@ -200,10 +211,21 @@ jobs:
         shell: bash
         timeout-minutes: 12
         run: |
+          # Same short --basetemp as the Python matrix (see that job); the
+          # editor projects these tests build are hashed through the same
+          # ancestor-enumerating canonicalization. --durations=0 lists every
+          # test's time so per-platform editor costs are visible in the log.
+          pytest_args=(-v -s --durations=0 --basetemp="${RUNNER_TEMP}/pytest-basetemp"
+            tests/integration/test_godot_editor_restart.py
+            tests/integration/test_migration_bridge_failures.py
+            tests/integration/test_self_update_upgrade_paths.py
+            tests/integration/test_qualification_https.py
+            tests/integration/test_plugin_reload_persistence.py
+            tests/integration/test_runtime_qualification_driver.py)
           if [ "${{ runner.os }}" = "Linux" ]; then
-            xvfb-run -a env GODOT_BIN=godot pytest -v -s tests/integration/test_godot_editor_restart.py tests/integration/test_migration_bridge_failures.py tests/integration/test_self_update_upgrade_paths.py tests/integration/test_qualification_https.py tests/integration/test_plugin_reload_persistence.py tests/integration/test_runtime_qualification_driver.py
+            xvfb-run -a env GODOT_BIN=godot pytest "${pytest_args[@]}"
           else
-            GODOT_BIN=godot pytest -v -s tests/integration/test_godot_editor_restart.py tests/integration/test_migration_bridge_failures.py tests/integration/test_self_update_upgrade_paths.py tests/integration/test_qualification_https.py tests/integration/test_plugin_reload_persistence.py tests/integration/test_runtime_qualification_driver.py
+            GODOT_BIN=godot pytest "${pytest_args[@]}"
           fi
 
       - name: Start MCP server

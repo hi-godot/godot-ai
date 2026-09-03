@@ -99,6 +99,16 @@ where = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+# Remove each passed test's tmp_path at teardown; failed tests keep theirs.
+# update_transaction canonicalizes every path it touches by enumerating each
+# ancestor directory on Windows and macOS (Linux never scans), so a basetemp
+# that accumulates one entry per test makes every later transaction, updater
+# and qualification test slower than the one before it. Measured on the
+# hosted Windows runner: a 0.55s median per transaction test against 0.05s on
+# Linux, and a 2s stage-live barrier missed outright once the run directory
+# held roughly two thousand entries. CI also points --basetemp at the short
+# runner temp directory for the same reason.
+tmp_path_retention_policy = "failed"
 
 [tool.ruff]
 target-version = "py311"
