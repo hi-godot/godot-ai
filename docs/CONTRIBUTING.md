@@ -73,22 +73,21 @@ If your local clone has a valid `origin` GitHub remote, you can omit `owner/repo
 script/ci-find-regression-range
 ```
 
-### Local self-update smoke
+### Self-update tests
 
-For changes that touch self-update, plugin reload handoff, or install/extract logic, run the interactive local harness:
-
-```bash
-python script/local-self-update-smoke
-```
-
-It creates a disposable project with a physical `addons/godot_ai/` copy, stages a synthetic v(N+1) plugin ZIP, launches Godot, and prints the single manual action: click Update in the Godot AI dock. After you close Godot normally, the script verifies the fixture version advanced, the update temp dir was consumed, and no new macOS `Godot*.ips` crash report appeared.
+For changes that touch self-update, the migration bridge, or plugin
+disable/enable, run `test_project/tests/test_update_installer.gd` via
+`test_run` and the three real-editor scenarios in
+`tests/integration/test_self_update_upgrade_paths.py` with `GODOT_BIN` set
+(they skip otherwise). The path they cover is specified in
+[self-update.md](self-update.md).
 
 ### Self-update compatibility rules
 
 V4 is the runtime boundary. The final signed v3 line consumes only the
 temporary signed migration capsule; the capsule then crosses the boundary with
-the same external actor, retained old-tree backup, startup barrier, and exact
-signed inventory used by v4 updates. It gracefully restarts Godot after the
+the same in-editor installer, retained backup, post-restart tree verification,
+and exact signed inventory used by v4 updates. It restarts Godot after the
 swap so v4 never runs against cached v3 script classes. V4 carries no permanent
 v3 runtime path.
 
@@ -96,8 +95,8 @@ v3 runtime path.
   source commit with the canonical signed triple embedded. Never make it an
   alias for the canonical archive or a second final plugin tree.
 - File and `class_name` deletions are permitted only when the signed candidate
-  inventory, prepare-before-quiesce path, exact-tree swap, and startup recovery
-  tests all pass; never overlay a candidate onto the live tree.
+  inventory, exact-tree swap, and post-restart verification tests all pass;
+  never overlay a candidate onto the live tree.
 - Qualify the exact current-to-candidate pair that will ship. A synthetic or
   relabeled successor is not evidence for a different release.
 

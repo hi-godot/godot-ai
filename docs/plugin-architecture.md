@@ -120,8 +120,9 @@ plugin/addons/godot_ai/
     ├── server_lifecycle.gd      ## one serialized lifecycle episode
     ├── server_authority.gd      ## transport/process/replacement grants
     ├── transport_capability.gd  ## private record validation and status auth
-    ├── update_manager.gd        ## signed v4 discovery/download owner
-    ├── update_coordinator.gd    ## value-only disable/actor/scan/enable handoff
+    ├── update_manager.gd        ## signed v4 discovery/download owner; embeds the release public key
+    ├── release_verifier.gd      ## McpReleaseVerifier: pure manifest/signature/archive/inventory checks
+    ├── update_installer.gd      ## stage, lock, two-rename swap, restart, post-restart verify
     ├── client_mutation_lock.gd  ## durable account-wide mutation authority
     ├── uv_resolution_policy.gd  ## one production uvx resolver policy
     ├── port_resolver.gd         ## process identity and port helpers
@@ -136,7 +137,7 @@ The server-side counterparts live in:
 - `src/godot_ai/transport/websocket.py` — WebSocket server adopting/owning the :9500 socket
 - `src/godot_ai/transport/security.py` and `transport/capability.py` — bounded authenticated HTTP and private bootstrap records
 - `src/godot_ai/sessions/registry.py` — one authoritative editor/peer/pending-request table with immutable public snapshots
-- `src/godot_ai/update_transaction.py` and `release_verify.py` — transactional mutation/recovery and standalone signed-release verification
+- `src/godot_ai/release_verify.py` — standalone signed-release verification behind `script/v4-release` (development dependency; the server imports nothing from it at runtime)
 - `src/godot_ai/godot_client/client.py` — typed async client; raises `GodotCommandError`
 - `src/godot_ai/runtime/direct.py` — `DirectRuntime`, the in-process runtime adapter that handlers depend on
 - `src/godot_ai/handlers/` — shared sync handlers; `_readiness.py` gates writes; `_target.py` resolves nodes
@@ -184,18 +185,18 @@ _process(delta)
 ### `_enter_tree()`
 
 - reject unsupported Godot versions before constructing the lifecycle
-- run the bounded durable update startup barrier before normal composition
-  (a joined worker in interactive editors; bounded synchronous execution for
-  export/import launches)
+- if `addons/.godot_ai_update/pending.json` exists, hash the live tree against
+  the marker's expected tree hash and record `success`, `rolled_back`, or
+  `repair_required` before normal composition ([self-update.md](self-update.md))
 - construct plugin-lifetime owners (`McpServerLifecycleManager`,
   `McpClientJobOwner`, and `McpUpdateManager`) with inert constructors
 - construct the connection/dispatcher/debugger/log composition and lazy
   handler registrations
 - attach the replaceable Dock as a view over copied owner snapshots
-- if startup reports a durable pending M6, keep that composition inert and run
-  only the client-migration path; otherwise activate client work, lifecycle,
-  transport, telemetry, and update discovery only after the complete
-  composition exists and the normal-start gate is released
+- on `repair_required`, keep that composition inert and show the exact paths;
+  otherwise activate client work, lifecycle, transport, telemetry, and update
+  discovery only after the complete composition exists, the post-restart tree
+  verification has finished, and the pin-only client repin has run
 
 ### `_process(delta)`
 
@@ -233,61 +234,30 @@ replace a verified owned backend. The lease is lifecycle evidence, not
 kill authority; lease calls are nevertheless authenticated by the same private
 HTTP capability as the rest of the server.
 
-### Transactional self-update boundary
+### Self-update
 
-The permanent updater is v4-to-v4. The final v3 line crosses once through a
-signed temporary bridge and then enters this same exact-tree protocol; see
-[v4-migration.md](v4-migration.md).
+The updater is one in-editor path, specified in
+[self-update.md](self-update.md). `utils/update_manager.gd` discovers a newer
+`4.x` release exposing the exact six-name asset set and downloads only the
+canonical triple. `utils/release_verifier.gd` (`McpReleaseVerifier`, pure and
+unit-testable) checks the manifest signature against the embedded
+`RELEASE_SIGNING_PUBLIC_KEY_PEM`, the release identity, the archive hash, and
+every inventory entry. `utils/update_installer.gd` stages the verified tree
+under `res://addons/.godot_ai_update/stage/`, waits for the dispatcher to
+drain and runs `prepare_for_update_reload()`, takes `lock.json`, renames the
+live tree to `backup/<old version>/` and the stage into place, writes
+`pending.json`, persists the enabled entry without loading the new tree in the
+old process, and restarts the editor. The new process hashes the live tree
+against the marker before normal composition and records `success`,
+`rolled_back` (the live tree goes to `quarantine/`, the backup is restored) or
+`repair_required` (no backup to restore; the plugin stays inactive). The final
+v3 line crosses once through a signed capsule whose bridge runs the same
+installer; see [v4-migration.md](v4-migration.md).
 
-- `utils/update_manager.gd` performs v4-only release discovery. It requires the
-  exact six-name release envelope and downloads only the canonical
-  archive/manifest/signature triple. Transaction preflight first
-  allocates a random owner-private directory under the external recovery root;
-  the manager writes only those three bounded filenames there and never uses a
-  predictable `user://` staging namespace.
-- `src/godot_ai/update_transaction.py prepare` verifies the signature and
-  explicit release identity, stages the complete bounded tree under an
-  external recovery root, uses the already-established exclusive editor
-  preflight, and publishes immutable `prepared.json` before live code is
-  quiesced. The activation actor later reconstructs that authority, acquires
-  the activation lock, and writes intent/journal.
-- `plugin.gd::install_downloaded_update` invokes that exact actor while the old
-  composition is still live. Only after `prepare` succeeds does the root
-  quiesce client/dispatcher work and construct the detached coordinator.
-- `utils/update_coordinator.gd` is a detached value-only actor. It retains no
-  plugin/Dock/Node owner and performs only disable, external transaction
-  invocation, filesystem scan, and enable.
-- The long-running Python activation actor atomically renames complete
-  namespaces, journals every mutation, verifies the activated tree, rolls back
-  or quarantines on failure, and publishes the bounded result. New GDScript
-  invokes the frozen old-package startup actor; that actor publishes readiness,
-  validates and atomically claims the result, and later publishes
-  `migration-complete.json` after GDScript completes the M6 post-update client
-  migration. A durable actor-owned election gives exactly one live editor that
-  completion authority; dead owners are archived only after process-identity
-  proof. Clean-major first start uses the same pattern in a private state
-  directory beside its deny-only marker, and the actor—not GDScript—removes the
-  exact marker after repin. Active activation is cleared before normal
-  composition; a durable pending M6 permits only inert composition and keeps
-  normal effects barred.
-- The clean-major installer requires `uvx` and proves the exact target actor's
-  package/protocol identity before any project mutation. A newly installed tree
-  therefore cannot reach first start without the actor its fail-closed lease
-  barrier requires.
-- Published server, attach, prewarm, and transaction-actor `uvx` commands share
-  one isolated/no-config/no-build resolver policy pinned to official PyPI.
-  Godot-owned spawns additionally clear inherited uv resolver controls while
-  holding the process-spawn mutex. A process-local qualification switch is the
-  only private-index escape. This removes alternate-index configuration as an
-  ambient authority; it does not make the actor identity response
-  cryptographic. PyPI/TLS, uv, its local cache, and same-user machine integrity
-  remain global Python-runtime trust roots until wheel bytes are independently
-  hash-enforced or the runtime is bundled.
-
-No GDScript object extracts over the tree containing its own script. A scan can
-observe only the old exact tree, the new exact tree, or a blocked recovery
-state—never a mixed overlay. Successful backups are retained outside the
-project and are never deleted automatically.
+No separate process, `uvx` invocation, journal, or lease is involved; `uvx`
+runs the server, not the plugin. The live tree is only ever the old exact tree
+or the new exact tree — the two renames are the whole swap — and nothing under
+`addons/.godot_ai_update/` is deleted on a failure path.
 
 Within v4, published `class_name` APIs remain explicit compatibility surface.
 Do not keep private v3 shims or legacy wire/update branches merely to make the
