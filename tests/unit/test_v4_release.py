@@ -6,6 +6,7 @@ import base64
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import shutil
 import stat
@@ -117,6 +118,18 @@ def _repository(root: Path, public_key: str) -> tuple[Path, str]:
     _run("git", "init", "-q", cwd=repo)
     _run("git", "config", "user.email", "release-test@example.invalid", cwd=repo)
     _run("git", "config", "user.name", "Release Test", cwd=repo)
+    # The final v3 add-on the capsule restores on a Godot below v4's floor.
+    v4_config = (plugin / "plugin.cfg").read_bytes()
+    v4_script = (plugin / "plugin.gd").read_bytes()
+    (plugin / "plugin.cfg").write_text('[plugin]\nversion="3.2.5"\n', encoding="utf-8")
+    (plugin / "plugin.gd").write_text(
+        "@tool\nextends EditorPlugin\n## final v3\n", encoding="utf-8"
+    )
+    _run("git", "add", "plugin", cwd=repo)
+    _run("git", "commit", "-q", "-m", "final v3", cwd=repo)
+    _run("git", "tag", v4_release.FINAL_V3_REF, cwd=repo)
+    (plugin / "plugin.cfg").write_bytes(v4_config)
+    (plugin / "plugin.gd").write_bytes(v4_script)
     _run("git", "add", "plugin", "migration_bridge", "pyproject.toml", cwd=repo)
     _run("git", "commit", "-q", "-m", "fixture", cwd=repo)
     source = _run("git", "rev-parse", "HEAD", cwd=repo).decode().strip()
@@ -334,6 +347,17 @@ def test_release_set_adds_one_deterministic_signed_v3_migration_capsule(signed_r
             for path in (signed_release["repo"] / "migration_bridge").iterdir()
         }
         assert bridge_names <= set(names)
+        # The final v3 add-on rides along, re-packed at its live path, so a
+        # Godot below v4's floor gets its working plugin back.
+        fallback = f"{v4_release.MIGRATION_PAYLOAD_PREFIX}{v4_release.V3_FALLBACK_NAME}"
+        assert fallback in names
+        with zipfile.ZipFile(io.BytesIO(package.read(fallback))) as embedded:
+            members = embedded.namelist()
+            assert members == sorted(members) and members
+            assert all(member.startswith(v4_release.PLUGIN_PREFIX) for member in members)
+            config = embedded.read(f"{v4_release.PLUGIN_PREFIX}plugin.cfg").decode()
+            assert config.count('version="3.2.5"') == 1
+            assert not any(member.endswith("migration_bridge.gd") for member in members)
 
 
 def test_build_never_overwrites_an_existing_candidate(signed_release):

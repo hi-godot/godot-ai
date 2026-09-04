@@ -54,6 +54,12 @@ LEGACY_SIGNATURE_NAME = f"{LEGACY_CHECKSUM_NAME}.sig"
 LEGACY_MAX_ARCHIVE_SIZE = 66 * 1024 * 1024
 LEGACY_MAX_CHECKSUM_SIZE = 1024
 MIGRATION_BRIDGE_SOURCE = "migration_bridge"
+## The final v3 add-on rides inside the capsule so a pre-v4 install on a Godot
+## below v4's floor gets its working plugin back instead of a dead tree. It
+## leaves with the capsule once the fleet is on v4.
+FINAL_V3_REF = "v3.2.5"
+V3_FALLBACK_NAME = "godot-ai-v3-plugin.zip"
+V3_FALLBACK_SOURCE = "plugin/addons/godot_ai"
 MIGRATION_PAYLOAD_PREFIX = f"{PLUGIN_PREFIX}migration_payload/"
 # The bridge runs the same verifier and installer the v4 tree ships, and reads
 # the process fingerprint for the update lock from the v4 port resolver (the
@@ -726,12 +732,27 @@ def build_release(
     return destinations
 
 
+def _final_v3_fallback(repo: Path, ref: str) -> bytes:
+    """The final v3 add-on re-packed at its live path, for the capsule to restore."""
+    context = "final v3 fallback"
+    snapshot = _snapshot_git_directory(repo, ref, V3_FALLBACK_SOURCE, PLUGIN_PREFIX, context)
+    snapshot.sort(key=lambda item: item[0])
+    _validate_paths([path for path, _data in snapshot], context)
+    if not any(path == PLUGIN_CONFIG for path, _data in snapshot):
+        _fail(context, f"{ref} has no {PLUGIN_CONFIG}")
+    with tempfile.TemporaryDirectory(prefix=".v3-fallback-") as temporary:
+        archive = Path(temporary) / V3_FALLBACK_NAME
+        _write_zip(archive, snapshot)
+        return _read_bounded(archive, MAX_ARCHIVE_SIZE)
+
+
 def build_migration_capsule(
     repo_root: Path,
     output_dir: Path,
     private_key: Path,
     canonical: tuple[Path, Path, Path],
     expected: tuple[str, ...],
+    final_v3_ref: str = FINAL_V3_REF,
 ) -> tuple[Path, Path, Path]:
     """Build the signed v3-compatible capsule around one verified v4 release."""
     repository, channel, tag, version, source_commit = expected
@@ -777,6 +798,12 @@ def build_migration_capsule(
         if artifact.name != name or artifact.is_symlink() or not artifact.is_file():
             _fail("migration payload", f"expected regular canonical artifact {name}")
         snapshot.append((f"{MIGRATION_PAYLOAD_PREFIX}{name}", _read_bounded(artifact, maximum)))
+    snapshot.append(
+        (
+            f"{MIGRATION_PAYLOAD_PREFIX}{V3_FALLBACK_NAME}",
+            _final_v3_fallback(repo_root.resolve(), final_v3_ref),
+        )
+    )
     snapshot.sort(key=lambda item: item[0])
     _validate_paths([path for path, _data in snapshot], "migration capsule")
     if sum(len(data) for _path, data in snapshot) > LEGACY_MAX_ARCHIVE_SIZE:

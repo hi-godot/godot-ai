@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import http.client
 import importlib.machinery
+import io
 import importlib.util
 import json
 import os
@@ -55,6 +56,8 @@ SMOKE_MIGRATED_LOG = "MCP | client migration completed"
 RESTARTED_EDITOR_LOG_NAME = "godot-editor-restarted.log"
 RESTARTED_EDITOR_TIMEOUT_SECONDS = 120.0
 V3_BRIDGE_RESTART_LOG = "MCP | v3 bridge restarting editor into canonical v4 tree"
+FINAL_V3_REF = "v3.2.5"
+V3_FALLBACK_NAME = "godot-ai-v3-plugin.zip"
 V3_CLICK_LOG = "V3_BRIDGE_TEST | clicked final-v3 Update button"
 # The capsule ships the installer and everything it preloads (docs/self-update.md).
 CAPSULE_INSTALLER_SCRIPTS = (
@@ -1413,6 +1416,7 @@ def prepare_v3_crossing_project(
     payload.mkdir()
     for name in (SMOKE_ARCHIVE_NAME, SMOKE_MANIFEST_NAME, SMOKE_SIGNATURE_NAME):
         shutil.copy2(bundle / name, payload / name)
+    write_final_v3_fallback(payload / V3_FALLBACK_NAME)
     bridge = capsule_tree / "migration_bridge.gd"
     bridge_text = subn_once(
         bridge,
@@ -1543,6 +1547,27 @@ def prepare_v3_crossing_project(
         "work": work,
         "capability_dir": fixture_environment_paths(project_dir)["capability_dir"],
     }
+
+
+def write_final_v3_fallback(destination: Path, ref: str = FINAL_V3_REF) -> None:
+    """The final v3 add-on re-packed at its live path, as the release capsule carries it."""
+    archived = subprocess.run(
+        ["git", "archive", "--format=zip", ref, "plugin/addons/godot_ai"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    prefix = "plugin/addons/godot_ai/"
+    with (
+        zipfile.ZipFile(io.BytesIO(archived)) as source,
+        zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as target,
+    ):
+        for info in sorted(source.infolist(), key=lambda entry: entry.filename):
+            if info.is_dir():
+                continue
+            if not info.filename.startswith(prefix) or ".." in PurePosixPath(info.filename).parts:
+                raise HarnessError(f"unexpected archive member {info.filename}")
+            target.writestr("addons/godot_ai/" + info.filename[len(prefix) :], source.read(info))
 
 
 def print_v3_instructions(

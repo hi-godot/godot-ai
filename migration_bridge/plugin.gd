@@ -8,8 +8,13 @@ extends EditorPlugin
 
 const MigrationBridge := preload("res://addons/godot_ai/migration_bridge.gd")
 const MigrationCoordinator := preload("res://addons/godot_ai/migration_coordinator.gd")
+const MigrationFallback := preload("res://addons/godot_ai/migration_fallback.gd")
 const FLOOR_REFUSAL := "Godot AI v4 migration requires Godot 4.7 or newer; bridge remains inactive."
 const FLOOR_MESSAGE := "Godot AI v4 requires Godot 4.7 or newer. Upgrade Godot, reopen this project, then click Retry."
+const FLOOR_RESTORING := (
+	"Godot AI v4 requires Godot 4.7 or newer. Restoring the previous Godot AI version; "
+	+ "upgrade Godot to update."
+)
 const EDITOR_REQUIRED := (
 	"Godot AI v4 migration needs the interactive Godot editor. "
 	+ "Reopen the project in the editor (not headless or exported), then click Retry migration."
@@ -30,6 +35,15 @@ func _enter_tree() -> void:
 		return
 	if not _meets_floor():
 		print(FLOOR_REFUSAL)
+		## The user's updater already overlaid the capsule over their v3 tree.
+		## Put the final v3 back so nothing is lost; without the fallback (an
+		## older capsule) the bridge can only wait for a newer Godot.
+		if MigrationFallback.available():
+			_present_state(FLOOR_RESTORING, false, false)
+			var fallback: Node = MigrationFallback.new()
+			_parent_node().add_child(fallback)
+			fallback.start()
+			return
 		_present_state(FLOOR_MESSAGE, true, false)
 		return
 	if not _editor_available():
@@ -130,6 +144,9 @@ func _parent_node() -> Node:
 
 
 static func _meets_floor() -> bool:
+	## Test-only: lets a scenario exercise the refusal path on a current Godot.
+	if OS.get_environment("GODOT_AI_TEST_GODOT_FLOOR") == "unmet":
+		return false
 	var version := Engine.get_version_info()
 	return int(version.get("major", 0)) == 4 and int(version.get("minor", 0)) >= 7
 

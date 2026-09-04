@@ -41,6 +41,7 @@ from tests.integration._self_update_fixture import (
     RESTARTED_EDITOR_LOG,
     UPDATE_STATE_RELATIVE,
     AttachedAgent,
+    _write_fake_uvx_shim,
     append_driver_autoload,
     assert_no_update_parse_errors,
     godot_bin_or_skip,
@@ -744,6 +745,115 @@ func _process(_delta: float) -> void:
     assert autoload is not None, project_settings
     assert autoload.group(1) == "res://addons/godot_ai/runtime/game_helper.gd"
     assert (live / "runtime" / "game_helper.gd").is_file()
+
+
+def test_final_v3_capsule_restores_final_v3_when_godot_is_too_old(tmp_path: Path) -> None:
+    """Below v4's Godot floor the capsule puts the final v3 add-on back, working."""
+    godot_bin = godot_bin_or_skip()
+    smoke = load_smoke_script()
+    target_version = read_plugin_version(PLUGIN_ROOT / "plugin.cfg")
+    from_version = "3.2.4"
+    http_port, ws_port = allocate_free_ports(2)
+    project = tmp_path / "v3-floor-refusal"
+    prepared = smoke.prepare_v3_crossing_project(
+        project,
+        from_version=from_version,
+        target_version=target_version,
+        http_port=http_port,
+        ws_port=ws_port,
+    )
+    append_driver_autoload(project / "project.godot")
+    live = prepared["live"]
+    write_driver_support(project)
+    (project / "_test_runner_driver.gd").write_text(
+        f'''@tool
+extends Node
+
+const DriverSupport := preload("res://_test_self_update_driver_support.gd")
+const DEADLINE_MSEC := 180000
+
+var _deadline := 0
+var _clicked := false
+
+
+func _ready() -> void:
+\tif not Engine.is_editor_hint():
+\t\tqueue_free()
+\t\treturn
+\t_deadline = Time.get_ticks_msec() + DEADLINE_MSEC
+\tset_process(true)
+
+
+func _process(_delta: float) -> void:
+\tif Time.get_ticks_msec() >= _deadline:
+\t\tpush_error("V3_FALLBACK_TEST | restore timed out")
+\t\tget_tree().quit(41)
+\t\treturn
+\tif not _clicked:
+\t\tvar old_plugin := DriverSupport.find_godot_ai_plugin()
+\t\tif old_plugin == null:
+\t\t\treturn
+\t\tvar dock: Variant = old_plugin.get("_dock")
+\t\tif dock == null or not dock.has_method("_on_update_pressed"):
+\t\t\treturn
+\t\tdock.call("_on_update_pressed")
+\t\t_clicked = true
+\t\treturn
+\tif FileAccess.file_exists("res://addons/godot_ai/migration_bridge.gd"):
+\t\treturn
+\tvar config := ConfigFile.new()
+\tif config.load("res://addons/godot_ai/plugin.cfg") != OK:
+\t\treturn
+\tif str(config.get_value("plugin", "version", "")) != "{smoke.FINAL_V3_REF.lstrip("v")}":
+\t\treturn
+\tif DriverSupport.find_godot_ai_plugin() == null:
+\t\treturn
+\tprint("V3_FALLBACK_TEST | final v3 restored and enabled")
+\tget_tree().quit(0)
+''',
+        encoding="utf-8",
+    )
+    environment = smoke.godot_child_environment(project)
+    # The restored final v3 is pristine: keep its server launch off the network.
+    shim_root = project / ".floor-smoke"
+    shim_root.mkdir()
+    fake_bin = _write_fake_uvx_shim(shim_root, smoke.smoke_python()).parent
+    environment["PATH"] = str(fake_bin) + os.pathsep + os.environ.get("PATH", "")
+    environment["GODOT_AI_TEST_GODOT_FLOOR"] = "unmet"
+
+    log = run_godot_editor(
+        project, godot_bin, allow_headless=True, timeout=240, environment=environment
+    )
+
+    _assert_ordered(
+        log,
+        (
+            "V3_BRIDGE_TEST | clicked final-v3 Update button",
+            "MCP | update runner disabling old plugin",
+            "Godot AI v4 migration requires Godot 4.7 or newer; bridge remains inactive.",
+            "MCP | v3 bridge restored Godot AI v3.2.5; update again on Godot 4.7 or newer",
+            "V3_FALLBACK_TEST | final v3 restored and enabled",
+        ),
+    )
+    restored_at = log.index("MCP | v3 bridge restored Godot AI v3.2.5")
+    for pattern in (
+        "SCRIPT ERROR: Parse Error",
+        "ERROR: Failed to load script",
+        "Could not resolve script",
+    ):
+        assert pattern not in log[restored_at:], log[restored_at:]
+    assert read_plugin_version(live / "plugin.cfg") == "3.2.5"
+    assert (live / "update_reload_runner.gd").is_file(), "final v3 keeps its own updater"
+    for capsule_only in (
+        "migration_bridge.gd",
+        "migration_coordinator.gd",
+        "migration_fallback.gd",
+        "migration_payload",
+        "utils/update_installer.gd",
+        "utils/release_verifier.gd",
+    ):
+        assert not (live / capsule_only).exists(), capsule_only
+    assert not (project / UPDATE_STATE_RELATIVE).exists(), "nothing was staged or swapped"
 
 
 def test_tampered_tree_after_swap_is_rolled_back_and_restarted(tmp_path: Path) -> None:

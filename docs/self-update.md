@@ -122,6 +122,15 @@ crossing needed (removing v3's `game_helper` autoload before the swap, #946,
 and persisting the next-start enabled entry without loading v4 in the old
 process, #957), and restarts. The v4 plugin then runs step 9 as on any update.
 
+The capsule also carries the final v3 add-on (`migration_payload/godot-ai-v3-plugin.zip`,
+re-packed from the `v3.2.5` tag). Pre-v4 updaters offer whatever release is
+latest and cannot know that v4 needs Godot 4.7, and they discard their
+per-file backups once the overlay succeeds; on a Godot below the floor the
+bridge therefore puts that final v3 back and re-enables it instead of leaving
+a dead tree, and the user updates again after upgrading Godot. The fallback
+is transitional like the capsule itself: once telemetry shows the fleet on
+v4, the capsule triple stops being published and the fallback goes with it.
+
 ## Closed-editor installer
 
 `script/v4-release install` performs the same verify, stage, swap sequence from

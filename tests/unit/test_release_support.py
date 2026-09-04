@@ -1068,7 +1068,12 @@ def test_verify_pypi_requires_both_unyanked_exact_public_files(pair, monkeypatch
 # must trust the same signing key as the v4 updater.
 
 BRIDGE_ROOT = support.ROOT / "migration_bridge"
-BRIDGE_SCRIPTS = {"migration_bridge.gd", "migration_coordinator.gd", "plugin.gd"}
+BRIDGE_SCRIPTS = {
+    "migration_bridge.gd",
+    "migration_coordinator.gd",
+    "migration_fallback.gd",
+    "plugin.gd",
+}
 UPDATER_SOURCE = support.ROOT / "plugin/addons/godot_ai/utils/update_manager.gd"
 PEM_BEGIN, PEM_END = b"-----BEGIN PUBLIC KEY-----", b"-----END PUBLIC KEY-----"
 # Any of these would mean the bridge left GDScript: a spawned process, uvx,
