@@ -1258,15 +1258,13 @@ func _replace_server_left_by_update(snapshot: Dictionary) -> void:
 		_post_update_replaced_version = ""
 		return
 	if not bool(snapshot.get("can_recover_incompatible", false)):
-		## Bound but not answering yet: the spawned backend is still starting.
-		## Probe again shortly, a bounded number of times, then leave the
-		## dock's Restart Server as the remaining path.
-		var occupied := (
-			str(snapshot.get("episode_state", "")) == "BLOCKED"
-			and str(snapshot.get("conflict_version", "")).is_empty()
-			and int(snapshot.get("conflict_port", 0)) > 0
-		)
-		if occupied and _post_update_reprobes_left > 0:
+		## Any other block right after an update is the bridge's backend in
+		## flight: bound but not answering yet, or bound between our probe and
+		## our launch so our server exited on bind. Probe again shortly, a
+		## bounded number of times; the re-probe finds that backend answering
+		## and takes the replacement path. Then the dock's Restart Server is
+		## the remaining path.
+		if str(snapshot.get("episode_state", "")) == "BLOCKED" and _post_update_reprobes_left > 0:
 			_post_update_reprobes_left -= 1
 			get_tree().create_timer(1.0).timeout.connect(_reprobe_after_update, CONNECT_ONE_SHOT)
 		return

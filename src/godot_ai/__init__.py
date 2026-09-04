@@ -7,6 +7,7 @@ import errno
 import os
 import socket
 import sys
+import time
 import tomllib
 from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError
@@ -78,32 +79,58 @@ def preflight_check_port(port: int, *, label: str, setting: str, host: str = "12
     ## bind_host_for_networks(); an AF_INET socket can't bind those, so pick
     ## the family from the host (Copilot review on #647's PR).
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    sock = socket.socket(family, socket.SOCK_STREAM)
-    try:
-        if os.name != "nt":
-            ## Mirror uvicorn/websockets SO_REUSEADDR so a just-stopped
-            ## server's TIME_WAIT socket doesn't false-positive as a
-            ## foreign occupant. Skipped on Windows, where SO_REUSEADDR
-            ## means "hijack the active listener".
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    ## The plugin sets this only when it launches this server to replace a
+    ## godot-ai backend that still holds the port and kills that backend
+    ## right after: the port then goes from the old backend to this process
+    ## within one retry, before an attach bridge that is polling for a free
+    ## port can spawn another backend of its own. Every other launch keeps
+    ## the fail-fast contract below (#647).
+    wait_deadline = time.monotonic() + _wait_for_port_seconds()
+    while True:
+        sock = socket.socket(family, socket.SOCK_STREAM)
         try:
-            sock.bind((host, port))
+            if os.name != "nt":
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind((host, port))
+                return
+            except OSError as exc:
+                if _is_eaddrinuse(exc) and time.monotonic() < wait_deadline:
+                    continue
+                raise
         except OSError as exc:
-            if _is_eaddrinuse(exc):
-                print(
+            if not _is_eaddrinuse(exc):
+                ## Any other bind failure (EACCES, EADDRNOTAVAIL, winnat
+                ## exclusion ranges, exotic address families) is NOT the
+                ## condition this preflight exists to catch: let the real
+                ## server startup produce its existing failure mode.
+                return
+            print(
                     f"godot-ai: {label} port {port} is already in use by another "
                     f"process. Stop it or change the port ({setting} in Godot "
                     "Editor Settings).",
                     file=sys.stderr,
                 )
-                raise SystemExit(EXIT_PORT_IN_USE) from exc
-            ## Any other bind failure (EACCES, EADDRNOTAVAIL, winnat
-            ## exclusion ranges, exotic address families) is NOT the
-            ## condition this preflight exists to catch — let the real
-            ## server startup produce its existing failure mode instead
-            ## of the probe inventing a new earlier crash.
-    finally:
-        sock.close()
+            raise SystemExit(EXIT_PORT_IN_USE) from exc
+        finally:
+            sock.close()
+            if time.monotonic() < wait_deadline:
+                time.sleep(WAIT_FOR_PORT_RETRY_SECONDS)
+
+
+WAIT_FOR_PORT_ENV = "GODOT_AI_WAIT_FOR_PORT_MS"
+WAIT_FOR_PORT_RETRY_SECONDS = 0.05
+WAIT_FOR_PORT_MAX_SECONDS = 30.0
+
+
+def _wait_for_port_seconds() -> float:
+    raw = os.environ.get(WAIT_FOR_PORT_ENV, "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return min(max(int(raw), 0) / 1000.0, WAIT_FOR_PORT_MAX_SECONDS)
+    except ValueError:
+        return 0.0
 
 
 def main(argv: Sequence[str] | None = None) -> None:

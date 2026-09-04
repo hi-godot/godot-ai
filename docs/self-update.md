@@ -99,10 +99,12 @@ All steps run inside the editor, on the main thread except the download.
     during the update loses server A at the swap. Its bridge then does what
     it always does without a backend: it spawns one, of the old version,
     into the restart window. The restarted editor replaces a godot-ai server
-    at exactly the version it just updated from without asking (a few times,
-    since the bridge spawns again as soon as the port frees, and re-probing
-    briefly while such a backend is still binding); any other conflict keeps
-    the dock's explicit Restart Server authority. The
+    at exactly the version it just updated from without asking; any other
+    conflict keeps the dock's explicit Restart Server authority. Every
+    replacement launches our server before killing the occupant, and that
+    server waits for the port to free, so the port passes straight from the
+    old backend to ours within one retry: a bridge polling for a free port
+    to spawn again never sees one. The
     old bridge itself refuses the new backend as incompatible, so the dock
     tells the user to restart AI clients that were connected during the
     update; the repinned client configuration launches the new version.
