@@ -578,3 +578,45 @@ def test_installer_never_references_the_transaction_actor():
     source = (ROOT / "script/v4-release").read_text(encoding="utf-8")
     assert "update_transaction" not in source
     assert "recovery-root" not in source
+
+
+def test_openssl_path_matches_the_cryptography_path(release, trusted):
+    """The signing and publishing jobs have no ``cryptography``; openssl must agree."""
+    signature = release.signature.read_bytes()
+    verify._verify_signature_with_openssl(release.raw, signature, trusted.public)
+    forged = bytearray(signature)
+    forged[len(forged) // 2] ^= 0x01
+    with pytest.raises(verify.ReleaseError, match="verification failed"):
+        verify._verify_signature_with_openssl(release.raw, bytes(forged), trusted.public)
+    with pytest.raises(verify.ReleaseError, match="verification failed"):
+        verify._verify_signature_with_openssl(
+            release.raw + b"\n", release.signature.read_bytes(), trusted.public
+        )
+    with pytest.raises(verify.ReleaseError, match="expected exactly"):
+        verify._verify_signature_with_openssl(
+            release.raw, release.signature.read_bytes()[:-1], trusted.public
+        )
+    other = ec.generate_private_key(ec.SECP256R1()).public_key()
+    other_pem = other.public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode("ascii")
+    with pytest.raises(verify.ReleaseError, match="expected an RSA public key"):
+        verify._verify_signature_with_openssl(release.raw, signature, other_pem)
+    with pytest.raises(verify.ReleaseError, match="SubjectPublicKeyInfo"):
+        verify._verify_signature_with_openssl(release.raw, release.signature.read_bytes(), "junk")
+
+
+def test_verify_signature_falls_back_to_openssl_without_cryptography(release, trusted, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def refuse_cryptography(name, *args, **kwargs):
+        if name.startswith("cryptography"):
+            raise ImportError("not installed in this job")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse_cryptography)
+    verify._verify_signature(release.raw, release.signature.read_bytes(), trusted.public)
+    with pytest.raises(verify.ReleaseError, match="verification failed"):
+        verify._verify_signature(release.raw + b"x", release.signature.read_bytes(), trusted.public)

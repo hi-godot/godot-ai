@@ -206,18 +206,18 @@ def _verify_signature(manifest: bytes, data: bytes, public_key: str) -> None:
     """Verify one RSA PKCS#1 v1.5 SHA-256 signature over the manifest bytes.
 
     ``cryptography`` is imported here rather than at module import so that
-    ``import godot_ai`` never loads it; only the closed-editor installer, the
-    release pipeline, and tests ever reach this function.
+    ``import godot_ai`` never loads it. Where it is absent (the release
+    pipeline's signing and publishing jobs install nothing beyond the
+    interpreter), the same primitive is checked through the OpenSSL command
+    line, which those runners already use to sign.
     """
     try:
         from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import padding, rsa
-    except ImportError as exc:  # pragma: no cover - the dev extra is not installed
-        raise ReleaseError(
-            "manifest signature: the 'cryptography' package is required "
-            "(install the godot-ai 'dev' extra)"
-        ) from exc
+    except ImportError:
+        _verify_signature_with_openssl(manifest, data, public_key)
+        return
     try:
         key = serialization.load_pem_public_key(public_key.encode("utf-8"))
     except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
@@ -235,6 +235,59 @@ def _verify_signature(manifest: bytes, data: bytes, public_key: str) -> None:
         raise ReleaseError(
             "manifest signature: RSA PKCS#1 v1.5 SHA-256 verification failed"
         ) from exc
+
+
+_OPENSSL_KEY_SIZE = re.compile(r"Public-Key: \((\d+) bit\)")
+
+
+def _verify_signature_with_openssl(manifest: bytes, data: bytes, public_key: str) -> None:
+    """The same check as above through the ``openssl`` command line."""
+    import subprocess
+    import tempfile
+
+    if shutil.which("openssl") is None:
+        _fail("manifest signature", "neither the 'cryptography' package nor openssl is available")
+    with tempfile.TemporaryDirectory(prefix=".godot-ai-verify-") as temporary:
+        root = Path(temporary)
+        key_path = root / "public.pem"
+        key_path.write_text(public_key, encoding="utf-8")
+        described = subprocess.run(
+            ["openssl", "pkey", "-pubin", "-in", str(key_path), "-noout", "-text"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if described.returncode != 0:
+            _fail("public key", "expected a PEM SubjectPublicKeyInfo")
+        match = _OPENSSL_KEY_SIZE.search(described.stdout)
+        ## OpenSSL 3 prints "Public-Key: (N bit)" for every key type; an RSA
+        ## key is the one that prints a modulus and an exponent.
+        is_rsa = "Modulus:" in described.stdout and "Exponent:" in described.stdout
+        if match is None or not is_rsa:
+            _fail("public key", "expected an RSA public key")
+        size, remainder = divmod(int(match.group(1)), 8)
+        if remainder or size > SIGNATURE_SIZE:
+            _fail("public key", f"expected an RSA key of at most {SIGNATURE_SIZE * 8} bits")
+        if len(data) != size:
+            _fail("manifest signature", f"expected exactly {size} bytes")
+        signature_path = root / "manifest.sig"
+        signature_path.write_bytes(data)
+        verified = subprocess.run(
+            [
+                "openssl",
+                "dgst",
+                "-sha256",
+                "-verify",
+                str(key_path),
+                "-signature",
+                str(signature_path),
+            ],
+            input=manifest,
+            capture_output=True,
+            check=False,
+        )
+    if verified.returncode != 0 or verified.stdout.strip() != b"Verified OK":
+        _fail("manifest signature", "RSA PKCS#1 v1.5 SHA-256 verification failed")
 
 
 def _validate_manifest(raw: bytes, expected: tuple[str, str, str, str, str]) -> dict[str, Any]:

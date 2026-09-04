@@ -157,6 +157,19 @@ def test_strict_evidence_json(raw):
         support.strict_json(raw)
 
 
+def test_prepare_b_makes_the_exact_child_validate_sources_accepts(pair):
+    repo, _candidates, a, b_fixture = pair
+    b = support.prepare_b(repo, a, "4.0.0")
+    assert support.SHA.fullmatch(b) and b != a
+    support.validate_sources(repo, a, b, "4.0.0", "4.0.1")
+    assert support.prepare_b(repo, a, "4.0.0") == b, "the same A yields the same B"
+    # Content, not identity, is what qualification binds to.
+    assert support.git(repo, "rev-parse", f"{b}^{{tree}}") == support.git(
+        repo, "rev-parse", f"{b_fixture}^{{tree}}"
+    )
+    assert support.git(repo, "worktree", "list").decode().count("\n") == 1, "no worktree left"
+
+
 def test_exact_signed_candidate_and_source_pair(pair):
     repo, candidates, a, b = pair
     support.validate_sources(repo, a, b, "4.0.0", "4.0.1")

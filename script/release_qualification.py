@@ -20,6 +20,7 @@ from script import release_support as support
 
 TEST_REQUIREMENTS = (
     "pytest==9.1.1",
+    "pytest-xdist==3.8.0",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
     "hypothesis==6.167.1",
@@ -113,7 +114,7 @@ def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "documented exact-artifact installs are missing or failed",
             )
-            support.require(set(row.get("tests", {})) == {"a", "b"}, "missing candidate tests")
+            support.require(set(row.get("tests", {})) == {"a"}, "missing candidate A tests")
             for summary in row["tests"].values():
                 support.require(
                     summary.get("tests", 0) > 0
@@ -377,23 +378,15 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
         wheel_b = candidates / "b/dist" / f"godot_ai-{records['b']['version']}-py3-none-any.whl"
         shutil.copyfile(wheel_b, packages / wheel_b.name)
         report["dependencies"] = dependency_inventory(packages)
-        with (
-            tempfile.TemporaryDirectory(prefix="godot-ai-python-qualification-") as temporary,
-            contextlib.ExitStack() as cleanup,
-        ):
+        with tempfile.TemporaryDirectory(prefix="godot-ai-python-qualification-") as temporary:
             work = Path(temporary).resolve()
-            source_b = cleanup.enter_context(
-                candidate_test_source(
-                    source,
-                    records["b"]["source"],
-                    work / "source-b",
-                    output / "test-source.log",
-                    environment,
-                )
-            )
+            ## B is A plus two version fields minus the bundled README: its
+            ## wheel must install from the retained index (the runtime row
+            ## updates into it), but its sdist and its test run would only
+            ## repeat A's evidence.
             for name in ("a", "b"):
                 version = records[name]["version"]
-                for package_type in ("wheel", "sdist"):
+                for package_type in ("wheel", "sdist") if name == "a" else ("wheel",):
                     target = work / f"{name}-{package_type}"
                     execute(
                         [sys.executable, "-m", "venv", str(target)],
@@ -459,7 +452,7 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
                         cwd=work,
                         environment=environment,
                     )
-                    if package_type == "wheel":
+                    if package_type == "wheel" and name == "a":
                         junit = output / f"{name}-pytest.xml"
                         # Override the development pythonpath so tests import the
                         # installed wheel. Godot fixture tests are run separately;
@@ -470,6 +463,8 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
                                 "-m",
                                 "pytest",
                                 "-v",
+                                "-n",
+                                "auto",
                                 "-o",
                                 "pythonpath=",
                                 "--junitxml",
@@ -478,7 +473,7 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
                                 "tests/integration",
                             ],
                             output / f"{name}-pytest.log",
-                            cwd=source if name == "a" else source_b,
+                            cwd=source,
                             environment=environment,
                         )
                         suites = ET.parse(junit).getroot().iter("testsuite")

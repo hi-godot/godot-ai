@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 import zipfile
 from email.parser import BytesParser
@@ -187,6 +188,66 @@ def validate_sources(repo: Path, a: str, b: str, va: str, vb: str) -> None:
         git(repo, "diff", "--name-status", a, b, "--", readme).decode().strip() == f"D\t{readme}",
         "B must delete A's bundled README",
     )
+
+
+B_COMMIT_ENV = {
+    "GIT_AUTHOR_NAME": "godot-ai release",
+    "GIT_AUTHOR_EMAIL": "release@godot-ai.invalid",
+    "GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z",
+    "GIT_COMMITTER_NAME": "godot-ai release",
+    "GIT_COMMITTER_EMAIL": "release@godot-ai.invalid",
+    "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",
+}
+
+
+def prepare_b(repo: Path, a: str, va: str) -> str:
+    """Commit A's qualification-only child B and return its SHA.
+
+    B is A with the two version fields at A's next patch and without the
+    bundled README, exactly what ``validate_sources`` accepts. The commit is
+    made under fixed identity and dates in a disposable worktree, so the same
+    A always yields the same B; it is created locally and never pushed here.
+    """
+    require(isinstance(a, str) and SHA.fullmatch(a) is not None, "A must be a full commit SHA")
+    vb = next_version(va, "patch")
+    config = "plugin/addons/godot_ai/plugin.cfg"
+    readme = "plugin/addons/godot_ai/README.md"
+    with tempfile.TemporaryDirectory(prefix="godot-ai-prepare-b-") as temporary:
+        worktree = Path(temporary) / "b"
+        git(repo, "worktree", "add", "--detach", "--quiet", str(worktree), a)
+        try:
+            for path, pattern in (
+                ("pyproject.toml", rb'(?m)^version = "([^"\r\n]+)"$'),
+                (config, rb'(?m)^version="([^"\r\n]+)"$'),
+            ):
+                before = (worktree / path).read_bytes()
+                require(re.findall(pattern, before) == [va.encode()], f"{path} is not at {va}")
+                after = re.sub(
+                    pattern, lambda m: m.group(0).replace(va.encode(), vb.encode()), before
+                )
+                (worktree / path).write_bytes(after)
+            require((worktree / readme).is_file(), "A has no bundled README to remove")
+            (worktree / readme).unlink()
+            git(worktree, "add", "-A", "--", "pyproject.toml", config, readme)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(worktree),
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    f"qualification-only child B: {vb}",
+                ],
+                check=True,
+                capture_output=True,
+                env={**os.environ, **B_COMMIT_ENV},
+            )
+            b = git(worktree, "rev-parse", "HEAD").decode().strip()
+        finally:
+            git(repo, "worktree", "remove", "--force", str(worktree))
+    validate_sources(repo, a, b, va, vb)
+    return b
 
 
 def distribution_names(version: str) -> set[str]:
@@ -486,8 +547,15 @@ def main(argv: list[str] | None = None) -> int:
     version.add_argument("--bump", choices=("patch", "minor", "major"), required=True)
     sources = commands.add_parser("validate-sources")
     sources.add_argument("--repo", type=Path, default=ROOT)
-    for name in ("a", "b", "version-a", "version-b"):
+    for name in ("a", "b", "version-a"):
         sources.add_argument("--" + name, required=True)
+    sources.add_argument("--version-b", default=None, help="defaults to A's next patch")
+    prepare = commands.add_parser(
+        "prepare-b", help="commit the qualification-only child of A and print its SHA"
+    )
+    prepare.add_argument("--repo", type=Path, default=ROOT)
+    prepare.add_argument("--a", required=True)
+    prepare.add_argument("--version-a", required=True)
     seal = commands.add_parser("seal")
     seal.add_argument("--root", type=Path, required=True)
     for name in ("candidate", "source", "version", "workflow-sha", "run-id"):
@@ -512,7 +580,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "next-version":
             print(next_version(args.previous, args.bump))
         elif args.command == "validate-sources":
-            validate_sources(args.repo, args.a, args.b, args.version_a, args.version_b)
+            version_b = args.version_b or next_version(args.version_a, "patch")
+            validate_sources(args.repo, args.a, args.b, args.version_a, version_b)
+        elif args.command == "prepare-b":
+            b = prepare_b(args.repo, args.a, args.version_a)
+            print(b)
+            print(
+                f"push it for the run: git push origin {b}:refs/heads/qualify/v{args.version_a}-b",
+                file=sys.stderr,
+            )
         elif args.command == "seal":
             output = args.root / "evidence.json"
             record = candidate_record(

@@ -93,6 +93,12 @@ def test_qualification_builds_and_signs_a_b_once_then_verifies_on_all_platforms(
     assert "secrets." not in str(workflow["jobs"]["build"])
     assert workflow["jobs"]["sign"]["environment"] == "release-signing"
     assert "pip install" not in str(workflow["jobs"]["sign"])
+    # B's version is never typed by an operator: it is A's next patch.
+    triggers = workflow.get(True, workflow.get("on"))
+    assert set(triggers["workflow_dispatch"]["inputs"]) == {"source_a", "version_a", "source_b"}
+    assert "inputs.version_b" not in raw
+    assert "release_support next-version" in raw
+    assert workflow["jobs"]["sign"]["needs"] == ["validate-inputs", "build"]
     # Trimmed release gate: package rows at the floor/ceiling interpreters on
     # every desktop OS; one real-editor A -> B row per OS at Godot 4.7.0, plus
     # a single Linux row at the newest supported engine.

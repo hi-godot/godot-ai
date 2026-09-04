@@ -106,7 +106,8 @@ def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
                     name: {"status": "passed", "managed_tree": {"plugin.cfg": {}}}
                     for name in bindings
                 },
-                tests={name: {"tests": 1, "failures": 0, "errors": 0} for name in bindings},
+                # Only A's installed suite runs; B repeats A's evidence.
+                tests={"a": {"tests": 1, "failures": 0, "errors": 0}},
             )
         else:
             row.update(

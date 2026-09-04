@@ -17,9 +17,12 @@ those exact bytes:
 
 - **Python rows** — `ubuntu-latest`, `macos-latest`, `windows-latest` × Python
   3.11 and 3.14 (the floor and ceiling interpreters; ordinary CI covers 3.12
-  and 3.13): retained dependency resolution, offline wheel/sdist installs of
-  A and B, the installed test suites, and the documented closed-editor
-  installer for both candidates.
+  and 3.13): retained dependency resolution, offline installs of A's wheel and
+  sdist and of B's wheel (the runtime row updates into it from the retained
+  index), A's installed test suite in parallel, and the documented
+  closed-editor installer for both candidates. B is A plus two version fields
+  minus the bundled README, so testing B's install would only repeat A's
+  evidence.
 - **Runtime rows** — the same three operating systems × Godot 4.7.0 × Python
   3.11, plus one Linux row at Godot 4.7.2, the newest supported engine: one
   real-editor exact A -> B hot update through the private HTTPS
@@ -36,9 +39,24 @@ evidence behind it.
 `release-qualification.yml` separates credential-free packaging from protected
 signing. A must equal the reviewed `main` workflow commit. B must be its immediate
 single-parent child with only the two version edits and the bundled README
-deletion. The packager creates required version tags only in disposable local
-checkouts; it never pushes B's tag or publishes B. Python regression fixtures
-that patch sources remain development evidence, not exact-candidate runtime proof.
+deletion; its version is never typed, it is always A's next patch. Make B with
+
+```bash
+python -m script.release_support prepare-b --a <A commit> --version-a <A version>
+```
+
+which commits that exact child under a fixed identity and date (the same A
+always yields the same B), validates it, and prints its SHA. Every job fetches
+B by SHA, so push it to a branch on this repository for the run's duration
+(`git push origin <B>:refs/heads/qualify/v<A version>-b`) and delete the branch
+afterwards; promotion never needs it. The packager creates required version
+tags only in disposable local checkouts; it never pushes B's tag or publishes
+B. Python regression fixtures that patch sources remain development evidence,
+not exact-candidate runtime proof.
+
+The signing and publishing jobs install nothing beyond the interpreter, so the
+Python-side signature check runs through the OpenSSL command line there; with
+the `cryptography` package present (the dev extra) the same check uses it.
 
 After the qualification run's `Require complete release evidence` job is
 green, dispatch `release.yml`. Select **patch**, **minor**, or **major**, and
