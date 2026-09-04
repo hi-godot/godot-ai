@@ -2,7 +2,7 @@
 
 The harness owns only an external disposable project, TLS adapter and driver.
 It never patches either candidate add-on, rebuilds an artifact, or substitutes
-development Python code for the candidate server/update actor.
+development Python code for the candidate server.
 """
 
 from __future__ import annotations
@@ -23,14 +23,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from godot_ai.update_transaction import (  # noqa: E402
-    TransactionPaths,
-    hash_tree,
-    install_id,
-    load_intent,
-    validate_migration_complete,
-    validate_terminal,
-)
+from godot_ai import release_verify  # noqa: E402
 from script import qualification_engine as engine  # noqa: E402
 from script import release_qualification as qualification  # noqa: E402
 from script import release_support as support  # noqa: E402
@@ -40,6 +33,10 @@ from script.qualification_index import retained_index  # noqa: E402
 HTTP_PORT = 8000
 WS_PORT = 9500
 TIMEOUT_SECONDS = 360
+MANIFEST_NAME = "release/godot-ai-v4-plugin.manifest.json"
+# The lean updater keeps its marker, lock and retained backup beside the live
+# tree; nothing of it lives outside the project (docs/self-update.md).
+UPDATE_STATE = "addons/.godot_ai_update"
 
 
 def current_python_version() -> str:
@@ -440,34 +437,71 @@ def _execute_sensitive(
     support.require(completed.returncode == 0, f"qualification command failed; see {log}")
 
 
-def _verify_transaction(project: Path, candidate_a: Path, candidate_b: Path) -> dict[str, Any]:
+def _verify_lean_update(
+    project: Path, candidates: Path, records: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """Prove the editor left exactly the lean updater's success state behind.
+
+    The live tree must hash to B's signed inventory, the single retained backup
+    to A's, the marker must record that success against B's manifest, and no
+    lock, stage or quarantine may survive (docs/self-update.md, steps 6-10).
+    """
     live = project / "addons/godot_ai"
-    root = project.parent / ".godot-ai-recovery" / install_id(project.resolve(), live.resolve())
-    support.require(root.is_dir(), "runtime update did not create its bound recovery root")
-    support.require(not (root / "activation.lock").exists(), "runtime update retained its lock")
-    backup = root / "retained-backup"
+    state = project / UPDATE_STATE
+    marker_path = state / "pending.json"
+    support.require(marker_path.is_file(), "runtime update did not record its marker")
+    marker = support.read_json(marker_path, canonical_required=False)
+    support.require(type(marker) is dict, "runtime update marker is not an object")
+    version_a, version_b = records["a"]["version"], records["b"]["version"]
+    manifests = {name: candidates / name / MANIFEST_NAME for name in ("a", "b")}
+    expected = {
+        name: release_verify.inventory_tree_hash(support.read_json(path))
+        for name, path in manifests.items()
+    }
+    support.require(marker.get("status") == "success", "runtime update did not succeed")
     support.require(
-        support.inventory(backup) == _manifest_tree(candidate_a),
+        marker.get("from_version") == version_a and marker.get("to_version") == version_b,
+        "runtime update marker versions differ from A/B",
+    )
+    support.require(
+        marker.get("manifest_sha256") == support.fingerprint(manifests["b"])["sha256"]
+        and marker.get("expected_tree_sha256") == expected["b"],
+        "runtime update marker is not bound to B's signed manifest",
+    )
+    support.require(
+        release_verify.hash_tree(live)["tree_sha256"] == expected["b"],
+        "live tree is not exact B",
+    )
+    backups = state / "backup"
+    retained = sorted(path.name for path in backups.iterdir()) if backups.is_dir() else []
+    support.require(retained == [version_a], "runtime update did not retain exactly A")
+    backup = backups / version_a
+    support.require(
+        release_verify.hash_tree(backup)["tree_sha256"] == expected["a"],
         "runtime backup is not exact A",
     )
-    transactions = root / "transactions"
-    entries = [path for path in transactions.iterdir() if path.is_dir()]
-    support.require(len(entries) == 1, "runtime update did not retain exactly one transaction")
-    paths = TransactionPaths.for_transaction(root, entries[0].name)
-    intent = load_intent(paths)
-    claim = validate_terminal(paths.claim, intent)
-    completion = validate_migration_complete(paths, intent)
-    support.require(claim["outcome"] == "success", "runtime transaction did not succeed")
+    backup_root = str(marker.get("backup_root", "")).replace("\\", "/").rstrip("/")
     support.require(
-        hash_tree(backup) == intent.old_tree and hash_tree(live) == intent.new_tree,
-        "runtime transaction identities differ from A/B",
+        backup_root.endswith(f"backup/{version_a}"),
+        "runtime update marker does not name the retained backup",
     )
+    for leftover in ("lock.json", "stage", "quarantine"):
+        support.require(not (state / leftover).exists(), f"runtime update retained {leftover}")
     return {
-        "transaction": intent.transaction,
-        "claim": support.fingerprint(paths.claim),
-        "migration_complete": support.fingerprint(paths.migration_complete),
+        "update_marker": support.fingerprint(marker_path),
+        "update_state": {
+            key: marker.get(key)
+            for key in (
+                "status",
+                "from_version",
+                "to_version",
+                "manifest_sha256",
+                "expected_tree_sha256",
+            )
+        },
+        "live_tree_sha256": expected["b"],
         "backup_tree": support.inventory(backup),
-        "migration_editor": completion["editor"],
+        "backup_tree_sha256": expected["a"],
     }
 
 
@@ -523,9 +557,6 @@ def exact_a_to_b(
                 records["a"]["source"],
                 "--project-root",
                 str(project),
-                "--recovery-root",
-                str(work / "initial-install-recovery"),
-                "--editors-closed",
             ]
             _execute_sensitive(
                 command,
@@ -588,10 +619,10 @@ def exact_a_to_b(
             not any(secret in json.dumps(result) for secret in (release.token, index)),
             "qualification capability leaked into result",
         )
-        transaction = _verify_transaction(project, candidates / "a", candidates / "b")
+        update = _verify_lean_update(project, candidates, records)
         private_values = (release.token, index, _private_index_capability(index), ORIGIN)
         _require_values_absent(project, private_values)
-        _require_values_absent(project.parent / ".godot-ai-recovery", private_values)
+        _require_values_absent(project / UPDATE_STATE, private_values)
         _require_values_absent(output, private_values)
         return {
             **result,
@@ -603,7 +634,7 @@ def exact_a_to_b(
             "index_artifacts_requested": sorted(set(index_requests)),
             "live_tree": support.inventory(live),
             "backend_stopped": True,
-            **transaction,
+            **update,
         }
 
 

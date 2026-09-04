@@ -1,3 +1,6 @@
+import hashlib
+import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -274,7 +277,7 @@ def test_runtime_row_is_bound_to_matching_python_evidence(monkeypatch, tmp_path)
         assert case_output == output / "exact-a-to-b"
         assert not case_output.exists()
         case_output.mkdir()
-        return {"status": "passed", "transaction": "test-transaction-0001"}
+        return {"status": "passed", "update_marker": {"size": 1, "sha256": "f" * 64}}
 
     monkeypatch.setattr(runtime, "exact_a_to_b", run_case)
 
@@ -285,7 +288,9 @@ def test_runtime_row_is_bound_to_matching_python_evidence(monkeypatch, tmp_path)
     assert report["required_skips"] == 0
     assert report["godot_version"] == "4.7.0"
     assert report["candidates"] == bindings
-    assert report["cases"] == [{"status": "passed", "transaction": "test-transaction-0001"}]
+    assert report["cases"] == [
+        {"status": "passed", "update_marker": {"size": 1, "sha256": "f" * 64}}
+    ]
 
 
 def test_runtime_row_rejects_different_candidate_binding(monkeypatch, tmp_path):
@@ -334,3 +339,132 @@ def test_sparse_or_duplicate_non_python_rows_cannot_qualify():
         qualification.validate_mandatory_cases(
             "runtime", [{**case, "status": "failed"} for case in complete]
         )
+
+
+def _lean_update_project(tmp_path: Path) -> tuple[Path, Path, dict[str, dict[str, str]]]:
+    """Lay out the on-disk state one successful A-to-B update leaves behind."""
+    candidates = tmp_path / "candidates"
+    manifests = {}
+    for name, version in (("a", "4.0.0"), ("b", "4.0.1")):
+        release = candidates / name / "release"
+        release.mkdir(parents=True)
+        manifest = release / "godot-ai-v4-plugin.manifest.json"
+        manifest.write_bytes(
+            support.canonical(
+                {
+                    "version": version,
+                    "inventory": [
+                        {"path": "addons/godot_ai/plugin.cfg", "size": 1, "sha256": name * 64}
+                    ],
+                }
+            )
+        )
+        manifests[name] = manifest
+    project = tmp_path / "project"
+    live = project / "addons/godot_ai"
+    live.mkdir(parents=True)
+    (live / "plugin.cfg").write_bytes(b"b")
+    state = project / "addons/.godot_ai_update"
+    backup = state / "backup/4.0.0"
+    backup.mkdir(parents=True)
+    (backup / "plugin.cfg").write_bytes(b"a")
+    marker = {
+        "status": "success",
+        "from_version": "4.0.0",
+        "to_version": "4.0.1",
+        "manifest_sha256": hashlib.sha256(manifests["b"].read_bytes()).hexdigest(),
+        "expected_tree_sha256": "tree-b",
+        "backup_root": "res://addons/.godot_ai_update/backup/4.0.0",
+    }
+    (state / "pending.json").write_text(json.dumps(marker), encoding="utf-8")
+    records = {"a": {"version": "4.0.0"}, "b": {"version": "4.0.1"}}
+    return project, candidates, records
+
+
+def _stub_tree_hashes(monkeypatch) -> None:
+    """Tree identity belongs to the release verifier; pin it to file content here."""
+
+    def hash_tree(root: Path) -> dict:
+        content = (root / "plugin.cfg").read_bytes().decode()
+        return {"files": [{"path": "plugin.cfg"}], "tree_sha256": f"tree-{content}"}
+
+    def inventory_tree_hash(manifest: dict) -> str:
+        return f"tree-{manifest['inventory'][0]['sha256'][0]}"
+
+    monkeypatch.setattr(runtime.release_verify, "hash_tree", hash_tree, raising=False)
+    monkeypatch.setattr(
+        runtime.release_verify, "inventory_tree_hash", inventory_tree_hash, raising=False
+    )
+
+
+def _rewrite_marker(**changes):
+    def rewrite(project: Path) -> None:
+        path = project / "addons/.godot_ai_update/pending.json"
+        marker = json.loads(path.read_text(encoding="utf-8"))
+        marker.update(changes)
+        path.write_text(json.dumps(marker), encoding="utf-8")
+
+    return rewrite
+
+
+def test_lean_update_evidence_binds_marker_live_tree_and_backup(monkeypatch, tmp_path):
+    project, candidates, records = _lean_update_project(tmp_path)
+    _stub_tree_hashes(monkeypatch)
+
+    evidence = runtime._verify_lean_update(project, candidates, records)
+
+    marker = project / "addons/.godot_ai_update/pending.json"
+    assert evidence["update_marker"] == support.fingerprint(marker)
+    assert evidence["update_state"] == {
+        "status": "success",
+        "from_version": "4.0.0",
+        "to_version": "4.0.1",
+        "manifest_sha256": hashlib.sha256(
+            (candidates / "b/release/godot-ai-v4-plugin.manifest.json").read_bytes()
+        ).hexdigest(),
+        "expected_tree_sha256": "tree-b",
+    }
+    assert evidence["live_tree_sha256"] == "tree-b"
+    assert evidence["backup_tree_sha256"] == "tree-a"
+    assert set(evidence["backup_tree"]) == {"plugin.cfg"}
+
+
+@pytest.mark.parametrize(
+    ("break_state", "message"),
+    [
+        (lambda p: (p / "addons/.godot_ai_update/lock.json").write_text("{}"), "retained lock"),
+        (lambda p: (p / "addons/.godot_ai_update/stage").mkdir(), "retained stage"),
+        (lambda p: (p / "addons/.godot_ai_update/quarantine").mkdir(), "retained quarantine"),
+        (lambda p: (p / "addons/godot_ai/plugin.cfg").write_bytes(b"x"), "not exact B"),
+        (
+            lambda p: (p / "addons/.godot_ai_update/backup/4.0.0/plugin.cfg").write_bytes(b"x"),
+            "not exact A",
+        ),
+        (
+            lambda p: shutil.rmtree(p / "addons/.godot_ai_update/backup/4.0.0"),
+            "retain exactly A",
+        ),
+        (
+            lambda p: (p / "addons/.godot_ai_update/backup/3.9.9").mkdir(),
+            "retain exactly A",
+        ),
+        (_rewrite_marker(status="rolled_back"), "did not succeed"),
+        (_rewrite_marker(to_version="4.0.2"), "versions differ"),
+        (_rewrite_marker(expected_tree_sha256="tree-x"), "not bound to B"),
+        (_rewrite_marker(manifest_sha256="0" * 64), "not bound to B"),
+        (_rewrite_marker(backup_root="res://elsewhere"), "does not name the retained backup"),
+        (
+            lambda p: (p / "addons/.godot_ai_update/pending.json").unlink(),
+            "did not record its marker",
+        ),
+    ],
+)
+def test_lean_update_evidence_rejects_every_leftover_or_mismatch(
+    monkeypatch, tmp_path, break_state, message
+):
+    project, candidates, records = _lean_update_project(tmp_path)
+    _stub_tree_hashes(monkeypatch)
+    break_state(project)
+
+    with pytest.raises(support.ReleaseError, match=message):
+        runtime._verify_lean_update(project, candidates, records)

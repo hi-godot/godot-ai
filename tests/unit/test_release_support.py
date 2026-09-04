@@ -492,8 +492,7 @@ def test_documented_installer_is_executed_with_exact_identity_and_tree(
             str(support.ROOT / "script/v4-release"),
             "install",
         ]
-        assert command[-1] == "--editors-closed"
-        args = dict(zip(command[3:-1:2], command[4:-1:2], strict=True))
+        args = dict(zip(command[3::2], command[4::2], strict=True))
         assert args == {
             "--archive": str(root / "release/godot-ai-v4-plugin.zip"),
             "--manifest": str(root / "release/godot-ai-v4-plugin.manifest.json"),
@@ -504,7 +503,6 @@ def test_documented_installer_is_executed_with_exact_identity_and_tree(
             "--expected-version": record["version"],
             "--expected-source": record["source"],
             "--project-root": str(work / "project"),
-            "--recovery-root": str(work / "recovery"),
         }
         assert (work / "project/project.godot").read_text(encoding="utf-8") == "config_version=5\n"
         with zipfile.ZipFile(args["--archive"]) as archive:

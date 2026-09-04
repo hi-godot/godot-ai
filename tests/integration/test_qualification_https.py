@@ -184,7 +184,7 @@ def test_real_godot_uses_verified_default_port_https_without_system_changes(tmp_
 
 @pytest.mark.parametrize("authorized", [True, False])
 def test_unchanged_update_manager_discovers_and_downloads_over_private_https(tmp_path, authorized):
-    """Development fixture: real manager, no actor, signature approval or A/B claim."""
+    """Development fixture: the real manager alone, with no signature approval or A/B claim."""
     godot = godot_bin_or_skip()
     major, minor, patch = support.version_tuple(read_plugin_version(PLUGIN_ROOT / "plugin.cfg"))
     version = f"{major}.{minor}.{patch + 1}"
