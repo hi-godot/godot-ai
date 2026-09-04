@@ -13,8 +13,8 @@ import argparse
 import hashlib
 import http.client
 import importlib.machinery
-import io
 import importlib.util
+import io
 import json
 import os
 import platform
