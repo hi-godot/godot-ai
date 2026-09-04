@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -59,6 +60,19 @@ V3_BRIDGE_RESTART_LOG = "MCP | v3 bridge restarting editor into canonical v4 tre
 FINAL_V3_REF = "v3.2.5"
 V3_FALLBACK_NAME = "godot-ai-v3-plugin.zip"
 V3_CLICK_LOG = "V3_BRIDGE_TEST | clicked final-v3 Update button"
+V3_FLOOR_REFUSAL_LOG = "Godot AI v4 migration requires Godot 4.7 or newer"
+V3_RESTORED_LOG = "MCP | v3 bridge restored Godot AI v"
+## Set to "unmet" to make the capsule treat this Godot as below v4's floor.
+GODOT_FLOOR_ENV = "GODOT_AI_TEST_GODOT_FLOOR"
+## What migration_fallback.gd removes after restoring final v3 (CAPSULE_ONLY there).
+CAPSULE_ONLY_ENTRIES = (
+    "migration_bridge.gd",
+    "migration_coordinator.gd",
+    "migration_fallback.gd",
+    "migration_payload",
+    "utils/release_verifier.gd",
+    "utils/update_installer.gd",
+)
 # The capsule ships the installer and everything it preloads (docs/self-update.md).
 CAPSULE_INSTALLER_SCRIPTS = (
     "release_verifier.gd",
@@ -1444,8 +1458,14 @@ def prepare_v3_crossing_project(
     signature = work / "godot-ai-plugin.zip.sha256.sig"
     subprocess.run(
         [
-            "openssl", "dgst", "-sha256", "-sign", str(private_key),
-            "-out", str(signature), str(checksum),
+            "openssl",
+            "dgst",
+            "-sha256",
+            "-sign",
+            str(private_key),
+            "-out",
+            str(signature),
+            str(checksum),
         ],
         check=True,
         capture_output=True,
@@ -1580,6 +1600,20 @@ def print_v3_instructions(
     print(f"  installed:     exact Godot AI v{from_version} (git tag v{from_version})")
     print(f"  capsule:       bridge + this checkout's installer + signed v{target_version} bundle")
     print("")
+    if floor_forced_unmet():
+        final_v3 = release_tag_to_version(FINAL_V3_REF)
+        print(f"Manual step ({GODOT_FLOOR_ENV}=unmet: the capsule treats this Godot as too old):")
+        print(f"  1. In the v{from_version} Godot AI dock, click Update.")
+        print("  2. v3's own updater extracts the capsule; the capsule refuses v4 below Godot 4.7,")
+        print(f"     restores final v{final_v3} from its payload, prints '{V3_RESTORED_LOG}...'")
+        print("     and re-enables it in this same editor (no restart).")
+        print("  3. This script verifies the restored tree, the log order and .ips files, then")
+        print("     leaves the editor open for inspection.")
+        print("")
+        print("Launch command:")
+        print(f"  {godot_bin} --editor --path {project_dir} --log-file {log_path}")
+        print("")
+        return
     print("Manual step:")
     print(f"  1. In the v{from_version} Godot AI dock, click Update.")
     print("  2. v3's own updater extracts the capsule; the bridge verifies, stages and swaps")
@@ -1629,14 +1663,30 @@ def launch_and_verify_v3_crossing(
     )
     lines: list[str] = []
     assert proc.stdout is not None
-    for line in proc.stdout:
-        print(line, end="")
-        lines.append(line.rstrip("\n"))
+    drain = threading.Thread(target=_drain_editor_output, args=(proc.stdout, lines), daemon=True)
+    drain.start()
+    refusal = floor_forced_unmet()
+    while proc.poll() is None:
+        if refusal and _restored_final_v3_loaded(lines):
+            break
+        time.sleep(POST_UPDATE_STATUS_POLL_SECONDS)
+    if refusal and proc.poll() is None:
+        ## The refusal never restarts the editor: final v3 is restored and
+        ## re-enabled in place, so verify while that editor stays open.
+        ok = verify_v3_floor_refusal(
+            project_dir, from_version, baseline, started, list(lines), godot_path=Path(godot_path)
+        )
+        print("The editor stays open with the restored final v3; close it when you are done.")
+        return 0 if ok else 1
+    drain.join()
     code = proc.wait()
     if code != 0:
         print(f"FAIL: Godot exited with code {code}")
         print_new_reports(baseline, started, Path(godot_path))
         return code or 1
+    if refusal:
+        print("FAIL: the editor closed before the capsule restored final v3 (click Update)")
+        return 1
     if not any(V3_BRIDGE_RESTART_LOG in line for line in lines):
         print("FAIL: the editor closed before the capsule swapped the v4 tree in (click Update)")
         return 1
@@ -1761,6 +1811,123 @@ def verify_v3_crossing(
             f"FAIL: post-update {STATUS_PATH} was not live "
             f"(got {got!r}, expected {target_version!r})"
         )
+        ok = False
+
+    new_reports = new_diagnostic_reports(baseline, started, godot_path)
+    if new_reports:
+        print("FAIL: new Godot crash reports:")
+        for report in new_reports:
+            print(f"  {report}")
+        ok = False
+    elif platform.system() == "Darwin":
+        print("PASS: no new Godot .ips crash report detected")
+    return ok
+
+
+def floor_forced_unmet() -> bool:
+    return os.environ.get(GODOT_FLOOR_ENV) == "unmet"
+
+
+def _drain_editor_output(stream, lines: list[str]) -> None:
+    for line in stream:
+        print(line, end="", flush=True)
+        lines.append(line.rstrip("\n"))
+
+
+def _index_after(lines: list[str], marker: str, start: int = 0) -> int:
+    for index in range(start, len(lines)):
+        if marker in lines[index]:
+            return index
+    return -1
+
+
+def _restored_final_v3_loaded(lines: list[str]) -> bool:
+    snapshot = list(lines)
+    restored = _index_after(snapshot, V3_RESTORED_LOG)
+    return restored >= 0 and _index_after(snapshot, "MCP | plugin loaded", restored + 1) >= 0
+
+
+def verify_v3_floor_refusal(
+    project_dir: Path,
+    from_version: str,
+    baseline: set[Path],
+    started: float,
+    lines: list[str],
+    *,
+    godot_path: Path | None = None,
+) -> bool:
+    """The capsule on a Godot below v4's floor: refuse, restore final v3, re-enable in place."""
+    ok = True
+    final_v3 = release_tag_to_version(FINAL_V3_REF)
+    live = project_dir / "addons" / "godot_ai"
+    installed = read_plugin_version(live / "plugin.cfg")
+    if installed == final_v3:
+        print(f"PASS: capsule refused v4 below the Godot floor and restored final v{final_v3}")
+    else:
+        print(f"FAIL: plugin version is {installed}, expected the restored final v{final_v3}")
+        ok = False
+
+    expected_order = (
+        V3_CLICK_LOG,
+        "MCP | self-update release signature verified",
+        "MCP | update runner disabling old plugin",
+        V3_FLOOR_REFUSAL_LOG,
+        V3_RESTORED_LOG,
+        "MCP | plugin loaded",
+    )
+    position = 0
+    missing = ""
+    for marker in expected_order:
+        position = _index_after(lines, marker, position)
+        if position < 0:
+            missing = marker
+            break
+        position += 1
+    if missing:
+        print(f"FAIL: refusal log is missing or out of order at {missing!r}")
+        ok = False
+    else:
+        print("PASS: click, extract, floor refusal, restore and reload logged in order")
+    overshoot = [
+        marker
+        for marker in (V3_BRIDGE_RESTART_LOG, "MCP | v3 bridge swapping in", SMOKE_MIGRATED_LOG)
+        if any(marker in line for line in lines)
+    ]
+    if overshoot:
+        print(f"FAIL: the bridge went past the floor refusal: {overshoot}")
+        ok = False
+    if any("SCRIPT ERROR" in line for line in lines):
+        print("FAIL: a script error was logged during the refusal")
+        ok = False
+    if any("Failed to create an autoload" in line for line in lines):
+        print("FAIL: an autoload failed to load during the refusal (#946)")
+        ok = False
+
+    leftovers = [name for name in CAPSULE_ONLY_ENTRIES if (live / name).exists()]
+    if leftovers:
+        print(f"FAIL: live tree still carries {leftovers}")
+        ok = False
+    else:
+        print("PASS: live tree is the final v3 tree (no bridge, fallback, payload or v4 installer)")
+
+    state = project_dir / "addons" / ".godot_ai_update"
+    stray = (
+        sorted(path.relative_to(state).as_posix() for path in state.rglob("*"))
+        if state.exists()
+        else []
+    )
+    if stray:
+        print(f"FAIL: the refusal left v4 update state behind: {stray}")
+        ok = False
+    else:
+        print("PASS: no v4 update state left behind")
+
+    project_file = project_dir / "project.godot"
+    settings = project_file.read_text(encoding="utf-8") if project_file.is_file() else ""
+    if re.search(r'enabled=PackedStringArray\([^)]*"res://addons/godot_ai/plugin.cfg"', settings):
+        print("PASS: the restored plugin stays enabled for the next editor start")
+    else:
+        print("FAIL: project.godot does not list the restored plugin as enabled")
         ok = False
 
     new_reports = new_diagnostic_reports(baseline, started, godot_path)
@@ -1978,7 +2145,6 @@ def smoke_lines_before_update(lines: list[str]) -> list[str]:
             break
         before.append(line)
     return before
-
 
 
 def status_url(http_port: int) -> str:

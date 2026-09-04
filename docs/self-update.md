@@ -192,3 +192,7 @@ dependency only; the server package imports nothing from it at runtime.
   that editor open for inspection. `--from-v3-tag v3.2.4` does the same for
   the crossing: it installs that exact final-v3 tree with a locally built
   capsule, and you click Update in the v3 dock.
+  With `GODOT_AI_TEST_GODOT_FLOOR=unmet` in the environment the same
+  command exercises the refusal instead: the capsule refuses v4, restores
+  final v3 in place, and the harness verifies that restored tree rather than
+  waiting for a restart.

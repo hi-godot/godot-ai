@@ -103,6 +103,7 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     production_manager = (ROOT / "plugin/addons/godot_ai/utils/update_manager.gd").read_text(
         encoding="utf-8"
     )
+
     def function_block(source: str, signature: str) -> str:
         return source[source.index(signature) :].split("\n\nfunc ", 1)[0]
 
@@ -112,7 +113,6 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
         "func _on_asset_completed(",
         "func _finish_downloads() -> void:",
     ):
-
         assert function_block(base_manager, signature) == function_block(
             production_manager, signature
         )
@@ -480,6 +480,57 @@ def test_lean_update_state_requires_success_marker_backup_and_clean_state(
     shutil.rmtree(backup)
     with pytest.raises(smoke.HarnessError, match="retained backup"):
         smoke.verify_lean_update_state(project, "4.0.1")
+
+
+def test_v3_floor_refusal_verifier_requires_restored_final_v3_and_clean_tree(
+    tmp_path: Path,
+) -> None:
+    smoke = load_smoke_script()
+    project = tmp_path / "project"
+    live = project / "addons" / "godot_ai"
+    live.mkdir(parents=True)
+    final_v3 = smoke.release_tag_to_version(smoke.FINAL_V3_REF)
+    (live / "plugin.cfg").write_text(f'[plugin]\nversion="{final_v3}"\n', encoding="utf-8")
+    (project / "project.godot").write_text(
+        '[editor_plugins]\n\nenabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")\n',
+        encoding="utf-8",
+    )
+    lines = [
+        smoke.V3_CLICK_LOG,
+        "MCP | self-update release signature verified",
+        "MCP | update runner disabling old plugin",
+        smoke.V3_FLOOR_REFUSAL_LOG + "; bridge remains inactive.",
+        f"{smoke.V3_RESTORED_LOG}{final_v3}; update again on Godot 4.7 or newer",
+        "MCP | plugin loaded",
+    ]
+    # A far-future start keeps unrelated crash reports on this machine out of the check.
+    started = time.time() + 3600
+
+    def verify(log: list[str]) -> bool:
+        return smoke.verify_v3_floor_refusal(project, "3.2.4", set(), started, log)
+
+    assert verify(lines)
+    assert not verify(lines[:-2]), "restore and reload must be logged"
+    assert not verify([lines[0], *lines[2:], lines[1]]), "order matters"
+    assert not verify([*lines, smoke.V3_BRIDGE_RESTART_LOG]), "the bridge must stop at the refusal"
+    assert not verify([*lines, "SCRIPT ERROR: bad"])
+    assert not smoke._restored_final_v3_loaded(lines[:-1])
+    assert smoke._restored_final_v3_loaded(lines)
+
+    (live / "migration_payload").mkdir()
+    assert not verify(lines), "capsule-only entries must be gone"
+    (live / "migration_payload").rmdir()
+    stage = project / "addons" / ".godot_ai_update" / "stage"
+    stage.mkdir(parents=True)
+    assert not verify(lines), "no v4 update state may remain"
+    shutil.rmtree(stage.parent)
+    (project / "project.godot").write_text("[editor_plugins]\n", encoding="utf-8")
+    assert not verify(lines), "the restored plugin must stay enabled"
+    (project / "project.godot").write_text(
+        'enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")\n', encoding="utf-8"
+    )
+    (live / "plugin.cfg").write_text('[plugin]\nversion="4.0.0"\n', encoding="utf-8")
+    assert not verify(lines), "the live tree must be final v3"
 
 
 def test_self_update_smoke_log_verifier_rejects_external_adoption() -> None:
