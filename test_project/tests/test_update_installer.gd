@@ -280,6 +280,7 @@ func test_swap_moves_trees_and_writes_the_marker_verbatim() -> void:
 	assert_eq(marker.get("replace_owned_mismatches"), true)
 	assert_gt(int(marker.get("swapped_unix", 0)), 0)
 	assert_false(_exists(McpUpdateInstaller.STAGE_DIR), "the emptied stage scaffold is removed")
+	assert_eq(str(marker.get("godot_version", "")), str(Engine.get_version_info().get("string", "")), "the swapping Godot is recorded")
 
 
 func test_swap_refuses_an_existing_backup() -> void:

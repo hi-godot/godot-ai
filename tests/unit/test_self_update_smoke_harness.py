@@ -337,8 +337,8 @@ def test_launch_passes_isolation_only_to_godot_child(
         stdout = iter(
             [
                 f"{smoke.SMOKE_STAGED_LOG}\n",
-                f"{smoke.COORDINATOR_ENABLE_LOG}\n",
-                "MCP | plugin loaded\n",
+                "MCP | stopped server (PID [123])\n",
+                "MCP | update to 4.0.1 swapped in; restarting the editor\n",
             ]
         )
 
@@ -363,6 +363,11 @@ def test_launch_passes_isolation_only_to_godot_child(
 
     monkeypatch.setattr(smoke.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(smoke, "wait_for_live_status", fake_wait)
+    monkeypatch.setattr(
+        smoke,
+        "wait_for_restarted_editor",
+        lambda *_args, **_kwargs: [smoke.SMOKE_MIGRATED_LOG, "MCP | plugin loaded"],
+    )
     monkeypatch.setattr(smoke, "verify_post_run", lambda *_args, **_kwargs: True)
 
     assert (
@@ -483,7 +488,7 @@ def test_self_update_smoke_log_verifier_rejects_external_adoption() -> None:
         "MCP | foreign server already running on port 18000, using existing",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
     ]
 
     assert smoke.smoke_adopted_existing_server_before_update(lines)
@@ -496,7 +501,7 @@ def test_self_update_smoke_log_verifier_requires_managed_stop_after_staging() ->
     lines = [
         "MCP | started server (PID 123, v2.2.1): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
     ]
 
     assert smoke.smoke_started_own_server_before_update(lines)
@@ -510,7 +515,7 @@ def test_self_update_smoke_log_verifier_rejects_version_mismatch() -> None:
         "MCP | started server (PID 123, v2.2.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
         "MCP | plugin loaded",
         (
             "MCP | Port 18000 is occupied by godot-ai server v2.2.0; "
@@ -527,7 +532,7 @@ def test_self_update_smoke_log_verifier_accepts_matching_versions() -> None:
         "MCP | started server (PID 123, v2.2.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
         "MCP | started server (PID 456, v2.2.0): godot-ai",
         "MCP | plugin loaded",
     ]
@@ -629,17 +634,18 @@ def test_self_update_smoke_harness_refuses_suspicious_marker(tmp_path: Path) -> 
     assert "has a smoke marker but does not look generated" in result.stderr
 
 
-def test_smoke_new_plugin_loaded_after_update_requires_both_markers() -> None:
+def test_smoke_restart_requested_needs_the_swap_line() -> None:
     smoke = load_smoke_script()
-    before_reload = [
-        "MCP | started server (PID 123, v2.2.0): godot-ai",
+    before_swap = [
+        "MCP | started server (PID 123, v4.0.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
     ]
-    assert not smoke.smoke_new_plugin_loaded_after_update(before_reload)
-    after_reload = before_reload + ["MCP | plugin loaded"]
-    assert smoke.smoke_new_plugin_loaded_after_update(after_reload)
+    assert not smoke.smoke_restart_requested(before_swap)
+    swapped = before_swap + ["MCP | update to 4.0.1 swapped in; restarting the editor"]
+    assert smoke.smoke_restart_requested(swapped)
+    assert not smoke.vnext_exit_tree_during_update(swapped + [smoke.SMOKE_TRIGGER_LOG])
+    assert smoke.vnext_exit_tree_during_update(before_swap + [smoke.SMOKE_TRIGGER_LOG])
 
 
 def test_status_reports_live_version_requires_name_and_pin() -> None:
@@ -782,7 +788,8 @@ def test_verify_post_run_requires_live_status(
         "MCP | started server (PID 123, v4.0.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
+        "MCP | client migration completed",
         "MCP | plugin loaded",
     ]
     ok = smoke.verify_post_run(
@@ -815,7 +822,8 @@ def test_verify_post_run_accepts_live_status(
         "MCP | started server (PID 123, v4.0.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
+        "MCP | client migration completed",
         "MCP | plugin loaded",
     ]
     ok = smoke.verify_post_run(

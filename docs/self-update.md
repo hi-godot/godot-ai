@@ -136,6 +136,11 @@ dependency only; the server package imports nothing from it at runtime.
   that is the whole guarantee.
 - Malicious code already running as the same user, or an administrator.
 - Two editors on the same project racing past the lock's process check.
+- The restart landing in a different Godot. On macOS the editor relaunches
+  through LaunchServices by bundle, and with several Godot copies installed
+  that has been seen to start another copy once under test. The marker then
+  stays `swapped`, an unsupported Godot says so instead of refusing blindly,
+  and the next start in the original Godot completes the update.
 
 ## Testing
 
@@ -146,9 +151,19 @@ dependency only; the server package imports nothing from it at runtime.
 - Four real-editor scenarios in `tests/integration/test_self_update_upgrade_paths.py`:
   a signed v4-to-v4 update restarts into a working server; a final-v3 install
   crosses the capsule; a tampered live tree after a swap is rolled back; the
-  closed-editor installer's first start completes client migration. With the
+  closed-editor installer's first start completes client migration. The
+  capsule crossing is parametrized over the v3 versions the installed fleet
+  runs; a pull request proves the two newest and the nightly run proves all
+  of them. With the
   capsule coordinator's restart handoff in
   `tests/integration/test_migration_bridge_failures.py`, they run on Linux on
   every pull request and on all three desktop OSes nightly, and the release
   pipeline's A-to-B row runs the signed update on the exact signed candidate
   on every OS before publication.
+- Interactive pass: `script/local-self-update-smoke` prepares a signed
+  A-to-B project with a one-run key and opens it in a real editor. Click
+  Update in the dock; the harness waits for the editor the swap restarts
+  into, checks the marker, backup, live server and crash reports, and leaves
+  that editor open for inspection. `--from-v3-tag v3.2.4` does the same for
+  the crossing: it installs that exact final-v3 tree with a locally built
+  capsule, and you click Update in the v3 dock.

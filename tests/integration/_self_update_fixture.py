@@ -410,6 +410,7 @@ def patch_restart_diagnostics(addon_root: Path, log_path: Path) -> None:
     """
     installer = addon_root / "utils" / "update_installer.gd"
     text = installer.read_text(encoding="utf-8")
+    assert "diagnostics_args" not in text, f"{installer} already forwards a restart log"
     old = "\t\tEditorInterface.restart_editor(true)\n"
     assert text.count(old) == 1, installer
     text = text.replace(

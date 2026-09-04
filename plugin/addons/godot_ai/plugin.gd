@@ -153,7 +153,7 @@ func _init() -> void:
 
 func _enter_tree() -> void:
 	if _unsupported_engine:
-		push_error(UNSUPPORTED_GODOT_MESSAGE)
+		push_error(UNSUPPORTED_GODOT_MESSAGE + _pending_swap_hint())
 		return
 	_startup_trace_begin()
 
@@ -171,6 +171,8 @@ func _enter_tree() -> void:
 	if not ClientConfigurator.is_dev_checkout():
 		var was_swapped := str(UpdateInstaller.read_pending().get("status", "")) == "swapped"
 		var outcome: Dictionary = UpdateInstaller.verify_after_restart(LIVE_ADDON_ROOT)
+		if was_swapped and not outcome.is_empty():
+			_warn_if_verified_elsewhere(outcome)
 		if not outcome.is_empty():
 			_post_update_outcome = outcome.duplicate(true)
 			_post_update_outcome["outcome"] = str(outcome.get("status", ""))
@@ -190,6 +192,30 @@ func _enter_tree() -> void:
 				return
 
 	_continue_enter_tree_after_update_barrier()
+
+
+## An update swapped in under one Godot and restarted into another (seen on
+## macOS, where the relaunch goes through LaunchServices by bundle). Say which
+## editor is waiting to verify it instead of refusing blindly.
+static func _pending_swap_hint() -> String:
+	var pending := UpdateInstaller.read_pending()
+	if str(pending.get("status", "")) != "swapped":
+		return ""
+	return (
+		" An update to %s was swapped in under Godot %s and is waiting to be verified;"
+		+ " reopen the project in that Godot."
+	) % [str(pending.get("to_version", "")), str(pending.get("godot_version", "unknown"))]
+
+
+static func _warn_if_verified_elsewhere(outcome: Dictionary) -> void:
+	var swapped_in := str(outcome.get("godot_version", ""))
+	var running := str(Engine.get_version_info().get("string", ""))
+	if swapped_in.is_empty() or swapped_in == running:
+		return
+	push_warning(
+		"MCP | update to %s was swapped in under Godot %s; this editor is Godot %s"
+		% [str(outcome.get("to_version", "")), swapped_in, running]
+	)
 
 
 func _continue_enter_tree_after_update_barrier() -> void:

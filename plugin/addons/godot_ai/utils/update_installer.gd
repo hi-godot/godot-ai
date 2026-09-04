@@ -236,6 +236,11 @@ static func swap(stage_root: String, live_root: String, record: Dictionary) -> D
 	marker["live_root"] = live_root
 	marker["expected_tree_sha256"] = str(record["expected_tree_sha256"])
 	marker["swapped_unix"] = int(Time.get_unix_time_from_system())
+	## The editor that verifies the swap should be this same Godot. On macOS
+	## the restart goes through LaunchServices, which has been seen to launch
+	## another installed copy of Godot; recording the version lets the next
+	## start explain that instead of silently refusing or verifying elsewhere.
+	marker["godot_version"] = str(Engine.get_version_info().get("string", ""))
 	var write_error := _write_json(PENDING_FILE, marker)
 	if write_error != OK:
 		var undo_stage := DirAccess.rename_absolute(live_abs, stage_abs)
