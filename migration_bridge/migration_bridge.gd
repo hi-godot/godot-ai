@@ -1,131 +1,159 @@
 @tool
 extends Node
 
-## Prepares the embedded canonical v4 release while the migration capsule is
-## still enabled. The Python actor authenticates and stages the exact tree;
-## this script never writes live add-on files.
+## Verifies and stages the embedded canonical v4 release while the migration
+## capsule is still the enabled plugin. Every step runs in GDScript on the
+## editor's main thread through the same installer scripts the v4 tree ships
+## (`utils/release_verifier.gd`, `utils/update_installer.gd`); nothing here
+## spawns a process, and nothing here writes a live add-on file.
 
-const BridgeExec := preload("res://addons/godot_ai/bridge_exec.gd")
 const PAYLOAD_ROOT := "res://addons/godot_ai/migration_payload"
 const ARCHIVE_NAME := "godot-ai-v4-plugin.zip"
 const MANIFEST_NAME := "godot-ai-v4-plugin.manifest.json"
 const SIGNATURE_NAME := "godot-ai-v4-plugin.manifest.sig"
+const VERIFIER_SCRIPT := "res://addons/godot_ai/utils/release_verifier.gd"
+const INSTALLER_SCRIPT := "res://addons/godot_ai/utils/update_installer.gd"
 const REPOSITORY := "hi-godot/godot-ai"
-const PREPARE_TIMEOUT_MSEC := 180 * 1000
-const ACTOR_PROTOCOL := 1
+const CHANNEL := "stable"
+const MAX_MANIFEST_BYTES := 1024 * 1024
+const SIGNATURE_BYTES := 512
 const PENDING_V3_UPDATE_SETTING := "godot_ai/pending_self_update_event"
+const INCOMPLETE_CAPSULE := (
+	"The migration capsule is incomplete (%s). Download the release again, then click Retry migration."
+)
 
-signal state_changed(message: String, failed: bool, termination_unproven: bool)
+## Kept byte-identical to `utils/update_manager.gd::RELEASE_SIGNING_PUBLIC_KEY_PEM`
+## in the v4 tree; `tests/unit/test_release_support.py` pins the two copies
+## together. The capsule cannot preload the v4 updater to read it there.
+const RELEASE_SIGNING_PUBLIC_KEY_PEM := """-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAr4OmbONFTONGFcXSUQ2p
+e54YaUhWDA75wxeDWhOc476vsdo53YnXEFT7EPr2hUKqeNxv++LqKOkFuAsxSNZy
+wBe6P1tmQA4Og6Ezv4CGnZdEj1uhlDJFK9ShQ29oWfC6bf/84625SvvBxZos2Br9
+yPKl7h5wzqDoeUSpv+f0ynTiC0i/HAUo/NQBlkgGwkomK2Fr3pP1VDxxq2xvgHSk
+lU6Qcomr9WjJxI+HkDN5tRPPn0pDrg6YFx2J18OfD8KIa/kMGxuXOcHlPyRYpjyu
+qTtg2oL0NyUIG+1TmJ3DcN4GlKC55eOrkfJ04vudS5pxdnUIFRmkGBXZLdaetoPc
+ixtlD4w6gi8KIH1CTG+/TtHP1KVdOogCWDcjRCAmMJPFZe6eEKXmGQUZDb9wfnbx
+h++XiVe5tq83BTLWmaFTy+fZbNo12uhNCNS1LJ42/yj+S1xvo0yMbkkNr1hIYk0P
+584XnBQeBSVJDf3667NZXaxnWv94K9zbb+1OvOvPwhbOdgi2Ymcw5QEOQIavtg86
+XLLcWzG+SJsycz1imikjv6sStWh8WHneKSTMq6A7V6PBj7oJyEJp10696BDw287k
+YlH+9VGqowPEMXpWX57wOBKiWb4K1kw1LfxjT8W1e/pcX9pJqiv0DkjTXUxo9CDG
+1X1+ZXBBR3MkGuFAOCjy0x8CAwEAAQ==
+-----END PUBLIC KEY-----
+"""
+
+signal state_changed(message: String, failed: bool)
 signal prepared(package: Dictionary)
 
-var _thread: Thread
-var _started := false
-var _cancel_mutex := Mutex.new()
-var _cancelled := false
+enum Step { IDLE, VERIFY, STAGE, DONE }
+
+var _step := Step.IDLE
+var _manifest: Dictionary = {}
+var _manifest_sha256 := ""
+var _from_version := ""
 
 
 func start() -> void:
-	if _started:
+	if _step != Step.IDLE:
 		return
-	_started = true
-	var identity := _release_identity()
-	if identity.is_empty():
-		state_changed.emit("The embedded signed v4 release metadata is invalid.", true, false)
-		return
-	var nonce := Crypto.new().generate_random_bytes(16).hex_encode()
-	var transaction := Crypto.new().generate_random_bytes(16).hex_encode()
-	var job := {
-		"archive": ProjectSettings.globalize_path(PAYLOAD_ROOT.path_join(ARCHIVE_NAME)),
-		"manifest": ProjectSettings.globalize_path(PAYLOAD_ROOT.path_join(MANIFEST_NAME)),
-		"signature": ProjectSettings.globalize_path(PAYLOAD_ROOT.path_join(SIGNATURE_NAME)),
-		"project": ProjectSettings.globalize_path("res://").trim_suffix("/"),
-		"install": ProjectSettings.globalize_path("res://addons/godot_ai"),
-		"editor_pid": OS.get_process_id(),
-		"editor_nonce": nonce,
-		"transaction": transaction,
-		"from_version": _previous_version(),
-		"identity": identity,
-	}
-	_thread = Thread.new()
-	if _thread.start(
-		Callable(MigrationBridgeWorker, "prepare").bind(job, Callable(self, "_cancel_requested"))
-	) != OK:
-		_thread = null
-		state_changed.emit("Could not start the v4 migration preparation worker.", true, false)
-		return
+	_from_version = _previous_version()
+	_step = Step.VERIFY
+	state_changed.emit("Verifying the signed Godot AI v4 release…", false)
 	set_process(true)
 
 
 func _process(_delta: float) -> void:
-	if _thread == null or _thread.is_alive():
+	## One step per frame so the dock renders each status line before the
+	## next synchronous hash/extract pass runs.
+	match _step:
+		Step.VERIFY:
+			_verify()
+		Step.STAGE:
+			_stage()
+		_:
+			set_process(false)
+
+
+func _verify() -> void:
+	var verifier := _load_script_with(VERIFIER_SCRIPT, "verify_manifest")
+	if verifier == null or not _script_declares(verifier, "verify_archive"):
+		_fail(INCOMPLETE_CAPSULE % "utils/release_verifier.gd is missing or invalid")
 		return
-	var result: Variant = _thread.wait_to_finish()
-	_thread = null
+	var manifest_bytes := _read_bounded(PAYLOAD_ROOT.path_join(MANIFEST_NAME), MAX_MANIFEST_BYTES)
+	var signature := _read_bounded(PAYLOAD_ROOT.path_join(SIGNATURE_NAME), SIGNATURE_BYTES)
+	if manifest_bytes.is_empty() or signature.size() != SIGNATURE_BYTES:
+		_fail(INCOMPLETE_CAPSULE % "the embedded v4 manifest or signature is unreadable")
+		return
+	var expected := {"repository": REPOSITORY, "channel": CHANNEL}
+	if not _from_version.is_empty():
+		## Only the final v3 runners publish the pre-capsule plugin.cfg
+		## version; older ones cannot, and the verifier must not be told a
+		## guess.
+		expected["current_version"] = _from_version
+	var verified: Variant = verifier.call(
+		"verify_manifest", manifest_bytes, signature, expected, RELEASE_SIGNING_PUBLIC_KEY_PEM
+	)
+	if not verified is Dictionary or not bool(verified.get("ok", false)):
+		_fail(_error_of(verified, "The embedded v4 release manifest could not be verified."))
+		return
+	var manifest: Variant = (verified as Dictionary).get("manifest", {})
+	if not manifest is Dictionary or str(manifest.get("version", "")).is_empty():
+		_fail("The verified v4 manifest is missing its release version.")
+		return
+	_manifest = (manifest as Dictionary).duplicate(true)
+	_manifest_sha256 = _sha256_hex(manifest_bytes)
+	var archive_checked: Variant = verifier.call(
+		"verify_archive", PAYLOAD_ROOT.path_join(ARCHIVE_NAME), _manifest
+	)
+	if not archive_checked is Dictionary or not bool(archive_checked.get("ok", false)):
+		_fail(_error_of(archive_checked, "The embedded v4 archive does not match its signed manifest."))
+		return
+	_step = Step.STAGE
+	state_changed.emit("Staging the verified Godot AI v4 tree…", false)
+
+
+func _stage() -> void:
+	var installer := _load_script_with(INSTALLER_SCRIPT, "stage")
+	if installer == null:
+		_fail(INCOMPLETE_CAPSULE % "utils/update_installer.gd is missing or invalid")
+		return
+	var staged: Variant = installer.call("stage", PAYLOAD_ROOT.path_join(ARCHIVE_NAME), _manifest)
+	if not staged is Dictionary or not bool(staged.get("ok", false)):
+		_fail(_error_of(staged, "The verified v4 tree could not be staged."))
+		return
+	var stage_root := str((staged as Dictionary).get("stage_root", ""))
+	var tree_sha256 := str((staged as Dictionary).get("tree_sha256", ""))
+	if stage_root.is_empty() or tree_sha256.is_empty():
+		_fail("The installer staged the v4 tree without reporting where or what it wrote.")
+		return
+	_step = Step.DONE
 	set_process(false)
-	if not result is Dictionary or not bool(result.get("ok", false)):
-		var message := str(result.get("error", "The v4 migration could not be prepared.")) if result is Dictionary else "The v4 migration worker returned no result."
-		state_changed.emit(message, true, result is Dictionary and bool(result.get("termination_unproven", false)))
-		return
-	state_changed.emit("Activating the verified Godot AI v4 tree…", false, false)
-	prepared.emit((result as Dictionary).get("package", {}).duplicate(true))
+	state_changed.emit("Activating the verified Godot AI v4 tree…", false)
+	prepared.emit({
+		"stage_root": stage_root,
+		"expected_tree_sha256": tree_sha256,
+		"manifest_sha256": _manifest_sha256,
+		"from_version": _from_version,
+		"to_version": str(_manifest.get("version", "")),
+	})
 
 
-func cancel_and_join() -> bool:
-	## Return whether actor termination is proved, including during plugin unload.
-	if _thread != null:
-		_cancel_mutex.lock()
-		_cancelled = true
-		_cancel_mutex.unlock()
-		var result: Variant = _thread.wait_to_finish()
-		_thread = null
-		return result is Dictionary and not bool(result.get("termination_unproven", false))
-	return true
+func _fail(message: String) -> void:
+	_step = Step.DONE
+	set_process(false)
+	state_changed.emit(message, true)
 
 
-func _cancel_requested() -> bool:
-	_cancel_mutex.lock()
-	var cancelled := _cancelled
-	_cancel_mutex.unlock()
-	return cancelled
-
-
-func _release_identity() -> Dictionary:
-	var path := PAYLOAD_ROOT.path_join(MANIFEST_NAME)
-	var file := FileAccess.open(path, FileAccess.READ)
-	if file == null or file.get_length() <= 0 or file.get_length() > 1024 * 1024:
-		return {}
-	var parsed: Variant = JSON.parse_string(file.get_as_text())
-	file.close()
-	if not parsed is Dictionary:
-		return {}
-	var tag := str(parsed.get("tag", ""))
-	var version := str(parsed.get("version", ""))
-	var source := str(parsed.get("source_commit", ""))
-	var source_expression := RegEx.new()
-	if (
-		str(parsed.get("repository", "")) != REPOSITORY
-		or str(parsed.get("channel", "")) != "stable"
-		or tag != "v%s" % version
-		or not tag.begins_with("v4.")
-		or source_expression.compile("^[0-9a-f]{40}$") != OK
-		or source_expression.search(source) == null
-	):
-		return {}
-	return {"tag": tag, "version": version, "source": source}
-
-
+## The pre-capsule plugin.cfg version, as recorded by the final v3 self-update
+## runner before it extracted the capsule over the tree. Empty when unknown.
 static func _previous_version() -> String:
 	var settings := EditorInterface.get_editor_settings()
-	if settings != null and settings.has_setting(PENDING_V3_UPDATE_SETTING):
-		var parsed: Variant = JSON.parse_string(str(settings.get_setting(PENDING_V3_UPDATE_SETTING)))
-		if parsed is Dictionary:
-			var value := str(parsed.get("from_version", ""))
-			if _is_pre_v4_version(value):
-				return value
-	## Older v3 runners did not all publish the marker. Manual-major client
-	## repinning replaces any owned pre-v4 entry, so this fallback is identity
-	## metadata rather than a client-selection authority.
-	return "3.0.0"
+	if settings == null or not settings.has_setting(PENDING_V3_UPDATE_SETTING):
+		return ""
+	var parsed: Variant = JSON.parse_string(str(settings.get_setting(PENDING_V3_UPDATE_SETTING)))
+	if not parsed is Dictionary:
+		return ""
+	var value := str(parsed.get("from_version", ""))
+	return value if _is_pre_v4_version(value) else ""
 
 
 static func _is_pre_v4_version(value: String) -> bool:
@@ -133,90 +161,48 @@ static func _is_pre_v4_version(value: String) -> bool:
 	return expression.compile("^[0-3]\\.\\d+\\.\\d+$") == OK and expression.search(value) != null
 
 
-class MigrationBridgeWorker:
-	static func prepare(job: Dictionary, cancel_check: Callable) -> Dictionary:
-		var identity: Dictionary = job.identity
-		var version := str(identity.version)
-		var command := BridgeExec.actor_command(version)
-		if command.is_empty():
-			return {"ok": false, "error": "Install uv (which provides uvx), reopen Godot, then click Retry migration."}
-		var checked := _call(command, ["identity"], version, PREPARE_TIMEOUT_MSEC, cancel_check)
-		if not bool(checked.get("ok", false)):
-			return checked
-		var common: Array[String] = [
-			"--project", str(job.project),
-			"--install", str(job.install),
-			"--editor-pid", str(job.editor_pid),
-			"--editor-nonce", str(job.editor_nonce),
-		]
-		var lease_arguments: Array[String] = ["lease", "acquire"]
-		lease_arguments.append_array(common)
-		var lease := _call(
-			command, lease_arguments, version, PREPARE_TIMEOUT_MSEC, cancel_check
-		)
-		if not bool(lease.get("ok", false)):
-			return lease
-		var arguments: Array[String] = [
-			"prepare",
-			"--archive", str(job.archive),
-			"--manifest", str(job.manifest),
-			"--signature", str(job.signature),
-			"--project", str(job.project),
-			"--install", str(job.install),
-			"--transaction", str(job.transaction),
-			"--channel", "stable",
-			"--tag", str(identity.tag),
-			"--version", version,
-			"--source", str(identity.source),
-			"--editor-pid", str(job.editor_pid),
-			"--editor-nonce", str(job.editor_nonce),
-		]
-		var staged := _call(command, arguments, version, PREPARE_TIMEOUT_MSEC, cancel_check)
-		if not bool(staged.get("ok", false)):
-			## A timed-out process may still own the lease or be mutating its
-			## private stage. Preserve that durable exclusion when termination
-			## cannot be proved; startup recovery can then adjudicate it safely.
-			if not bool(staged.get("termination_unproven", false)):
-				var release_arguments: Array[String] = ["lease", "release"]
-				release_arguments.append_array(common)
-				_call(
-					command,
-					release_arguments,
-					version,
-					PREPARE_TIMEOUT_MSEC,
-					Callable(),
-				)
-			return staged
-		var data: Dictionary = staged.data
-		return {"ok": true, "package": {
-			"actor_command": command,
-			"editor_nonce": str(job.editor_nonce),
-			"from_version": str(job.from_version),
-			"install_root": str(job.install),
-			"manifest_sha256": str(data.get("manifest_sha256", "")),
-			"project_root": str(job.project),
-			"recovery_root": str(data.get("recovery_root", "")),
-			"stage_root": str(data.get("stage_root", "")),
-			"to_version": version,
-			"transaction": str(job.transaction),
-		}}
+## Load one of the v4 installer scripts by path. The capsule cannot name them
+## by `class_name`: those globals only exist once the v4 tree is live, and the
+## bridge must still parse when a truncated capsule lacks them entirely.
+static func _load_script_with(path: String, method: String) -> Script:
+	if not ResourceLoader.exists(path):
+		return null
+	var loaded: Variant = load(path)
+	if not loaded is Script or not _script_declares(loaded, method):
+		return null
+	return loaded
 
 
-	static func _call(
-		command: Array[String],
-		arguments: Array[String],
-		version: String,
-		timeout: int,
-		cancel_check: Callable,
-	) -> Dictionary:
-		var executed := BridgeExec.run(command, arguments, timeout, cancel_check)
-		if not bool(executed.get("ok", false)):
-			return executed
-		var parsed: Variant = JSON.parse_string(str(executed.get("stdout", "")).strip_edges())
-		if (
-			not parsed is Dictionary
-			or int(parsed.get("protocol_version", 0)) != ACTOR_PROTOCOL
-			or str(parsed.get("package_version", "")) != version
-		):
-			return {"ok": false, "error": "The v4 transaction actor identity is incompatible."}
-		return {"ok": true, "data": parsed}
+static func _script_declares(script: Script, method: String) -> bool:
+	for entry in script.get_script_method_list():
+		if str(entry.get("name", "")) == method:
+			return true
+	return false
+
+
+static func _read_bounded(path: String, maximum: int) -> PackedByteArray:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return PackedByteArray()
+	var length := file.get_length()
+	if length <= 0 or length > maximum:
+		file.close()
+		return PackedByteArray()
+	var data := file.get_buffer(length)
+	file.close()
+	return data if data.size() == length else PackedByteArray()
+
+
+static func _sha256_hex(data: PackedByteArray) -> String:
+	var context := HashingContext.new()
+	context.start(HashingContext.HASH_SHA256)
+	context.update(data)
+	return context.finish().hex_encode()
+
+
+static func _error_of(result: Variant, fallback: String) -> String:
+	if result is Dictionary:
+		var error := str((result as Dictionary).get("error", "")).strip_edges()
+		if not error.is_empty():
+			return error
+	return fallback
