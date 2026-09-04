@@ -220,7 +220,9 @@ def prepare_b(repo: Path, a: str, va: str) -> str:
                 ("pyproject.toml", rb'(?m)^version = "([^"\r\n]+)"$'),
                 (config, rb'(?m)^version="([^"\r\n]+)"$'),
             ):
-                before = (worktree / path).read_bytes()
+                ## A's blob, not the worktree file: a Windows checkout with
+                ## autocrlf hands back CRLF copies the version patterns reject.
+                before = git(repo, "show", f"{a}:{path}")
                 require(re.findall(pattern, before) == [va.encode()], f"{path} is not at {va}")
                 after = re.sub(
                     pattern, lambda m: m.group(0).replace(va.encode(), vb.encode()), before
