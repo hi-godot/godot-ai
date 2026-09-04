@@ -320,10 +320,14 @@ def test_release_set_adds_one_deterministic_signed_v3_migration_capsule(signed_r
         # The bridge runs the v4 installer scripts in-process; the capsule
         # carries them at their canonical paths, byte-for-byte from the
         # source commit, and nothing from the retired transaction actor.
-        plugin = signed_release["repo"] / "plugin"
         for relative in v4_release.MIGRATION_INSTALLER_SCRIPTS:
             member = f"{v4_release.PLUGIN_PREFIX}{relative}"
-            assert package.read(member) == (plugin / member).read_bytes()
+            # Compare with the committed blob, not the working tree: a Windows
+            # checkout with autocrlf carries CRLF copies of LF blobs.
+            committed = v4_release._git_blob(
+                signed_release["repo"], signed_release["source"], f"plugin/{member}", "test"
+            )
+            assert package.read(member) == committed
         assert not any(name.endswith("bridge_exec.gd") for name in names)
         bridge_names = {
             f"{v4_release.PLUGIN_PREFIX}{path.name}"
