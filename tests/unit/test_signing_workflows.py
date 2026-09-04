@@ -93,6 +93,12 @@ def test_qualification_builds_and_signs_a_b_once_then_verifies_on_all_platforms(
     assert "secrets." not in str(workflow["jobs"]["build"])
     assert workflow["jobs"]["sign"]["environment"] == "release-signing"
     assert "pip install" not in str(workflow["jobs"]["sign"])
+    # B's version is never typed by an operator: it is A's next patch.
+    triggers = workflow.get(True, workflow.get("on"))
+    assert set(triggers["workflow_dispatch"]["inputs"]) == {"source_a", "version_a", "source_b"}
+    assert "inputs.version_b" not in raw
+    assert "release_support next-version" in raw
+    assert workflow["jobs"]["sign"]["needs"] == ["validate-inputs", "build"]
     # Trimmed release gate: package rows at the floor/ceiling interpreters on
     # every desktop OS; one real-editor A -> B row per OS at Godot 4.7.0, plus
     # a single Linux row at the newest supported engine.
@@ -135,7 +141,9 @@ def test_nightly_diagnostics_are_credential_free_and_not_a_release_gate() -> Non
     assert set(triggers) == {"schedule", "workflow_dispatch"}
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["env"]["GODOT_AI_DISABLE_TELEMETRY"] == "true"
-    assert set(workflow["jobs"]) == {"failpoint-recovery", "storm-baseline"}
+    assert set(workflow["jobs"]) == {"updater-scenarios", "storm-baseline"}
+    matrix = workflow["jobs"]["updater-scenarios"]["strategy"]["matrix"]["include"]
+    assert {row["os"] for row in matrix} == {"ubuntu-latest", "macos-latest", "windows-latest"}
     # Diagnostics only: no signing/publishing environment, secret, or
     # release tooling, and nothing that release promotion reads.
     for forbidden in ("secrets.", "environment:", "release_promotion", "release_support sign"):
@@ -143,8 +151,11 @@ def test_nightly_diagnostics_are_credential_free_and_not_a_release_gate() -> Non
     assert "chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789" in raw
     assert "--measure-baseline" in raw
     assert "script.qualification_resources" in raw
-    for job in workflow["jobs"].values():
-        assert job["runs-on"] == "ubuntu-latest"
+    for name, job in workflow["jobs"].items():
+        if name == "updater-scenarios":
+            assert job["runs-on"] == "${{ matrix.os }}"
+        else:
+            assert job["runs-on"] == "ubuntu-latest"
         for step in job["steps"]:
             if step.get("uses", "").startswith("actions/checkout@"):
                 assert step["with"]["persist-credentials"] is False

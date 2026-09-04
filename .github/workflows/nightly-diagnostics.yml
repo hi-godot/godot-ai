@@ -1,7 +1,7 @@
 name: Nightly diagnostics
 
-# Failpoint/crash-recovery suites and the locked storm profile against a real
-# Godot 4.7.2 editor on Linux. These are diagnostics, not release gates:
+# The real-editor updater scenarios on every desktop OS and the locked storm
+# profile on Linux, against a real Godot 4.7.2 editor. These are diagnostics, not release gates:
 # release-qualification.yml and release.yml never read their output. A red
 # run is a regression to investigate. Nothing here needs signing credentials.
 on:
@@ -20,11 +20,22 @@ env:
   GODOT_AI_DISABLE_TELEMETRY: "true"
 
 jobs:
-  failpoint-recovery:
-    name: Failpoint and crash recovery / Godot 4.7.2
-    runs-on: ubuntu-latest
+  updater-scenarios:
+    name: Real-editor updater scenarios / ${{ matrix.label }} / Godot 4.7.2
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
     env:
+      GODOT_AI_FLEET_CROSSINGS: "1"
       GODOT_AI_MODE: dev
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,31 +59,38 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
+        shell: bash
         run: |
           pip install -e ".[dev]"
-          sudo apt-get update && sudo apt-get install -y xvfb
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y xvfb
+          fi
 
-      - name: Deterministic failpoint, crash, lock and repair matrix
+      - name: Real-editor updater scenarios on every desktop OS
+        shell: bash
         env:
           GODOT_BIN: godot
         run: |
           mkdir -p diagnostics
-          # Same short --basetemp as ci.yml: editor projects built by these
-          # tests are hashed through an ancestor-enumerating canonicalization.
-          xvfb-run -a pytest -v --durations=0 --basetemp="${RUNNER_TEMP}/pytest-basetemp" \
-            --junitxml=diagnostics/failpoint-recovery.xml \
-            tests/unit/test_update_transaction.py \
-            tests/integration/test_migration_bridge_failures.py \
-            tests/integration/test_self_update_upgrade_paths.py \
-            tests/integration/test_godot_editor_restart.py \
-            tests/integration/test_plugin_reload_persistence.py \
-            tests/integration/test_qualification_resources.py \
-            tests/integration/test_runtime_qualification_driver.py
+          pytest_args=(-v -s --durations=0 --basetemp="${RUNNER_TEMP}/pytest-basetemp"
+            --junitxml=diagnostics/updater-scenarios.xml
+            tests/integration/test_migration_bridge_failures.py
+            tests/integration/test_self_update_upgrade_paths.py
+            tests/integration/test_godot_editor_restart.py
+            tests/integration/test_plugin_reload_persistence.py
+            tests/integration/test_qualification_resources.py
+            tests/integration/test_qualification_https.py
+            tests/integration/test_runtime_qualification_driver.py)
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a pytest "${pytest_args[@]}"
+          else
+            pytest "${pytest_args[@]}"
+          fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
-          name: nightly-failpoint-recovery
+          name: nightly-updater-scenarios-${{ matrix.label }}
           path: diagnostics/
           if-no-files-found: warn
           retention-days: 14

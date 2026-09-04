@@ -14,7 +14,6 @@ from typing import Any
 
 LIFECYCLE_PATH = Path("plugin/addons/godot_ai/utils/server_lifecycle.gd")
 UPDATE_MANAGER_PATH = Path("plugin/addons/godot_ai/utils/update_manager.gd")
-UPDATE_RUNNER_PATH = Path("plugin/addons/godot_ai/utils/update_coordinator.gd")
 DOCK_PATH = Path("plugin/addons/godot_ai/mcp_dock.gd")
 CLIENT_HANDLER_PATH = Path("plugin/addons/godot_ai/handlers/client_handler.gd")
 SESSION_REGISTRY_PATH = Path("src/godot_ai/sessions/registry.py")
@@ -38,14 +37,6 @@ _FORBIDDEN_OWNER_FIELDS = {
         "_lifecycle",
         "_plugin",
         "_preflight",
-    },
-    UPDATE_RUNNER_PATH: {
-        "_detached_dock",
-        "_dock",
-        "_host",
-        "_owner",
-        "_plugin",
-        "_source_plugin",
     },
     LIFECYCLE_PATH: {"_dock", "_host", "_plugin", "_update_manager"},
     DOCK_PATH: {"_client_jobs", "_connection", "_host", "_lifecycle", "_plugin", "_update_manager"},
@@ -483,12 +474,6 @@ def collect_report(
         },
         "gates": {
             "active_lifecycle_episode_variants": _active_lifecycle_episode_variants(root),
-            "detached_runner_owner_node_references": _owner_fields(
-                root,
-                UPDATE_RUNNER_PATH,
-                {"_detached_dock", "_dock", "_host", "_owner", "_plugin", "_source_plugin"},
-                "detached update-runner fields retaining an owner/Node instead of values",
-            ),
             "dock_client_worker_static_stores": _dock_client_worker_fields(root),
             "external_mutable_session_assignments": _external_session_mutations(root),
             "legacy_tokenless_transport_branches": _legacy_tokenless_paths(root),

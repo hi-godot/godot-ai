@@ -3,10 +3,11 @@
 Part of the Godot AI agent guide — see [AGENTS.md](../AGENTS.md) for the
 always-loaded rules.
 
-Godot AI v4 has one signed canonical tree and one exact-tree transaction
-protocol. A temporary, signed v3-compatible capsule carries that same tree
-across the major-version boundary; it is not a second v4 runtime shape. See the
-[v4 migration guide](v4-migration.md) for the one-click user flow.
+Godot AI v4 has one signed canonical tree and one update path, specified in
+[self-update.md](self-update.md). A temporary, signed v3-compatible capsule
+carries that same tree across the major-version boundary; it is not a second
+v4 runtime shape. See the [v4 migration guide](v4-migration.md) for the
+one-click user flow.
 
 ## Qualification and publication
 
@@ -16,9 +17,12 @@ those exact bytes:
 
 - **Python rows** — `ubuntu-latest`, `macos-latest`, `windows-latest` × Python
   3.11 and 3.14 (the floor and ceiling interpreters; ordinary CI covers 3.12
-  and 3.13): retained dependency resolution, offline wheel/sdist installs of
-  A and B, the installed test suites, and the documented closed-editor
-  installer for both candidates.
+  and 3.13): retained dependency resolution, offline installs of A's wheel and
+  sdist and of B's wheel (the runtime row updates into it from the retained
+  index), A's installed test suite in parallel, and the documented
+  closed-editor installer for both candidates. B is A plus two version fields
+  minus the bundled README, so testing B's install would only repeat A's
+  evidence.
 - **Runtime rows** — the same three operating systems × Godot 4.7.0 × Python
   3.11, plus one Linux row at Godot 4.7.2, the newest supported engine: one
   real-editor exact A -> B hot update through the private HTTPS
@@ -27,10 +31,7 @@ those exact bytes:
 
 `complete-qualification` requires every one of those rows to be present,
 passed, and bound to the same candidate pair; the runtime row's required case
-set is exactly `exact-a-to-b-hot-update`. Failpoint/crash-recovery and storm
-matrices are **nightly diagnostics** (`nightly-diagnostics.yml`), not release
-gates: they fail visibly and upload their outputs, but promotion does not
-read them. The full contract is in the
+set is exactly `exact-a-to-b-hot-update`. The full contract is in the
 [verification plan](architecture-simplification-verification-plan.md); the
 [PR #949 follow-up](v4-release-review-followup.md) records the development
 evidence behind it.
@@ -38,9 +39,24 @@ evidence behind it.
 `release-qualification.yml` separates credential-free packaging from protected
 signing. A must equal the reviewed `main` workflow commit. B must be its immediate
 single-parent child with only the two version edits and the bundled README
-deletion. The packager creates required version tags only in disposable local
-checkouts; it never pushes B's tag or publishes B. Python regression fixtures
-that patch sources remain development evidence, not exact-candidate runtime proof.
+deletion; its version is never typed, it is always A's next patch. Make B with
+
+```bash
+python -m script.release_support prepare-b --a <A commit> --version-a <A version>
+```
+
+which commits that exact child under a fixed identity and date (the same A
+always yields the same B), validates it, and prints its SHA. Every job fetches
+B by SHA, so push it to a branch on this repository for the run's duration
+(`git push origin <B>:refs/heads/qualify/v<A version>-b`) and delete the branch
+afterwards; promotion never needs it. The packager creates required version
+tags only in disposable local checkouts; it never pushes B's tag or publishes
+B. Python regression fixtures that patch sources remain development evidence,
+not exact-candidate runtime proof.
+
+The signing and publishing jobs install nothing beyond the interpreter, so the
+Python-side signature check runs through the OpenSSL command line there; with
+the `cryptography` package present (the dev extra) the same check uses it.
 
 After the qualification run's `Require complete release evidence` job is
 green, dispatch `release.yml`. Select **patch**, **minor**, or **major**, and
@@ -246,195 +262,94 @@ release-asset hashes alongside the wheel, sdist, and verifier-file digests of
 the promoted source commit. The two verifier files and repository
 documentation are not their own trust anchor.
 
-## V3-to-v4 bridge transaction
+## The update path
 
-The last signed v3 line discovers the legacy-named triple and performs its
-existing outer signature/checksum verification. Its updater overlays the
-temporary bridge only long enough to load it. The bridge prepares the embedded
-canonical triple with the target v4 transaction actor, then disables itself and
-uses the same exact-tree activation protocol described below. After the swap,
-the bridge persists the v4 plugin in the next-start enabled list without
-enabling its scripts in the old process, then Godot performs one graceful
-automatic editor restart. Failure to save that intent refuses restart and
-requires explicit recovery. The new process proves the prior editor closed
-and transfers the inherited nonce-bound lease before claiming the transaction.
-A temporarily unverifiable predecessor is retried within the existing bounded
-wait, never treated as permission to transfer; persistent uncertainty refuses
-startup and leaves the predecessor lease intact. This clean process boundary
-prevents loaded v3 `class_name` resources from contaminating v4 startup. The
-complete mixed temporary tree is retained as the old backup; only the verified
-canonical tree becomes live.
+Every v4 update — the dock's **Update** click and the final-v3 crossing through
+the signed capsule alike — is the one flow specified in
+[self-update.md](self-update.md): download the canonical triple, verify the
+manifest signature, release identity, archive hash and complete inventory,
+stage the tree under `res://addons/.godot_ai_update/stage/`, wait for the
+dispatcher to drain, take the editor lock, rename the live tree to
+`backup/<old version>/` and the stage into place, write the marker, persist
+the enabled entry, restart the editor, and re-hash the live tree in the new
+process. There is no separate update process; `uvx` runs the server, not the
+plugin. The capsule differs only in who starts it: v3's own signed-sidecar
+runner extracts the bridge, and the bridge runs the same installer on the
+embedded triple ([v4-migration.md](v4-migration.md)).
 
-The bridge begins automatically after the user's single **Update** click. V4
-startup treats a pre-v4 `from_version` as a major migration, broadly replacing
-owned mismatched client entries before durable completion and managed-server
-startup. It does not wait for an unverifiable global client-restart
-confirmation. Unsupported old updater generations are not carried forward as
-permanent v4 runtime branches.
+`script/v4-release install` performs the same verify, stage, swap sequence
+from outside a running editor. It exists for release qualification and for
+recovery; it is not an end-user path.
 
-Bridge failure status is scoped to the canonical project path, so failure in
-one project cannot block migration in another.
+## Recovery: the three marker states
 
-## V4 self-update transaction
+Everything the updater writes lives under `addons/.godot_ai_update/` inside the
+project, a `.gdignore`d and `.gitignore`d directory beside the live tree:
 
-The dock considers only a newer `v4.*` GitHub release with the exact six-name,
-bounded release set above, but downloads only the canonical three. An Update
-click runs this sequence:
+- `pending.json` — the marker: from and to versions, the manifest SHA-256, the
+  expected tree hash, the backup path, the editor nonce, and after the
+  post-restart check a `status`;
+- `backup/<old version>/` — the complete previous add-on tree;
+- `stage/addons/godot_ai/` — the verified candidate before the swap;
+- `quarantine/` — a live tree that failed the post-restart check;
+- `lock.json` — the updating editor's PID and process fingerprint.
 
-1. Preflight refuses an unresolved transaction, retained backup that still
-   needs archival, unsafe recovery namespace, active transaction lock, or a
-   second live editor lease before download or quiescence.
-2. The actor allocates a random owner-private download directory under the
-   external recovery root. The manager downloads only the three trusted HTTPS
-   release-asset URLs into that exact directory, enforcing release-declared
-   sizes and exact filenames. Successful preparation or cancellation removes
-   the bounded files; a later exclusive preflight safely collects a stale
-   interrupted directory.
-3. The Python transaction actor verifies the signature and complete inventory,
-   extracts a fresh stage, and publishes `prepared.json`. Its expected stage
-   identity comes from the signed manifest—not from a later re-hash of mutable
-   stage contents.
-4. The root quiesces plugin-owned work and asks the value-only coordinator to
-   disable the plugin. The coordinator owns no live files or plugin/Dock
-   reference.
-5. The actor reconstructs the prepared intent, proves the stage still equals
-   the signed inventory, acquires the activation lock, renames the complete
-   live tree to a retained backup, and renames the complete stage into place.
-   It never overlays files.
-6. The coordinator hands the exact initiating actor command across the swap in
-   a bounded environment envelope. After Godot scans and enables the new tree,
-   the new plugin's bounded startup barrier uses that old actor—never a newly
-   resolved/downloaded package—to publish readiness and claim the result before
-   ordinary lifecycle, transport, updater, or client work begins. Interactive
-   editors run this barrier on one joined worker so a cold, offline, or wedged
-   actor cannot freeze the editor UI; export/import launches run it
-   synchronously with the same fixed deadline before registering the export
-   filter.
-7. A successful claim remains the durable client-migration obligation. The
-   root repins configured clients, then asks the exact actor that cleared this
-   startup barrier to publish an
-   immutable `migration-complete.json` bound to the claim, intent, signed live
-   tree, and current editor lease. Normal server/client/update startup is
-   released only after that acknowledgement. A crash before it causes the next
-   ordinary startup to rediscover the claim and repeat the migration barrier;
-   a crash after publication does not repeat completed work. External clients
-   reconnect to the stable endpoint; an individual restart is remediation for
-   a stale client, not a release gate that the plugin cannot verify.
-8. Failure rolls the complete old tree back when that can be proven safe.
-   Ambiguous state becomes `repair_required`; normal startup remains barred
-   until the explicit repair actor resolves it.
+Nothing under it is deleted automatically on a failure path. After the restart
+the marker's `status` is one of:
 
-The prepared, intent, journal, readiness, result→claim, migration-completion,
-activation-lock, and editor-lease records live in a private recovery root
-outside the project on the same filesystem. Namespace changes are atomic
-renames. Records are strict, size-bounded canonical JSON; links, unsafe POSIX
-ancestors, wrong ownership/modes, identity drift, stale actors, and unknown
-fields fail closed.
+- **`success`** — the live tree hashed equal to the signed inventory. The
+  previous tree stays in `backup/<old version>/` until the next successful
+  update replaces it. No action is needed.
+- **`rolled_back`** — the live tree did not match. It was renamed to
+  `quarantine/` and `backup/<old version>/` was renamed back into place, so the
+  editor is running the previous version; the dock shows the reason.
+  `quarantine/` is kept as evidence — remove it yourself once it is no longer
+  needed.
+- **`repair_required`** — the live tree did not match and no backup was found
+  to restore. The plugin stays inactive and the dock prints the exact paths.
+  Close the editor, keep the project directory as it is, and either run
+  `script/v4-release install` against the release you were updating to or
+  restore `addons/godot_ai/` from version control. Do not delete
+  `addons/.godot_ai_update/` while working out what happened.
 
-V4 transaction records use schema 1. Claimed transaction directories remain
-part of startup and preflight evidence: the actor scans and validates that
-retained history before deciding that no repair or M6 obligation remains. There
-is no automatic history compaction. Do not hand-edit or delete record JSON to
-bypass a refusal. A future record-schema change must first ship an explicit
-bounded migration/compaction policy for retained v4 history.
-
-Only the initiating editor lineage may cross an active activation lock. An
-editor already open holds a lease and blocks preflight; an editor opened after
-lock acquisition refuses before composition and disables the plugin. Re-enable
-it or restart after the transaction so Godot loads the terminal tree afresh.
-V4 never lets an old in-memory script continue as a read-only "observer" of a
-newly renamed tree.
+A `lock.json` held by a live process that is not the current editor refuses an
+update; a lock from a dead process is replaced on the next attempt, so a stale
+lock needs no manual cleanup.
 
 ### Recovering a stranded client mutation lock
 
-Automatic Configure/Remove writes and M6 repins share one account-wide durable
-lock at `OS.get_config_dir()/godot-ai/client_mutation.lock` (the error prints
-the exact platform path). Each claim covers the mutation and its readback. If a
-timed-out CLI mutation cannot prove that its process tree stopped, the lock
-survives plugin reload, editor restart, and crashes, and later client mutation
-or M6 startup fails closed.
+Automatic Configure/Remove writes and post-update repins share one
+account-wide durable lock at `OS.get_config_dir()/godot-ai/client_mutation.lock`
+(the error prints the exact platform path). Each claim covers the mutation and
+its readback. If a timed-out CLI mutation cannot prove that its process tree
+stopped, the lock survives plugin reload, editor restart, and crashes, and
+later client mutation or post-update repin fails closed.
 
 Stop the relevant MCP client processes—or reboot—then explicitly remove the
 **entire exact lock directory printed in the error** before retrying. Restarting
 Godot alone is insufficient, and deleting only `owner.json` deliberately leaves
 the deny marker in place. This recovery concerns global client configuration;
-it does not authorize editing update-transaction records or rolling back the
-live add-on.
+it does not authorize editing the update marker or rolling back the live
+add-on.
 
-### Retained backup and the next update
+## Required verification
 
-A successful update keeps one retained backup. Godot AI never silently deletes
-it. After validating and externally backing up the new version, close every
-editor for the project and archive it explicitly. Use the exact
-`recovery_root` printed by `prepare`/`root`—not its parent directory:
+Any change to release identity or layout, `utils/release_verifier.gd`,
+`utils/update_installer.gd`, `update_manager.gd`, the migration bridge, the
+enabled-entry persistence, plugin disable/enable, or client repinning must
+pass:
 
-```bash
-python -m godot_ai.update_transaction archive-backup \
-  --project /absolute/path/to/project \
-  --install /absolute/path/to/project/addons/godot_ai \
-  --recovery-root /absolute/path/to/recovery-base/INSTALL-ID \
-  --editors-closed
-```
+- `test_project/tests/test_update_installer.gd` via `test_run` — the verifier
+  and installer as pure functions with an injected fixture key pair — and the
+  Python verifier/installer unit tests behind `script/v4-release`;
+- the three real-editor scenarios in
+  `tests/integration/test_self_update_upgrade_paths.py`, run with `GODOT_BIN`
+  set: a signed v4-to-v4 update restarts into a working server, a final-v3
+  install crosses the capsule, and a tampered live tree after a swap is rolled
+  back.
 
-The actor refuses archival if it finds a live or unverifiable editor lease or
-an activation lock. On success it atomically moves the retained tree into
-hash-named immutable history, allowing the next update while preserving
-recovery evidence.
-
-The CLI deliberately distinguishes the two meanings. `--recovery-root` is an
-exact, already-derived install root and is required by `activate`,
-`abort-prepared`, `repair`, and `archive-backup`. `--recovery-base` is the
-optional parent used by `root`, `prepare`, `startup`, and `lease`; those
-commands append the deterministic install ID themselves. Passing an exact
-root as a base would derive a different path and is refused rather than
-guessing operator intent.
-
-### Recovering an abandoned prepared update
-
-If an editor dies after `prepare` (or after publishing an abort intent) but
-before activation, first make sure that editor process is gone. Use the exact
-project, install, recovery-root, and transaction values printed for the failed
-update, and invoke the actor from the same exact installed environment:
-
-```bash
-python -m godot_ai.update_transaction abort-prepared \
-  --project /absolute/path/to/project \
-  --install /absolute/path/to/project/addons/godot_ai \
-  --recovery-root /absolute/path/to/recovery-base/INSTALL-ID \
-  --transaction TRANSACTION-ID \
-  --dead-owner-takeover
-```
-
-For an `uvx` installation, use the same isolated/no-config/no-build,
-official-PyPI resolver options rendered by the plugin, followed by
-`--from godot-ai==LIVE_VERSION godot-ai-update-transaction`; substitute the
-exact version in the still-live add-on's `plugin.cfg`. Do not let an alternate
-index from local uv configuration choose a repair actor. The takeover refuses
-while the prepared editor, another abort requester, or a prior repairer remains
-live or unverifiable. It also refuses after activation begins or if any bound
-identity/hash has changed. On success it deletes only the authenticated staged
-candidate, publishes durable cleanup, and leaves the live add-on untouched.
-Do not use this command as a general rollback tool; post-activation ambiguity
-belongs to the separate `repair` command.
-
-## Required self-update smoke
-
-Any change to release identity/layout, verification, update discovery,
-transaction records, lease/startup barriers, plugin disable/enable, client
-repinning, or recovery must run:
-
-```bash
-python script/local-self-update-smoke
-```
-
-The harness builds a disposable signed v4-to-v4 fixture from the current tree and
-launches a real editor. The operator clicks **Update** in the dock. Passing
-requires exact version/tree advancement, a healthy authenticated backend after
-reload, no parse/load error in the disable→enable window, no new macOS Godot
-crash report, no activation artifact inside the project, and a retained
-recoverable backup. This interactive check is release-blocking and supplements,
-rather than replaces, the automated failpoint, rollback, multi-editor, exact
-release-shape, bridge-migration, and clean-install suites. Historical pre-v4
+CI runs the three scenarios on Linux on every pull request and on all three
+desktop OSes nightly; the release pipeline's A-to-B row runs the first one on
+the exact signed candidate on every OS before publication. Historical pre-v4
 behavior remains recorded in
-[pre-v4-updater-one-time-evidence.md](verification/pre-v4-updater-one-time-evidence.md),
-but the signed final-v3→v4 bridge path is a recurring release-blocking smoke.
+[pre-v4-updater-one-time-evidence.md](verification/pre-v4-updater-one-time-evidence.md).

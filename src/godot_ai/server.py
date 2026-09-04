@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import time
 from collections.abc import AsyncIterator, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -410,6 +411,7 @@ def create_server(
     exclude_domains: Iterable[str] | None = None,
     owner_pid: int | None = None,
     allow_host_networks: Sequence[IPNetwork] | None = None,
+    ws_socket: socket.socket | None = None,
 ) -> FastMCP:
     logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
     capabilities = validate_launch_capabilities(capabilities.http, capabilities.websocket)
@@ -445,6 +447,7 @@ def create_server(
             registry,
             port=ws_port,
             auth_token=capabilities.websocket,
+            **({"sock": ws_socket} if ws_socket is not None else {}),
         )
         client = GodotClient(ws_server)
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -12,7 +14,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -33,6 +35,13 @@ def load_smoke_script() -> ModuleType:
     module.__file__ = str(SCRIPT)
     loader.exec_module(module)
     return module
+
+
+def _static_func_block(text: str, signature: str) -> str:
+    """Return one top-level GDScript function, stopping at the next top-level func."""
+    start = text.index(signature)
+    end = re.compile(r"^(?:static )?func ", re.MULTILINE).search(text, start + len(signature))
+    return text[start : end.start() if end else len(text)]
 
 
 def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
@@ -94,6 +103,7 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     production_manager = (ROOT / "plugin/addons/godot_ai/utils/update_manager.gd").read_text(
         encoding="utf-8"
     )
+
     def function_block(source: str, signature: str) -> str:
         return source[source.index(signature) :].split("\n\nfunc ", 1)[0]
 
@@ -103,7 +113,6 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
         "func _on_asset_completed(",
         "func _finish_downloads() -> void:",
     ):
-
         assert function_block(base_manager, signature) == function_block(
             production_manager, signature
         )
@@ -119,15 +128,8 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert ".godot-ai-self-update-smoke" in base_configurator
     assert "server-selector.py" in base_configurator
     assert '"-I"' in base_configurator
-    assert (
-        "godot-ai=="
-        not in base_configurator[
-            base_configurator.index(
-                "static func get_server_command() -> Array[String]:"
-            ) : base_configurator.index(
-                "static func get_update_transaction_command() -> Array[String]:"
-            )
-        ]
+    assert "godot-ai==" not in _static_func_block(
+        base_configurator, "static func get_server_command() -> Array[String]:"
     )
     assert "return default_port" in base_configurator
     assert "static func ensure_settings_registered() -> void:" in base_configurator
@@ -149,12 +151,7 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "find_uvx" not in prewarm_block
     assert "McpCliExec.run" not in prewarm_block
     marker = project / ".godot-ai-self-update-smoke"
-    assert (marker / "transaction_actor.py").is_file()
     assert not (marker / "smoke-release-key.pem").exists()
-    assert "release_verify.PUBLIC_KEY_PEM" in (marker / "transaction_actor.py").read_text(
-        encoding="utf-8"
-    )
-    assert "]\n\nstatic func update_actor_requires_uv_environment_isolation" in base_configurator
     for name, version in (("server-a", "4.0.0"), ("server-b", "4.0.1")):
         launcher = marker / name / "godot-ai-server.py"
         assert launcher.is_file()
@@ -241,20 +238,9 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "const DEFAULT_HTTP_PORT := 18000" in vnext_configurator
     assert "server-selector.py" in vnext_configurator
 
-    def server_command_block(text: str) -> str:
-        start = text.index("static func get_server_command() -> Array[String]:")
-        end = text.index("static func get_update_transaction_command() -> Array[String]:")
-        return text[start:end]
-
-    assert server_command_block(base_configurator) == server_command_block(vnext_configurator)
-    assert "vNext actor discovery is intentionally unavailable" in vnext_configurator
-    assert "get_update_transaction_command() -> Array[String]:\n\treturn []" in (
-        vnext_configurator.replace(
-            "\t## Fixture: vNext actor discovery is intentionally unavailable.\n", ""
-        )
-    )
-    assert "return []\n\nstatic func update_actor_requires_uv_environment_isolation" in (
-        vnext_configurator
+    server_signature = "static func get_server_command() -> Array[String]:"
+    assert _static_func_block(base_configurator, server_signature) == _static_func_block(
+        vnext_configurator, server_signature
     )
     assert "return default_port" in vnext_configurator
     assert "static func ensure_settings_registered() -> void:" in vnext_configurator
@@ -351,8 +337,8 @@ def test_launch_passes_isolation_only_to_godot_child(
         stdout = iter(
             [
                 f"{smoke.SMOKE_STAGED_LOG}\n",
-                f"{smoke.COORDINATOR_ENABLE_LOG}\n",
-                "MCP | plugin loaded\n",
+                "MCP | stopped server (PID [123])\n",
+                "MCP | update to 4.0.1 swapped in; restarting the editor\n",
             ]
         )
 
@@ -377,6 +363,11 @@ def test_launch_passes_isolation_only_to_godot_child(
 
     monkeypatch.setattr(smoke.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(smoke, "wait_for_live_status", fake_wait)
+    monkeypatch.setattr(
+        smoke,
+        "wait_for_restarted_editor",
+        lambda *_args, **_kwargs: [smoke.SMOKE_MIGRATED_LOG, "MCP | plugin loaded"],
+    )
     monkeypatch.setattr(smoke, "verify_post_run", lambda *_args, **_kwargs: True)
 
     assert (
@@ -431,60 +422,115 @@ def test_server_selector_refuses_unknown_or_ambiguous_installed_version(
         assert "refused unknown or ambiguous plugin version" in refused.stderr
 
 
-def test_transaction_recovery_requires_bound_migration_completion(
+def test_lean_update_state_requires_success_marker_backup_and_clean_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     smoke = load_smoke_script()
     project = tmp_path / "project"
     live = project / "addons" / "godot_ai"
     live.mkdir(parents=True)
-    recovery = (
-        project.parent / ".godot-ai-recovery" / smoke.install_id(project.resolve(), live.resolve())
-    )
-    backup = recovery / "retained-backup"
-    transaction = "transaction-0123456789"
-    transaction_dir = recovery / "transactions" / transaction
+    (live / "plugin.cfg").write_text('version="4.0.1"\n', encoding="utf-8")
+    state = project / "addons" / ".godot_ai_update"
+    backup = state / "backup" / "4.0.0"
     backup.mkdir(parents=True)
-    transaction_dir.mkdir(parents=True)
-    for private_dir in (recovery, recovery / "transactions", transaction_dir):
-        private_dir.chmod(0o700)
-
-    tree = object()
-    intent = SimpleNamespace(
-        transaction=transaction,
-        to_version="4.0.1",
-        new_tree=tree,
-    )
-    monkeypatch.setattr(smoke, "load_intent", lambda _paths: intent)
-    monkeypatch.setattr(
-        smoke,
-        "validate_terminal",
-        lambda _path, _intent: {"outcome": "success"},
-    )
-    monkeypatch.setattr(smoke, "hash_tree", lambda _live: tree)
-
-    def refuse_completion(_paths: Any, _intent: Any) -> dict[str, object]:
-        raise RuntimeError("migration completion is missing")
-
-    monkeypatch.setattr(smoke, "validate_migration_complete", refuse_completion)
-    with pytest.raises(RuntimeError, match="migration completion is missing"):
-        smoke.verify_transaction_recovery(project, "4.0.1")
-
-    seen: dict[str, object] = {}
-
-    def accept_completion(paths: Any, durable_intent: Any) -> dict[str, object]:
-        seen["path"] = paths.migration_complete
-        seen["intent"] = durable_intent
-        return {"status": "migration_complete"}
-
-    monkeypatch.setattr(smoke, "validate_migration_complete", accept_completion)
-    verified_transaction, verified_backup = smoke.verify_transaction_recovery(project, "4.0.1")
-    assert verified_transaction == transaction
-    assert verified_backup == backup
-    assert seen == {
-        "path": transaction_dir / "migration-complete.json",
-        "intent": intent,
+    marker_path = state / "pending.json"
+    marker = {
+        "status": "success",
+        "from_version": "4.0.0",
+        "to_version": "4.0.1",
+        "expected_tree_sha256": "tree-live",
+        "backup_root": "res://addons/.godot_ai_update/backup/4.0.0",
+        "clients_migrated": True,
     }
+    monkeypatch.setattr(
+        smoke.release_verify,
+        "hash_tree",
+        lambda root: {
+            "files": {},
+            "tree_sha256": "tree-live" if root == live.resolve() else "tree-other",
+        },
+        raising=False,
+    )
+
+    def write(**changes: object) -> None:
+        marker_path.write_text(json.dumps({**marker, **changes}), encoding="utf-8")
+
+    with pytest.raises(smoke.HarnessError, match="marker is missing"):
+        smoke.verify_lean_update_state(project, "4.0.1")
+    write()
+    assert smoke.verify_lean_update_state(project, "4.0.1") == (marker, backup.resolve())
+
+    write(status="rolled_back")
+    with pytest.raises(smoke.HarnessError, match="does not record success"):
+        smoke.verify_lean_update_state(project, "4.0.1")
+    write(clients_migrated=False)
+    with pytest.raises(smoke.HarnessError, match="does not record client migration"):
+        smoke.verify_lean_update_state(project, "4.0.1")
+    write(to_version="4.0.2")
+    with pytest.raises(smoke.HarnessError, match="ends at"):
+        smoke.verify_lean_update_state(project, "4.0.1")
+    write(expected_tree_sha256="tree-other")
+    with pytest.raises(smoke.HarnessError, match="differs from the hash"):
+        smoke.verify_lean_update_state(project, "4.0.1")
+    write()
+    (state / "lock.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(smoke.HarnessError, match="left lock.json behind"):
+        smoke.verify_lean_update_state(project, "4.0.1")
+    (state / "lock.json").unlink()
+    shutil.rmtree(backup)
+    with pytest.raises(smoke.HarnessError, match="retained backup"):
+        smoke.verify_lean_update_state(project, "4.0.1")
+
+
+def test_v3_floor_refusal_verifier_requires_restored_final_v3_and_clean_tree(
+    tmp_path: Path,
+) -> None:
+    smoke = load_smoke_script()
+    project = tmp_path / "project"
+    live = project / "addons" / "godot_ai"
+    live.mkdir(parents=True)
+    final_v3 = smoke.release_tag_to_version(smoke.FINAL_V3_REF)
+    (live / "plugin.cfg").write_text(f'[plugin]\nversion="{final_v3}"\n', encoding="utf-8")
+    (project / "project.godot").write_text(
+        '[editor_plugins]\n\nenabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")\n',
+        encoding="utf-8",
+    )
+    lines = [
+        smoke.V3_CLICK_LOG,
+        "MCP | self-update release signature verified",
+        "MCP | update runner disabling old plugin",
+        smoke.V3_FLOOR_REFUSAL_LOG + "; bridge remains inactive.",
+        f"{smoke.V3_RESTORED_LOG}{final_v3}; update again on Godot 4.7 or newer",
+        "MCP | plugin loaded",
+    ]
+    # A far-future start keeps unrelated crash reports on this machine out of the check.
+    started = time.time() + 3600
+
+    def verify(log: list[str]) -> bool:
+        return smoke.verify_v3_floor_refusal(project, "3.2.4", set(), started, log)
+
+    assert verify(lines)
+    assert not verify(lines[:-2]), "restore and reload must be logged"
+    assert not verify([lines[0], *lines[2:], lines[1]]), "order matters"
+    assert not verify([*lines, smoke.V3_BRIDGE_RESTART_LOG]), "the bridge must stop at the refusal"
+    assert not verify([*lines, "SCRIPT ERROR: bad"])
+    assert not smoke._restored_final_v3_loaded(lines[:-1])
+    assert smoke._restored_final_v3_loaded(lines)
+
+    (live / "migration_payload").mkdir()
+    assert not verify(lines), "capsule-only entries must be gone"
+    (live / "migration_payload").rmdir()
+    stage = project / "addons" / ".godot_ai_update" / "stage"
+    stage.mkdir(parents=True)
+    assert not verify(lines), "no v4 update state may remain"
+    shutil.rmtree(stage.parent)
+    (project / "project.godot").write_text("[editor_plugins]\n", encoding="utf-8")
+    assert not verify(lines), "the restored plugin must stay enabled"
+    (project / "project.godot").write_text(
+        'enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")\n', encoding="utf-8"
+    )
+    (live / "plugin.cfg").write_text('[plugin]\nversion="4.0.0"\n', encoding="utf-8")
+    assert not verify(lines), "the live tree must be final v3"
 
 
 def test_self_update_smoke_log_verifier_rejects_external_adoption() -> None:
@@ -493,7 +539,7 @@ def test_self_update_smoke_log_verifier_rejects_external_adoption() -> None:
         "MCP | foreign server already running on port 18000, using existing",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
     ]
 
     assert smoke.smoke_adopted_existing_server_before_update(lines)
@@ -506,7 +552,7 @@ def test_self_update_smoke_log_verifier_requires_managed_stop_after_staging() ->
     lines = [
         "MCP | started server (PID 123, v2.2.1): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
     ]
 
     assert smoke.smoke_started_own_server_before_update(lines)
@@ -520,7 +566,7 @@ def test_self_update_smoke_log_verifier_rejects_version_mismatch() -> None:
         "MCP | started server (PID 123, v2.2.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
         "MCP | plugin loaded",
         (
             "MCP | Port 18000 is occupied by godot-ai server v2.2.0; "
@@ -537,7 +583,7 @@ def test_self_update_smoke_log_verifier_accepts_matching_versions() -> None:
         "MCP | started server (PID 123, v2.2.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
         "MCP | started server (PID 456, v2.2.0): godot-ai",
         "MCP | plugin loaded",
     ]
@@ -639,17 +685,18 @@ def test_self_update_smoke_harness_refuses_suspicious_marker(tmp_path: Path) -> 
     assert "has a smoke marker but does not look generated" in result.stderr
 
 
-def test_smoke_new_plugin_loaded_after_update_requires_both_markers() -> None:
+def test_smoke_restart_requested_needs_the_swap_line() -> None:
     smoke = load_smoke_script()
-    before_reload = [
-        "MCP | started server (PID 123, v2.2.0): godot-ai",
+    before_swap = [
+        "MCP | started server (PID 123, v4.0.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
     ]
-    assert not smoke.smoke_new_plugin_loaded_after_update(before_reload)
-    after_reload = before_reload + ["MCP | plugin loaded"]
-    assert smoke.smoke_new_plugin_loaded_after_update(after_reload)
+    assert not smoke.smoke_restart_requested(before_swap)
+    swapped = before_swap + ["MCP | update to 4.0.1 swapped in; restarting the editor"]
+    assert smoke.smoke_restart_requested(swapped)
+    assert not smoke.vnext_exit_tree_during_update(swapped + [smoke.SMOKE_TRIGGER_LOG])
+    assert smoke.vnext_exit_tree_during_update(before_swap + [smoke.SMOKE_TRIGGER_LOG])
 
 
 def test_status_reports_live_version_requires_name_and_pin() -> None:
@@ -785,14 +832,15 @@ def test_verify_post_run_requires_live_status(
     project = _minimal_smoke_project(tmp_path, "4.0.1")
     monkeypatch.setattr(
         smoke,
-        "verify_transaction_recovery",
-        lambda *_args: ("transaction", tmp_path / "retained-backup"),
+        "verify_lean_update_state",
+        lambda *_args: ({"from_version": "4.0.0", "to_version": "4.0.1"}, tmp_path / "backup"),
     )
     lines = [
         "MCP | started server (PID 123, v4.0.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
+        "MCP | client migration completed",
         "MCP | plugin loaded",
     ]
     ok = smoke.verify_post_run(
@@ -818,14 +866,15 @@ def test_verify_post_run_accepts_live_status(
     project = _minimal_smoke_project(tmp_path, "4.0.1")
     monkeypatch.setattr(
         smoke,
-        "verify_transaction_recovery",
-        lambda *_args: ("transaction", tmp_path / "retained-backup"),
+        "verify_lean_update_state",
+        lambda *_args: ({"from_version": "4.0.0", "to_version": "4.0.1"}, tmp_path / "backup"),
     )
     lines = [
         "MCP | started server (PID 123, v4.0.0): godot-ai",
         "MCP | self-update smoke: staged signed local bundle",
         "MCP | stopped server (PID [123])",
-        "MCP | update coordinator enabling verified plugin",
+        "MCP | update to 4.0.1 swapped in; restarting the editor",
+        "MCP | client migration completed",
         "MCP | plugin loaded",
     ]
     ok = smoke.verify_post_run(

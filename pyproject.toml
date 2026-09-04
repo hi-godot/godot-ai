@@ -81,6 +81,10 @@ dev = [
     "pillow>=10.0",
     # Reviewed harness only: identity-bound release resource measurements.
     "psutil==7.2.2",
+    # The closed-editor installer (script/v4-release) verifies release
+    # signatures with it. release_verify imports it lazily, so the server
+    # package never loads it at runtime.
+    "cryptography>=42",
 ]
 build = [
     "build==1.6.0",
@@ -89,7 +93,6 @@ build = [
 
 [project.scripts]
 godot-ai = "godot_ai:main"
-godot-ai-update-transaction = "godot_ai.update_transaction:main"
 
 [build-system]
 requires = ["setuptools==84.0.0"]
@@ -102,15 +105,7 @@ where = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
-# Remove each passed test's tmp_path at teardown; failed tests keep theirs.
-# update_transaction canonicalizes every path it touches by enumerating each
-# ancestor directory on Windows and macOS (Linux never scans), so a basetemp
-# that accumulates one entry per test makes every later transaction, updater
-# and qualification test slower than the one before it. Measured on the
-# hosted Windows runner: a 0.55s median per transaction test against 0.05s on
-# Linux, and a 2s stage-live barrier missed outright once the run directory
-# held roughly two thousand entries. CI also points --basetemp at the short
-# runner temp directory for the same reason.
+# Drop each passed test's tmp_path at teardown so a long run's basetemp stays small and fast.
 tmp_path_retention_policy = "failed"
 
 [tool.ruff]

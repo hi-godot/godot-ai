@@ -6,15 +6,16 @@ always-loaded rules.
 Godot AI v4 has one lifecycle owner:
 `plugin/addons/godot_ai/utils/server_lifecycle.gd`. The plugin root captures an
 immutable launch plan on the main thread, configures the owner without side
-effects, completes composition, and only then activates it. An active update
-transaction blocks composition before normal settings capture or construction
-of client/lifecycle/transport workers, sockets, or server objects. A successful
-claim with unfinished M6 client migration is different: the root may construct
-inert owners and UI, but keeps
-`_normal_start_released == false`. Lifecycle start/restart/recover and all other
-normal client, update, transport, and telemetry effects remain barred until the
-exact actor publishes `migration-complete.json`. Stop remains available so
-shutdown cannot be trapped behind the release gate.
+effects, completes composition, and only then activates it. When
+`addons/.godot_ai_update/pending.json` exists, the root first hashes the live
+tree against the marker and records the outcome
+([self-update.md](self-update.md)); a `repair_required` outcome keeps the
+plugin inactive. Otherwise the root may construct owners and UI but keeps
+`_normal_start_released == false`: lifecycle start/restart/recover and all
+other normal client, update, transport, and telemetry effects remain barred
+until that post-restart tree verification and the pin-only client repin have
+finished. Stop remains available so shutdown cannot be trapped behind the
+release gate.
 
 ## One serialized episode
 

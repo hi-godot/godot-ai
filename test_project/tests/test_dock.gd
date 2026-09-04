@@ -651,6 +651,23 @@ func test_post_update_retry_button_emits_barrier_action_instead_of_a_second_upda
 	dock.free()
 
 
+func test_update_asks_before_saving_and_relaunching() -> void:
+	## A dock outside a scene tree has no dialog to show and proceeds directly
+	## (the test above); the confirmation itself is what a click really does.
+	var text := McpDockScript.update_confirm_text("4.1.0")
+	assert_true(text.contains("save your project"), text)
+	assert_true(text.contains("relaunch the editor"), text)
+	assert_true(text.contains("Godot AI v4.1.0"), text)
+	assert_true(text.contains("AI clients connected right now must be restarted"), text)
+	assert_true(McpDockScript.update_confirm_text("").contains("the new Godot AI"))
+	var dock := McpDockScript.new()
+	var update_calls := [0]
+	dock.update_requested.connect(func() -> void: update_calls[0] += 1)
+	dock._on_update_confirmed()
+	assert_eq(update_calls[0], 1, "confirming is what requests the update")
+	dock.free()
+
+
 func test_successful_configure_discloses_the_scope_sweep_on_the_row() -> void:
 	## #877: `_show_manual_command_for` — the only thing that reveals the panel
 	## listing the pre-cleanup removes — is called just once, on the Configure

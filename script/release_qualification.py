@@ -20,6 +20,7 @@ from script import release_support as support
 
 TEST_REQUIREMENTS = (
     "pytest==9.1.1",
+    "pytest-xdist==3.8.0",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
     "hypothesis==6.167.1",
@@ -40,6 +41,8 @@ EXTRA_RUNTIME_ROWS = (("ubuntu-latest", "3.11", "4.7.2"),)
 # nightly diagnostics (.github/workflows/nightly-diagnostics.yml), not rows
 # that complete-qualification requires.
 MANDATORY_CASES = {"runtime": frozenset({"exact-a-to-b-hot-update"})}
+# The lean updater keeps its marker and retained backup beside the live tree.
+UPDATE_STATE_PREFIX = "addons/.godot_ai_update/"
 
 
 def validate_mandatory_cases(kind: str, cases: Any) -> None:
@@ -111,7 +114,7 @@ def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "documented exact-artifact installs are missing or failed",
             )
-            support.require(set(row.get("tests", {})) == {"a", "b"}, "missing candidate tests")
+            support.require(set(row.get("tests", {})) == {"a"}, "missing candidate A tests")
             for summary in row["tests"].values():
                 support.require(
                     summary.get("tests", 0) > 0
@@ -282,9 +285,6 @@ def closed_install(
         record["source"],
         "--project-root",
         str(project),
-        "--recovery-root",
-        str(work / "recovery"),
-        "--editors-closed",
     ]
     execute(command, output, cwd=work, environment=environment)
     manifest = support.read_json(release / "godot-ai-v4-plugin.manifest.json")
@@ -293,8 +293,13 @@ def closed_install(
     }
     installed = support.inventory(project)
     installed.pop("project.godot")
-    support.require(installed == expected, "documented installer produced a different tree")
-    return {"status": "passed", "managed_tree": installed}
+    # Whatever the installer keeps under its own state directory is its
+    # business; every other byte in the project must be exactly the manifest.
+    managed = {
+        path: row for path, row in installed.items() if not path.startswith(UPDATE_STATE_PREFIX)
+    }
+    support.require(managed == expected, "documented installer produced a different tree")
+    return {"status": "passed", "managed_tree": managed}
 
 
 def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> None:
@@ -373,23 +378,15 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
         wheel_b = candidates / "b/dist" / f"godot_ai-{records['b']['version']}-py3-none-any.whl"
         shutil.copyfile(wheel_b, packages / wheel_b.name)
         report["dependencies"] = dependency_inventory(packages)
-        with (
-            tempfile.TemporaryDirectory(prefix="godot-ai-python-qualification-") as temporary,
-            contextlib.ExitStack() as cleanup,
-        ):
+        with tempfile.TemporaryDirectory(prefix="godot-ai-python-qualification-") as temporary:
             work = Path(temporary).resolve()
-            source_b = cleanup.enter_context(
-                candidate_test_source(
-                    source,
-                    records["b"]["source"],
-                    work / "source-b",
-                    output / "test-source.log",
-                    environment,
-                )
-            )
+            ## B is A plus two version fields minus the bundled README: its
+            ## wheel must install from the retained index (the runtime row
+            ## updates into it), but its sdist and its test run would only
+            ## repeat A's evidence.
             for name in ("a", "b"):
                 version = records[name]["version"]
-                for package_type in ("wheel", "sdist"):
+                for package_type in ("wheel", "sdist") if name == "a" else ("wheel",):
                     target = work / f"{name}-{package_type}"
                     execute(
                         [sys.executable, "-m", "venv", str(target)],
@@ -455,13 +452,7 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
                         cwd=work,
                         environment=environment,
                     )
-                    execute(
-                        [python, "-I", "-m", "godot_ai.update_transaction", "identity"],
-                        output / "install.log",
-                        cwd=work,
-                        environment=environment,
-                    )
-                    if package_type == "wheel":
+                    if package_type == "wheel" and name == "a":
                         junit = output / f"{name}-pytest.xml"
                         # Override the development pythonpath so tests import the
                         # installed wheel. Godot fixture tests are run separately;
@@ -472,6 +463,8 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
                                 "-m",
                                 "pytest",
                                 "-v",
+                                "-n",
+                                "auto",
                                 "-o",
                                 "pythonpath=",
                                 "--junitxml",
@@ -480,7 +473,7 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
                                 "tests/integration",
                             ],
                             output / f"{name}-pytest.log",
-                            cwd=source if name == "a" else source_b,
+                            cwd=source,
                             environment=environment,
                         )
                         suites = ET.parse(junit).getroot().iter("testsuite")
@@ -495,37 +488,18 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
                             "Python tests did not pass",
                         )
                         report["tests"][name] = summary
-            # The actor resolves through the exact retained private index. No
-            # development source, public-package substitution, or shared cache.
-            from script.qualification_index import retained_index
-
-            with retained_index(packages, report["dependencies"]) as (index, requested):
-                install_environment = {
-                    **environment,
-                    "GODOT_AI_QUALIFICATION_PYTHON_INDEX": "1",
-                    "UV_INDEX": index,
-                    "UV_DEFAULT_INDEX": index,
-                    "UV_PYTHON": sys.executable,
-                    "UV_PYTHON_DOWNLOADS": "never",
-                    "UV_CACHE_DIR": str(work / "uv-cache"),
-                    "UV_TOOL_DIR": str(work / "uv-tools"),
-                }
-                report["installs"] = {
-                    name: closed_install(
-                        candidates / name,
-                        records[name],
-                        work / f"{name}-install",
-                        output / f"{name}-documented-install.log",
-                        install_environment,
-                    )
-                    for name in ("a", "b")
-                }
-                # URLs/capabilities stay out of evidence; retain filenames only.
-                report["index_artifacts_requested"] = sorted(set(requested))
-                support.require(
-                    {wheel_a.name, wheel_b.name} <= set(requested),
-                    "documented install did not resolve both exact candidate wheels",
+            # The closed-editor installer runs no Python of its own: it verifies,
+            # stages and swaps the signed tree from the candidate directory alone.
+            report["installs"] = {
+                name: closed_install(
+                    candidates / name,
+                    records[name],
+                    work / f"{name}-install",
+                    output / f"{name}-documented-install.log",
+                    environment,
                 )
+                for name in ("a", "b")
+            }
         # Environment-inapplicable development tests may skip; this report does
         # not grant the separate zero-required-skip runtime qualification gate.
         report["status"] = "passed"

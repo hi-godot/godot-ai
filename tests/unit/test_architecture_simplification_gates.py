@@ -26,9 +26,6 @@ def _fixture(root: Path) -> None:
         "plugin/addons/godot_ai/utils/update_manager.gd": (
             "var _plugin\nvar _dock\nvar _unrelated\n"
         ),
-        "plugin/addons/godot_ai/utils/update_coordinator.gd": (
-            'var _zip_path := ""\nvar _detached_dock = null\n'
-        ),
         "plugin/addons/godot_ai/utils/client_job_owner.gd": "",
         "plugin/addons/godot_ai/mcp_dock.gd": (
             "var _client_status_refresh_thread\n"
@@ -79,14 +76,13 @@ def test_collectors_recognize_entries_and_ignore_non_session_self_fields(tmp_pat
     measured = report["gates"]
     assert {name: gate["value"] for name, gate in measured.items()} == {
         "active_lifecycle_episode_variants": 1,
-        "detached_runner_owner_node_references": 1,
         "dock_client_worker_static_stores": 2,
         "external_mutable_session_assignments": 2,
         "legacy_tokenless_transport_branches": 3,
         "lifecycle_generic_host_dependencies": 2,
         "non_owner_client_thread_spawns": 2,
-        "owner_dependency_cycles": 4,
-        "production_python_gdscript_loc": 44,
+        "owner_dependency_cycles": 3,
+        "production_python_gdscript_loc": 42,
         "python_session_peer_membership_maps": 2,
         "update_manager_plugin_dock_references": 2,
         "v4_release_plugin_zip_shapes": 1,

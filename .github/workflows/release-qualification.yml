@@ -1,5 +1,5 @@
 name: Qualify v4 release candidates
-run-name: Qualify ${{ inputs.version_a }} with test-only ${{ inputs.version_b }}
+run-name: Qualify ${{ inputs.version_a }}
 
 on:
   workflow_dispatch:
@@ -13,11 +13,7 @@ on:
         required: true
         type: string
       source_b:
-        description: "Full commit of the minimal qualification-only child B"
-        required: true
-        type: string
-      version_b:
-        description: "Qualification-only B version: A's next patch, never published"
+        description: "Full commit of the minimal qualification-only child B (script/release_support.py prepare-b)"
         required: true
         type: string
 
@@ -34,6 +30,9 @@ env:
 jobs:
   validate-inputs:
     runs-on: ubuntu-latest
+    ## B's version is not an input: it is always A's next patch.
+    outputs:
+      version_b: ${{ steps.derive.outputs.version_b }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,12 +41,20 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      - name: Derive B's version from A's
+        id: derive
+        env:
+          VERSION_A: ${{ inputs.version_a }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "version_b=$(python -m script.release_support next-version --previous "$VERSION_A" --bump patch)" >> "$GITHUB_OUTPUT"
       - name: Validate reviewed source and exact minimal child
         env:
           SOURCE_A: ${{ inputs.source_a }}
           SOURCE_B: ${{ inputs.source_b }}
           VERSION_A: ${{ inputs.version_a }}
-          VERSION_B: ${{ inputs.version_b }}
+          VERSION_B: ${{ steps.derive.outputs.version_b }}
         shell: bash
         run: |
           set -euo pipefail
@@ -68,7 +75,7 @@ jobs:
             version: ${{ inputs.version_a }}
           - name: b
             source: ${{ inputs.source_b }}
-            version: ${{ inputs.version_b }}
+            version: ${{ needs.validate-inputs.outputs.version_b }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -100,7 +107,7 @@ jobs:
 
   sign:
     name: Sign candidate ${{ matrix.name }}
-    needs: build
+    needs: [validate-inputs, build]
     runs-on: ubuntu-latest
     environment: release-signing
     strategy:
@@ -112,7 +119,7 @@ jobs:
             version: ${{ inputs.version_a }}
           - name: b
             source: ${{ inputs.source_b }}
-            version: ${{ inputs.version_b }}
+            version: ${{ needs.validate-inputs.outputs.version_b }}
     steps:
       # Only reviewed workflow source supplies executable signing code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

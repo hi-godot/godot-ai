@@ -6,11 +6,11 @@ import base64
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import shutil
 import stat
 import subprocess
-import threading
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -25,13 +25,6 @@ v4_release = importlib.util.module_from_spec(spec)
 loader.exec_module(v4_release)
 
 IDENTITY = (v4_release.REPOSITORY, "stable", "v4.0.0", "4.0.0")
-_REAL_PREWARM_UPDATE_ACTOR = v4_release._prewarm_update_actor
-
-
-@pytest.fixture(autouse=True)
-def _avoid_public_actor_resolution(monkeypatch):
-    """Unit installs exercise bytes and durability; focused tests own uvx."""
-    monkeypatch.setattr(v4_release, "_prewarm_update_actor", lambda _version: None)
 
 
 def _run(*command: str, cwd: Path | None = None) -> bytes:
@@ -58,6 +51,52 @@ def _keys(root: Path, name: str = "release") -> tuple[Path, str]:
     return private, public
 
 
+INSTALLER_STUBS = {
+    "utils/release_verifier.gd": (
+        "@tool\nextends RefCounted\n\n"
+        "static func verify_manifest(_m, _s, _e, _k) -> Dictionary:\n\treturn {}\n"
+    ),
+    "utils/update_installer.gd": (
+        "@tool\nextends RefCounted\n\n"
+        'const Verifier := preload("res://addons/godot_ai/utils/release_verifier.gd")\n\n'
+        "static func swap(_s, _l, _r) -> Dictionary:\n\treturn {}\n"
+    ),
+    "utils/port_resolver.gd": (
+        "@tool\nextends RefCounted\n\n"
+        'static func process_fingerprint(_pid: int) -> String:\n\treturn ""\n'
+    ),
+}
+
+
+def _seed_installer_scripts(plugin: Path) -> None:
+    """Give the fixture plugin the scripts the capsule must carry.
+
+    The real files (and whatever they preload) are copied when this checkout
+    has them; otherwise a minimal stub stands in, so the capsule contract is
+    exercised without ever writing into the tree.
+    """
+    pending = list(v4_release.MIGRATION_INSTALLER_SCRIPTS)
+    seen: set[str] = set()
+    while pending:
+        relative = pending.pop(0)
+        if relative in seen:
+            continue
+        seen.add(relative)
+        source = ROOT / "plugin/addons/godot_ai" / relative
+        target = plugin / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_file():
+            shutil.copyfile(source, target)
+            pending.extend(
+                match.group(1).decode("utf-8")
+                for match in v4_release._GDSCRIPT_DEPENDENCY.finditer(source.read_bytes())
+            )
+        else:
+            target.write_text(
+                INSTALLER_STUBS.get(relative, "@tool\nextends RefCounted\n"), encoding="utf-8"
+            )
+
+
 def _repository(root: Path, public_key: str) -> tuple[Path, str]:
     repo = root / "repo"
     plugin = repo / "plugin/addons/godot_ai"
@@ -71,6 +110,7 @@ def _repository(root: Path, public_key: str) -> tuple[Path, str]:
         ROOT / "plugin/addons/godot_ai/utils/uv_resolution_policy.gd",
         plugin / "utils/uv_resolution_policy.gd",
     )
+    _seed_installer_scripts(plugin)
     shutil.copytree(ROOT / "migration_bridge", repo / "migration_bridge")
     (repo / "pyproject.toml").write_text(
         '[project]\nname="godot-ai"\nversion="4.0.0"\n', encoding="utf-8"
@@ -78,6 +118,18 @@ def _repository(root: Path, public_key: str) -> tuple[Path, str]:
     _run("git", "init", "-q", cwd=repo)
     _run("git", "config", "user.email", "release-test@example.invalid", cwd=repo)
     _run("git", "config", "user.name", "Release Test", cwd=repo)
+    # The final v3 add-on the capsule restores on a Godot below v4's floor.
+    v4_config = (plugin / "plugin.cfg").read_bytes()
+    v4_script = (plugin / "plugin.gd").read_bytes()
+    (plugin / "plugin.cfg").write_text('[plugin]\nversion="3.2.5"\n', encoding="utf-8")
+    (plugin / "plugin.gd").write_text(
+        "@tool\nextends EditorPlugin\n## final v3\n", encoding="utf-8"
+    )
+    _run("git", "add", "plugin", cwd=repo)
+    _run("git", "commit", "-q", "-m", "final v3", cwd=repo)
+    _run("git", "tag", v4_release.FINAL_V3_REF, cwd=repo)
+    (plugin / "plugin.cfg").write_bytes(v4_config)
+    (plugin / "plugin.gd").write_bytes(v4_script)
     _run("git", "add", "plugin", "migration_bridge", "pyproject.toml", cwd=repo)
     _run("git", "commit", "-q", "-m", "fixture", cwd=repo)
     source = _run("git", "rev-parse", "HEAD", cwd=repo).decode().strip()
@@ -143,143 +195,6 @@ def test_release_cli_checks_python_before_command_parsing(monkeypatch, capsys):
 
     assert v4_release.main(["verify"]) == 1
     assert "unqualified runtime" in capsys.readouterr().err
-
-
-def test_update_actor_prewarm_resolves_only_from_canonical_public_index(monkeypatch):
-    calls: list[tuple[list[str], dict[str, Any]]] = []
-
-    def complete(command: list[str], **kwargs):
-        calls.append((command, kwargs))
-        response = {
-            "package_version": "4.0.0",
-            "protocol_version": 1,
-            "status": "identity",
-        }
-        return subprocess.CompletedProcess(
-            command,
-            0,
-            stdout=json.dumps(response).encode(),
-            stderr=b"",
-        )
-
-    monkeypatch.setattr(v4_release.shutil, "which", lambda name: "/trusted/bin/uvx")
-    monkeypatch.setattr(v4_release.subprocess, "run", complete)
-    monkeypatch.delenv(v4_release.QUALIFICATION_PYTHON_INDEX_ENV, raising=False)
-    monkeypatch.setenv("UV_INDEX", "https://counterfeit.invalid/simple")
-    monkeypatch.setenv("UV_FIND_LINKS", "/counterfeit/wheels")
-    monkeypatch.setenv("UV_PYTHON", "/counterfeit/python")
-
-    _REAL_PREWARM_UPDATE_ACTOR("4.0.0")
-
-    command, kwargs = calls.pop()
-    assert command == [
-        "/trusted/bin/uvx",
-        *v4_release.UPDATE_ACTOR_UVX_BASE_ARGS,
-        "--index",
-        v4_release.PUBLIC_PYPI_INDEX,
-        "--default-index",
-        v4_release.PUBLIC_PYPI_INDEX,
-        "--find-links",
-        v4_release.PUBLIC_PYPI_FLAT_INDEX,
-        "--from",
-        "godot-ai==4.0.0",
-        "godot-ai-update-transaction",
-        "identity",
-    ]
-    assert kwargs["timeout"] == v4_release.UPDATE_ACTOR_PREWARM_TIMEOUT_SECONDS
-    assert kwargs["capture_output"] is True
-    assert kwargs["check"] is False
-    assert kwargs["env"]["UV_NO_PROGRESS"] == "1"
-    assert "UV_INDEX" not in kwargs["env"]
-    assert "UV_FIND_LINKS" not in kwargs["env"]
-    assert "UV_PYTHON" not in kwargs["env"]
-
-
-def test_update_actor_prewarm_private_index_requires_explicit_qualification_authority(
-    monkeypatch,
-):
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: "/trusted/bin/uvx")
-    monkeypatch.setenv(v4_release.QUALIFICATION_PYTHON_INDEX_ENV, "1")
-    monkeypatch.delenv("UV_INDEX", raising=False)
-    monkeypatch.delenv("UV_DEFAULT_INDEX", raising=False)
-    monkeypatch.delenv("UV_INDEX_URL", raising=False)
-
-    with pytest.raises(v4_release.ReleaseError, match="requires an explicit UV index"):
-        _REAL_PREWARM_UPDATE_ACTOR("4.0.1")
-
-
-def test_update_actor_prewarm_preserves_only_explicitly_authorized_qualification_index(
-    monkeypatch,
-):
-    calls: list[tuple[list[str], dict[str, Any]]] = []
-
-    def complete(command: list[str], **kwargs):
-        calls.append((command, kwargs))
-        return subprocess.CompletedProcess(
-            command,
-            0,
-            stdout=(b'{"package_version":"4.0.1","protocol_version":1,"status":"identity"}'),
-            stderr=b"",
-        )
-
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: "/trusted/bin/uvx")
-    monkeypatch.setattr(v4_release.subprocess, "run", complete)
-    monkeypatch.setenv(v4_release.QUALIFICATION_PYTHON_INDEX_ENV, "1")
-    monkeypatch.setenv("UV_INDEX", "https://qualification.invalid/simple")
-
-    _REAL_PREWARM_UPDATE_ACTOR("4.0.1")
-
-    command, kwargs = calls.pop()
-    assert command == [
-        "/trusted/bin/uvx",
-        *v4_release.UPDATE_ACTOR_UVX_BASE_ARGS,
-        "--from",
-        "godot-ai==4.0.1",
-        "godot-ai-update-transaction",
-        "identity",
-    ]
-    assert "--index" not in command
-    assert kwargs["env"]["UV_INDEX"] == "https://qualification.invalid/simple"
-
-
-def test_update_actor_prewarm_requires_uvx(monkeypatch):
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: None)
-    with pytest.raises(v4_release.ReleaseError, match="uvx is required"):
-        _REAL_PREWARM_UPDATE_ACTOR("4.0.0")
-
-
-def test_update_actor_prewarm_has_a_fixed_deadline(monkeypatch):
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: "/trusted/bin/uvx")
-
-    def time_out(command: list[str], **_kwargs):
-        raise subprocess.TimeoutExpired(command, 120)
-
-    monkeypatch.setattr(v4_release.subprocess, "run", time_out)
-    with pytest.raises(v4_release.ReleaseError, match="120-second deadline"):
-        _REAL_PREWARM_UPDATE_ACTOR("4.0.0")
-
-
-@pytest.mark.parametrize(
-    "stdout",
-    [
-        b"not-json",
-        b'{"package_version":"4.0.1","protocol_version":1,"status":"identity"}',
-        b'{"extra":true,"package_version":"4.0.0","protocol_version":1,"status":"identity"}',
-        b'{"package_version":"4.0.1","package_version":"4.0.0",'
-        b'"protocol_version":1,"status":"identity"}',
-    ],
-)
-def test_update_actor_prewarm_rejects_any_nonexact_identity(monkeypatch, stdout):
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: "/trusted/bin/uvx")
-    monkeypatch.setattr(
-        v4_release.subprocess,
-        "run",
-        lambda command, **_kwargs: subprocess.CompletedProcess(
-            command, 0, stdout=stdout, stderr=b""
-        ),
-    )
-    with pytest.raises(v4_release.ReleaseError, match="identity"):
-        _REAL_PREWARM_UPDATE_ACTOR("4.0.0")
 
 
 @pytest.fixture(scope="module")
@@ -415,6 +330,34 @@ def test_release_set_adds_one_deterministic_signed_v3_migration_capsule(signed_r
                 package.read(f"{v4_release.MIGRATION_PAYLOAD_PREFIX}{name}")
                 == by_name[name].read_bytes()
             )
+        # The bridge runs the v4 installer scripts in-process; the capsule
+        # carries them at their canonical paths, byte-for-byte from the
+        # source commit, and nothing from the retired transaction actor.
+        for relative in v4_release.MIGRATION_INSTALLER_SCRIPTS:
+            member = f"{v4_release.PLUGIN_PREFIX}{relative}"
+            # Compare with the committed blob, not the working tree: a Windows
+            # checkout with autocrlf carries CRLF copies of LF blobs.
+            committed = v4_release._git_blob(
+                signed_release["repo"], signed_release["source"], f"plugin/{member}", "test"
+            )
+            assert package.read(member) == committed
+        assert not any(name.endswith("bridge_exec.gd") for name in names)
+        bridge_names = {
+            f"{v4_release.PLUGIN_PREFIX}{path.name}"
+            for path in (signed_release["repo"] / "migration_bridge").iterdir()
+        }
+        assert bridge_names <= set(names)
+        # The final v3 add-on rides along, re-packed at its live path, so a
+        # Godot below v4's floor gets its working plugin back.
+        fallback = f"{v4_release.MIGRATION_PAYLOAD_PREFIX}{v4_release.V3_FALLBACK_NAME}"
+        assert fallback in names
+        with zipfile.ZipFile(io.BytesIO(package.read(fallback))) as embedded:
+            members = embedded.namelist()
+            assert members == sorted(members) and members
+            assert all(member.startswith(v4_release.PLUGIN_PREFIX) for member in members)
+            config = embedded.read(f"{v4_release.PLUGIN_PREFIX}plugin.cfg").decode()
+            assert config.count('version="3.2.5"') == 1
+            assert not any(member.endswith("migration_bridge.gd") for member in members)
 
 
 def test_build_never_overwrites_an_existing_candidate(signed_release):
@@ -477,13 +420,9 @@ def test_standalone_verify_accepts_exact_explicit_identity(signed_release):
 
 
 def test_release_limits_match_every_self_update_acceptor():
-    import godot_ai.update_transaction as transaction
-
     assert v4_release.MAX_ARCHIVE_SIZE == 64 * 1024 * 1024
     assert v4_release.MAX_TREE_SIZE == v4_release.MAX_ARCHIVE_SIZE
     assert v4_release.MAX_MANIFEST_SIZE == 1024 * 1024
-    assert transaction.DOWNLOAD_LIMITS[transaction.ASSET_NAME] == v4_release.MAX_ARCHIVE_SIZE
-    assert transaction.DOWNLOAD_LIMITS[transaction.MANIFEST_NAME] == v4_release.MAX_MANIFEST_SIZE
     manager = (ROOT / "plugin/addons/godot_ai/utils/update_manager.gd").read_text(encoding="utf-8")
     assert "const MAX_ARCHIVE_SIZE_BYTES := 64 * 1024 * 1024" in manager
     assert "const MAX_MANIFEST_SIZE_BYTES := 1024 * 1024" in manager
@@ -554,179 +493,9 @@ def test_verified_stage_syncs_created_namespace_bottom_up(
     assert staged.index(destination / "addons") < staged.index(destination)
 
 
-def _old_project(root: Path) -> tuple[Path, dict[str, bytes]]:
-    project = root / "project"
-    addon = project / "addons/godot_ai"
-    addon.mkdir(parents=True)
-    (project / "project.godot").write_text('[application]\nconfig/name="old"\n')
-    old = {
-        "plugin.cfg": b'[plugin]\nversion="3.2.4"\n',
-        "old-only.gd": b"extends RefCounted\n",
-    }
-    for relative, data in old.items():
-        (addon / relative).write_bytes(data)
-    return project, old
-
-
-def _fresh_project(root: Path) -> Path:
-    project = root / "project"
-    project.mkdir()
-    (project / "project.godot").write_text('[application]\nconfig/name="fresh"\n')
-    return project
-
-
-def test_install_proves_actor_before_any_project_mutation(signed_release, tmp_path, monkeypatch):
-    project, old = _old_project(tmp_path)
-    recovery = tmp_path / "recovery"
-
-    def reject_actor(version: str) -> None:
-        assert version == "4.0.0"
-        raise v4_release.ReleaseError("update actor: unavailable fixture")
-
-    monkeypatch.setattr(v4_release, "_prewarm_update_actor", reject_actor)
-    with pytest.raises(v4_release.ReleaseError, match="unavailable fixture"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            recovery,
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-
-    addon = project / "addons/godot_ai"
-    assert {path.name: path.read_bytes() for path in addon.iterdir()} == old
-    assert not recovery.exists()
-    assert not (project / "addons/.godot-ai-v4-installing").exists()
-    assert not (project / v4_release.MIGRATION_MARKER_RELATIVE).exists()
-
-
-def test_install_atomically_creates_an_exact_tree_for_a_fresh_project(signed_release, tmp_path):
-    project = _fresh_project(tmp_path)
-    recovery = tmp_path / "recovery"
-
-    backup = v4_release.install_verified_release(
-        *signed_release["outputs"],
-        signed_release["expected"],
-        project,
-        recovery,
-        editors_closed=True,
-        clients_and_backend_stopped=True,
-    )
-
-    manifest = json.loads(signed_release["outputs"][1].read_bytes())
-    assert backup is None
-    v4_release._verify_installed_tree(project / "addons/godot_ai", manifest)
-    assert not recovery.exists()
-    assert not (project / v4_release.MIGRATION_MARKER_RELATIVE).exists()
-
-
-def test_fresh_install_cleanup_failure_preserves_committed_live_tree(
-    signed_release, tmp_path, monkeypatch
-):
-    project = _fresh_project(tmp_path)
-    recovery = tmp_path / "recovery"
-    real_rmtree = v4_release.shutil.rmtree
-
-    def fail_recovery_cleanup(path: Path, *args, **kwargs) -> None:
-        if Path(path) == recovery:
-            raise OSError("injected post-commit cleanup failure")
-        real_rmtree(path, *args, **kwargs)
-
-    monkeypatch.setattr(v4_release.shutil, "rmtree", fail_recovery_cleanup)
-    assert (
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            recovery,
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-        is None
-    )
-
-    manifest = json.loads(signed_release["outputs"][1].read_bytes())
-    v4_release._verify_installed_tree(project / "addons/godot_ai", manifest)
-    assert recovery.is_dir()
-    assert not (recovery / "failed-v4-tree").exists()
-
-
 def test_canonical_manifest_rejects_lone_surrogate_as_release_error() -> None:
     with pytest.raises(v4_release.ReleaseError, match="canonical JSON"):
         v4_release._canonical({"value": "\ud800"})
-
-
-def test_install_replaces_the_whole_old_tree_and_retains_external_backup(signed_release, tmp_path):
-    project, old = _old_project(tmp_path)
-    recovery = tmp_path / "recovery"
-    backup = v4_release.install_verified_release(
-        *signed_release["outputs"],
-        signed_release["expected"],
-        project,
-        recovery,
-        editors_closed=True,
-        clients_and_backend_stopped=True,
-    )
-
-    manifest = json.loads(signed_release["outputs"][1].read_bytes())
-    v4_release._verify_installed_tree(project / "addons/godot_ai", manifest)
-    assert not (project / "addons/godot_ai/old-only.gd").exists()
-    assert backup == recovery / "retained-pre-v4-addon"
-    backup_files = {
-        path.relative_to(backup).as_posix(): path.read_bytes() for path in backup.iterdir()
-    }
-    assert backup_files == old
-    assert project not in recovery.parents
-    marker = project / v4_release.MIGRATION_MARKER_RELATIVE
-    assert marker.read_bytes() == v4_release._canonical(
-        v4_release._migration_marker_record(
-            "3.2.4", signed_release["expected"][3], signed_release["expected"][4]
-        )
-    )
-    if v4_release.os.name != "nt":
-        assert stat.S_IMODE(marker.stat().st_mode) == 0o600
-
-
-def test_install_requires_editor_closure_ack_and_external_unused_recovery(signed_release, tmp_path):
-    project, _old = _old_project(tmp_path)
-
-    def call(recovery, closed):
-        return v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            recovery,
-            editors_closed=closed,
-            clients_and_backend_stopped=True,
-        )
-
-    with pytest.raises(v4_release.ReleaseError, match="editors-closed"):
-        call(tmp_path / "unused", False)
-    with pytest.raises(v4_release.ReleaseError, match="outside the entire project"):
-        call(project / "recovery", True)
-    occupied = tmp_path / "occupied"
-    occupied.mkdir()
-    with pytest.raises(v4_release.ReleaseError, match="already exists"):
-        call(occupied, True)
-    assert (project / "addons/godot_ai/old-only.gd").is_file()
-
-
-def test_existing_tree_requires_clients_and_backend_stopped_ack(signed_release, tmp_path):
-    project, _old = _old_project(tmp_path)
-
-    with pytest.raises(v4_release.ReleaseError, match="clients-and-backend-stopped"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            tmp_path / "recovery",
-            editors_closed=True,
-            clients_and_backend_stopped=False,
-        )
-
-    assert (project / "addons/godot_ai/old-only.gd").is_file()
-    assert not (project / v4_release.MIGRATION_MARKER_RELATIVE).exists()
 
 
 @pytest.mark.skipif(v4_release.os.name == "nt", reason="POSIX namespace policy")
@@ -741,309 +510,6 @@ def test_migration_posix_policy_allows_only_root_owned_sticky_writable_dirs():
     if current != 0:
         assert not v4_release._verify._safe_posix_ancestor(current, directory | 0o1777)
     assert not v4_release._verify._safe_posix_ancestor(other, directory | 0o700)
-
-
-@pytest.mark.skipif(v4_release.os.name == "nt", reason="POSIX namespace policy")
-def test_install_rejects_writable_posix_ancestor_before_mutation(signed_release, tmp_path):
-    unsafe = tmp_path / "unsafe"
-    project, _old = _old_project(unsafe)
-    unsafe.chmod(0o777)
-    try:
-        with pytest.raises(v4_release.ReleaseError, match="unsafe POSIX ancestor"):
-            v4_release.install_verified_release(
-                *signed_release["outputs"],
-                signed_release["expected"],
-                project,
-                tmp_path / "recovery",
-                editors_closed=True,
-                clients_and_backend_stopped=True,
-            )
-    finally:
-        unsafe.chmod(0o700)
-    assert (project / "addons/godot_ai/old-only.gd").is_file()
-    assert not (tmp_path / "recovery").exists()
-
-
-@pytest.mark.skipif(v4_release.os.name == "nt", reason="symlink fixture")
-def test_install_rejects_linked_project_marker_before_mutation(signed_release, tmp_path):
-    project, _old = _old_project(tmp_path)
-    marker = project / "project.godot"
-    outside = tmp_path / "outside-project.godot"
-    marker.replace(outside)
-    marker.symlink_to(outside)
-
-    with pytest.raises(v4_release.ReleaseError, match="regular non-link file"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            tmp_path / "recovery",
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-    assert (project / "addons/godot_ai/old-only.gd").is_file()
-    assert not (tmp_path / "recovery").exists()
-
-
-@pytest.mark.skipif(v4_release.os.name == "nt", reason="POSIX hard-link contract")
-def test_install_rejects_hard_linked_old_tree_before_mutation(signed_release, tmp_path):
-    project, _old = _old_project(tmp_path)
-    linked = project / "addons/godot_ai/old-only.gd"
-    external = tmp_path / "external-link"
-    v4_release.os.link(linked, external)
-
-    with pytest.raises(v4_release.ReleaseError, match="hard-linked file"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            tmp_path / "recovery",
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-    assert linked.is_file()
-    assert not (tmp_path / "recovery").exists()
-
-
-def test_install_restores_old_tree_when_activation_rename_fails(
-    signed_release, tmp_path, monkeypatch
-):
-    project, old = _old_project(tmp_path)
-    recovery = tmp_path / "recovery"
-    real_rename = v4_release.os.rename
-
-    def fail_stage_activation(source, target):
-        if Path(source).parent.parent.name == "stage":
-            raise OSError("injected activation failure")
-        return real_rename(source, target)
-
-    monkeypatch.setattr(v4_release.os, "rename", fail_stage_activation)
-    with pytest.raises(v4_release.ReleaseError, match="restored the old add-on"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            recovery,
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-    addon = project / "addons/godot_ai"
-    addon_files = {
-        path.relative_to(addon).as_posix(): path.read_bytes() for path in addon.iterdir()
-    }
-    assert addon_files == old
-    assert not recovery.exists()
-    assert not (project / v4_release.MIGRATION_MARKER_RELATIVE).exists()
-
-
-def test_install_syncs_complete_stage_before_first_live_tree_rename(
-    signed_release, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project, _old = _old_project(tmp_path)
-    events: list[str] = []
-    real_sync_stage = v4_release._sync_staged_directories
-    real_rename = v4_release._rename_tree
-
-    def sync_stage(path: Path) -> None:
-        events.append("sync_stage")
-        real_sync_stage(path)
-
-    def rename(source: Path, target: Path) -> None:
-        events.append("rename")
-        real_rename(source, target)
-
-    monkeypatch.setattr(v4_release, "_sync_staged_directories", sync_stage)
-    monkeypatch.setattr(v4_release, "_rename_tree", rename)
-    v4_release.install_verified_release(
-        *signed_release["outputs"],
-        signed_release["expected"],
-        project,
-        tmp_path / "recovery",
-        editors_closed=True,
-        clients_and_backend_stopped=True,
-    )
-
-    assert events[0] == "sync_stage"
-    assert events.count("rename") == 2
-
-
-def test_install_restores_old_tree_when_first_post_rename_sync_fails(
-    signed_release, tmp_path, monkeypatch
-):
-    project, old = _old_project(tmp_path)
-    recovery = tmp_path / "recovery"
-    real_sync = v4_release._sync_directory
-    failed = False
-
-    def fail_first_sync(path: Path) -> None:
-        nonlocal failed
-        if not failed and (recovery / "retained-pre-v4-addon").exists():
-            failed = True
-            raise OSError("injected post-rename sync failure")
-        real_sync(path)
-
-    monkeypatch.setattr(v4_release, "_sync_directory", fail_first_sync)
-    with pytest.raises(v4_release.ReleaseError, match="restored the old add-on"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            recovery,
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-
-    addon = project / "addons/godot_ai"
-    assert {path.name: path.read_bytes() for path in addon.iterdir()} == old
-    assert not recovery.exists()
-    assert not (project / v4_release.MIGRATION_MARKER_RELATIVE).exists()
-
-
-def test_fresh_install_failure_restores_absent_target_and_cleans_staging(
-    signed_release, tmp_path, monkeypatch
-):
-    project = _fresh_project(tmp_path)
-    recovery = tmp_path / "recovery"
-    real_verify = v4_release._verify_installed_tree
-    calls = 0
-
-    def fail_live_verification(path: Path, manifest: dict[str, Any]) -> None:
-        nonlocal calls
-        calls += 1
-        real_verify(path, manifest)
-        if calls == 2:
-            raise v4_release.ReleaseError("injected live verification failure")
-
-    monkeypatch.setattr(v4_release, "_verify_installed_tree", fail_live_verification)
-    with pytest.raises(v4_release.ReleaseError, match="fresh install failed"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            recovery,
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-
-    assert not (project / "addons/godot_ai").exists()
-    assert not recovery.exists()
-
-
-def test_fresh_install_loser_never_quarantines_a_target_that_appeared(
-    signed_release, tmp_path, monkeypatch
-):
-    project = _fresh_project(tmp_path)
-    live = project / "addons/godot_ai"
-    recovery = tmp_path / "loser-recovery"
-    real_rename = v4_release._rename_tree
-
-    def publish_winner_before_loser(source: Path, target: Path) -> None:
-        if target == live:
-            target.mkdir()
-            (target / "winner.txt").write_text("winner\n")
-        real_rename(source, target)
-
-    monkeypatch.setattr(v4_release, "_rename_tree", publish_winner_before_loser)
-    with pytest.raises(v4_release.ReleaseError, match="fresh install failed"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            recovery,
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-
-    assert (live / "winner.txt").read_text(encoding="utf-8") == "winner\n"
-    assert not recovery.exists()
-    assert not (project / "addons/.godot-ai-v4-installing").exists()
-
-
-def test_two_fresh_installers_have_one_exclusive_winner(signed_release, tmp_path, monkeypatch):
-    project = _fresh_project(tmp_path)
-    first_recovery = tmp_path / "first-recovery"
-    second_recovery = tmp_path / "second-recovery"
-    entered = threading.Event()
-    release = threading.Event()
-    real_extract = v4_release._extract_verified_archive
-    first_call = True
-
-    def pause_first_extract(data: bytes, destination: Path) -> Path:
-        nonlocal first_call
-        staged = real_extract(data, destination)
-        if first_call:
-            first_call = False
-            entered.set()
-            assert release.wait(3)
-        return staged
-
-    monkeypatch.setattr(v4_release, "_extract_verified_archive", pause_first_extract)
-    results: list[Path | None] = []
-    errors: list[BaseException] = []
-
-    def first_install() -> None:
-        try:
-            results.append(
-                v4_release.install_verified_release(
-                    *signed_release["outputs"],
-                    signed_release["expected"],
-                    project,
-                    first_recovery,
-                    editors_closed=True,
-                    clients_and_backend_stopped=True,
-                )
-            )
-        except BaseException as exc:
-            errors.append(exc)
-
-    worker = threading.Thread(target=first_install)
-    worker.start()
-    assert entered.wait(3)
-    with pytest.raises(v4_release.ReleaseError, match="exclusive claim"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            second_recovery,
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-    release.set()
-    worker.join(5)
-
-    assert not worker.is_alive()
-    assert errors == []
-    assert results == [None]
-    manifest = json.loads(signed_release["outputs"][1].read_bytes())
-    v4_release._verify_installed_tree(project / "addons/godot_ai", manifest)
-    assert not second_recovery.exists()
-
-
-def test_cleanup_sync_failure_does_not_turn_an_installed_tree_into_failure(
-    signed_release, tmp_path, monkeypatch
-):
-    project, _old = _old_project(tmp_path)
-    recovery = tmp_path / "recovery"
-    real_sync = v4_release._sync_directory
-
-    def fail_only_cleanup_sync(path: Path) -> None:
-        if path == recovery and not (recovery / v4_release.ASSET_NAME).exists():
-            raise OSError("injected cleanup-only sync failure")
-        real_sync(path)
-
-    monkeypatch.setattr(v4_release, "_sync_directory", fail_only_cleanup_sync)
-    backup = v4_release.install_verified_release(
-        *signed_release["outputs"],
-        signed_release["expected"],
-        project,
-        recovery,
-        editors_closed=True,
-        clients_and_backend_stopped=True,
-    )
-
-    manifest = json.loads(signed_release["outputs"][1].read_bytes())
-    assert backup == recovery / "retained-pre-v4-addon"
-    v4_release._verify_installed_tree(project / "addons/godot_ai", manifest)
 
 
 def test_package_is_credential_free_and_sign_consumes_frozen_manifest(

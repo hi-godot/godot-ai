@@ -1,14 +1,20 @@
 # v4 Architecture Simplification — Verification Plan
 
 - Date: 2026-08-30
-- Status: approved executable release contract; the ownership redesign and
-  core update reducer have a local checkpoint. The section-8 failpoint and
-  storm matrices are nightly diagnostics rather than release gates, and no
-  final qualification bundle or publication approval is recorded
-- Purpose: make migration, updater, security, release, crash, and stress gates
+- Status: approved executable release contract; the ownership redesign has a
+  local checkpoint. The storm profiles in section 7 are diagnostics rather
+  than release gates, and no final qualification bundle or publication
+  approval is recorded
+- Purpose: make migration, updater, security, release, and stress gates
   executable against exact bytes
 - Release range: Godot 4.7+ within the 4.x line
 - Required desktop platforms: Windows, macOS, Linux
+
+The updater sections were reduced on 2026-09-03 per
+[self-update.md](self-update.md): the interprocess activation-lock matrix and
+the failpoint/crash matrix were removed, and the migration and evidence
+sections now describe the in-editor verify, stage, swap, restart, verify-again
+path.
 
 ## 1. Gate rules
 
@@ -45,7 +51,6 @@ Before the first architecture tranche, check in a verification manifest with:
   artifact inventory (name/version/filename/size/SHA-256) for every row;
 - fixed workload seeds and generated operation traces;
 - numeric error, latency, recovery, memory, file-descriptor, and thread bounds;
-- all failpoint IDs and expected on-disk states;
 - expected-red, current-green, oracle-only, and intentional-v4-difference rows;
 - evidence output schema and retention path.
 
@@ -105,7 +110,7 @@ handoff through this origin. A wrong token yields no candidate or download. The
 driver observes that handoff but never activates it: synthetic manifest/signature
 bytes do not qualify an update and are not submitted as candidate evidence.
 The signed development updater regression separately exercises the whole
-activation/repin/backend/tool/recovery path over this transport, with unchanged
+update/repin/backend/tool path over this transport, with unchanged
 manager bytes in its live and backup trees. Its disposable signing key and
 local server/client substitutions still exclude it from immutable-candidate
 qualification; its retained shutdown-resource diagnostics also remain open.
@@ -116,15 +121,16 @@ resolution and cross-platform runtime evidence producer remains required.
 The qualification workflow's runtime row is the exact A -> B path. It
 consumes the matching retained Python-row inventory, installs unmodified
 signed A through the documented verifier, serves unmodified signed B through
-the private HTTPS origin, resolves both exact server/actor wheels through the
-retained private index, and drives one real editor update from a
-harness-owned autoload. The retained case verifies the changed backend
-identity, automatic client repin, exact B live tree, exact A backup, successful
-claim, migration completion, released lock, engine hash/version and absence of
-private endpoint credentials in retained output. Its required case set is
-exactly `exact-a-to-b-hot-update`; final-v3 migration is the release-blocking
-manual smoke in the runbook, and the functional/security, reopen/backup and
-repeated-crash cases are nightly diagnostics.
+the private HTTPS origin, resolves the exact server wheel through the retained
+private index, and drives one real editor update from a harness-owned
+autoload. The retained case verifies the changed backend identity, automatic
+client repin, exact B live tree, exact A backup under
+`addons/.godot_ai_update/backup/`, a `success` marker, engine hash/version and
+absence of private endpoint credentials in retained output. Its required case
+set is exactly `exact-a-to-b-hot-update`; the final-v3 capsule crossing and
+the tampered-tree rollback are the other two real-editor scenarios in
+`tests/integration/test_self_update_upgrade_paths.py`, run on Linux on every
+pull request and on all three desktop OSes nightly.
 
 Runtime jobs and aggregate evidence keys carry the engine version: one row per
 desktop OS at Godot 4.7.0 / Python 3.11, plus one Linux row at Godot 4.7.2
@@ -204,21 +210,21 @@ The harness performs the documented single **Update** action from the exact
 final-v3 tree. It then proves, without another user action:
 
 1. v3 selects and authenticates the legacy-named capsule;
-2. the bridge resolves the exact actor through the production uv boundary and
-   verifies the embedded canonical signature/inventory before live mutation;
-3. unsafe recovery namespaces, aliases, links/reparse traversal, permissions,
-   cross-filesystem roots, and competing editors fail closed;
-4. the complete temporary/old tree moves to external recovery and the exact v4
-   tree alone becomes live;
-5. Godot gracefully restarts itself, the new editor proves its predecessor
-   closed, and the actor transfers the inherited nonce-bound lease;
-6. first v4 startup claims the transaction, broadly repins owned pre-v4 client
-   entries, durably completes migration, and starts the matching server; and
-7. authenticated tools, later reopen, and retained-backup restoration work.
+2. the bridge verifies the embedded canonical signature and inventory inside
+   the editor before any live mutation;
+3. a lock held by another live editor on the same project refuses the update
+   before the swap;
+4. the complete old tree, bridge included, moves to
+   `addons/.godot_ai_update/backup/<old version>/` and the exact v4 tree alone
+   becomes live;
+5. the bridge persists the v4 enabled entry without loading v4 in the old
+   process, and Godot restarts itself;
+6. first v4 startup hashes the live tree against the marker, records
+   `success`, repins owned client entries, and starts the matching server; and
+7. authenticated tools, later reopen, and restoring the retained backup work.
 
-Missing `uvx`, timeout/offline resolution, malformed identity, wrong package or
-protocol identity, and an extra response field each fail before an install
-claim, recovery directory, marker, backup, or live-tree mutation exists.
+A wrong signature, malformed identity, or inventory mismatch fails before any
+marker, backup, or live-tree mutation exists.
 
 Each mandatory desktop row starts from a byte-hashed final-v3 tree with
 old-only files and owned client entries. Older historical classes remain
@@ -226,8 +232,8 @@ outside the recurring support gate; the retained archaeology evidence does not
 substitute for executing the exact final-v3 bridge candidate.
 
 The harness scans the entire project after reopening for duplicate/stale
-`class_name` failures and parse cascades. A backup anywhere under the project
-is a hard failure.
+`class_name` failures and parse cascades. A backup anywhere in the project
+outside `addons/.godot_ai_update/` is a hard failure.
 
 ### 5.3 Installation-surface audit
 
@@ -239,8 +245,9 @@ Before publication:
 - classic Asset Library and Asset Store listings remain on final v3 during
   qualification; that updater consumes only the signed transition capsule;
 - source archives cannot be mistaken for updater payloads;
-- the supported final-v3 Update path requires Godot 4.7+ and proves automatic
-  external backup, exact replacement, client repin, and server startup.
+- the supported final-v3 Update path requires Godot 4.7+ and proves the
+  automatic retained backup, exact replacement, client repin, and server
+  startup.
 
 ## 6. Exact two-candidate qualification
 
@@ -251,7 +258,7 @@ Before publication:
 - **B:** qualification-only identity `4.0.1`, source SHA B. B is a reviewed
   minimal child of A whose only runtime change is version/package identity. It
   also removes the bundled, runtime-inert `addons/godot_ai/README.md`, proving
-  that activation deletes an A-only managed-tree file instead of overlaying B.
+  that the swap removes an A-only managed-tree file instead of overlaying B.
   B is never relabeled or published. Its patch number is not reserved: the
   next patch release publishes a fresh reviewed A under `4.0.1`, and the
   retained test-only B is the accepted residual recorded in the
@@ -278,7 +285,6 @@ A + B digests
   |-> retained historical boundary decision + signed bridge-shape gate
   |-> one-click final-v3 migration to exact A
   |-> exact A -> B hot self-update (release gate)
-  |-> failure/lock/repair/storm evidence (nightly diagnostics, not a gate)
   `-> pre-publication qualification bundle
        `-> release-publish reviewer approves the exact digest set
             `-> publish A byte-for-byte
@@ -338,191 +344,7 @@ If GitHub publication fails after PyPI, resume with the immutable A artifacts.
 Before a future stable v4.1 release, public v4.0 must qualify the exact private
 v4.1 candidate that will be published byte-for-byte; B cannot stand in for it.
 
-## 7. Interprocess activation-lock matrix
-
-The policy is refusal, not invisible multi-editor coordination.
-
-Required cases:
-
-- two update clicks on one canonical install root: exactly one transaction
-  starts; the loser fails before quiescence/disable/mutation;
-- a retained successful backup causes the next update to refuse before
-  download/quiescence/mutation; after an explicit editor-closed archive or
-  removal, the same update may proceed without rotating or overwriting it;
-- a non-initiating editor already live on the root: activation refuses before
-  mutation;
-- a second editor starts after lock acquisition: startup refuses before normal
-  composition, persists no lease or outcome, and disables the plugin rather
-  than continuing an old compiled tree as an observer;
-- after the matching terminal claim exists and the activation lock is
-  released, that editor must re-enable the plugin or restart so Godot loads the
-  terminal tree afresh; the refused instance emits no `PostUpdateOutcome`
-  fanout, client repin, or update-outcome telemetry;
-- a successful claim without `migration-complete.json` is rediscovered on
-  every ordinary startup; crashes before repin, during repin, and after repin
-  but before durable completion all repeat the M6 barrier and start no server;
-- migration completion requires the exact current editor lease, successful
-  claim/journal, and signed live-tree identity; only its durable actor
-  acknowledgement releases normal startup or permits another update;
-- a missing, malformed, mismatched, timed-out, or still-locked terminal state
-  keeps every non-initiating startup barred and points to existing-runtime
-  repair;
-- different canonical roots do not block each other;
-- case, separator, relative, symlink, junction, and reparse aliases resolve to
-  the same identity or fail closed;
-- live locks are never stolen;
-- killed/stale owner cannot be taken over automatically;
-- repair takeover requires explicit user action, closed editors, dead-process
-  fingerprint proof, and atomic claim;
-- explicit `abort-prepared --dead-owner-takeover` can clean only authenticated
-  preactivation stage state after proving the prepared editor and any prior
-  abort requester/repairer dead or PID-reused; it never mutates the live tree;
-- PID reuse, malformed/unknown records, mismatched roots/transactions, and
-  unverifiable ownership fail closed;
-- only the initiating reload lineage writes readiness and claims result;
-- another editor cannot consume outcome or replacement authorization.
-
-Use two real Godot editor processes, not mocked consumers.
-
-## 8. Nightly diagnostics (not release gates)
-
-The failpoint/crash matrix and the locked storm profiles below are **nightly
-diagnostics**, not release gates. `nightly-diagnostics.yml` runs the
-deterministic failpoint/crash-recovery suites and the real-editor recovery
-tests on Linux at Godot 4.7.2, runs the locked `steady` storm profile in
-`--measure-baseline` mode, samples post-quiescence editor/backend resources,
-uploads every output as a 14-day artifact, and fails visibly on any failure
-beyond the one expected `baseline measurement is not qualification` contract
-line. `complete-qualification` does not read these results and promotion does
-not wait for them; a red nightly is a bug to investigate, not a waived gate.
-
-### 8.1 Failpoint and crash matrix
-
-#### 8.1.1 Deterministic barriers
-
-The current activation/coordinator adapter accepts optional process-local
-`GODOT_AI_QUALIFICATION_FAILPOINT_OCCURRENCE` (1–9999, default 1) alongside
-the required token/effect/before-or-after/timeout tuple. It counts matching
-effect/timing crossings, publishes the selected occurrence as `sequence`, and
-authenticates that sequence in the controller response. Unrelated effects do
-not advance the counter. The selector is one-shot and never arms a barrier
-without the complete capability tuple. This closes repeated-effect ambiguity;
-it does not complete the command-path coverage listed below.
-
-The activation actor also exposes `intent_temporary_write`,
-`journal_temporary_write` and `terminal_temporary_write`, each before creation
-and after the private temporary file is fully written, fsynced and closed but
-before its record name is published/replaced. The existing `*_commit` barriers
-still bracket the whole publication operation. The in-memory intent is already
-validated before these controls can arm; this is not a pre-prepare or
-recovery-root-creation hook. A handled failure removes its own unpublished
-temporary. A killed writer leaves that temporary as evidence; repair must use
-the committed journal, never promote the pending bytes to authority, and retain
-the orphan temporary. The coordinator recognizes these actor effects without
-claiming or consuming their execution. The rest of the surface below remains
-required, including preparation and the separate startup/repair command paths.
-
-The separate `complete-migration` CLI now accepts the same explicit tuple for
-`migration_complete` and `migration_complete_temporary_write`. It arms only
-after validating the exact live tree, successful claim/journal, current editor
-lease and migration election. An already validated completion is idempotent
-and does not re-arm. Library calls remain environment-inert. Handled failures
-scrub the tuple and remove their own capability/temporary; a killed command
-retains its barrier and unpublished bytes without granting startup authority.
-Activation and coordinator adapters recognize these names but do not execute
-them. This is a separately launched command boundary, **not** an end-to-end
-Godot M6 handoff proof: the coordinator currently clears its inherited tuple
-after launching activation, so qualification must explicitly provision the
-completion command. Full candidate lifecycle/controller integration remains
-required alongside the other missing command paths.
-
-The explicit `repair` CLI now externally addresses `repair_claim` before and
-after publication. Its optional control arms only after validating the bound
-intent/activation lock and positively proving the initiating editor and runner
-dead or PID-reused. A still-live prior repairer still refuses takeover. Library
-calls remain environment-inert; all CLI exits scrub the tuple, handled exits
-remove their capability, and a killed repair process preserves its barrier.
-Six real repair-subprocess continue/fail/kill rows prove exact pre-claim tree
-state, barred ordinary startup and explicit subsequent rollback/quarantine.
-Their initial activation is a development crash fixture with two separate
-Python owner-identity processes, not two Godot editors or an immutable candidate.
-The remaining repair effects/reclamation boundaries and other command paths
-below are still required; recognizing an effect name does not execute it.
-
-Every updater/recovery reducer effect has stable `before_*` and `after_*`
-barrier IDs, including:
-
-- recovery-root and activation-lock creation;
-- editor census and client quiescence;
-- candidate/manifest/staged-tree revalidation;
-- prepared-state temporary write and atomic commit;
-- intent temporary write and atomic commit;
-- disable request and verified disable;
-- live-to-backup rename;
-- stage-to-live rename;
-- filesystem scan and enable;
-- readiness temporary write and atomic commit;
-- result temporary write and atomic commit;
-- result rename-to-claim;
-- claim validation and pre-fanout;
-- migration-completion publication;
-- fanout and startup-barrier release;
-- every rollback/quarantine rename, rescan, and re-enable;
-- repair transaction claim and each repair effect;
-- prepared-update abort intent, stage deletion/sync, cleanup publication, and
-  preactivation dead-owner repair-claim publication/reclamation;
-- replacement-authorization spend;
-- activation-lock release.
-
-The exact candidate writes an out-of-project barrier record bound to
-project/install root, transaction, effect, and monotonic sequence, then waits
-for an external continue/fail token. It is owner-private on verified POSIX
-paths; on Windows it uses the fixed canonical default and reparse checks under
-the explicitly narrowed threat claim. The controller injects one failure or
-kill only after observing the record. It does not race console logs.
-
-Failpoint control is disabled by default, requires an explicit local
-qualification capability, cannot be armed by release metadata/project data,
-and never leaks its token.
-
-#### 8.1.2 Assertions per injected boundary
-
-Each before/after failure and process-kill case declares:
-
-- expected live, stage, backup, and quarantine tree hashes;
-- expected prepared, activation-lock, editor-lease, intent, journal, readiness,
-  result, claim, and migration-completion presence/content;
-- which process may still be live;
-- whether normal startup remains barred;
-- exact next restart or repair action;
-- final immutable `PostUpdateOutcome`;
-- retained backup/evidence paths;
-- expected user message and exit/error code.
-
-Corrupt, truncated, duplicate-key, unknown-schema, stale, mismatched-version,
-mismatched-root, and syntactically valid but impossible-state records each have
-explicit rows.
-
-The normal successful backup is never auto-deleted, so no post-success cleanup
-failpoint exists.
-
-#### 8.1.3 Repeated crash regression smoke
-
-The user observed multiple macOS Godot crashes during prior updater testing.
-Qualification therefore runs repeated fresh-snapshot cycles:
-
-- 10 exact A -> B hot updates on Windows;
-- 10 exact A -> B hot updates on macOS;
-- 5 exact A -> B hot updates on Linux;
-- 5 one-click byte-hashed final-v3 -> A migrations per platform;
-- repeated Dock detach/reattach and plugin disable/enable around success and
-  failure rows.
-
-Before and after each run, capture platform crash-report directories, Godot
-logs, process trees, and tree hashes. Any new Godot crash, abort, parse cascade,
-or unexplained process death fails the nightly run and must be investigated.
-
-### 8.2 Locked storm profiles
+## 7. Locked storm profiles
 
 Phase 1 executes five baseline repetitions per platform and checks the numeric
 thresholds into the verification manifest before Phase 2. The operation traces
@@ -537,7 +359,7 @@ Target IDs are also RNG inputs and therefore locked: single-editor profiles use
 is a different schedule and is rejected rather than compared to canonical
 coverage floors.
 
-#### 8.2.1 Steady profile
+### 7.1 Steady profile
 
 - 8 workers;
 - 20 waves;
@@ -550,7 +372,7 @@ coverage floors.
   disposable project root and captured editor PID;
 - every unique pinned platform/Godot row.
 
-#### 8.2.2 Reload-churn profile
+### 7.2 Reload-churn profile
 
 - 12 workers;
 - 30 waves;
@@ -564,9 +386,9 @@ coverage floors.
 - minimum 180 calls per supported domain and 60 for project;
 - latest-stable Godot on all platforms plus Linux 4.7.0.
 
-#### 8.2.3 Multi-editor profile
+### 7.3 Multi-editor profile
 
-- two distinct project roots plus a separate same-root activation-refusal row;
+- two distinct project roots;
 - four workers per editor;
 - 20 waves, 25 calls per worker/wave;
 - at least half of calls explicitly session-pinned;
@@ -575,7 +397,7 @@ coverage floors.
 - focus, Dock, plugin, client, and server churn;
 - all three platforms at current stable Godot.
 
-#### 8.2.4 Acceptance
+### 7.4 Acceptance
 
 - zero unexpected errors;
 - `CONNECTION`/`EDITOR_NOT_READY` only inside recorded reload windows and zero
@@ -595,7 +417,7 @@ coverage floors.
   any path-level drift fails the storm contract;
 - after 60 seconds quiescence, the surrounding qualification row (outside the
   storm runner) records zero pending requests, exact expected
-  session/process/capability/lock counts, and no orphan transaction;
+  session/process/capability/lock counts;
 - checked-in absolute RSS/file-descriptor/thread ceilings and no monotonic
   post-quiescence growth across the five repetitions;
 - replay of any failed generated trace reproduces the same operation sequence.
@@ -632,7 +454,7 @@ numeric ceilings and candidate-bound producer integration remain open
 diagnostics work, not release gates.
 See the [measurement companion](STRESS_TESTING.md#resource-measurement-companion).
 
-## 9. Functional and security matrix
+## 8. Functional and security matrix
 
 At exact A and after A -> B, run:
 
@@ -656,9 +478,9 @@ At exact A and after A -> B, run:
 No test may enable the removed v3 transport as a success path. Mixed pairs must
 fail closed within the locked timeout and point to matching-version migration.
 
-## 10. Evidence and release approval
+## 9. Evidence and release approval
 
-### 10.1 Pre-publication qualification bundle
+### 9.1 Pre-publication qualification bundle
 
 The bundle required for publication approval contains:
 
@@ -672,8 +494,6 @@ The bundle required for publication approval contains:
 - the compact one-time pre-v4 updater evidence record;
 - all platform/Godot/Python results;
 - migration transcripts and verifier output;
-- the latest nightly diagnostics run (failpoint/crash and storm outputs),
-  informational and not a required row;
 - simplification-gate before/after values;
 - production/test LOC additions/deletions/net per tranche;
 - every skip (required count: zero).
@@ -681,14 +501,14 @@ The bundle required for publication approval contains:
 Runtime rows also have an exact required case ID: runtime evidence must
 include exactly `exact-a-to-b-hot-update`. Missing, duplicate, unknown or
 failed cases invalidate the row even when a producer labels the surrounding
-result passed. Failpoint and storm results are nightly diagnostics (section 8)
-and are not required rows of this bundle.
+result passed. Storm results (section 7) are diagnostics and are not required
+rows of this bundle.
 
 The `release-publish` review approves the exact A/B digest set. Any source,
 workflow, document, manifest, package, or asset change after approval
 invalidates the affected rows and requires a new pre-publication bundle.
 
-### 10.2 Post-publication attestation
+### 9.2 Post-publication attestation
 
 After publishing the already-approved A bytes, append a separate attestation
 containing:

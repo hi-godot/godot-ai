@@ -60,10 +60,11 @@ system install). A disabled telemetry preference renders as
 `--disable-telemetry` on the attach argv — the env-injection path that covers
 plugin-spawned servers never runs for a client-spawned bridge or its backend
 (see docs/TELEMETRY.md). Package pins, command paths, ports, exclusions,
-telemetry, and required uv options are verified as launch drift. A normal v4
-self-update repins configured clients automatically before it records durable
-migration completion. **Configure all** is manual remediation when that repair
-reports drift or failure, and remains the explicit repair path after a port
+telemetry, and required uv options are verified as launch drift. After an
+update restarts the editor and the live tree verifies, the plugin repins
+configured clients automatically (pin-only). **Configure all** is manual
+remediation when that repin reports drift or failure, and remains the explicit
+repair path after a port
 change, telemetry toggle, or tool-domain change. Never silently fall back to a
 bare `uvx` command for these entries—report ERROR and leave the config untouched
 when no verified tier exists.
@@ -94,7 +95,7 @@ not read as a hang.
 ### Global mutation lock and recovery
 
 Every automatic Configure or Remove operation—JSON, TOML, YAML, CLI, DSH, and
-post-update client repinning (the M6 migration gate)—acquires one account-wide
+post-update client repinning—acquires one account-wide
 durable lock at the exact path reported by
 `McpClientMutationLock.recovery_message()`. It lives below the OS config
 directory rather than `user://`, because global client configuration is shared
@@ -109,7 +110,8 @@ error** before retrying. Restarting Godot alone is not proof that a descendant
 stopped, and deleting only `owner.json` leaves the deny marker in place.
 
 The lock serializes each mutation and its readback; it does not make a
-multi-client M6 batch or the earlier lock-free status/drift probes atomic. The
+multi-client post-update repin batch or the earlier lock-free status/drift
+probes atomic. The
 migration fails closed on observed non-version drift, but another project can
 complete a serialized write between that observation and a later per-client
 claim. Treat that probe-to-write interval as an explicit P2 last-writer
