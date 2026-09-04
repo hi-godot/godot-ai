@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
+import re
 import shutil
 import tarfile
 import zipfile
@@ -1058,3 +1060,119 @@ def test_verify_pypi_requires_both_unyanked_exact_public_files(pair, monkeypatch
     rows.pop()
     with pytest.raises(support.ReleaseError, match="inventory"):
         promotion.verify_pypi(record)
+
+
+# --- V3-to-v4 migration capsule ---------------------------------------------
+#
+# The capsule is the legacy-named ZIP the final v3 updater overlays: the bridge
+# plugin plus the embedded canonical v4 triple. The bridge runs the v4
+# installer scripts in-process, so the capsule must carry them, and the bridge
+# must trust the same signing key as the v4 updater.
+
+BRIDGE_ROOT = support.ROOT / "migration_bridge"
+BRIDGE_SCRIPTS = {"migration_bridge.gd", "migration_coordinator.gd", "plugin.gd"}
+UPDATER_SOURCE = support.ROOT / "plugin/addons/godot_ai/utils/update_manager.gd"
+PEM_BEGIN, PEM_END = b"-----BEGIN PUBLIC KEY-----", b"-----END PUBLIC KEY-----"
+# Any of these would mean the bridge left GDScript: a spawned process, uvx,
+# Python, an environment handoff, or a worker thread.
+FORBIDDEN_BRIDGE_TOKENS = (
+    b"os.execute",
+    b"create_process",
+    b"execute_with_pipe",
+    b"os.kill",
+    b"uvx",
+    b"python",
+    b"set_environment",
+    b"thread.new",
+)
+
+
+def _embedded_pem(data: bytes) -> bytes:
+    assert data.count(PEM_BEGIN) == 1 and data.count(PEM_END) == 1
+    return data[data.index(PEM_BEGIN) : data.index(PEM_END) + len(PEM_END)] + b"\n"
+
+
+def _commit_and_retag(repo: Path, message: str) -> str:
+    _run("git", "add", "-A", cwd=repo)
+    _run("git", "commit", "-qm", message, cwd=repo)
+    _run("git", "tag", "-d", "v4.0.0", cwd=repo)
+    _run("git", "tag", "v4.0.0", cwd=repo)
+    return _run("git", "rev-parse", "HEAD", cwd=repo).decode().strip()
+
+
+def _build_set(repo: Path, output: Path, key: Path, source: str) -> tuple[Path, ...]:
+    return v4_release.build_release_set(repo, output, key, "stable", "v4.0.0", "4.0.0", source)
+
+
+def test_bridge_signing_key_is_byte_identical_to_the_v4_updater_key():
+    bridge = (BRIDGE_ROOT / "migration_bridge.gd").read_bytes()
+    pem = _embedded_pem(bridge)
+    assert pem == _embedded_pem(UPDATER_SOURCE.read_bytes())
+    spki = base64.b64decode(b"".join(pem.splitlines()[1:-1]), validate=True)
+    assert hashlib.sha256(spki).hexdigest() == v4_release.PUBLIC_KEY_SPKI_SHA256
+    v4_release._validate_embedded_public_key(bridge)
+
+
+def test_migration_bridge_runs_entirely_in_gdscript():
+    scripts = sorted(BRIDGE_ROOT.glob("*.gd"))
+    assert {path.name for path in scripts} == BRIDGE_SCRIPTS
+    for path in scripts:
+        data = path.read_bytes().lower()
+        for token in FORBIDDEN_BRIDGE_TOKENS:
+            assert token not in data, f"{path.name} contains {token!r}"
+
+
+def test_capsule_embeds_the_installer_scripts_from_the_source_commit(pair):
+    repo, candidates, a, _ = pair
+    with zipfile.ZipFile(candidates / "a/release" / v4_release.LEGACY_ASSET_NAME) as package:
+        names = package.namelist()
+        for relative in v4_release.MIGRATION_INSTALLER_SCRIPTS:
+            member = f"{v4_release.PLUGIN_PREFIX}{relative}"
+            assert package.read(member) == _run("git", "show", f"{a}:plugin/{member}", cwd=repo)
+    assert not any("bridge_exec" in name for name in names)
+    assert {f"{v4_release.PLUGIN_PREFIX}{name}" for name in BRIDGE_SCRIPTS} <= set(names)
+
+
+@pytest.mark.parametrize("missing", v4_release.MIGRATION_INSTALLER_SCRIPTS[:2])
+def test_capsule_build_fails_when_an_installer_script_is_missing(
+    tmp_path, signing_key, monkeypatch, missing
+):
+    key, public = signing_key
+    _trust_fixture_key(monkeypatch, public)
+    repo, _ = _repository(tmp_path, public)
+    (repo / "plugin/addons/godot_ai" / missing).unlink()
+    source = _commit_and_retag(repo, "drop installer script")
+    with pytest.raises(v4_release.ReleaseError, match=re.escape(missing)):
+        _build_set(repo, tmp_path / "out", key, source)
+    assert list((tmp_path / "out").iterdir()) == []
+
+
+def test_capsule_carries_what_the_installer_preloads(tmp_path, signing_key, monkeypatch):
+    key, public = signing_key
+    _trust_fixture_key(monkeypatch, public)
+    repo, _ = _repository(tmp_path, public)
+    utils = repo / "plugin/addons/godot_ai/utils"
+    installer = utils / "update_installer.gd"
+    installer.write_text(
+        installer.read_text(encoding="utf-8")
+        + '\nconst Lock := preload("res://addons/godot_ai/utils/lock_helper.gd")\n',
+        encoding="utf-8",
+    )
+    (utils / "lock_helper.gd").write_text(
+        "@tool\nextends RefCounted\n"
+        'const Inner := preload("res://addons/godot_ai/utils/lock_inner.gd")\n',
+        encoding="utf-8",
+    )
+    (utils / "lock_inner.gd").write_text("@tool\nextends RefCounted\n", encoding="utf-8")
+    source = _commit_and_retag(repo, "installer dependencies")
+    outputs = _build_set(repo, tmp_path / "with", key, source)
+    capsule = next(path for path in outputs if path.name == v4_release.LEGACY_ASSET_NAME)
+    with zipfile.ZipFile(capsule) as package:
+        names = set(package.namelist())
+    prefix = f"{v4_release.PLUGIN_PREFIX}utils/"
+    assert {prefix + "lock_helper.gd", prefix + "lock_inner.gd"} <= names
+
+    (utils / "lock_inner.gd").unlink()
+    source = _commit_and_retag(repo, "drop transitive dependency")
+    with pytest.raises(v4_release.ReleaseError, match="lock_inner.gd"):
+        _build_set(repo, tmp_path / "without", key, source)

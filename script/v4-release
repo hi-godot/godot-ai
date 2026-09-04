@@ -55,6 +55,17 @@ LEGACY_MAX_ARCHIVE_SIZE = 66 * 1024 * 1024
 LEGACY_MAX_CHECKSUM_SIZE = 1024
 MIGRATION_BRIDGE_SOURCE = "migration_bridge"
 MIGRATION_PAYLOAD_PREFIX = f"{PLUGIN_PREFIX}migration_payload/"
+# The bridge runs the same verifier and installer the v4 tree ships, and reads
+# the process fingerprint for the update lock from the v4 port resolver (the
+# final v3 copy of that file predates the method). Every script is read from
+# the immutable source commit, together with whatever it preloads.
+MIGRATION_INSTALLER_SCRIPTS = (
+    "utils/release_verifier.gd",
+    "utils/update_installer.gd",
+    "utils/port_resolver.gd",
+)
+MIGRATION_INSTALLER_MAX_FILES = 32
+_GDSCRIPT_DEPENDENCY = re.compile(rb'(?:pre)?load\(\s*"res://addons/godot_ai/([^"\\]+\.gd)"\s*\)')
 ReleaseError = _verify.ReleaseError
 _canonical = _verify._canonical
 _extract_verified_archive = _verify._extract_verified_archive
@@ -200,6 +211,55 @@ def _snapshot_git_directory(
         snapshot.append((f"{destination_prefix}{relative}", data))
     snapshot.sort(key=lambda item: item[0])
     _validate_paths([path for path, _data in snapshot], context)
+    return snapshot
+
+
+def _git_blob(repo: Path, source: str, path: str, context: str) -> bytes | None:
+    """Read one immutable Git blob bound to ``source``; None when the path is absent."""
+    listing = _run(["git", "-C", str(repo), "ls-tree", "-z", source, "--", path], context)
+    entries = [raw for raw in listing.split(b"\0") if raw]
+    if not entries:
+        return None
+    if len(entries) != 1:
+        _fail(context, f"ambiguous Git entry: {path}")
+    try:
+        header, listed = entries[0].decode("utf-8").split("\t", 1)
+        mode, kind, object_id = header.split(" ")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ReleaseError(f"{context}: malformed or non-UTF-8 Git entry") from exc
+    if listed != path or mode not in {"100644", "100755"} or kind != "blob":
+        _fail(context, f"non-regular Git entry: {path}")
+    data = _run(["git", "-C", str(repo), "cat-file", "blob", object_id], "source blob")
+    if not 0 < len(data) <= MAX_FILE_SIZE:
+        _fail(context, f"Git blob is empty or exceeds release bound: {path}")
+    return data
+
+
+def _snapshot_installer_scripts(
+    repo: Path, source: str, carried: set[str]
+) -> list[tuple[str, bytes]]:
+    """Embed the v4 installer scripts, and everything they preload, beside the bridge."""
+    context = "migration installer"
+    pending = list(MIGRATION_INSTALLER_SCRIPTS)
+    seen: set[str] = set()
+    snapshot: list[tuple[str, bytes]] = []
+    while pending:
+        archive_path = f"{PLUGIN_PREFIX}{pending.pop(0)}"
+        if archive_path in seen or archive_path in carried:
+            continue
+        seen.add(archive_path)
+        if len(seen) > MIGRATION_INSTALLER_MAX_FILES:
+            _fail(context, "script dependency closure exceeds the capsule bound")
+        data = _git_blob(repo, source, f"plugin/{archive_path}", context)
+        if data is None:
+            _fail(context, f"required script is missing from the source commit: {archive_path}")
+        snapshot.append((archive_path, data))
+        sidecar = _git_blob(repo, source, f"plugin/{archive_path}.uid", context)
+        if sidecar is not None:
+            snapshot.append((f"{archive_path}.uid", sidecar))
+        pending.extend(
+            match.group(1).decode("utf-8") for match in _GDSCRIPT_DEPENDENCY.finditer(data)
+        )
     return snapshot
 
 
@@ -699,6 +759,11 @@ def build_migration_capsule(
     snapshot[config_index] = (config_path, config.replace(b"@VERSION@", version.encode("ascii")))
     if _plugin_version(snapshot[config_index][1]) != version:
         _fail("migration bridge", "rendered plugin version differs from release identity")
+    snapshot.extend(
+        _snapshot_installer_scripts(
+            repo_root.resolve(), source_commit, {path for path, _data in snapshot}
+        )
+    )
 
     for artifact, name, maximum in zip(
         canonical,
