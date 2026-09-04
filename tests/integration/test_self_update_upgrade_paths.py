@@ -19,8 +19,6 @@ from tests._qualification_https_fixture import signed_smoke_https_delivery
 from tests.conftest import allocate_free_ports
 from tests.integration._self_update_fixture import (
     CLEAN_MAJOR_MARKER_RELATIVE,
-    CLEAN_MAJOR_STATUS_FILE,
-    CLEAN_MAJOR_TOOL_PROBE_FILE,
     COORDINATOR_DISABLE_MARKER,
     LIVE_HTTP_PORT,
     LIVE_WS_PORT,
@@ -29,7 +27,6 @@ from tests.integration._self_update_fixture import (
     POST_UPDATE_TOOL_PROBE_FILE,
     append_driver_autoload,
     assert_no_update_parse_errors,
-    clean_major_install_argv,
     godot_bin_or_skip,
     load_smoke_script,
     prepare_clean_major_migration_project,
