@@ -727,6 +727,7 @@ func _begin_startup_release() -> void:
 		if not _post_update_outcome.is_empty():
 			_present_post_update_failure()
 			UpdateInstaller.clear_pending()
+			UpdateInstaller.release_lock()
 		_fan_post_update_outcome()
 		_release_normal_startup()
 		return
@@ -790,8 +791,11 @@ func _on_dock_post_update_action_requested(action: String) -> void:
 
 func _finish_post_update() -> void:
 	print("MCP | client migration completed")
+	## The success marker stays as the durable record of the last update; the
+	## next swap overwrites it and preflight only refuses swapped/repair states.
 	UpdateInstaller.prune_backups(str(_post_update_outcome.get("to_version", "")))
-	UpdateInstaller.clear_pending()
+	## The lock was taken by the editor that performed the swap; it is dead now.
+	UpdateInstaller.release_lock()
 	_present_post_update_complete()
 	_fan_post_update_outcome()
 	_release_normal_startup()

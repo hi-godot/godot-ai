@@ -415,6 +415,7 @@ def test_install_swaps_the_old_tree_for_the_signed_tree_and_retains_a_backup(
         "status": "success",
         "from_version": "3.2.4",
         "to_version": "4.0.0",
+        "replace_owned_mismatches": True,
         "manifest_sha256": _sha256(release.raw),
         "expected_tree_sha256": expected_tree,
         "backup_root": str(backup),

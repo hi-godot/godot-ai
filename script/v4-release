@@ -616,6 +616,9 @@ def install_verified_release(
         "to_version": expected[3],
         "manifest_sha256": manifest_sha256,
         "expected_tree_sha256": expected_tree,
+        # A pre-v4 tree carries v3-shaped owned client entries; the plugin's
+        # first start may replace them outright, as the capsule crossing does.
+        "replace_owned_mismatches": not from_version.startswith("4."),
         "backup_root": str(update / "backup" / from_version) if from_version else "",
     }
     _write_json(lock, {"pid": os.getpid(), "owner": "script/v4-release install"})
