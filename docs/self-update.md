@@ -37,7 +37,9 @@ hot reload. An update is verify, stage, swap, restart, then verify again.
 All steps run inside the editor, on the main thread except the download.
 
 1. **Check.** The dock polls the releases API; a candidate is a newer `4.x`
-   release exposing the six-name asset set. Dev checkouts skip this.
+   release exposing the six-name asset set. Dev checkouts skip this. Clicking
+   Update asks first: the update saves the project, relaunches the editor,
+   and connected AI clients must be restarted afterwards.
 2. **Download** the three canonical assets into
    `user://godot_ai_update/download/`, enforcing the release-declared sizes and
    trusted asset URLs exactly as today.

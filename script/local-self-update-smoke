@@ -1219,7 +1219,7 @@ def print_instructions(
         print("  crash report: non-macOS; .ips check is skipped")
     print("")
     print("Manual step:")
-    print("  1. In the Godot AI dock, click Update.")
+    print("  1. In the Godot AI dock, click Update, then confirm 'Save & Update'.")
     print("  2. The editor verifies, stages and swaps the bundle, prints")
     print(f"     '... {SMOKE_SWAP_LOG_SUFFIX}' and restarts itself. Nothing else to click.")
     print(f"  3. The restarted editor verifies the tree, prints '{SMOKE_MIGRATED_LOG}',")

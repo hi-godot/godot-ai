@@ -116,6 +116,9 @@ var _tools_apply_btn: Button
 var _tools_reset_btn: Button
 var _tools_dirty_warning: Label
 var _tools_close_confirm: ConfirmationDialog
+## Update saves the project and relaunches the editor; the user says so first.
+var _update_confirm: ConfirmationDialog
+var _update_candidate_version := ""
 var _telemetry_toggle: CheckButton
 var _telemetry_pending_enabled: bool = true
 var _telemetry_saved_enabled: bool = true
@@ -2066,6 +2069,12 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 	_tools_close_confirm.confirmed.connect(_on_tools_discard_confirmed)
 	add_child(_tools_close_confirm)
 
+	_update_confirm = ConfirmationDialog.new()
+	_update_confirm.title = "Update Godot AI?"
+	_update_confirm.ok_button_text = "Save & Update"
+	_update_confirm.confirmed.connect(_on_update_confirmed)
+	add_child(_update_confirm)
+
 	_reset_tools_pending_from_setting()
 	_refresh_tools_ui_state()
 
@@ -2703,10 +2712,31 @@ func _on_update_pressed() -> void:
 	if not _post_update_action.is_empty():
 		post_update_action_requested.emit(_post_update_action)
 		return
+	## The update saves every open scene, swaps the add-on tree and relaunches
+	## the editor (docs/self-update.md, step 8). Ask before doing that to a
+	## user's session. A dock that is not in a scene tree has no dialog to
+	## show and proceeds directly.
+	if _update_confirm != null and is_inside_tree():
+		_update_confirm.dialog_text = update_confirm_text(_update_candidate_version)
+		_update_confirm.popup_centered()
+		return
 	update_requested.emit()
 
 
+func _on_update_confirmed() -> void:
+	update_requested.emit()
+
+
+static func update_confirm_text(version: String) -> String:
+	var target := "Godot AI v%s" % version if not version.is_empty() else "the new Godot AI"
+	return (
+		"This will save your project and relaunch the editor to install %s.\n"
+		+ "AI clients connected right now must be restarted afterwards.\n\nContinue?"
+	) % target
+
+
 func present_update_check(result: Dictionary) -> void:
+	_update_candidate_version = String(result.get("version", ""))
 	_update_label.text = String(result.get("label_text", ""))
 	_update_banner.visible = true
 
