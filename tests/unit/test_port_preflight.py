@@ -149,8 +149,30 @@ def test_preflight_waits_for_the_port_when_the_plugin_asks(monkeypatch) -> None:
     monkeypatch.setenv("GODOT_AI_WAIT_FOR_PORT_MS", "3000")
     started = time.monotonic()
     threading.Timer(0.3, holder.close).start()
-    preflight_check_port(port, label="HTTP", setting="godot_ai/http_port")
+    held = preflight_check_port(port, label="HTTP", setting="godot_ai/http_port")
     assert 0.25 <= time.monotonic() - started < 2.5
+    # The port is held from the instant the wait ends, for the real server
+    # to take over; nobody else can bind it in between.
+    assert held is not None and held.getsockname()[1] == port
+    other = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(OSError):
+            other.bind(("127.0.0.1", port))
+    finally:
+        other.close()
+        held.close()
+
+
+def test_preflight_returns_nothing_on_the_ordinary_path(monkeypatch) -> None:
+    monkeypatch.delenv("GODOT_AI_WAIT_FOR_PORT_MS", raising=False)
+    probe, port = _hold_port()
+    probe.close()
+    assert preflight_check_port(port, label="HTTP", setting="godot_ai/http_port") is None
+    reusable = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        reusable.bind(("127.0.0.1", port))
+    finally:
+        reusable.close()
 
 
 def test_preflight_still_fails_fast_without_the_wait(monkeypatch) -> None:

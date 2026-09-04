@@ -101,10 +101,11 @@ All steps run inside the editor, on the main thread except the download.
     into the restart window. The restarted editor replaces a godot-ai server
     at exactly the version it just updated from without asking; any other
     conflict keeps the dock's explicit Restart Server authority. Every
-    replacement launches our server before killing the occupant, and that
-    server waits for the port to free, so the port passes straight from the
-    old backend to ours within one retry: a bridge polling for a free port
-    to spawn again never sees one. The
+    replacement launches our server before killing the occupant; that server
+    waits for the port to free, binds and listens the instant it does, and
+    hands that very socket to its HTTP and WebSocket servers, so the port is
+    never free between the old backend's death and ours listening: a bridge
+    polling for a free port to spawn again never sees one. The
     old bridge itself refuses the new backend as incompatible, so the dock
     tells the user to restart AI clients that were connected during the
     update; the repinned client configuration launches the new version.

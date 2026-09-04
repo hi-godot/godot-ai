@@ -442,6 +442,8 @@ def test_signed_update_restarts_into_matching_live_server(
         for line in restarted_log[:started_at].splitlines()
         if "MCP | server start blocked: " in line
     ]
+    initial_log = log[: log.index("SELF_UPDATE_HARNESS | replacement editor log:")]
+    print(f"server A: {'stopped' if 'MCP | stopped server' in initial_log else 'detached (lease)'}")
     print(f"replacement: {'needed' if replaced_line in restarted_log else 'not needed'}")
     print(f"blocks before the start: {blocks_before_start}")
     assert f"MCP | AI clients attached before the update must restart to use v{next_version}" in log
@@ -456,20 +458,20 @@ def test_signed_update_restarts_into_matching_live_server(
             "SELF_UPDATE_TEST | pre-update instance_id=",
             f"SELF_UPDATE_TEST | configured Codex command pin={base_version}",
             "SELF_UPDATE_TEST | requesting canonical signed install",
-            # The local bundle is staged before the plugin stops A and swaps;
-            # the HTTPS observer is connected after the plugin's activation
-            # listener, which runs the whole swap synchronously, so its line
-            # lands after the restart announcement.
+            # The local bundle is staged before the swap; the HTTPS observer is
+            # connected after the plugin's activation listener, which runs the
+            # whole swap synchronously, so its line lands after the restart
+            # announcement. Whether A is stopped or merely detached before the
+            # swap depends on the attached agent holding a lease at that
+            # instant; the restarted editor replaces either occupant.
             *(
                 [
-                    "MCP | stopped server",
                     f"MCP | update to {next_version} swapped in; restarting the editor",
                     "SELF_UPDATE_TEST | HTTPS canonical triple downloaded",
                 ]
                 if delivery is not None
                 else [
                     smoke.SMOKE_STAGED_LOG,
-                    "MCP | stopped server",
                     f"MCP | update to {next_version} swapped in; restarting the editor",
                 ]
             ),

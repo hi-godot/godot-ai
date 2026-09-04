@@ -63,8 +63,15 @@ def _is_eaddrinuse(exc: OSError) -> bool:
     )
 
 
-def preflight_check_port(port: int, *, label: str, setting: str, host: str = "127.0.0.1") -> None:
+def preflight_check_port(
+    port: int, *, label: str, setting: str, host: str = "127.0.0.1"
+) -> socket.socket | None:
     """Exit with a distinctive stderr message + exit code when `port` is taken.
+
+    Returns the bound, listening socket when the plugin asked this launch to
+    wait for the port (see below): the caller hands it to the real server so
+    the port is never free between the wait ending and the server listening.
+    Returns ``None`` on the ordinary fail-fast path.
 
     #647: when a foreign process (e.g. a docker container) already owns the
     HTTP or WebSocket port, uvicorn/websockets fail with an opaque bind error
@@ -85,15 +92,23 @@ def preflight_check_port(port: int, *, label: str, setting: str, host: str = "12
     ## within one retry, before an attach bridge that is polling for a free
     ## port can spawn another backend of its own. Every other launch keeps
     ## the fail-fast contract below (#647).
-    wait_deadline = time.monotonic() + _wait_for_port_seconds()
+    wait_seconds = _wait_for_port_seconds()
+    wait_deadline = time.monotonic() + wait_seconds
     while True:
         sock = socket.socket(family, socket.SOCK_STREAM)
+        keep = False
         try:
             if os.name != "nt":
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 sock.bind((host, port))
-                return
+                if wait_seconds <= 0:
+                    return None
+                ## Hold the port from this instant: a bridge polling for a
+                ## free port to spawn its own backend never sees one.
+                sock.listen(128)
+                keep = True
+                return sock
             except OSError as exc:
                 if _is_eaddrinuse(exc) and time.monotonic() < wait_deadline:
                     continue
@@ -113,9 +128,10 @@ def preflight_check_port(port: int, *, label: str, setting: str, host: str = "12
                 )
             raise SystemExit(EXIT_PORT_IN_USE) from exc
         finally:
-            sock.close()
-            if time.monotonic() < wait_deadline:
-                time.sleep(WAIT_FOR_PORT_RETRY_SECONDS)
+            if not keep:
+                sock.close()
+                if time.monotonic() < wait_deadline:
+                    time.sleep(WAIT_FOR_PORT_RETRY_SECONDS)
 
 
 WAIT_FOR_PORT_ENV = "GODOT_AI_WAIT_FOR_PORT_MS"
@@ -280,12 +296,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     ## #647: fail fast — with a recognizable message and exit code — when a
     ## foreign process holds a port we need, instead of uvicorn's opaque bind
     ## error (HTTP) or a half-ready HTTP process without its editor bridge.
+    held_http = held_ws = None
     if args.transport in ("sse", "streamable-http"):
         http_host = (
             bind_host_for_networks(allow_host_networks) if allow_host_networks else "127.0.0.1"
         )
-        preflight_check_port(args.port, label="HTTP", setting="godot_ai/http_port", host=http_host)
-        preflight_check_port(args.ws_port, label="WebSocket", setting="godot_ai/ws_port")
+        held_http = preflight_check_port(
+            args.port, label="HTTP", setting="godot_ai/http_port", host=http_host
+        )
+        held_ws = preflight_check_port(args.ws_port, label="WebSocket", setting="godot_ai/ws_port")
 
     from godot_ai.runtime_info import install_pid_file
 
@@ -325,9 +344,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         exclude_domains=exclude_domains,
         owner_pid=owner_pid,
         allow_host_networks=allow_host_networks,
+        ws_socket=held_ws,
     )
 
     transport_kwargs = {}
+    if held_http is not None:
+        transport_kwargs["sockets"] = [held_http]
     if args.transport in ("sse", "streamable-http"):
         from godot_ai.asgi import hardened_uvicorn_config, http_access_log_enabled
 
