@@ -1,8 +1,12 @@
-"""Strict, dependency-free verification and staging for signed v4 releases."""
+"""Strict verification and staging for signed v4 releases.
+
+Signature checks use ``cryptography``, imported lazily inside the one function
+that needs it, so ``import godot_ai`` never loads it: the running server has no
+use for release verification. Everything else is standard library only.
+"""
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import io
 import json
@@ -198,84 +202,39 @@ def _read_bounded(path: Path, maximum: int, *, allow_empty: bool = False) -> byt
     return data
 
 
-def _der_item(data: bytes, offset: int, tag: int, context: str) -> tuple[bytes, int]:
-    if offset >= len(data) or data[offset] != tag:
-        _fail(context, f"expected DER tag 0x{tag:02x}")
-    offset += 1
-    if offset >= len(data):
-        _fail(context, "truncated DER length")
-    first, offset = data[offset], offset + 1
-    if first < 0x80:
-        length = first
-    else:
-        count = first & 0x7F
-        if not 1 <= count <= 4 or offset + count > len(data) or data[offset] == 0:
-            _fail(context, "invalid DER length")
-        length = int.from_bytes(data[offset : offset + count], "big")
-        offset += count
-        if length < 0x80:
-            _fail(context, "non-canonical DER length")
-    end = offset + length
-    if end > len(data):
-        _fail(context, "truncated DER value")
-    return data[offset:end], end
-
-
-def _rsa_public_numbers(public_key: str) -> tuple[int, int]:
-    lines = public_key.strip().splitlines()
-    if (
-        len(lines) < 3
-        or lines[0] != "-----BEGIN PUBLIC KEY-----"
-        or lines[-1] != "-----END PUBLIC KEY-----"
-    ):
-        _fail("public key", "expected a PEM SubjectPublicKeyInfo")
-    try:
-        der = base64.b64decode("".join(lines[1:-1]), validate=True)
-    except (ValueError, base64.binascii.Error) as exc:
-        raise ReleaseError("public key: invalid PEM encoding") from exc
-    outer, end = _der_item(der, 0, 0x30, "public key")
-    if end != len(der):
-        _fail("public key", "trailing DER data")
-    algorithm, offset = _der_item(outer, 0, 0x30, "public key algorithm")
-    if algorithm != bytes.fromhex("06092a864886f70d0101010500"):
-        _fail("public key", "expected rsaEncryption with NULL parameters")
-    bits, offset = _der_item(outer, offset, 0x03, "public key bits")
-    if offset != len(outer) or not bits or bits[0] != 0:
-        _fail("public key", "invalid subjectPublicKey bit string")
-    key, key_end = _der_item(bits, 1, 0x30, "RSA public key")
-    if key_end != len(bits):
-        _fail("public key", "trailing RSA key data")
-
-    def integer(position: int, name: str) -> tuple[int, int]:
-        raw, position = _der_item(key, position, 0x02, name)
-        if not raw or raw[0] & 0x80 or (len(raw) > 1 and raw[0] == 0 and not raw[1] & 0x80):
-            _fail(name, "expected a canonical positive INTEGER")
-        return int.from_bytes(raw, "big"), position
-
-    modulus, position = integer(0, "RSA modulus")
-    exponent, position = integer(position, "RSA exponent")
-    if position != len(key) or exponent < 3 or exponent % 2 == 0:
-        _fail("public key", "invalid RSA public numbers")
-    if (modulus.bit_length() + 7) // 8 != SIGNATURE_SIZE:
-        _fail("public key", f"expected a {SIGNATURE_SIZE * 8}-bit RSA key")
-    return modulus, exponent
-
-
 def _verify_signature(manifest: bytes, data: bytes, public_key: str) -> None:
-    if len(data) != SIGNATURE_SIZE:
-        _fail("manifest signature", f"expected exactly {SIGNATURE_SIZE} bytes")
-    modulus, exponent = _rsa_public_numbers(public_key)
-    number = int.from_bytes(data, "big")
-    if number >= modulus:
-        _fail("manifest signature", "signature representative is outside the RSA modulus")
-    encoded = pow(number, exponent, modulus).to_bytes(SIGNATURE_SIZE, "big")
-    digest_info = (
-        bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(manifest).digest()
-    )
-    padding = SIGNATURE_SIZE - len(digest_info) - 3
-    expected = b"\x00\x01" + b"\xff" * padding + b"\x00" + digest_info
-    if padding < 8 or encoded != expected:
-        _fail("manifest signature", "RSA PKCS#1 v1.5 SHA-256 verification failed")
+    """Verify one RSA PKCS#1 v1.5 SHA-256 signature over the manifest bytes.
+
+    ``cryptography`` is imported here rather than at module import so that
+    ``import godot_ai`` never loads it; only the closed-editor installer, the
+    release pipeline, and tests ever reach this function.
+    """
+    try:
+        from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    except ImportError as exc:  # pragma: no cover - the dev extra is not installed
+        raise ReleaseError(
+            "manifest signature: the 'cryptography' package is required "
+            "(install the godot-ai 'dev' extra)"
+        ) from exc
+    try:
+        key = serialization.load_pem_public_key(public_key.encode("utf-8"))
+    except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
+        raise ReleaseError(f"public key: expected a PEM SubjectPublicKeyInfo: {exc}") from exc
+    if not isinstance(key, rsa.RSAPublicKey):
+        _fail("public key", "expected an RSA public key")
+    size, remainder = divmod(key.key_size, 8)
+    if remainder or size > SIGNATURE_SIZE:
+        _fail("public key", f"expected an RSA key of at most {SIGNATURE_SIZE * 8} bits")
+    if len(data) != size:
+        _fail("manifest signature", f"expected exactly {size} bytes")
+    try:
+        key.verify(data, manifest, padding.PKCS1v15(), hashes.SHA256())
+    except InvalidSignature as exc:
+        raise ReleaseError(
+            "manifest signature: RSA PKCS#1 v1.5 SHA-256 verification failed"
+        ) from exc
 
 
 def _validate_manifest(raw: bytes, expected: tuple[str, str, str, str, str]) -> dict[str, Any]:
@@ -405,45 +364,78 @@ def _safe_directory(path: Path, context: str) -> Path:
         raise ReleaseError(f"{context}: cannot inspect path: {exc}") from exc
 
 
-def _tree_identity(root: Path, context: str) -> tuple[str, list[dict[str, Any]]]:
-    rows: list[dict[str, Any]] = []
+def _tree_sha256(rows: list[tuple[str, int, str]]) -> str:
+    """Digest ``(path, size, sha256)`` rows in UTF-8 byte order of ``path``.
+
+    One line per file: ``sha256 + " " + str(size) + " " + path + "\\n"``.
+    ``update_installer.gd`` computes the identical value from this definition;
+    a change here must land there in the same release.
+    """
+    digest = hashlib.sha256()
+    for path, size, sha256 in sorted(rows, key=lambda row: row[0].encode("utf-8")):
+        digest.update(f"{sha256} {size} {path}\n".encode("utf-8"))
+    return digest.hexdigest()
+
+
+def hash_tree(root: Path) -> dict[str, Any]:
+    """Hash every regular file beneath ``root``.
+
+    Returns ``{"files": {path: {"size": int, "sha256": hex}}, "tree_sha256": hex}``
+    with each path POSIX-relative to ``root`` and ``files`` in UTF-8 byte order.
+    Links and other non-regular entries fail rather than being skipped, so a
+    planted link cannot hide inside an otherwise matching tree.
+    """
+    context = f"tree {root}"
+    files: dict[str, dict[str, Any]] = {}
     total = 0
     try:
-        for current, directories, files in os.walk(
+        for current, directories, names in os.walk(
             root, onerror=lambda error: _fail(context, str(error))
         ):
             parent = Path(current)
             for name in directories:
                 if not stat.S_ISDIR((parent / name).lstat().st_mode):
                     _fail(context, f"non-directory or link: {parent / name}")
-            for name in files:
+            for name in names:
                 path = parent / name
-                info = path.lstat()
-                if not stat.S_ISREG(info.st_mode):
+                if not stat.S_ISREG(path.lstat().st_mode):
                     _fail(context, f"non-regular file or link: {path}")
-                if os.name != "nt" and info.st_nlink != 1:
-                    _fail(context, f"hard-linked file cannot be retained safely: {path}")
                 size, digest = _hash_file(path, MAX_FILE_SIZE)
                 total += size
-                if len(rows) >= MAX_FILES or total > MAX_TREE_SIZE:
-                    _fail(context, "tree exceeds migration bounds")
-                rows.append(
-                    {
-                        "path": path.relative_to(root).as_posix(),
-                        "size": size,
-                        "sha256": digest,
-                    }
-                )
+                if len(files) >= MAX_FILES or total > MAX_TREE_SIZE:
+                    _fail(context, "tree exceeds release bounds")
+                files[path.relative_to(root).as_posix()] = {"size": size, "sha256": digest}
     except OSError as exc:
         raise ReleaseError(f"{context}: cannot inspect tree: {exc}") from exc
-    rows.sort(key=lambda row: row["path"])
-    return hashlib.sha256(_canonical(rows)).hexdigest(), rows
+    ordered = sorted(files, key=lambda path: path.encode("utf-8"))
+    return {
+        "files": {path: files[path] for path in ordered},
+        "tree_sha256": _tree_sha256(
+            [(path, files[path]["size"], files[path]["sha256"]) for path in ordered]
+        ),
+    }
+
+
+def inventory_tree_hash(manifest: dict[str, Any]) -> str:
+    """The ``hash_tree`` value of a tree installed exactly from ``manifest``."""
+    rows = manifest.get("inventory") if isinstance(manifest, dict) else None
+    if not isinstance(rows, list):
+        _fail("manifest.inventory", "expected array")
+    stripped: list[tuple[str, int, str]] = []
+    for row in rows:
+        path = row["path"]
+        if not path.startswith(PLUGIN_PREFIX):
+            _fail("manifest.inventory", f"path must be beneath {PLUGIN_PREFIX}")
+        stripped.append((path[len(PLUGIN_PREFIX) :], row["size"], row["sha256"]))
+    return _tree_sha256(stripped)
 
 
 def _verify_installed_tree(root: Path, manifest: dict[str, Any]) -> None:
-    _digest, actual = _tree_identity(root, "installed v4 tree")
-    expected = [{**row, "path": row["path"][len(PLUGIN_PREFIX) :]} for row in manifest["inventory"]]
-    if actual != expected:
+    expected = {
+        row["path"][len(PLUGIN_PREFIX) :]: {"size": row["size"], "sha256": row["sha256"]}
+        for row in manifest["inventory"]
+    }
+    if hash_tree(root)["files"] != expected:
         _fail("installed v4 tree", "files do not exactly match the signed inventory")
 
 

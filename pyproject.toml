@@ -81,6 +81,10 @@ dev = [
     "pillow>=10.0",
     # Reviewed harness only: identity-bound release resource measurements.
     "psutil==7.2.2",
+    # The closed-editor installer (script/v4-release) verifies release
+    # signatures with it. release_verify imports it lazily, so the server
+    # package never loads it at runtime.
+    "cryptography>=42",
 ]
 build = [
     "build==1.6.0",
