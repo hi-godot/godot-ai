@@ -20,9 +20,9 @@ Cherry Studio is not supported in v4; remove its stale v3 entry in Cherry
 Studio itself. Godot AI cannot safely edit that application's internal database.
 
 The public v4 release is not available yet: publication remains fail-closed
-until its immutable cross-platform qualification and release attestation
-are complete. The steps above describe the supported flow once publication
-opens. Do not install an unpublished candidate into a real project.
+until the cross-platform qualification run is complete and the maintainer
+approves promotion. The steps above describe the supported flow once
+publication opens. Do not install an unpublished candidate into a real project.
 
 ## What the Update click does
 
@@ -32,27 +32,32 @@ The stable release has six exact assets:
 - a legacy-named migration capsule, checksum, and checksum signature consumed
   by the v3 updater.
 
-The capsule is not a second v4 distribution and is never overlaid as the final
-installation. It is a small, temporary bridge containing the three canonical
-v4 assets. The signed v3 updater authenticates the capsule. The bridge then
-uses the v4 transaction actor to authenticate the inner manifest and every v4
-file, stage a fresh tree, and atomically replace `addons/godot_ai`.
+The capsule is not a second v4 distribution and is never the final
+installation. It is a small, temporary bridge plugin with the three canonical
+v4 assets embedded. v3's own signed updater authenticates the capsule and
+extracts it over the add-on, as it would any v3 release. The bridge then runs
+the v4 installer that ships inside it, entirely within the editor
+([self-update.md](self-update.md)):
 
-The entire pre-update add-on—including any old-only files—is renamed to a
-private recovery location outside the project. V3 and v4 files are never
-merged in the committed installation. If activation fails cleanly, the actor
-restores the prior tree. Ambiguous state fails closed instead of starting a
-possibly mixed plugin.
+1. verifies the embedded manifest signature, release identity, archive hash,
+   and every file in the inventory;
+2. stages the verified tree under `addons/.godot_ai_update/stage/` and
+   re-hashes it;
+3. removes v3's `game_helper` autoload, renames the complete pre-update
+   add-on — bridge included — to `addons/.godot_ai_update/backup/<old version>/`,
+   and renames the staged v4 tree into place: two renames, never a
+   file-by-file overlay;
+4. persists the v4 plugin in `editor_plugins/enabled` without loading it in
+   the old process, and restarts Godot.
 
-After the exact-tree swap, Godot AI gracefully restarts the editor. The new
-process inherits only the bounded transaction handoff, proves the prior editor
-closed, transfers its nonce-bound lease, and starts v4 without any cached v3
-GDScript classes. On that first v4 start, Godot AI automatically:
-
-- claims the exact successful transaction before normal startup;
-- replaces owned pre-v4 client entries with v4 authenticated attach entries;
-- records durable migration completion; and
-- starts the matching managed server.
+On that first v4 start the plugin hashes the live tree against the signed
+inventory before anything else runs. When it matches, it records `success` in
+the marker, repins the owned client entries (the crossing marker carries
+`replace_owned_mismatches`, so v3-shaped owned entries are replaced outright;
+an ordinary v4 update keeps the pin-only repin and reports other drift for
+**Configure all** in the dock), and
+starts the matching managed server. No separate process or package download
+is part of the update itself; `uvx` runs the server.
 
 An individual AI client may still need to be reopened if that application
 does not notice its configuration change, but restarting every client is not a
@@ -76,41 +81,60 @@ entries are migrated automatically.
 
 ## If the migration is interrupted
 
-Reopen the same project in Godot 4.7+. Durable transaction records determine
-whether Godot AI should continue v4, restore v3, or remain blocked. Do not
-delete `.godot` transaction records, the add-on tree, or a recovery directory
-to force progress.
+Reopen the same project in Godot 4.7+. The marker at
+`addons/.godot_ai_update/pending.json` and the trees beside it determine what
+happens next. Nothing is deleted automatically, and nothing needs to be deleted
+to make progress; do not remove `addons/.godot_ai_update/` or the add-on tree
+by hand while an outcome is unresolved.
 
-Common outcomes:
+An interruption before the swap — during download, verification, or staging —
+touches nothing under `addons/godot_ai/`; start the update again from the
+dock. After the swap, the outcome is one of the three marker states:
 
-- **Install uv / actor unavailable:** install `uv`, reopen Godot, and click
-  **Retry migration**. No live-tree swap has occurred.
-- **Rolled back safely:** the prior add-on is restored and the bridge offers
-  **Retry migration**.
-- **Repair required:** close Godot and preserve the full error, project, and
-  recovery directory. Do not move or delete either retained tree; use the
-  exact paths in the error when requesting support.
-- **V4 is installed but a client is stale:** reopen only that client. The
-  server does not wait for a global client-restart confirmation.
+- **`success`** — the live tree matched the signed inventory. The previous
+  add-on stays in `addons/.godot_ai_update/backup/<old version>/` until the
+  next successful update replaces it.
+- **`rolled_back`** — the live tree did not match. It was moved to
+  `addons/.godot_ai_update/quarantine/` and the backup was renamed back into
+  place, so the editor is running the previous version; the dock shows the
+  reason.
+- **`repair_required`** — the live tree did not match and no backup was
+  available. The plugin stays inactive and the dock prints the exact paths.
+  Close Godot, preserve the project and the full error, and either restore
+  `addons/godot_ai/` from version control or use the closed-editor installer
+  below.
+
+If v4 is installed but one client is stale, reopen only that client. The
+server does not wait for a global client-restart confirmation.
 
 Release engineering retains a closed-editor `script/v4-release install`
-interface for qualification and exceptional recovery. It is not the normal
-user migration path and should not be copied into end-user instructions.
+interface that performs the same verify, stage, swap sequence from outside a
+running editor, for qualification and for recovery. It is not the normal user
+migration path and should not be copied into end-user instructions.
 
 ## Security boundary
 
 The bridge preserves the existing RSA trust anchor across the major update.
 The outer v3 signature prevents an altered capsule from executing; the inner
 v4 signature binds repository, channel, tag, version, source commit, canonical
-archive hash, and complete file inventory. The exact target
-`godot-ai==VERSION` transaction actor is resolved through isolated,
-no-config/no-build uv arguments with official PyPI named explicitly.
+archive hash, and complete file inventory, and is checked inside the editor by
+the same installer every v4 update uses. The private key exists only in the
+`release-signing` GitHub environment; its public half is embedded in the
+plugin.
 
-This still relies on the installed `uv` executable/cache, PyPI/TLS delivery,
-and same-user machine integrity. GitHub release notes are mutable and are not
-a trust anchor. Approval records will be published in
-[dsarno/godot-ai-release-attestations](https://github.com/dsarno/godot-ai-release-attestations),
-where godot-ai release automation must have no write access. This separates repository
-credentials, not the GitHub provider or owner account. Its bootstrap README
-does not approve a release; public migration remains closed until the exact
-promoted bytes have passed qualification and received a commit-pinned approval.
+This does not defend against:
+
+- compromise of the signing key, the signing environment, the repository, or
+  GitHub itself;
+- power or storage loss in the instant between the two renames — the backup
+  and the marker make that a visible, recoverable state, not a silent one, and
+  that is the whole guarantee;
+- malicious code already running as the same user, or an administrator; or
+- two editors on the same project racing past the lock's process check.
+
+GitHub release notes are mutable and are not a trust anchor. The required
+reviewer on the `release-publish` environment is the approval, and the
+public-key fingerprint plus the six release-asset hashes are recorded in the
+publication receipt artifact. The signing key and the same GitHub owner account
+are the trust roots. Public migration remains closed until the exact promoted
+bytes have passed qualification and that review.

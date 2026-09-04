@@ -6,15 +6,16 @@ always-loaded rules.
 Godot AI v4 has one lifecycle owner:
 `plugin/addons/godot_ai/utils/server_lifecycle.gd`. The plugin root captures an
 immutable launch plan on the main thread, configures the owner without side
-effects, completes composition, and only then activates it. An active update
-transaction blocks composition before normal settings capture or construction
-of client/lifecycle/transport workers, sockets, or server objects. A successful
-claim with unfinished M6 client migration is different: the root may construct
-inert owners and UI, but keeps
-`_normal_start_released == false`. Lifecycle start/restart/recover and all other
-normal client, update, transport, and telemetry effects remain barred until the
-exact actor publishes `migration-complete.json`. Stop remains available so
-shutdown cannot be trapped behind the release gate.
+effects, completes composition, and only then activates it. When
+`addons/.godot_ai_update/pending.json` exists, the root first hashes the live
+tree against the marker and records the outcome
+([self-update.md](self-update.md)); a `repair_required` outcome keeps the
+plugin inactive. Otherwise the root may construct owners and UI but keeps
+`_normal_start_released == false`: lifecycle start/restart/recover and all
+other normal client, update, transport, and telemetry effects remain barred
+until that post-restart tree verification and the pin-only client repin have
+finished. Stop remains available so shutdown cannot be trapped behind the
+release gate.
 
 ## One serialized episode
 
@@ -119,6 +120,25 @@ is torn down, and the lifecycle either stops its exact owned process or detaches
 according to the rules above. The Python handler waits for a distinct
 authenticated replacement session; it never treats the old session entry as a
 successful reload.
+
+The editor tool first waits for the filesystem's main-thread completion
+notification, not merely `is_scanning() == false`: that worker flag can clear
+before Godot applies resource/script reloads. One bounded native-signal handoff
+survives those script reloads without retaining a suspended handler coroutine.
+A real-time five-second deadline leaves the plugin unchanged on timeout;
+duplicate requests are refused, stale callbacks cannot consume a later request,
+and direct reload cancels pending scan work. The script-work ledger remains
+busy until this handoff actually completes or is cancelled. The transaction
+coordinator already has its own notification-driven scan state and is unchanged.
+
+Ordinary reloads from the editor tool, Dock, and pre-mutation update-abort
+recovery share `utils/plugin_reload.gd`. It requires an enabled plugin, toggles
+it, verifies re-enablement, then saves project settings **after** the engine's
+enable call has completed. Startup/autoload callbacks may save the temporary
+disabled list during that call; without the final save, a working reloaded
+plugin can be disabled on the next editor start. Enable/save failures are
+reported, not treated as persisted success. This helper does not replace or
+relax the transaction coordinator's separate quiescence and readiness protocol.
 
 The Dock's managed-server control is visible only in developer mode. It starts,
 restarts, or stops only the lifecycle's exact fingerprinted child. If the port

@@ -1204,16 +1204,24 @@ func test_create_simple_auto_creates_player_and_coerces_vector_values() -> void:
 # ─── animation_play empty name ───────────────────────────────────────────────
 
 func test_play_with_empty_name_delegates_to_godot() -> void:
-	# Empty name is forwarded to AnimationPlayer.play("") which Godot interprets
-	# as "resume current, or default"; must not error if an animation exists.
+	# Empty name is forwarded to AnimationPlayer.play("") to resume the
+	# currently assigned animation, not merely any entry in the library.
 	var player_path := _add_player("TestPlayEmpty")
 	if player_path.is_empty():
 		skip("Scene not ready — _add_player returned empty path")
 		return
 	_handler.create_animation({"player_path": player_path, "name": "idle", "length": 1.0})
+	# Empty play resumes the assigned animation; merely creating a library
+	# entry does not assign one. Exercise a real paused animation, not Godot's
+	# unassigned-player error path.
+	var player := EditorInterface.get_edited_scene_root().get_node("TestPlayEmpty") as AnimationPlayer
+	player.play("idle")
+	player.pause()
 	var result := _handler.play({"player_path": player_path, "animation_name": ""})
 	assert_has_key(result, "data")
 	assert_eq(result.data.undoable, false)
+	assert_true(player.is_playing(), "empty-name play must actually resume")
+	assert_eq(player.current_animation, "idle")
 	_remove_node(player_path)
 
 

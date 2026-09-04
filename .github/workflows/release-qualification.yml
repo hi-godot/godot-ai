@@ -1,0 +1,296 @@
+name: Qualify v4 release candidates
+run-name: Qualify ${{ inputs.version_a }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_a:
+        description: "Full main commit for A (must equal workflow commit)"
+        required: true
+        type: string
+      version_a:
+        description: "Publishable semantic version"
+        required: true
+        type: string
+      source_b:
+        description: "Full commit of the minimal qualification-only child B (script/release_support.py prepare-b)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v4-candidate-signing
+  cancel-in-progress: false
+
+env:
+  GODOT_AI_DISABLE_TELEMETRY: "true"
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    ## B's version is not an input: it is always A's next patch.
+    outputs:
+      version_b: ${{ steps.derive.outputs.version_b }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Derive B's version from A's
+        id: derive
+        env:
+          VERSION_A: ${{ inputs.version_a }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "version_b=$(python -m script.release_support next-version --previous "$VERSION_A" --bump patch)" >> "$GITHUB_OUTPUT"
+      - name: Validate reviewed source and exact minimal child
+        env:
+          SOURCE_A: ${{ inputs.source_a }}
+          SOURCE_B: ${{ inputs.source_b }}
+          VERSION_A: ${{ inputs.version_a }}
+          VERSION_B: ${{ steps.derive.outputs.version_b }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$SOURCE_A" = "$GITHUB_SHA"
+          python -m script.release_support validate-sources --a "$SOURCE_A" --b "$SOURCE_B" --version-a "$VERSION_A" --version-b "$VERSION_B"
+
+  build:
+    name: Build unsigned candidate ${{ matrix.name }}
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: a
+            source: ${{ inputs.source_a }}
+            version: ${{ inputs.version_a }}
+          - name: b
+            source: ${{ inputs.source_b }}
+            version: ${{ needs.validate-inputs.outputs.version_b }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.source }}
+          path: candidate-source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Build without signing credentials
+        env:
+          SOURCE: ${{ matrix.source }}
+          VERSION: ${{ matrix.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install build==1.6.0
+          python -m script.release_support package --root candidate --repo candidate-source --source "$SOURCE" --version "$VERSION"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v4-unsigned-${{ matrix.name }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 90
+
+  sign:
+    name: Sign candidate ${{ matrix.name }}
+    needs: [validate-inputs, build]
+    runs-on: ubuntu-latest
+    environment: release-signing
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: a
+            source: ${{ inputs.source_a }}
+            version: ${{ inputs.version_a }}
+          - name: b
+            source: ${{ inputs.source_b }}
+            version: ${{ needs.validate-inputs.outputs.version_b }}
+    steps:
+      # Only reviewed workflow source supplies executable signing code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: v4-unsigned-${{ matrix.name }}
+          path: candidate
+      - name: Sign and verify prebuilt bytes
+        env:
+          RELEASE_SIGNING_KEY_PEM: ${{ secrets.RELEASE_SIGNING_KEY_PEM }}
+          SOURCE: ${{ matrix.source }}
+          VERSION: ${{ matrix.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_SIGNING_KEY_PEM"
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          chmod 600 "$key_file"
+          printf '%s\n' "$RELEASE_SIGNING_KEY_PEM" > "$key_file"
+          unset RELEASE_SIGNING_KEY_PEM
+          python -m script.release_support sign --root candidate --source "$SOURCE" --version "$VERSION" --key "$key_file"
+      - name: Record signed candidate inventory
+        env:
+          CANDIDATE: ${{ matrix.name }}
+          SOURCE: ${{ matrix.source }}
+          VERSION: ${{ matrix.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m script.release_support seal --root candidate --candidate "$CANDIDATE" --source "$SOURCE" --version "$VERSION" --workflow-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v4-candidate-${{ matrix.name }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 90
+
+  python:
+    name: Exact Python artifacts / ${{ matrix.os }} / ${{ matrix.python }}
+    needs: sign
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: v4-candidate-a
+          path: candidates/a
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: v4-candidate-b
+          path: candidates/b
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Resolve once, retain dependencies, test offline installs
+        env:
+          ROW_OS: ${{ matrix.os }}
+        shell: bash
+        run: |
+          python -m pip install uv==0.11.7
+          python -m script.release_qualification --candidates candidates --output row --os "$ROW_OS"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: v4-row-python-${{ matrix.os }}-${{ matrix.python }}
+          path: row/
+          if-no-files-found: error
+          retention-days: 90
+
+  runtime:
+    name: Exact A to B runtime / ${{ matrix.os }} / Godot ${{ matrix.godot }} / Python ${{ matrix.python }}
+    needs: [sign, python]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        godot: ["4.7.0"]
+        python: ["3.11"]
+        include:
+          # One extra Linux row at the newest supported engine, so a 4.7.x
+          # regression is caught before publication without tripling the
+          # runtime matrix. Ordinary CI runs only 4.7.0.
+          - os: ubuntu-latest
+            godot: "4.7.2"
+            python: "3.11"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: v4-candidate-a
+          path: candidates/a
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: v4-candidate-b
+          path: candidates/b
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: v4-row-python-${{ matrix.os }}-${{ matrix.python }}
+          path: python-row
+      - uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2
+        with:
+          version: ${{ matrix.godot }}
+          use-dotnet: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Exercise unmodified signed candidates in a real editor
+        env:
+          ROW_OS: ${{ matrix.os }}
+          ROW_GODOT: ${{ matrix.godot }}
+        shell: bash
+        run: |
+          python -m pip install uv==0.11.7
+          python -m script.runtime_qualification --candidates candidates --python-row python-row --godot "$GODOT" --godot-version "$ROW_GODOT" --output row --os "$ROW_OS"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: v4-row-runtime-${{ matrix.os }}-godot-${{ matrix.godot }}-python-${{ matrix.python }}
+          path: row/
+          if-no-files-found: error
+          retention-days: 90
+
+  complete-qualification:
+    name: Require complete release evidence
+    needs: [python, runtime]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: v4-row-*
+          path: qualification
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: v4-candidate-a
+          path: candidates/a
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: v4-candidate-b
+          path: candidates/b
+      - name: Validate every mandatory row before permitting promotion
+        run: python -m script.release_qualification --complete --candidates candidates --output qualification
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v4-qualification
+          path: qualification/
+          if-no-files-found: error
+          retention-days: 90

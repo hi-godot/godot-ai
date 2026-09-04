@@ -1,6 +1,6 @@
 # Godot AI v4 — Packaging and Distribution
 
-*Updated 2026-09-01*
+*Updated 2026-09-03*
 
 This document defines the supported v4 install surfaces and artifact shape.
 Release operation and self-update details live in [releasing.md](releasing.md);
@@ -26,9 +26,9 @@ version, source commit, archive size/hash, and every path/size/hash in the
 expanded tree.
 
 The legacy-named ZIP is intentionally not an alias. It contains a temporary
-bridge plus the canonical signed triple. Historical updaters overlay the
-bridge, which immediately delegates to the exact-tree v4 actor; the capsule is
-never accepted as the committed v4 tree.
+bridge plus the canonical signed triple. The final v3 updater overlays the
+bridge, which runs the v4 installer shipped inside it on the embedded triple;
+the capsule is never accepted as the committed v4 tree.
 
 ## Supported install paths
 
@@ -37,8 +37,9 @@ never accepted as the committed v4 tree.
 This is the v4 plugin distribution surface. A fresh project verifies the
 canonical triple and extracts the exact archive into an absent
 `addons/godot_ai` path. A project on the final signed v3 line clicks **Update**
-once. The signed capsule then moves the complete old tree to external recovery
-before renaming the verified canonical v4 tree into place.
+once. The signed capsule then renames the complete old tree to
+`addons/.godot_ai_update/backup/<old version>/` before renaming the verified
+canonical v4 tree into place ([self-update.md](self-update.md)).
 
 Do not publish or document an overlay-copy shortcut.
 
@@ -62,7 +63,7 @@ bearer capability.
 
 CI builds both wheel and sdist, installs them into clean environments on Linux,
 macOS, and Windows, and executes the installed CLI. Publication still requires
-the exact-candidate qualification and digest-bound approval in
+the exact-candidate qualification and reviewer-gated promotion in
 [releasing.md](releasing.md).
 
 ### Development checkout
@@ -92,18 +93,19 @@ installed.
 `script/v4-release` deliberately loads the exact sibling
 `src/godot_ai/release_verify.py` by file path. It does not trust an installed
 `godot-ai` package. GitHub release notes are mutable and cannot authenticate
-assets against a release publisher who can replace those notes. Before
-publication, the [owner-approved, separately permissioned attestation channel](releasing.md#attestation-channel-and-approved-threat-boundary)
-must bind:
+assets against a release publisher who can replace those notes. The required
+reviewer on `release-publish` is the approval, and the publication receipt
+artifact records:
 
-- both verifier file SHA-256 values;
-- their exact source commit;
+- both verifier file SHA-256 values and their exact source commit;
 - the exported RSA SPKI SHA-256 fingerprint;
-- all six plugin/migration asset names, sizes, hashes, and identity;
-- the `godot-ai` wheel and sdist names, sizes, hashes, version, and source
-  identity; and
-- for every qualification OS/Python row, the complete resolved distribution
-  inventory (normalized name, version, artifact filename, size, and SHA-256).
+- all six plugin/migration asset names, sizes, and hashes; and
+- the `godot-ai` wheel and sdist names, sizes, hashes, and version.
+
+For every qualification OS/Python row, the complete resolved distribution
+inventory (normalized name, version, artifact filename, size, and SHA-256) is
+retained in the qualification run's evidence artifact, which promotion
+verifies before any publication write.
 
 The behavior-defining runtime packages declared in `pyproject.toml` are exact
 pins and are checked again by `godot_ai.runtime_dependencies` before CLI
@@ -112,14 +114,14 @@ transitive packages; changing any resolved artifact invalidates that row and
 requires requalification while candidate/publication evidence is being built,
 rather than silently widening the environment that evidence describes.
 
-Every production `uvx` server, attach, prewarm, and transaction-actor command
-uses the one resolver policy shown above. Godot-owned spawns also temporarily
+Every production `uvx` server, attach, and prewarm command uses the one
+resolver policy shown above. Godot-owned spawns also temporarily
 clear inherited `UV_*` source/override/interpreter/cache controls under the
 global spawn mutex. Only
 `GODOT_AI_QUALIFICATION_PYTHON_INDEX=1`, set in the launching process together
 with an explicit `UV_INDEX`/`UV_DEFAULT_INDEX`, authorizes the private
 qualification index. The switch and any credentials are never written into a
-client command, project file, transaction record, log, or telemetry.
+client command, project file, update marker, log, or telemetry.
 
 This prevents a user/project uv configuration or already-installed uv tool
 from silently selecting an alternate `godot-ai` package. It is not wheel-byte
@@ -127,21 +129,21 @@ binding. The package/protocol identity response is a compatibility check, not
 authentication, and a later public resolution does not compare the selected
 wheel or every dependency to the qualification digests. PyPI's index/artifact
 integrity and TLS delivery, the selected `uv` executable/cache, and same-user
-local-machine integrity are therefore runtime trust roots. A PyPI compromise
-capable of serving counterfeit bytes under the exact version remains able to
-compromise both the server and transaction actor. Closing that residual needs
-a hash-enforced, signed actor/runtime artifact that remains addressable across
-the live-tree rename (or a bundled runtime), which is a separate delivery
+local-machine integrity are therefore runtime trust roots for the server. A
+PyPI compromise capable of serving counterfeit bytes under the exact version
+remains able to compromise the server; the plugin's updater runs no Python and
+is not exposed to it. Closing that residual needs a hash-enforced, signed
+runtime artifact (or a bundled runtime), which is a separate delivery
 architecture rather than another self-reported hash. Exact critical pins still
 fail before FastMCP import when resolution merely drifts; noncritical
 transitive drift remains an accepted packaging risk.
 
-The channel authenticates approval through the known canonical attestation
-repository and the `dsarno` account, not a second cryptographic signing key.
-Compromise of that account or GitHub is outside the approved guarantee.
-Its bootstrap record is published; exact-candidate approval and verification
-of the permission boundary in retained qualification evidence remain required.
-Publication and public migration remain closed until those gates pass.
+Promotion consults no second repository and no second cryptographic signing
+key: the signing key and the same GitHub owner account are the trust roots,
+and compromise of that account or GitHub is outside the guarantee.
+Exact-candidate qualification and the `release-publish` review remain
+required. Publication and public migration remain closed until those gates
+pass.
 
 The v4 SPKI fingerprint compiled into both standalone and in-plugin verification
 is:
@@ -164,14 +166,20 @@ oversized files/trees/archives, signature failure, and any exact-tree mismatch.
 4. Retained one-time historical boundary evidence: all 104 tags were
    source-classified into 24 behavior classes, with 29 selected runtime rows on
    macOS/Godot 4.7. This is not a recurring candidate or cross-platform tier.
-5. Signed plugin packaging, verifier, one-click bridge migration, v4-to-v4 transactional
-   update, crash/failpoint, two-editor, reload, stale-server, and stress proof.
-6. Exact private source-A/source-B candidate qualification on all required
-   platform/version rows, bound to immutable plugin, Python-package, and
-   resolved-dependency artifact digests.
+5. Signed plugin packaging and verifier tests, plus two-editor, reload, and
+   stale-server proof in ordinary CI. The three real-editor updater scenarios
+   in `tests/integration/test_self_update_upgrade_paths.py` (signed v4-to-v4
+   update, final-v3 capsule crossing, tampered-tree rollback) run on Linux on
+   every pull request and on all three desktop OSes nightly.
+6. Exact private source-A/source-B candidate qualification: package rows on
+   Linux, macOS, and Windows at Python 3.11 and 3.14, plus one real-editor
+   A -> B hot-update row per OS at Godot 4.7.0 / Python 3.11 and a Linux row
+   at Godot 4.7.2, bound to
+   immutable plugin, Python-package, and resolved-dependency artifact digests.
 
-The existence of Tier-6 tooling does not mean Tier 6 has run. Hosted rows and
-publication remain unqualified until their retained evidence is reviewed.
+Tier 6 is the release gate. Promotion cannot accept install smoke as a
+substitute for its complete evidence, and hosted rows and publication remain
+unqualified until that retained evidence is complete and reviewed.
 
 ## Release readiness
 
@@ -181,27 +189,29 @@ publication remain unqualified until their retained evidence is reviewed.
 - [ ] Every qualification row records the complete resolved distribution
       artifact set; startup proves the exact behavior-defining dependency pins.
 - [ ] The embedded updater key and standalone verifier key are identical; the
-      SPKI fingerprint matches the separately permissioned attestation surface.
-- [ ] One-click final-v3-to-v4 migration proves both signature layers, an
-      external retained backup, graceful editor restart/lease transfer,
-      automatic client repin/server start, and the exact signed live tree.
-- [ ] V4-to-v4 self-update proves prepare-before-quiesce, signed stage identity,
-      install/editor leases, durable journal reduction, rollback/quarantine,
-      startup barrier, and repeat-update behavior.
+      SPKI fingerprint is recorded in the publication receipt.
+- [ ] One-click final-v3-to-v4 migration proves both signature layers, the
+      retained backup under `addons/.godot_ai_update/backup/`, the editor
+      restart, the post-restart tree verification, automatic client
+      repin/server start, and the exact signed live tree.
+- [ ] V4-to-v4 self-update proves verification before any live mutation, the
+      two-rename swap, a `success` marker after restart, `rolled_back` on a
+      tampered live tree, and repeat-update behavior.
 - [x] Retained one-time evidence classifies the historical updater boundary;
       the new signed bridge path is qualified separately against the final v3
       line.
 - [ ] All mandatory Windows, macOS, Linux, Godot, and Python rows pass with no
       required skip.
-- [ ] Approval names the exact digest set. No source, docs, workflow, or artifact
-      is rebuilt after approval.
+- [ ] The `release-publish` reviewer approves the exact digest set. No source,
+      docs, workflow, or artifact is rebuilt after approval.
 - [ ] Publication uploads approved Python bytes first, verifies their public
       hashes, then uploads the already-approved plugin bytes.
 - [ ] Public redownload attestation proves every released byte and every
       dependency artifact selected by each publication-smoke row equals its
       approved digest.
 
-The packaging, signing, and verification primitives are implemented. The
-Phase-7 qualification-and-promotion workflow is not: release remains
-fail-closed until that workflow exists, the exact evidence above is reviewed,
-and publication is explicitly authorized.
+Packaging, signing, artifact verification, the release qualification matrix,
+and protected promotion safeguards are implemented. Storm baselines are
+diagnostics rather than release gates; public per-row dependency attestation
+after publication remains a follow-up. No final A/B digest set is approved.
+See [the release runbook](releasing.md) for the current fail-closed boundary.

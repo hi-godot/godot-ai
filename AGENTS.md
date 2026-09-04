@@ -127,11 +127,15 @@ Or in cmd: `mklink /J test_project\addons\godot_ai ..\..\plugin\addons\godot_ai`
 **When troubleshooting any dev-environment / setup / dependency / symlink issue, scan `script/` first** for an existing fixer before doing it by hand. The project ships scripts for a reason — bypassing them re-introduces the bugs they were written to handle.
 
 - Server start/adopt/teardown, discovery tiers, `editor_reload_plugin`: [docs/server-lifecycle.md](docs/server-lifecycle.md)
-- Cutting a release, and the self-update install path: [docs/releasing.md](docs/releasing.md).
-  **Any change touching update discovery, `update_manager.gd`,
-  `update_coordinator.gd`, `update_transaction.py`, `release_verify.py`, plugin
-  disable/enable or startup barriers, or the signed release layout must run
-  `python script/local-self-update-smoke`.**
+- Cutting a release: [docs/releasing.md](docs/releasing.md).
+- Self-update, migration capsule, or release verification changes:
+  [docs/self-update.md](docs/self-update.md). **Any change touching update
+  discovery, `update_manager.gd`, `release_verifier.gd`, `update_installer.gd`,
+  `release_verify.py`, the migration bridge, plugin disable/enable, or the
+  signed release layout must pass `test_project/tests/test_update_installer.gd`
+  and the three real-editor scenarios in
+  `tests/integration/test_self_update_upgrade_paths.py` (run with `GODOT_BIN`
+  set).**
 
 ## Testing
 

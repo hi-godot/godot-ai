@@ -1,6 +1,6 @@
 # Godot AI — Testing Strategy
 
-*Updated 2026-08-31*
+*Updated 2026-09-03*
 
 This document defines how Godot AI should prove that new capability is real, stable, and safe to extend.
 
@@ -91,43 +91,25 @@ Run real-project smoke tests for:
 - reading logs or screenshots
 - exporting or otherwise exercising the release surface
 
-### Interactive self-update smoke
+### Self-update tests
 
-Self-update changes require a local interactive smoke because editor
-disable→scan→enable and native crash behavior are not fully reproduced by
-headless CI. Run:
+The updater is one in-editor GDScript path ([self-update.md](self-update.md)),
+so its mandatory coverage is small and fixed:
 
-```bash
-python script/local-self-update-smoke
-```
+- `test_project/tests/test_update_installer.gd` — the verifier and installer
+  as pure functions with an injected fixture key pair: signature, identity,
+  archive and inventory rejections, stage hashing, marker states, rollback and
+  repair decisions;
+- the Python verifier/installer unit tests behind `script/v4-release`;
+- the three real-editor scenarios in
+  `tests/integration/test_self_update_upgrade_paths.py`: a signed v4-to-v4
+  update restarts into a working server, a final-v3 install crosses the
+  capsule, and a tampered live tree after a swap is rolled back. They need
+  `GODOT_BIN` and otherwise skip.
 
-The harness prepares a disposable physical add-on from the current branch,
-builds and signs a synthetic next-v4 exact-tree release, feeds six-asset metadata
-through production discovery, and exercises the production three-asset download
-queue and completion checks. Only network I/O is replaced with local fixture
-reads; the smoke asserts that exactly the canonical three are requested. It
-records the pre-run macOS DiagnosticReports baseline, and launches Godot. The
-operator step is only to click **Update** in the dock.
-
-Passing criteria:
-
-- the editor process stays alive without manual or programmatic restart
-- the installed fixture plugin version and complete tree advance to the signed
-  next version
-- verification/staging and transaction state stay outside the project; the
-  project contains no temporary, backup, lock, journal, or mixed-tree artifact
-- the complete previous add-on remains in the external retained backup
-- the update window prints no `SCRIPT ERROR: Parse Error`,
-  `ERROR: Failed to load script`, or `Could not resolve script` lines
-- no new `Godot*.ips` appears on macOS
-- the vNext `_exit_tree` trigger does not print during the update window
-- the re-enabled plugin reaches a healthy authenticated backend at the new
-  `server_version`
-
-Treat this as release-blocking local coverage for self-update, plugin reload
-handoff, and transaction changes. It is not a replacement for headless CI;
-automated signed-stage mutation, crash/failpoint, rollback, repair, sequential
-update, and multi-editor lease tests remain mandatory.
+The real-editor scenarios run on Linux on every pull request and on all three
+desktop OSes nightly, and the release pipeline's A-to-B row runs the first one
+on the exact signed candidate on every OS before publication.
 
 ---
 
@@ -163,8 +145,6 @@ The CI stack should exercise at least four tiers:
   unsupported after the v4 boundary. Recurring CI tests one canonical v4 tree,
   the signed transition-capsule shape, and the exact final-v3 one-click bridge;
   it does not download every older release on every commit.
-- local interactive self-update smoke for update/reload/extract changes
-  (`python script/local-self-update-smoke`)
 - **pixel-level capture smoke** for tools that cross the editor → game-process boundary (3 OS). The `game-capture-smoke-{linux,macos,windows}` jobs launch Godot with a real rendering driver (`xvfb-run -a ... godot --rendering-driver opengl3` on Linux, windowed on macOS and Windows), play `test_project/capture_smoke.tscn` (four colored quadrants), round-trip `editor_screenshot(source="game")` through the debugger-channel bridge, decode the returned PNG with Pillow, and assert the centre of each quadrant matches the expected color within tolerance. Catches regressions in the `_mcp_game_helper` autoload registration, the `DEFERRED_RESPONSE` dispatcher path, and the `McpConnection.send_deferred_response` reply pipeline — none of which are exercised by the headless Godot test suite.
 - **live port-conflict smoke** for the port-8000 occupant classification + recovery machinery (3 OS), which the GDScript unit tests can only cover with mocked OS interactions. `script/ci-stale-server-smoke` plants a process on the HTTP port, launches a real headless editor, and asserts the plugin's observable behavior from the editor log. The `stale-server-smoke` jobs run `--mode stale`: a godot-ai server simulator with an authenticated, mismatched version. Startup alone has no destructive authorization, so the plugin must refuse adoption, leave the process alive, and present an actionable incompatible-server state; an explicit Dock recovery intent is the only path allowed to spend kill/restart authority. The sibling `foreign-server-smoke` jobs run `--mode foreign`: a non-godot-ai listener (404s on `/godot-ai/status`) receives the same no-kill treatment and a suggested free port. The `stale-compatible-reload-smoke` jobs run `--mode stale-compatible-reload`: a real current-version external server is paired with a matching-version durable record naming a dead PID; the plugin must adopt it as external, preserve it through `editor_reload_plugin`, register a distinct replacement session, and answer a post-reload editor probe. Kept as separate jobs so a prior mode's listener cannot bleed into the next scenario.
 

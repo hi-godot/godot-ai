@@ -22,6 +22,8 @@ const STARTING := "STARTING"
 const READY := "READY"
 const BLOCKED := "BLOCKED"
 const RECOVERING := "RECOVERING"
+## How long a server launched to replace an occupant may wait for the port.
+const REPLACEMENT_WAIT_FOR_PORT_MS := 5000
 const STOPPING := "STOPPING"
 
 const PROBE := "PROBE"
@@ -72,7 +74,7 @@ func start_server() -> void:
 	_begin_start_episode()
 
 
-func _begin_start_episode(existing_id := 0) -> void:
+func _begin_start_episode(existing_id := 0, probe := true) -> void:
 	_cancel_effect()
 	_replacement_authorization = null
 	_transport = null
@@ -82,9 +84,9 @@ func _begin_start_episode(existing_id := 0) -> void:
 	_episode = {
 		"id": existing_id,
 		"state": STARTING,
-		"phase": PROBE,
+		"phase": PROBE if probe else LAUNCH,
 		"reason": "",
-		"message": "Probing the configured server endpoint.",
+		"message": "Probing the configured server endpoint." if probe else "Launching the managed server.",
 		"ready_kind": "",
 		"effect": "",
 		"expected_version": str(_plan.get("expected_version", "")),
@@ -94,6 +96,8 @@ func _begin_start_episode(existing_id := 0) -> void:
 		"after_stop": "",
 	}
 	_publish()
+	if not probe:
+		return
 	_request_effect(PROBE, {
 		"http_port": int(_plan.http_port),
 		"expected_version": str(_plan.expected_version),
@@ -174,9 +178,15 @@ func replace_authorized(now_msec := -1) -> bool:
 	_episode["message"] = "Replacing the explicitly authorized server."
 	_episode["effect"] = ""
 	_publish()
+	## The replacement launches our server first and kills the target only
+	## then, so the port never looks free to a bridge polling to spawn its
+	## own backend; the launched server waits for the port to free.
+	var launch_plan := _plan.duplicate(true)
+	launch_plan["wait_for_port_ms"] = REPLACEMENT_WAIT_FOR_PORT_MS
 	_request_effect(REPLACE, {
 		"target": target,
 		"timeout_ms": int(_plan.get("probe_timeout_ms", DEFAULT_PROBE_TIMEOUT_MS)),
+		"launch": launch_plan,
 	})
 	return true
 
@@ -383,7 +393,14 @@ func _complete_replace(result: Dictionary) -> void:
 		return
 	_process_grant = null
 	_transport = null
-	_begin_start_episode(int(_episode.get("id", 0)))
+	var launch: Dictionary = result.get("launch", {})
+	if launch.is_empty():
+		_begin_start_episode(int(_episode.get("id", 0)))
+		return
+	## Our server was launched before the target was killed and is taking
+	## the port now; continue exactly as a fresh launch would, at its proof.
+	_begin_start_episode(int(_episode.get("id", 0)), false)
+	_complete_launch(launch)
 
 
 func _complete_stop(result: Dictionary) -> void:
@@ -603,6 +620,8 @@ func _effect_launch(payload: Dictionary) -> Dictionary:
 	var environment := {
 		"GODOT_AI_PLUGIN_SPAWNED": "1",
 	}
+	if int(payload.get("wait_for_port_ms", 0)) > 0:
+		environment["GODOT_AI_WAIT_FOR_PORT_MS"] = str(int(payload.get("wait_for_port_ms", 0)))
 	if OS.get_name() != "Windows" and not bool(payload.get("keep_alive", false)):
 		environment["GODOT_AI_OWNER_PID"] = str(OS.get_process_id())
 	if bool(payload.get("keep_alive", false)):
@@ -757,15 +776,37 @@ func _effect_replace(payload: Dictionary) -> Dictionary:
 		or PortResolver.process_fingerprint(pid) != fingerprint
 	):
 		return {"ok": false, "reason": "replacement_target_changed", "message": "The authorized server changed before replacement."}
+	## Launch our server before the kill so the port passes straight from
+	## the target to it (the server waits for the port); a bridge polling
+	## for a free port to spawn its own backend never sees one. The launch
+	## baseline is the record the target published, which the proof must
+	## see replaced.
+	var launch_plan: Dictionary = payload.get("launch", {})
+	var launch := {}
+	if not launch_plan.is_empty():
+		launch_plan = launch_plan.duplicate(true)
+		launch_plan["baseline_instance_id"] = str(capability.get("instance_nonce", ""))
+		launch = _effect_launch(launch_plan)
+		if not bool(launch.get("ok", false)):
+			return {
+				"ok": false,
+				"reason": str(launch.get("reason", "launch_failed")),
+				"message": str(launch.get("message", "Server launch failed.")),
+			}
 	var killed := PortResolver.kill_exact_processes(
 		[{"pid": pid, "fingerprint": fingerprint}],
 		true,
 	)
-	PortResolver.wait_for_port_free(port, 5.0)
-	return {
-		"ok": killed.has(pid) and not PortResolver.is_port_in_use(port),
-		"reason": "" if killed.has(pid) else "replacement_failed",
-	}
+	if not killed.has(pid):
+		if not launch.is_empty():
+			PortResolver.kill_exact_processes(
+				[{"pid": int(launch.pid), "fingerprint": str(launch.fingerprint)}], true
+			)
+		return {"ok": false, "reason": "replacement_failed"}
+	if launch.is_empty():
+		PortResolver.wait_for_port_free(port, 5.0)
+		return {"ok": not PortResolver.is_port_in_use(port), "reason": ""}
+	return {"ok": true, "reason": "", "launch": launch}
 
 
 func _effect_stop(payload: Dictionary) -> Dictionary:
@@ -793,7 +834,10 @@ func _effect_stop(payload: Dictionary) -> Dictionary:
 		if PortResolver.process_fingerprint(int(exact.pid)) == str(exact.fingerprint):
 			targets_gone = false
 	var port_free := port <= 0 or not PortResolver.is_port_in_use(port)
-	var stopped := targets_gone and port_free
+	## Killing something of ours must also free its listener. When there was
+	## nothing of ours left to kill, whoever holds the port now is not ours to
+	## prove stopped; the next start's probe deals with that occupant.
+	var stopped := targets_gone and (grants.is_empty() or port_free)
 	return {
 		"ok": stopped,
 		"already_gone": grants.is_empty() and port_free,
@@ -1132,6 +1176,7 @@ func get_status_dict() -> Dictionary:
 		"connection_blocked": state != READY,
 		"can_recover_incompatible": can_recover_incompatible_server(),
 		"conflict_port": int(_episode.get("blocked_target", {}).get("port", 0)),
+		"conflict_version": str(_episode.get("blocked_target", {}).get("version", "")),
 		"keep_alive": bool(_plan.get("keep_alive", false)),
 	}
 

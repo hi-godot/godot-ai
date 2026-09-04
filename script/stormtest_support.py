@@ -175,6 +175,49 @@ def project_tree_drift(before: dict[str, str], after: dict[str, str]) -> list[st
     return drift
 
 
+def transport_exception_code(error: Exception) -> str | None:
+    """Recognize SDK timeout/rotated-auth envelopes, not arbitrary tool errors.
+
+    CONNECTION remains a failure outside a measured reload window. MCP's
+    Python SDK wraps its receive timeout in ErrorData(code=408), rather than
+    raising asyncio.TimeoutError. A restarted managed server rotates its HTTP
+    capability, so an old client's in-flight request may receive HTTP 401.
+    """
+    # Keep schedule/threshold validation stdlib-only. The live MCP path already
+    # depends on AnyIO, whose closed stream is another transport disconnect.
+    from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
+    from httpx import ReadError
+
+    # A backend shutdown can sever HTTP reads without an error message. Match
+    # the concrete transport type, not text or all HTTP/protocol exceptions.
+    if isinstance(error, (BrokenResourceError, ClosedResourceError, EndOfStream, ReadError)):
+        return "CONNECTION"
+    if getattr(getattr(error, "response", None), "status_code", None) == 401:
+        return "CONNECTION"
+    if getattr(getattr(error, "error", None), "code", None) == 408:
+        return "CONNECTION"
+    return None
+
+
+def pinned_session_identity(sessions: Any, session_id: str) -> dict[str, Any]:
+    """Bind an exploratory explicit pin before the first mutation or reload."""
+    if not isinstance(sessions, list) or not all(isinstance(row, dict) for row in sessions):
+        raise StormConfigError("session_manage returned a malformed session list")
+    matches = [row for row in sessions if row.get("session_id") == session_id]
+    if not session_id or len(matches) != 1:
+        raise StormConfigError("explicit pin must name exactly one live session")
+    selected = select_initial_session(
+        sessions,
+        expected_project_path=matches[0].get("project_path", ""),
+        requested_session_id=session_id,
+        require_only_session=False,
+    )
+    return {
+        "editor_pid": selected["editor_pid"],
+        "project_path": canonical_project_path(selected["project_path"]),
+    }
+
+
 def select_initial_session(
     sessions: Any,
     *,
@@ -666,6 +709,8 @@ def trace_entries_by_worker(trace: dict[str, Any]) -> dict[int, list[list[int]]]
 def evaluate_contract(report: dict[str, Any], thresholds: dict[str, Any]) -> list[str]:
     """Return every acceptance failure; an empty list passes."""
     failures: list[str] = []
+    if report.get("baseline_measurement"):
+        failures.append("baseline measurement is not qualification")
     maximum_errors = thresholds.get("unexpected_errors")
     errors = int(report.get("unexpected_errors", report.get("err", 0)))
     if maximum_errors is not None and errors > int(maximum_errors):

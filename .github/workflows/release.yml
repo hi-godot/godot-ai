@@ -1,25 +1,217 @@
-name: Release (qualification gated)
+name: Promote qualified v4 release
 
-# v4 publication must promote previously qualified, immutable A/B artifacts.
-# That cross-run digest binding is intentionally not approximated here: until
-# the Phase-7 promotion workflow exists, a release request fails before it can
-# read signing credentials, create a tag/release, or publish to PyPI.
+# Reviewed workflow code validates data artifacts. Candidate code is never
+# installed/executed or rebuilt in any job with publication permissions.
+# The human approval is the release-publish environment's required reviewer;
+# the expected release record is rebuilt from the qualification artifacts.
 on:
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Semantic release kind"
+        required: true
+        type: choice
+        options: [patch, minor, major]
+      previous_version:
+        description: "Previously published X.Y.Z version"
+        required: true
+        type: string
+      qualification_run_id:
+        description: "Successful complete qualification run"
+        required: true
+        type: string
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: v4-publication
+  cancel-in-progress: false
 
 env:
   GODOT_AI_DISABLE_TELEMETRY: "true"
+  QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+  BUMP: ${{ inputs.bump }}
+  PREVIOUS_VERSION: ${{ inputs.previous_version }}
 
 jobs:
-  publication-gate:
-    name: Refuse unqualified publication
+  verify-approval:
     runs-on: ubuntu-latest
     steps:
-      - name: Require exact qualified-artifact promotion
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify qualification provenance before downloading
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          echo "::error::v4 publication is disabled until immutable A/B qualification artifacts are bound to an approved promotion by run ID and digest."
-          exit 1
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python -m script.release_promotion run-provenance --run-id "$QUALIFICATION_RUN_ID"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-candidate-a
+          path: candidates/a
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-candidate-b
+          path: candidates/b
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-qualification
+          path: qualification
+      - name: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python -m script.release_promotion verify --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+      - name: pypi-preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python -m script.release_promotion pypi-preflight --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+
+  publish-pypi:
+    needs: verify-approval
+    runs-on: ubuntu-latest
+    environment: release-publish
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify qualification provenance before downloading
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python -m script.release_promotion run-provenance --run-id "$QUALIFICATION_RUN_ID"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-candidate-a
+          path: candidates/a
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-candidate-b
+          path: candidates/b
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-qualification
+          path: qualification
+      - name: pypi-preflight
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python -m script.release_promotion pypi-preflight --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        if: steps.preflight.outputs.pending == 'true'
+        with:
+          packages-dir: pending-pypi/
+          skip-existing: false
+      - name: verify-pypi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python -m script.release_promotion verify-pypi --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+
+  publish-github:
+    needs: [verify-approval, publish-pypi]
+    runs-on: ubuntu-latest
+    environment: release-publish
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify qualification provenance before downloading
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python -m script.release_promotion run-provenance --run-id "$QUALIFICATION_RUN_ID"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-candidate-a
+          path: candidates/a
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-candidate-b
+          path: candidates/b
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-qualification
+          path: qualification
+      - name: github
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python -m script.release_promotion github --run-id "$QUALIFICATION_RUN_ID" --bump "$BUMP" --previous "$PREVIOUS_VERSION"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v4-publication-receipt
+          path: publication.json
+          if-no-files-found: error
+          retention-days: 90

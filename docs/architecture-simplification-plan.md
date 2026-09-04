@@ -109,6 +109,12 @@ pinned at implementation start.
 
 ### 2.3 v4.0 crosses the boundary through a temporary bridge
 
+> **Superseded 2026-09-03.** The capsule design below delegated to the
+> transactional actor, which was replaced by the in-editor updater in
+> [self-update.md](self-update.md); the bridge now runs that installer on the
+> embedded triple and restarts the editor. See the note at section 6.7 for the
+> reason. The text below is kept as history.
+
 The classic Asset Library and Asset Store can overlay an existing
 `addons/godot_ai` tree without deleting old-only files. They cannot enforce the
 closed-editor replacement boundary. Their v3 listings therefore remain frozen
@@ -122,6 +128,13 @@ and commits only the canonical v4 tree. Store install can return only after a
 store surface can preserve the same clean replacement boundary.
 
 ### 2.4 Keep one retained backup
+
+> **Superseded 2026-09-03.** Under [self-update.md](self-update.md) the
+> retained backup lives at `addons/.godot_ai_update/backup/<old version>/`
+> inside the project, is replaced by the next successful update rather than
+> blocking it, and is never deleted on a failure path; the editor-closed
+> archive step below no longer exists. See the note at section 6.7 for the
+> reason. The text below is kept as history.
 
 The activation protocol never automatically deletes its successful backup.
 The Dock reports its external path and hash. Cleanup is a separate,
@@ -503,15 +516,28 @@ complete temporary/old tree and renames only the exact canonical stage live.
 First v4 startup broadly replaces owned pre-v4 client entries, durably records
 completion, and starts the managed server without a second confirmation.
 
-The owner-approved, separately permissioned attestation channel documented in
-[the release runbook](releasing.md#attestation-channel-and-approved-threat-boundary)
+The publication receipt documented in
+[the release runbook](releasing.md#trust-roots-and-the-retired-attestation-channel)
 still binds the source commit, both
 verifier-file digests, all six release assets, Python-package artifacts,
-qualification dependency inventories, and signing-key fingerprint. A capsule
+and signing-key fingerprint, and the qualification evidence retains every
+dependency inventory. A capsule
 is transitional delivery code, not authority to weaken canonical verification
 or introduce permanent v3 branches into v4.
 
 ### 6.7 Transactional v4 updater
+
+> **Superseded 2026-09-03.** The transactional actor specified below was
+> replaced by the lean in-editor updater in [self-update.md](self-update.md).
+> It was built to defend against failure modes that were never observed in
+> the field — a separate Python actor launched through `uvx`, a journal,
+> repair and abort modes, editor leases and elections, failpoints, hot reload
+> behind a quiescence barrier, and a startup barrier that ran the actor on
+> every editor start — and doing so cost about 5,400 lines and 39 real-editor
+> tests. The replacement is verify, stage, swap, restart, then verify again:
+> one GDScript path, one retained backup, and three marker states
+> (`success`, `rolled_back`, `repair_required`). The text below is kept as
+> history and is no longer the implementation baseline.
 
 Preparation occurs while the old plugin remains enabled:
 
@@ -699,10 +725,10 @@ bundle A + bundle B + per-row dependency artifacts
 ```
 
 The successor has a unique signed, stable-shaped qualification identity. Version
-`4.0.1` is permanently burned for this proof: it is never published, relabeled,
-or reused, so the next publishable stable version is at least `4.0.2`. Before an
-eventual v4.1 release, published v4.0 must qualify the exact private stable-v4.1
-candidate that will be published.
+`4.0.1` is test-only for this proof: it is never published or relabeled, but
+the number is not reserved; the next patch publication is a fresh reviewed A
+under it. Before an eventual v4.1 release, published v4.0 must qualify the
+exact private stable-v4.1 candidate that will be published.
 
 Main synchronizes only between immutable green tags. Each sync is range-diffed
 and re-runs affected evidence.
@@ -719,6 +745,15 @@ selects repeated effect names by explicit occurrence. The complete section-8.1 s
 actual process matrix remain required before Phase 7. The phase bullets below
 stay as the approved execution contract rather than being rewritten as a
 release changelog.
+
+The [PR #949 follow-up](v4-release-review-followup.md) records the release
+workflow hardening, handler-quiescence/shutdown repair, restart handoff fixes
+and development checks. Restart now persists the next-start enabled list
+without loading v4 in the old editor, and waits through transient predecessor
+uncertainty without transferring its lease until positive closure proof.
+Qualification now explicitly refuses before final signing while the remaining
+runtime/failure/stress producers and reviewed numeric ceilings are absent;
+these changes do not close Phase 6 or Phase 7.
 
 ### Phase 0 — approve and pin
 

@@ -366,7 +366,7 @@ func test_send_eval_without_active_session_replies_game_not_ready() -> void:
 	if plugin._first_active_session() != null:
 		skip("an active debugger session is present; no-session branch not exercised")
 		return
-	var conn := _StubConnection.new()
+	var conn := track(_StubConnection.new()) as _StubConnection
 	plugin._send_eval(tree, "return 1", "rid-no-session", conn, 10.0)
 	assert_eq(conn.captured.size(), 1, "exactly one deferred reply is sent")
 	assert_eq(conn.captured[0]["payload"]["error"]["code"], ErrorCodes.EVAL_GAME_NOT_READY,

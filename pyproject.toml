@@ -71,11 +71,20 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
+    # CI runs the suite across every runner core; the suite is safe under
+    # xdist because integration fixtures allocate free ports per test.
+    "pytest-xdist>=3.5",
     "hypothesis>=6.0",
     "ruff>=0.8",
     # Used by script/ci-game-capture-smoke to decode PNG frames from the
     # running game and assert the expected colored quadrants are present.
     "pillow>=10.0",
+    # Reviewed harness only: identity-bound release resource measurements.
+    "psutil==7.2.2",
+    # The closed-editor installer (script/v4-release) verifies release
+    # signatures with it. release_verify imports it lazily, so the server
+    # package never loads it at runtime.
+    "cryptography>=42",
 ]
 build = [
     "build==1.6.0",
@@ -84,7 +93,6 @@ build = [
 
 [project.scripts]
 godot-ai = "godot_ai:main"
-godot-ai-update-transaction = "godot_ai.update_transaction:main"
 
 [build-system]
 requires = ["setuptools==84.0.0"]
@@ -97,6 +105,8 @@ where = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+# Drop each passed test's tmp_path at teardown so a long run's basetemp stays small and fast.
+tmp_path_retention_policy = "failed"
 
 [tool.ruff]
 target-version = "py311"

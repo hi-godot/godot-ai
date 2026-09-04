@@ -144,6 +144,26 @@ func test_plugin_construction_is_inert_and_has_no_host_cycle() -> void:
 	plugin.free()
 
 
+func test_update_busy_probe_does_not_stop_the_live_composition() -> void:
+	var plugin := Plugin.new()
+	var lifecycle := _manual_lifecycle()
+	_ready_adopted(lifecycle)
+	plugin._lifecycle = lifecycle
+	var dispatcher := McpDispatcher.new(McpLogBuffer.new())
+	plugin._dispatcher = dispatcher
+	dispatcher._pending_deferred["still-running"] = {"command": "run_project"}
+	var before := lifecycle.episode_snapshot()
+	var result := plugin.prepare_for_update_reload()
+	assert_false(result.ok)
+	assert_false(result.get("reload_required", false))
+	assert_eq(lifecycle.episode_snapshot(), before)
+	assert_true(dispatcher._pending_deferred.has("still-running"))
+	dispatcher.release_after_teardown()
+	plugin._dispatcher = null
+	plugin._lifecycle = null
+	plugin.free()
+
+
 func test_root_applies_transport_values_without_retaining_connection_in_manager() -> void:
 	var plugin := Plugin.new()
 	var connection := FakeConnection.new()
@@ -373,60 +393,3 @@ func test_capability_pair_is_distinct_for_dev_and_managed_spawns() -> void:
 	assert_eq(str(pair.http).length(), 64)
 	assert_eq(str(pair.websocket).length(), 64)
 	assert_ne(pair.http, pair.websocket)
-
-
-func test_update_actor_command_value_has_a_real_wall_clock_deadline() -> void:
-	## Exercise the exact helper used by both the interactive startup worker and
-	## the synchronous export/import lease. A wedged actor must be killed rather
-	## than turning either path into an unbounded wait.
-	if OS.get_name() == "Windows":
-		skip("Windows lacks a standalone sleep executable; covered by the Unix path")
-		return
-	var sleep_exe := "/bin/sleep"
-	if not FileAccess.file_exists(sleep_exe):
-		sleep_exe = "/usr/bin/sleep"
-	if not FileAccess.file_exists(sleep_exe):
-		skip("No /bin/sleep or /usr/bin/sleep on this host")
-		return
-	var command: Array[String] = [sleep_exe]
-	var started_msec := Time.get_ticks_msec()
-	var result := Plugin._execute_update_command_value(
-		command,
-		["5"] as Array[String],
-		VERSION,
-		200,
-		Callable(),
-	)
-	var elapsed_msec := Time.get_ticks_msec() - started_msec
-	assert_false(bool(result.get("ok", true)))
-	assert_eq(
-		str(result.get("error", "")),
-		"transaction actor exceeded its deadline and could not be stopped safely",
-	)
-	assert_true(bool(result.get("termination_unproven", false)),
-		"POSIX actor termination cannot prove that no descendant retained authority")
-	assert_true(
-		elapsed_msec < 3000,
-		"Actor timeout must return near its deadline, not after sleep exits (%dms)" % elapsed_msec,
-	)
-
-
-func test_update_actor_refusal_never_reflects_arbitrary_resolver_stderr() -> void:
-	var secret := "https://user:secret@example.invalid/simple"
-	var generic := Plugin._update_actor_refusal_message(
-		"error: failed to resolve from %s" % secret
-	)
-	assert_eq(generic, "transaction actor or exact-package resolver refused")
-	assert_false(generic.contains("secret"))
-	assert_eq(
-		Plugin._update_actor_refusal_message(
-			"uvx preface\nupdate transaction refused: activation lock already exists\n"
-		),
-		"update transaction refused: activation lock already exists",
-	)
-	assert_eq(
-		Plugin._update_actor_refusal_message(
-			"update transaction refused: bad\u0001control"
-		),
-		"transaction actor or exact-package resolver refused",
-	)

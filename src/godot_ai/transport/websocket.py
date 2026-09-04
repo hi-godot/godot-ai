@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import secrets
+import socket
 from functools import partial
 from typing import Any, TypeVar
 
@@ -353,9 +354,13 @@ class GodotWebSocketServer:
         auth_token: str | None = None,
         *,
         max_open_connections: int = DEFAULT_MAX_OPEN_CONNECTIONS,
+        sock: socket.socket | None = None,
     ):
         self.registry = registry
         self.port = port
+        ## A listening socket the launcher already holds (a port handed over
+        ## from a replaced backend); host/port are then only informational.
+        self._sock = sock
         if auth_token is not None and not _CAPABILITY_RE.fullmatch(auth_token):
             raise ValueError("editor WebSocket capability must be 32 lowercase-hex bytes")
         if max_open_connections <= 0:
@@ -378,6 +383,11 @@ class GodotWebSocketServer:
         self._broadcast_rerun: bool = False
         self._custom_tool_service: CustomToolService = CustomToolService.get_instance()
 
+    def _bind_kwargs(self) -> dict[str, Any]:
+        if self._sock is not None:
+            return {"sock": self._sock}
+        return {"host": "127.0.0.1", "port": self.port}
+
     async def start(self):
         logger.info("Starting WebSocket server on port %d", self.port)
         try:
@@ -390,8 +400,7 @@ class GodotWebSocketServer:
                 # is defense in depth, not permission to expose the editor bridge
                 # to the LAN. Binding "::" (IPv6-only by default on Windows)
                 # would also break the editor's IPv4 loopback connection.
-                "127.0.0.1",
-                self.port,
+                **self._bind_kwargs(),
                 ## Start under the tiny pre-auth ceiling. Once both proofs
                 ## validate, the handler raises this peer's parser limit to the
                 ## normal 4 MiB screenshot/command envelope budget.

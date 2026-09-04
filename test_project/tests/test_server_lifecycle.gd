@@ -215,6 +215,19 @@ func test_replacement_authorization_expires_and_requires_fresh_action() -> void:
 	assert_eq(manager.episode_snapshot().state, Lifecycle.RECOVERING)
 
 
+func test_status_dict_names_the_conflicting_server_version() -> void:
+	var manager := _manager()
+	_block_replaceable(manager)
+	var target: Dictionary = manager.episode_snapshot().blocked_target
+	var status := manager.get_status_dict()
+	assert_true(bool(status.can_recover_incompatible))
+	assert_eq(str(status.conflict_version), str(target.version), "the plugin's post-update arm compares this")
+	assert_false(str(status.conflict_version).is_empty())
+	assert_eq(int(status.conflict_port), int(target.port))
+	manager.stop_server()
+	assert_eq(str(manager.get_status_dict().conflict_version), "", "cleared with the blocked target")
+
+
 func test_generic_restart_never_escalates_to_unowned_replacement() -> void:
 	var manager := _manager()
 	var effects: Array[String] = []
@@ -242,6 +255,49 @@ func test_successful_replacement_continues_same_episode_lineage() -> void:
 	assert_eq(manager.episode_snapshot().id, episode_id)
 	assert_eq(manager.episode_snapshot().state, Lifecycle.STARTING)
 	assert_eq(manager.episode_snapshot().phase, Lifecycle.PROBE)
+
+
+func test_replacement_effect_carries_a_launch_plan_that_waits_for_the_port() -> void:
+	var manager := _manager()
+	var payloads: Array[Dictionary] = []
+	manager.effect_requested.connect(func(_id: int, kind: String, payload: Dictionary) -> void:
+		if kind == Lifecycle.REPLACE:
+			payloads.append(payload)
+	)
+	_block_replaceable(manager)
+	assert_true(manager.request_replacement())
+	assert_eq(payloads.size(), 1)
+	var launch: Dictionary = payloads[0].get("launch", {})
+	assert_eq(int(launch.get("wait_for_port_ms", 0)), Lifecycle.REPLACEMENT_WAIT_FOR_PORT_MS)
+	assert_eq(str(launch.get("expected_version", "")), VERSION)
+
+
+func test_replacement_that_launched_first_continues_at_the_proof() -> void:
+	var manager := _manager()
+	var effects: Array[String] = []
+	manager.effect_requested.connect(func(_id: int, kind: String, _payload: Dictionary) -> void:
+		effects.append(kind)
+	)
+	_block_replaceable(manager)
+	var episode_id := int(manager.episode_snapshot().id)
+	assert_true(manager.request_replacement())
+	assert_true(manager.complete_effect(episode_id, Lifecycle.REPLACE, {
+		"ok": true,
+		"launch": {
+			"ok": true,
+			"pid": 4242,
+			"fingerprint": "process-start-fingerprint",
+			"http_capability": HTTP,
+			"ws_capability": WS,
+			"baseline_instance_id": "old-record",
+		},
+	}))
+	assert_eq(manager.episode_snapshot().id, episode_id)
+	assert_eq(manager.episode_snapshot().state, Lifecycle.STARTING)
+	assert_eq(manager.episode_snapshot().phase, Lifecycle.PROVE, "no probe: our server is taking the port")
+	assert_false(effects.slice(effects.find(Lifecycle.REPLACE) + 1).has(Lifecycle.PROBE))
+	assert_true(effects.has(Lifecycle.PROVE))
+	assert_eq(str(manager.episode_snapshot().launch.get("baseline_instance_id", "")), "old-record")
 
 
 func test_foreign_occupant_never_mints_replacement_authority() -> void:
@@ -377,7 +433,11 @@ func test_update_quiescence_reports_unfinished_owned_stop() -> void:
 	assert_eq(manager.episode_snapshot().state, Lifecycle.STOPPING)
 
 
-func test_stop_cannot_report_success_while_listener_remains() -> void:
+func test_stop_of_a_gone_process_succeeds_even_while_a_foreign_listener_remains() -> void:
+	## Nothing of ours is left to kill, so whoever holds the port now is not
+	## ours to prove stopped: the next start's probe deals with that occupant
+	## (an attach bridge's backend, after an update). Refusing here left the
+	## lifecycle looping between a failed stop and a block.
 	var holder := TCPServer.new()
 	var port := 51261
 	if holder.listen(port, "127.0.0.1") != OK:
@@ -390,8 +450,9 @@ func test_stop_cannot_report_success_while_listener_remains() -> void:
 		"launch": {},
 	})
 	holder.stop()
-	assert_false(bool(result.get("ok", false)))
-	assert_eq(str(result.get("reason", "")), "process_stop_failed")
+	assert_true(bool(result.get("ok", false)), str(result))
+	assert_false(bool(result.get("already_gone", true)), "the port was not free, so nothing is 'already gone'")
+	assert_eq(str(result.get("reason", "")), "")
 
 
 func test_adopted_server_and_keep_alive_owned_server_detach_on_exit() -> void:

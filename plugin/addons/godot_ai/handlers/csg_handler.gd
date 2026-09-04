@@ -1,5 +1,5 @@
 @tool
-extends RefCounted
+extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 ## CSG authoring — create CSG shapes (box, sphere, cylinder, torus, prism)
 ## and set their boolean operation (union / intersection / subtraction) so

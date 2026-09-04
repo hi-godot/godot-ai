@@ -1,5 +1,5 @@
 @tool
-extends RefCounted
+extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd")
@@ -260,6 +260,14 @@ static func _finish_scan_deferred(
 	connection: McpConnection,
 	request_id: String,
 	efs: EditorFileSystem,
+) -> void:
+	var work := ScriptWork.begin("scan_filesystem")
+	await _settle_scan(connection, request_id, efs)
+	ScriptWork.finish(work)
+
+
+static func _settle_scan(
+	connection: McpConnection, request_id: String, efs: EditorFileSystem,
 ) -> void:
 	if not is_instance_valid(connection):
 		return

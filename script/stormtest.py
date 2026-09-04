@@ -97,6 +97,7 @@ from stormtest_support import (  # noqa: E402
     normalize_profile,
     parse_qualification_project_specs,
     parse_target_specs,
+    pinned_session_identity,
     project_tree_drift,
     project_tree_inventory,
     save_trace,
@@ -106,6 +107,7 @@ from stormtest_support import (  # noqa: E402
     threshold_exit_code,
     tool_domain,
     trace_entries_by_worker,
+    transport_exception_code,
     validate_canonical_trace,
     validate_locked_qualification_thresholds,
     validate_locked_target_ids,
@@ -129,6 +131,11 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, help="deterministic run seed (locked: 41001-41003)")
     parser.add_argument("--profile", help="steady, reload-churn, or multi-editor")
+    parser.add_argument(
+        "--measure-baseline", action="store_true",
+        help=("measure a canonical workload before ceilings are reviewed; retains all "
+              "identity/cleanup/error checks but always fails qualification and exits nonzero"),
+    )
     parser.add_argument(
         "--config",
         type=Path,
@@ -171,6 +178,8 @@ try:
         REPLAY_TRACE = load_trace(ARGS.replay_trace)
     requested_profile = ARGS.profile or os.environ.get("SS_PROFILE", "").strip()
     replay_profile = str(REPLAY_TRACE["profile"]["id"]) if REPLAY_TRACE else ""
+    if ARGS.measure_baseline and (requested_profile or replay_profile) not in LOCKED_PROFILES:
+        raise StormConfigError("baseline measurement requires a canonical locked profile")
     if requested_profile and requested_profile not in LOCKED_PROFILES:
         raise StormConfigError(
             f"unknown profile {requested_profile!r}; choose from "
@@ -187,9 +196,10 @@ try:
                 "locked profiles require docs/verification/storm-profiles-v1.json"
             )
         PROFILE_CONFIG = load_profile_config(ARGS.config)
-        validate_locked_qualification_thresholds(
-            PROFILE_CONFIG, requested_profile or replay_profile
-        )
+        if not ARGS.measure_baseline:
+            validate_locked_qualification_thresholds(
+                PROFILE_CONFIG, requested_profile or replay_profile
+            )
 except StormConfigError as error:
     CONFIG_ERROR = str(error)
 
@@ -479,6 +489,8 @@ def flush_report_json():
     all_lat = [d for v in LAT.values() for d in v]
     routed_calls = M["session_pinned_calls"] + M["session_unpinned_calls"]
     snap = {
+        "baseline_measurement": ARGS.measure_baseline,
+        "unresolved_baseline_fields": PROFILE_CONFIG.get("unresolved_baseline_fields", []),
         "profile": PROFILE["id"],
         "seed": RUN_SEED,
         "trace_sha256": TRACE[0]["trace_sha256"] if TRACE[0] else None,
@@ -523,7 +535,7 @@ def flush_report_json():
             for op in sorted(set(M["by_op_ok"]) | set(M["by_op_err"]))
         },
     }
-    snap["contract_failures"] = evaluate_contract(snap, THRESHOLDS) if THRESHOLDS else []
+    snap["contract_failures"] = evaluate_contract(snap, THRESHOLDS)
     tmp = REPORT_JSON + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(snap, f, indent=2)
@@ -533,6 +545,9 @@ def flush_report_json():
 
 def _err_code(exc: Exception) -> str:
     """Best-effort extraction of a godot/MCP error code from an exception."""
+    transport_code = transport_exception_code(exc)
+    if transport_code:
+        return transport_code
     data = getattr(exc, "data", None)
     if isinstance(data, dict):
         code = data.get("code") or data.get("error_code")
@@ -623,7 +638,8 @@ class Worker:
             RUN_SEED, target["id"], local_worker, "list-domain"
         ).randrange(6)
         # Administrative setup is always routed to an explicitly named
-        # session; each trace entry then controls whether its operation is pinned.
+        # session. Only locked qualification profiles can intentionally vary
+        # routing; an exploratory explicit target must never become unpinned.
         self.session_pinned = bool(target["session_id"])
 
     @property
@@ -642,7 +658,7 @@ class Worker:
 
     async def connect(self) -> bool:
         """(Re)establish this worker's MCP connection. Retries until timeout."""
-        if IS_LOCKED:
+        if IS_LOCKED or self.target["session_id"]:
             await TARGET_REPINNED[self.target["id"]].wait()
         await _hard_close(self.client)
         self.client = None
@@ -650,7 +666,7 @@ class Worker:
         attempt = 0
         while time.monotonic() < deadline and not STOP[0]:
             attempt += 1
-            if IS_LOCKED:
+            if IS_LOCKED or self.target["session_id"]:
                 await TARGET_REPINNED[self.target["id"]].wait()
             c = None
             try:
@@ -1129,16 +1145,24 @@ async def op_input_map(w: Worker):
         )
         return
     if op == "add_action":
+        # The small name pool deliberately repeats. Stress valid mutations;
+        # duplicate-add and missing-remove refusals belong to negative tests.
+        op = "ensure_action"
         params = {"action": action}
     elif op == "bind_event":
         # ensure the action exists first, else bind_event errors NOT_FOUND
         await w.call(
             "input_map_manage",
-            {"op": "add_action", "params": {"action": action}},
-            op_label="input_map_manage.add_action",
+            {"op": "ensure_action", "params": {"action": action}},
+            op_label="input_map_manage.ensure_action",
         )
         params = {"action": action, "event_type": "key", "keycode": "A"}
     elif op == "remove_action":
+        await w.call(
+            "input_map_manage",
+            {"op": "ensure_action", "params": {"action": action}},
+            op_label="input_map_manage.ensure_action",
+        )
         params = {"action": action}
     else:
         params = {}
@@ -1260,7 +1284,9 @@ async def worker_loop(w: Worker):
                     break
                 operation_name = TRACE[0]["operations"][entry[3]]
                 op = OPERATION_BY_NAME[operation_name]
-                w.session_pinned = bool(entry[4])
+                w.session_pinned = bool(entry[4]) or (
+                    not IS_LOCKED and bool(w.target["session_id"])
+                )
                 M["scheduled_operations"] += 1
                 try:
                     await op(w)
@@ -1469,7 +1495,10 @@ async def _do_locked_reload(w: Worker) -> None:
 
 
 async def do_reload(w: Worker):
-    if IS_LOCKED:
+    # An explicit session pin rotates on every plugin reload in exploratory
+    # runs too. Use the same immutable project/PID proof; never silently fall
+    # back to whichever editor became active on the endpoint.
+    if IS_LOCKED or w.target["session_id"]:
         await _do_locked_reload(w)
         return
     M["reloads_attempted"] += 1
@@ -1555,6 +1584,15 @@ async def run_isolated_reload() -> None:
     if not await w.connect():
         _abort("could not reach the editor — is it running with the plugin enabled?")
         return
+    if not IS_LOCKED and w.target["session_id"]:
+        try:
+            await _capture_pinned_target(w.client, w.target)
+        except Exception as error:
+            _record_admin_error(_err_code(error), "isolated.identity")
+            _abort("isolated reload could not prove the explicitly pinned editor identity")
+            await _hard_close(w.client)
+            w.client = None
+            return
 
     for i in range(ISOLATED_ITERS):
         if STOP[0]:
@@ -1574,7 +1612,10 @@ async def run_isolated_reload() -> None:
         w.client = None
         t0 = time.monotonic()
         await asyncio.sleep(2.0)
-        ok = await w.connect()
+        if w.target["session_id"]:
+            ok = await _repin_locked_target(w, before)
+        else:
+            ok = await w.connect()
         dt = time.monotonic() - t0
         if not ok:
             _abort(
@@ -1607,7 +1648,7 @@ async def health_monitor(target: dict[str, str]):
     misses = 0
     while not STOP[0]:
         await asyncio.sleep(3)
-        if IS_LOCKED:
+        if IS_LOCKED or target["session_id"]:
             await TARGET_REPINNED[target["id"]].wait()
             if STOP[0]:
                 return
@@ -1720,6 +1761,58 @@ async def preflight_locked(originals: dict[str, str]) -> None:
         }
 
 
+async def _capture_pinned_target(client, target: dict[str, str]) -> None:
+    """Bind an exploratory explicit pin before any reload can rotate it."""
+    async with asyncio.timeout(CALL_TIMEOUT):
+        listing = await client.call_tool("session_manage", {"op": "list", "params": {}})
+    selected = pinned_session_identity(_sessions_from_result(listing), target["session_id"])
+    target_id = target["id"]
+    TARGET_IDENTITIES[target_id] = selected
+    # Routing evidence alone is not a locked qualification or durable-tree baseline.
+    QUALIFICATION_EVIDENCE[target_id] = {
+        **selected,
+        "initial_session_id": target["session_id"],
+        "current_session_id": target["session_id"],
+        "repins": [],
+    }
+
+
+async def _fresh_scratch_root(client, target: dict) -> str:
+    """Replace a retained editor tab from the newly written empty scene.
+
+    Removing scratch files does not close Godot's scene tab. A later create
+    writes fresh bytes but opening the same path can select the old in-memory
+    scene. Settle that tab first, then explicitly reload and prove it is empty
+    before any save or worker mutation can persist stale nodes again.
+    """
+    await client.call_tool("scene_open", _target_params(target, {"path": SCRATCH_SCENE}))
+    result = await client.call_tool(
+        "scene_open", _target_params(target, {"path": SCRATCH_SCENE, "force_reload": True})
+    )
+    data = getattr(result, "data", None)
+    if (
+        not isinstance(data, dict)
+        or data.get("switched") is not True
+        or data.get("reloaded_from_disk") is not True
+    ):
+        raise StormConfigError(f"target {target['id']}: fresh scratch reload was not proved")
+    hierarchy = await client.call_tool(
+        "scene_get_hierarchy", _target_params(target, {"depth": 1})
+    )
+    tree = getattr(hierarchy, "data", None)
+    nodes = tree.get("nodes") if isinstance(tree, dict) else None
+    if (
+        not isinstance(nodes, list)
+        or len(nodes) != 1
+        or not isinstance(nodes[0], dict)
+        or nodes[0].get("path") != "/Root"
+        or nodes[0].get("children_count") != 0
+        or tree.get("has_more") is not False
+    ):
+        raise StormConfigError(f"target {target['id']}: scratch scene is not a fresh empty root")
+    return "/Root"
+
+
 async def setup(originals: dict[str, str]) -> None:
     print(
         f"stormtest  workers={WORKERS} waves={WAVES} calls/wave={CALLS_PER_WAVE} "
@@ -1729,6 +1822,8 @@ async def setup(originals: dict[str, str]) -> None:
     for target in TARGETS:
         target_id = target["id"]
         async with _bounded_client(target["url"]) as c:
+            if not IS_LOCKED and target["session_id"]:
+                await _capture_pinned_target(c, target)
             st = (await c.call_tool("editor_state", _target_params(target, {}))).data
             original = st.get("current_scene") or ""
             if IS_LOCKED:
@@ -1758,18 +1853,7 @@ async def setup(originals: dict[str, str]) -> None:
                     },
                 ),
             )
-            await asyncio.sleep(0.4)
-            hierarchy = await c.call_tool(
-                "scene_get_hierarchy", _target_params(target, {"depth": 1})
-            )
-            # The hierarchy contract is the paginated node list; the old
-            # top-level `root` passthrough never came from the real plugin.
-            nodes = hierarchy.data.get("nodes", [])
-            root = nodes[0].get("path") if nodes and isinstance(nodes[0], dict) else None
-            if root:
-                ROOT_PATHS[target_id] = root if str(root).startswith("/") else f"/{root}"
-            else:
-                raise StormConfigError(f"target {target_id}: scratch scene has no root")
+            ROOT_PATHS[target_id] = await _fresh_scratch_root(c, target)
             print(f"  [{target_id}] scratch scene ready, root path = {ROOT_PATHS[target_id]}")
             await c.call_tool("scene_save", _target_params(target, {}))
             if IS_LOCKED:

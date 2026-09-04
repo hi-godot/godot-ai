@@ -1,5 +1,5 @@
 @tool
-extends RefCounted
+extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
@@ -265,6 +265,15 @@ static func _finish_open_scene_deferred(
 	path: String,
 	prev_root_id: int,
 	payload: Dictionary,
+) -> void:
+	var work := ScriptWork.begin("open_scene")
+	await _settle_open_scene(connection, request_id, path, prev_root_id, payload)
+	ScriptWork.finish(work)
+
+
+static func _settle_open_scene(
+	connection: McpConnection, request_id: String, path: String,
+	prev_root_id: int, payload: Dictionary,
 ) -> void:
 	if not is_instance_valid(connection):
 		return

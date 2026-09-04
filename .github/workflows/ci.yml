@@ -3,9 +3,22 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [main, beta]
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
   pull_request:
-    branches: [main, beta]
+    branches: [main, codex/v4-release-promotion]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+
+## One run per PR at a time: a new push cancels the previous run's 30-odd
+## jobs instead of letting two full matrices race. Pushes to main are never
+## cancelled, so every merged commit keeps a complete record.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 ## Stop CI from injecting fake "installs" into the telemetry dashboard or
 ## burning streaming-insert quota on the backend. Opt-out is fully
@@ -28,11 +41,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Process, path, lease, and updater behavior is platform-specific.
-        # Exercise the supported Python floor, default, and ceiling on every
-        # required desktop platform rather than inferring six combinations.
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Two independent axes, not their product. Interpreter-version
+        # behavior is the same on every OS, so every supported version runs
+        # on Linux, where a cell costs ~4 minutes. Process, path, lease, and
+        # updater behavior is OS-specific, so Windows (the platform with the
+        # most platform-specific code: kernel32 process identity, junctions,
+        # sharing-violation retries) runs the floor and the ceiling, and macOS
+        # runs the ceiling; 3.14 is what uvx hands users (#746). The full
+        # 3x4 product cost twelve cells, four of them Windows at 10+ minutes
+        # each and four macOS cells that queued behind the runner limit, for
+        # no class of regression these seven cells do not catch.
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.14"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,13 +78,29 @@ jobs:
 
       # Keep these conditions complementary so every matrix cell runs pytest
       # exactly once: with coverage on the Codecov cell, plain everywhere else.
+      #
+      # --basetemp keeps every tmp_path under the runner's short temp directory
+      # (D:\a\_temp on Windows) instead of the deep per-user Temp tree. The
+      # updater canonicalizes paths by enumerating each ancestor directory on
+      # Windows and macOS, so ancestor fan-out is a per-call cost for the
+      # transaction, updater and qualification suites; together with the
+      # failed-only tmp_path retention in pyproject.toml this keeps that walk
+      # short for the whole run. --durations reports the slowest tests so a
+      # regression in a single test is visible in the hosted log.
+      # -n auto: one worker per runner core. The suite is 2,700 tests at
+      # ~0.1 s each, so serial rows cost 4-6 minutes and set the wall clock;
+      # the whole suite, integration included, runs clean under xdist
+      # because its fixtures allocate free ports per test (verified locally:
+      # 403 s serial -> 108 s parallel, zero ordering failures).
       - name: Run tests
         if: matrix.os != 'ubuntu-latest' || matrix.python-version != '3.13'
-        run: pytest -v
+        run: pytest -n auto -v --durations=25 --basetemp="${{ runner.temp }}/pytest-basetemp"
 
       - name: Run tests with coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
-        run: pytest --cov=godot_ai --cov-report=xml -v
+        run: >-
+          pytest -n auto --cov=godot_ai --cov-report=xml -v --durations=25
+          --basetemp="${{ runner.temp }}/pytest-basetemp"
 
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
@@ -196,15 +239,25 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
-      - name: Self-update forward upgrade regression
+      - name: Real-editor updater scenarios
+        # Linux only on pull requests and pushes: the lean updater's real-editor
+        # scenarios (signed update, v3 capsule crossing, post-swap rollback) plus
+        # the restart, bridge, reload-persistence and qualification-fixture
+        # suites. Windows and macOS run the same files nightly
+        # (nightly-diagnostics.yml); their editor starts are 3-5x slower and the
+        # per-OS Godot and smoke jobs already prove the plugin and server start
+        # on every OS. See docs/self-update.md.
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         timeout-minutes: 12
         run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            xvfb-run -a env GODOT_BIN=godot pytest -q tests/integration/test_self_update_upgrade_paths.py
-          else
-            GODOT_BIN=godot pytest -q tests/integration/test_self_update_upgrade_paths.py
-          fi
+          xvfb-run -a env GODOT_BIN=godot pytest -v -s --durations=0 --basetemp="${RUNNER_TEMP}/pytest-basetemp" \
+            tests/integration/test_godot_editor_restart.py \
+            tests/integration/test_migration_bridge_failures.py \
+            tests/integration/test_self_update_upgrade_paths.py \
+            tests/integration/test_qualification_https.py \
+            tests/integration/test_plugin_reload_persistence.py \
+            tests/integration/test_runtime_qualification_driver.py
 
       - name: Start MCP server
         shell: bash
@@ -362,14 +415,12 @@ jobs:
       GODOT_AI_MODE: dev
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            label: Linux
-          - os: macos-latest
-            label: macOS
-          - os: windows-latest
-            label: Windows
+      # macOS runners are the scarce pool (five concurrent). On pull requests
+      # the macOS row of this smoke moves to pushes to main, so a PR runs
+      # five macOS jobs instead of seven and none of them queue behind the
+      # limit. macOS keeps the stale-server smoke and the Godot suite on
+      # every PR, which exercise its lsof-based port scraping.
+      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"os":"ubuntu-latest","label":"Linux"},{"os":"windows-latest","label":"Windows"}]}' || '{"include":[{"os":"ubuntu-latest","label":"Linux"},{"os":"macos-latest","label":"macOS"},{"os":"windows-latest","label":"Windows"}]}') }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -433,14 +484,12 @@ jobs:
       GODOT_AI_MODE: dev
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            label: Linux
-          - os: macos-latest
-            label: macOS
-          - os: windows-latest
-            label: Windows
+      # macOS runners are the scarce pool (five concurrent). On pull requests
+      # the macOS row of this smoke moves to pushes to main, so a PR runs
+      # five macOS jobs instead of seven and none of them queue behind the
+      # limit. macOS keeps the stale-server smoke and the Godot suite on
+      # every PR, which exercise its lsof-based port scraping.
+      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"os":"ubuntu-latest","label":"Linux"},{"os":"windows-latest","label":"Windows"}]}' || '{"include":[{"os":"ubuntu-latest","label":"Linux"},{"os":"macos-latest","label":"macOS"},{"os":"windows-latest","label":"Windows"}]}') }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

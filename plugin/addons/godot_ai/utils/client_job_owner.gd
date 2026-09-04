@@ -90,7 +90,15 @@ func _init() -> void:
 
 
 func _ready() -> void:
-	set_process(false)
+	## Work can start before this node is ready: the plugin begins post-update
+	## client migration while it is still entering the tree, and this callback
+	## runs after that. Idle only when nothing is in flight; becoming ready
+	## must never cancel the poll for a thread that is already running.
+	set_process(_has_work_in_flight())
+
+
+func _has_work_in_flight() -> bool:
+	return _post_update_thread != null or _refresh_thread != null or not _action_threads.is_empty()
 
 
 ## Construction is inert. The composition root calls activate only after its

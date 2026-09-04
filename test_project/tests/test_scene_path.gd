@@ -4,8 +4,8 @@ extends McpTestSuite
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 ## Tests for McpScenePath — the path resolver/formatter shared by every
-## scene-mutating handler. Uses a freestanding Node tree (no dependency
-## on the edited scene) so behavior is deterministic.
+## scene-mutating handler. Uses test-owned Node trees, independent of the
+## edited scene. The absolute-path case attaches its fixture to the editor UI.
 
 
 func suite_name() -> String:
@@ -166,11 +166,17 @@ func test_resolve_does_not_hijack_editor_internal_root_paths() -> void:
 	## not swallow them, or absolute-path lookups break for every handler
 	## that resolves a node by its real SceneTree path.
 	var root := _make_tree()
-	## Path doesn't match alias prefix "/root/Main" → falls through to the
-	## absolute-path fallback (which returns null here because root isn't
-	## actually in any SceneTree, but the key behavior is "don't strip /root").
-	assert_eq(McpScenePath.resolve("/root/@EditorNode@1/Main/Camera3D", root), null)
-	root.queue_free()
+	## Absolute lookups require a live SceneTree. Attach only this test-owned
+	## fixture under the editor UI, outside the user's edited scene.
+	EditorInterface.get_base_control().add_child(root)
+	var camera := root.get_node("Camera3D")
+	var absolute := str(camera.get_path())
+	assert_true(absolute.begins_with("/root/"))
+	assert_false(absolute.begins_with("/root/Main/"))
+	assert_eq(McpScenePath.resolve(absolute, root), camera,
+		"editor-internal absolute paths must resolve without applying the scene-root alias")
+	root.get_parent().remove_child(root)
+	root.free()
 
 
 # ----- resolve: failure cases -----

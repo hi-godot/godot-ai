@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+const StubSessionPlugin := preload("res://tests/stub_debugger_session_plugin.gd")
+
 ## Repro for the manual-play adoption gap (observed live 2026-08-26).
 ##
 ## Pressing Play (F5/F6) in the editor can leave the MCP runtime bridge dead:
@@ -23,7 +25,7 @@ func suite_name() -> String:
 
 
 func _plugin_with_log() -> McpDebuggerPlugin:
-	var plugin := McpDebuggerPlugin.new()
+	var plugin := StubSessionPlugin.new()
 	plugin._log_buffer = McpLogBuffer.new()
 	return plugin
 

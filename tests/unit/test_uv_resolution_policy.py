@@ -35,43 +35,33 @@ def test_one_policy_owns_public_index_and_explicit_qualification_escape() -> Non
     assert "if not qualification_authorized():" in args
 
 
-def test_every_uvx_server_actor_attach_and_prewarm_builder_uses_one_policy() -> None:
+def test_every_uvx_server_attach_and_prewarm_builder_uses_one_policy() -> None:
     configurator = _source("client_configurator.gd")
     attach = get_func_block(configurator, "static func _resolve_attach_launch_uncached(")
     server = get_func_block(configurator, "static func get_server_command() -> Array[String]:")
-    actor = get_func_block(
-        configurator, "static func get_update_transaction_command() -> Array[String]:"
-    )
     prewarm = get_func_block(
         configurator, "static func prewarm_server_package_argv(version: String) -> Array[String]:"
     )
 
     assert "UvResolution.args()" in attach
     assert "UvResolution.args()" in server
-    assert "UvResolution.args()" in actor
     assert "UvResolution.args()" in prewarm
-    assert '"godot-ai-update-transaction"' in actor
-    assert "server.duplicate()" not in actor
 
 
-def test_godot_owned_server_prewarm_and_actor_spawns_strip_uv_environment() -> None:
+def test_godot_owned_server_and_prewarm_spawns_strip_uv_environment() -> None:
     policy = _source("utils/uv_resolution_policy.gd")
     lifecycle = _source("utils/server_lifecycle.gd")
-    coordinator = _source("utils/update_coordinator.gd")
     cli_exec = _source("clients/_cli_exec.gd")
     configurator = _source("client_configurator.gd")
-    plugin = _source("plugin.gd")
 
     spawn = get_func_block(
         lifecycle,
         "static func _create_process_with_environment(",
     )
-    activate = get_func_block(coordinator, "func _spawn_actor() -> void:")
     piped = get_func_block(cli_exec, "static func _run_piped(")
     prewarm = get_func_block(
         configurator, "static func prewarm_server_package_blocking("
     )
-    actor = get_func_block(plugin, "static func _execute_update_command_value(")
 
     for name in (
         "UV_INDEX",
@@ -89,15 +79,8 @@ def test_godot_owned_server_prewarm_and_actor_spawns_strip_uv_environment() -> N
     assert spawn.index("UvResolution.restore_environment(") < spawn.index(
         "PortResolver.unlock_process_spawn()"
     )
-    assert activate.index("PortResolver.lock_process_spawn()") < activate.index(
-        "UvResolution.isolate_environment()"
-    ) < activate.index("_create_actor_process(") < activate.index(
-        "UvResolution.restore_environment("
-    ) < activate.index("PortResolver.unlock_process_spawn()")
-    assert "UvResolution.is_production_command(_command)" in activate
     assert "UvResolution.isolate_environment() if isolate_uv_resolution else {}" in piped
     assert "UvResolution.is_production_command(command)" in prewarm
-    assert "update_actor_requires_uv_environment_isolation(command)" in actor
 
 
 def test_qualification_authority_is_process_local_not_release_metadata() -> None:

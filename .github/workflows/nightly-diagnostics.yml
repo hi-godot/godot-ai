@@ -1,0 +1,260 @@
+name: Nightly diagnostics
+
+# The real-editor updater scenarios on every desktop OS and the locked storm
+# profile on Linux, against a real Godot 4.7.2 editor. These are diagnostics, not release gates:
+# release-qualification.yml and release.yml never read their output. A red
+# run is a regression to investigate. Nothing here needs signing credentials.
+on:
+  schedule:
+    - cron: "17 4 * * *" # 04:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-diagnostics
+  cancel-in-progress: false
+
+env:
+  GODOT_AI_DISABLE_TELEMETRY: "true"
+
+jobs:
+  updater-scenarios:
+    name: Real-editor updater scenarios / ${{ matrix.label }} / Godot 4.7.2
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
+    env:
+      GODOT_AI_FLEET_CROSSINGS: "1"
+      GODOT_AI_MODE: dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The bridge-failure tests start from the exact final-v3 tree.
+          fetch-depth: 0
+
+      - name: Build plugin link
+        run: bash script/verify-worktree
+
+      - uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2
+        with:
+          version: 4.7.2
+          use-dotnet: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          pip install -e ".[dev]"
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y xvfb
+          fi
+
+      - name: Real-editor updater scenarios on every desktop OS
+        shell: bash
+        env:
+          GODOT_BIN: godot
+        run: |
+          mkdir -p diagnostics
+          pytest_args=(-v -s --durations=0 --basetemp="${RUNNER_TEMP}/pytest-basetemp"
+            --junitxml=diagnostics/updater-scenarios.xml
+            tests/integration/test_migration_bridge_failures.py
+            tests/integration/test_self_update_upgrade_paths.py
+            tests/integration/test_godot_editor_restart.py
+            tests/integration/test_plugin_reload_persistence.py
+            tests/integration/test_qualification_resources.py
+            tests/integration/test_qualification_https.py
+            tests/integration/test_runtime_qualification_driver.py)
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a pytest "${pytest_args[@]}"
+          else
+            pytest "${pytest_args[@]}"
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: nightly-updater-scenarios-${{ matrix.label }}
+          path: diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
+
+  storm-baseline:
+    name: Storm baseline (steady, seed 41001) / Godot 4.7.2
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GODOT_AI_MODE: dev
+      MCP_SERVER_LOG: diagnostics/mcp-server.log
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build plugin link
+        run: bash script/verify-worktree
+
+      - uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2
+        with:
+          version: 4.7.2
+          use-dotnet: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+          sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri
+          mkdir -p diagnostics
+
+      - name: Start MCP server
+        run: bash script/ci-start-server
+
+      - name: Import and validate GDScript
+        timeout-minutes: 3
+        run: |
+          godot --headless --path test_project --import > diagnostics/godot-import.log 2>&1 || true
+          bash script/ci-check-gdscript diagnostics/godot-import.log
+
+      - name: Authorize the checkout's test project as a disposable storm target
+        run: |
+          # The marker is the storm harness's destructive-test authorization.
+          # This checkout is discarded with the job; nothing else may carry it.
+          printf 'godot-ai-stormtest-disposable-v1\n' > test_project/.godot-ai-stormtest-disposable
+
+      - name: Start Godot editor on a virtual display
+        run: |
+          # editor_screenshot is a required storm operation and a headless
+          # editor cannot draw, so run a windowed editor on Xvfb with the
+          # OpenGL (Mesa software) renderer.
+          xvfb-run -a --server-args="-screen 0 1280x720x24" \
+            godot --path test_project --editor --rendering-driver opengl3 \
+            > diagnostics/godot-editor.log 2>&1 &
+
+      - name: Wait for the editor session and open the saved scene
+        timeout-minutes: 5
+        run: |
+          python - <<'PY'
+          import asyncio
+          import sys
+          import time
+
+          sys.path.insert(0, "script")
+          from _transport_auth import authorization_header
+          from fastmcp import Client
+          from fastmcp.client.transports import StreamableHttpTransport
+
+          URL = "http://127.0.0.1:8000/mcp"
+
+          async def open_scene() -> bool:
+              transport = StreamableHttpTransport(
+                  URL, headers={"Authorization": authorization_header(URL)}
+              )
+              async with Client(transport, timeout=30) as client:
+                  listing = await client.call_tool("session_manage", {"op": "list", "params": {}})
+                  sessions = listing.data.get("sessions") or []
+                  if len(sessions) != 1:
+                      print(f"waiting: {len(sessions)} sessions")
+                      return False
+                  session_id = sessions[0]["session_id"]
+                  print(f"session {session_id} at {sessions[0].get('project_path')}")
+                  await client.call_tool(
+                      "scene_open", {"path": "res://main.tscn", "session_id": session_id}
+                  )
+                  return True
+
+          deadline = time.monotonic() + 240
+          while time.monotonic() < deadline:
+              try:
+                  if asyncio.run(open_scene()):
+                      sys.exit(0)
+              except Exception as exc:  # server or editor not up yet
+                  print(f"waiting: {exc}")
+              time.sleep(3)
+          sys.exit("editor session did not appear")
+          PY
+
+      - name: Steady storm profile in baseline-measurement mode
+        env:
+          SS_REPORT: diagnostics/steady-41001.json
+        run: |
+          # --measure-baseline always exits nonzero with exactly one expected
+          # contract line; the next step fails on anything beyond it.
+          python script/stormtest.py --profile steady --seed 41001 --measure-baseline \
+            --target editor-a=http://127.0.0.1:8000/mcp \
+            --qualification-project "editor-a=$PWD/test_project" \
+            --trace-out diagnostics/steady-41001-trace.json \
+            2>&1 | tee diagnostics/steady-41001.log || true
+
+      - name: Fail on any storm failure beyond the expected baseline line
+        run: |
+          python - <<'PY'
+          import json
+
+          with open("diagnostics/steady-41001.json", encoding="utf-8") as stream:
+              report = json.load(stream)
+          summary = {
+              key: report.get(key)
+              for key in (
+                  "scheduled_operations",
+                  "calls",
+                  "ok",
+                  "err",
+                  "unexpected_errors",
+                  "cleanup_complete",
+                  "contract_failures",
+              )
+          }
+          print(json.dumps(summary, indent=2))
+          expected = ["baseline measurement is not qualification"]
+          if report.get("contract_failures") != expected:
+              raise SystemExit(f"storm baseline regressed: {report.get('contract_failures')}")
+          PY
+
+      - name: Sample post-quiescence editor and backend resources
+        run: |
+          editor='^godot --path test_project --editor'
+          backend='^python -m godot_ai --transport streamable-http --port 8000$'
+          test "$(pgrep -c -f "$editor")" -eq 1
+          test "$(pgrep -c -f "$backend")" -eq 1
+          python -m script.qualification_resources \
+            --process "editor-a=$(pgrep -f "$editor")" \
+            --process "backend=$(pgrep -f "$backend")" \
+            --count 5 --interval 15 \
+            --output diagnostics/post-quiescence-resources.jsonl
+
+      - name: Dump editor and server logs on failure
+        if: failure()
+        run: |
+          echo "===== godot-editor.log (last 300 lines) ====="
+          tail -n 300 diagnostics/godot-editor.log || echo "(log not found)"
+          echo "===== mcp-server.log (last 300 lines) ====="
+          tail -n 300 diagnostics/mcp-server.log || echo "(log not found)"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: nightly-storm-baseline
+          path: diagnostics/
+          if-no-files-found: warn
+          retention-days: 14

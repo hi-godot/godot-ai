@@ -93,6 +93,13 @@ func unregister(command_name: String, handler_key: String) -> void:
 ## replaced. A handler that cannot prove quiescence keeps the dispatcher live
 ## and makes the caller fail closed.
 func quiesce_for_script_swap() -> Dictionary:
+	# Deferred timeouts are not proof that the underlying work has returned;
+	# the independent ledger also covers an old composition after a reload.
+	var work: Dictionary = preload("res://addons/godot_ai/utils/script_work.gd").quiescence()
+	if not bool(work.get("ok", false)):
+		return work
+	if not _pending_deferred.is_empty():
+		return {"ok": false, "error": "Wait for pending tool responses before updating."}
 	for handler_key in _lazy_handler_cache:
 		var instance: Variant = _lazy_handler_cache[handler_key]
 		if not is_instance_valid(instance) or not instance.has_method("quiesce_for_script_swap"):
@@ -119,6 +126,17 @@ func clear() -> Dictionary:
 	var quiesced := quiesce_for_script_swap()
 	if not bool(quiesced.get("ok", false)):
 		return quiesced
+	release_after_teardown()
+	return {"ok": true}
+
+
+## Ordinary plugin teardown is not permission to replace scripts. The root
+## first stops transport and joins its client/vision workers, then drops this
+## graph even when a handler cannot certify hot script replacement. Requiring
+## that stronger certificate here leaks the dispatcher <-> handler cycles at
+## every editor exit. Hot-update callers must still use clear(), which refuses
+## to release anything until every materialized handler proves quiescence.
+func release_after_teardown() -> void:
 	_handlers.clear()
 	## Release lazily-constructed handler instances (and the ctor args that
 	## reference plugin-lifetime objects) at the same teardown point where
@@ -133,7 +151,8 @@ func clear() -> Dictionary:
 	_log_buffer = null
 	_surfaced_error_tracker = null
 	pause_target = null
-	return {"ok": true}
+
+
 ## Drop queued-but-unexecuted commands. Called by the connection on
 ## disconnect (#712): commands queued by the previous connection must not
 ## execute under the next one — the requester is gone, its in-flight

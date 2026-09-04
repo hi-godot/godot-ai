@@ -1,5 +1,5 @@
 @tool
-extends RefCounted
+extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 ## GridMap authoring — set, fill, clear, and read 3D cells plus mesh-library
 ## items directly in the editor scene with full undo/redo support.
