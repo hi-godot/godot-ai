@@ -58,6 +58,52 @@ def _keys(root: Path, name: str = "release") -> tuple[Path, str]:
     return private, public
 
 
+INSTALLER_STUBS = {
+    "utils/release_verifier.gd": (
+        "@tool\nextends RefCounted\n\n"
+        "static func verify_manifest(_m, _s, _e, _k) -> Dictionary:\n\treturn {}\n"
+    ),
+    "utils/update_installer.gd": (
+        "@tool\nextends RefCounted\n\n"
+        'const Verifier := preload("res://addons/godot_ai/utils/release_verifier.gd")\n\n'
+        "static func swap(_s, _l, _r) -> Dictionary:\n\treturn {}\n"
+    ),
+    "utils/port_resolver.gd": (
+        "@tool\nextends RefCounted\n\n"
+        'static func process_fingerprint(_pid: int) -> String:\n\treturn ""\n'
+    ),
+}
+
+
+def _seed_installer_scripts(plugin: Path) -> None:
+    """Give the fixture plugin the scripts the capsule must carry.
+
+    The real files (and whatever they preload) are copied when this checkout
+    has them; otherwise a minimal stub stands in, so the capsule contract is
+    exercised without ever writing into the tree.
+    """
+    pending = list(v4_release.MIGRATION_INSTALLER_SCRIPTS)
+    seen: set[str] = set()
+    while pending:
+        relative = pending.pop(0)
+        if relative in seen:
+            continue
+        seen.add(relative)
+        source = ROOT / "plugin/addons/godot_ai" / relative
+        target = plugin / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_file():
+            shutil.copyfile(source, target)
+            pending.extend(
+                match.group(1).decode("utf-8")
+                for match in v4_release._GDSCRIPT_DEPENDENCY.finditer(source.read_bytes())
+            )
+        else:
+            target.write_text(
+                INSTALLER_STUBS.get(relative, "@tool\nextends RefCounted\n"), encoding="utf-8"
+            )
+
+
 def _repository(root: Path, public_key: str) -> tuple[Path, str]:
     repo = root / "repo"
     plugin = repo / "plugin/addons/godot_ai"
@@ -71,6 +117,7 @@ def _repository(root: Path, public_key: str) -> tuple[Path, str]:
         ROOT / "plugin/addons/godot_ai/utils/uv_resolution_policy.gd",
         plugin / "utils/uv_resolution_policy.gd",
     )
+    _seed_installer_scripts(plugin)
     shutil.copytree(ROOT / "migration_bridge", repo / "migration_bridge")
     (repo / "pyproject.toml").write_text(
         '[project]\nname="godot-ai"\nversion="4.0.0"\n', encoding="utf-8"
@@ -415,6 +462,19 @@ def test_release_set_adds_one_deterministic_signed_v3_migration_capsule(signed_r
                 package.read(f"{v4_release.MIGRATION_PAYLOAD_PREFIX}{name}")
                 == by_name[name].read_bytes()
             )
+        # The bridge runs the v4 installer scripts in-process; the capsule
+        # carries them at their canonical paths, byte-for-byte from the
+        # source commit, and nothing from the retired transaction actor.
+        plugin = signed_release["repo"] / "plugin"
+        for relative in v4_release.MIGRATION_INSTALLER_SCRIPTS:
+            member = f"{v4_release.PLUGIN_PREFIX}{relative}"
+            assert package.read(member) == (plugin / member).read_bytes()
+        assert not any(name.endswith("bridge_exec.gd") for name in names)
+        bridge_names = {
+            f"{v4_release.PLUGIN_PREFIX}{path.name}"
+            for path in (signed_release["repo"] / "migration_bridge").iterdir()
+        }
+        assert bridge_names <= set(names)
 
 
 def test_build_never_overwrites_an_existing_candidate(signed_release):
