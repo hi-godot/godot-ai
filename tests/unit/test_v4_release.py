@@ -332,13 +332,9 @@ def test_standalone_verify_accepts_exact_explicit_identity(signed_release):
 
 
 def test_release_limits_match_every_self_update_acceptor():
-    import godot_ai.update_transaction as transaction
-
     assert v4_release.MAX_ARCHIVE_SIZE == 64 * 1024 * 1024
     assert v4_release.MAX_TREE_SIZE == v4_release.MAX_ARCHIVE_SIZE
     assert v4_release.MAX_MANIFEST_SIZE == 1024 * 1024
-    assert transaction.DOWNLOAD_LIMITS[transaction.ASSET_NAME] == v4_release.MAX_ARCHIVE_SIZE
-    assert transaction.DOWNLOAD_LIMITS[transaction.MANIFEST_NAME] == v4_release.MAX_MANIFEST_SIZE
     manager = (ROOT / "plugin/addons/godot_ai/utils/update_manager.gd").read_text(encoding="utf-8")
     assert "const MAX_ARCHIVE_SIZE_BYTES := 64 * 1024 * 1024" in manager
     assert "const MAX_MANIFEST_SIZE_BYTES := 1024 * 1024" in manager

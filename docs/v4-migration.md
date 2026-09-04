@@ -52,8 +52,10 @@ the v4 installer that ships inside it, entirely within the editor
 
 On that first v4 start the plugin hashes the live tree against the signed
 inventory before anything else runs. When it matches, it records `success` in
-the marker, repins the owned client entries (the same pin-only repin every
-update uses; other drift is reported for **Configure all** in the dock), and
+the marker, repins the owned client entries (the crossing marker carries
+`replace_owned_mismatches`, so v3-shaped owned entries are replaced outright;
+an ordinary v4 update keeps the pin-only repin and reports other drift for
+**Configure all** in the dock), and
 starts the matching managed server. No separate process or package download
 is part of the update itself; `uvx` runs the server.
 

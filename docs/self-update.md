@@ -15,7 +15,8 @@ hot reload. An update is verify, stage, swap, restart, then verify again.
   tree, and the old tree is retained until the next successful update.
 - No editor start depends on any external process. `uvx` runs the server, not
   the plugin.
-- The whole path is one GDScript file a maintainer can read in a sitting.
+- The whole path is two small GDScript files, a verifier and an installer, a
+  maintainer can read in a sitting.
 
 ## Trust and delivery
 
