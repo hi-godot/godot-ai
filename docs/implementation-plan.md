@@ -116,8 +116,9 @@ See [Packaging & Distribution](packaging-distribution.md) for full detail. The s
   into 24 behavior classes and ran 29 selected macOS/Godot 4.7 runtime rows;
   it is deliberately not recurring cross-platform qualification.
 - [x] signed v4 build/verify/install tooling and transactional v4 self-update
-  exist. `python script/local-self-update-smoke` is the mandatory interactive
-  regression gate; no automatic bump-and-publish workflow remains.
+  exist. the three real-editor updater scenarios in
+  `tests/integration/test_self_update_upgrade_paths.py` are the mandatory
+  regression gate for that path (see `docs/self-update.md`).
 - [x] compatibility guidance states the Godot 4.7 floor and the manual,
   no-overlay v3→v4 migration boundary.
 - [ ] immutable Linux, macOS, and Windows release qualification is complete
