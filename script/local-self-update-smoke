@@ -34,15 +34,8 @@ os.environ.setdefault("GODOT_AI_DISABLE_TELEMETRY", "true")
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+from godot_ai import release_verify  # noqa: E402
 from godot_ai.transport.capability import CAPABILITY_DIR_ENV, read_capabilities  # noqa: E402
-from godot_ai.update_transaction import (  # noqa: E402
-    TransactionPaths,
-    hash_tree,
-    install_id,
-    load_intent,
-    validate_migration_complete,
-    validate_terminal,
-)
 
 PLUGIN_ROOT = ROOT / "plugin" / "addons" / "godot_ai"
 DEFAULT_PROJECT_DIR = Path(tempfile.gettempdir()) / "godot-ai-self-update-smoke"
@@ -53,6 +46,9 @@ SMOKE_MANIFEST_NAME = "godot-ai-v4-plugin.manifest.json"
 SMOKE_SIGNATURE_NAME = "godot-ai-v4-plugin.manifest.sig"
 SMOKE_SOURCE = "0123456789abcdef0123456789abcdef01234567"
 SMOKE_STAGED_LOG = "MCP | self-update smoke: staged signed local bundle"
+# The lean updater keeps its marker, lock and retained backup beside the live
+# tree (docs/self-update.md); nothing of it lives outside the project.
+UPDATE_STATE_DIR = "addons/.godot_ai_update"
 COORDINATOR_ENABLE_LOG = "MCP | update coordinator enabling verified plugin"
 DEFAULT_HTTP_PORT = 18000
 DEFAULT_WS_PORT = 19500
@@ -408,7 +404,9 @@ def prepare_project(
     )
 
     write_project_files(project_dir)
-    base_server, base_runtime = prepare_local_server_runtime(marker_dir, "server-a", server_version)
+    base_server, _base_runtime = prepare_local_server_runtime(
+        marker_dir, "server-a", server_version
+    )
     next_server, _next_runtime = prepare_local_server_runtime(
         marker_dir, "server-b", next_server_version
     )
@@ -425,7 +423,7 @@ def prepare_project(
             next_version: next_server,
         },
     )
-    actor_command, private_key, public_key = prepare_smoke_actor(marker_dir, base_runtime)
+    private_key, public_key = prepare_smoke_signing_key(marker_dir)
     client_launch_command = (
         prepare_isolated_client_environment(
             project_dir,
@@ -451,7 +449,6 @@ def prepare_project(
         force_local_update=True,
         next_version=next_version,
         server_command=server_selector,
-        actor_command=actor_command,
         isolate_client_migration=isolate_client_migration,
         client_launch_command=client_launch_command,
     )
@@ -467,11 +464,9 @@ def prepare_project(
         force_local_update=False,
         next_version=next_version,
         server_command=server_selector,
-        actor_command=actor_command,
         isolate_client_migration=isolate_client_migration,
         client_launch_command=client_launch_command,
     )
-    patch_vnext_actor_discovery_failure(vnext_root / "client_configurator.gd")
     patch_vnext_hot_reload_trigger(vnext_root / "mcp_dock.gd")
     patch_vnext_topology_change(vnext_root)
 
@@ -557,7 +552,6 @@ def patch_fixture_plugin(
     force_local_update: bool,
     next_version: str,
     server_command: list[str],
-    actor_command: list[str],
     isolate_client_migration: bool = False,
     skip_client_prewarm: bool = True,
     client_launch_command: Path | None = None,
@@ -572,7 +566,6 @@ def patch_fixture_plugin(
     )
     patch_server_command(addon_dir / "client_configurator.gd", server_command)
     patch_expected_server_version(addon_dir / "plugin.gd", server_version)
-    patch_transaction_actor(addon_dir / "client_configurator.gd", actor_command)
     if isolate_client_migration:
         patch_client_migration_fixture(
             addon_dir / "client_configurator.gd", skip_prewarm=skip_client_prewarm
@@ -644,7 +637,7 @@ def _require_v4_addon_shape(addon_dir: Path, version: str) -> None:
     if not missing:
         return
     raise HarnessError(
-        f"Base addon at version {version!r} is not a v4 transaction-capable tree; "
+        f"Base addon at version {version!r} is not a v4 self-updating tree; "
         f"missing {missing}. Pre-v4 releases require the documented clean migration."
     )
 
@@ -725,33 +718,6 @@ def patch_server_command(path: Path, command: list[str]) -> None:
         text,
         "static func get_server_command() -> Array[String]:",
         (f"static func get_server_command() -> Array[String]:\n\treturn {json.dumps(command)}"),
-    )
-    path.write_text(text, encoding="utf-8")
-
-
-def patch_transaction_actor(path: Path, command: list[str]) -> None:
-    text = path.read_text(encoding="utf-8")
-    text = replace_function(
-        text,
-        "static func get_update_transaction_command() -> Array[String]:",
-        (
-            "static func get_update_transaction_command() -> Array[String]:\n"
-            f"\treturn {json.dumps(command)}"
-        ),
-    )
-    path.write_text(text, encoding="utf-8")
-
-
-def patch_vnext_actor_discovery_failure(path: Path) -> None:
-    """Prove transaction reload uses the frozen old actor without uvx/network."""
-    text = replace_function(
-        path.read_text(encoding="utf-8"),
-        "static func get_update_transaction_command() -> Array[String]:",
-        (
-            "static func get_update_transaction_command() -> Array[String]:\n"
-            "\t## Fixture: vNext actor discovery is intentionally unavailable.\n"
-            "\treturn []"
-        ),
     )
     path.write_text(text, encoding="utf-8")
 
@@ -868,7 +834,8 @@ def prepare_server_selector(
     return [str(smoke_python()), "-I", str(selector)]
 
 
-def prepare_smoke_actor(marker_dir: Path, runtime_source: Path) -> tuple[list[str], Path, str]:
+def prepare_smoke_signing_key(marker_dir: Path) -> tuple[Path, str]:
+    """Mint the one-run release signing pair the fixture bundle is signed with."""
     private = marker_dir / "smoke-release-key.pem"
     subprocess.run(
         [
@@ -890,16 +857,7 @@ def prepare_smoke_actor(marker_dir: Path, runtime_source: Path) -> tuple[list[st
         capture_output=True,
         text=True,
     ).stdout
-    actor = marker_dir / "transaction_actor.py"
-    actor.write_text(
-        "import sys\n"
-        f"sys.path.insert(0, {str(runtime_source)!r})\n"
-        "from godot_ai import release_verify, update_transaction\n"
-        f"release_verify.PUBLIC_KEY_PEM = {public!r}\n"
-        "raise SystemExit(update_transaction.main())\n",
-        encoding="utf-8",
-    )
-    return [str(smoke_python()), "-I", str(actor)], private, public
+    return private, public
 
 
 def _load_v4_release():
@@ -1074,7 +1032,7 @@ func marker() -> String:
     )
     # Godot creates UID sidecars during the first class scan when they are
     # absent. Include stable values in the signed tree so scanning cannot
-    # mutate the actor's authenticated live-tree identity mid-activation.
+    # change the live tree's hash between the swap and its verification.
     Path(f"{base_path}.uid").write_text("uid://m5waxbfff4ud\n", encoding="utf-8")
     Path(f"{child_path}.uid").write_text("uid://bm2056w0qvj7x\n", encoding="utf-8")
 
@@ -1198,7 +1156,7 @@ def print_instructions(
     print("")
     print("Failure signals:")
     print("  - Godot exits or a new Godot*.ips appears.")
-    print("  - The transaction has no success claim or retained backup.")
+    print("  - The update marker does not record success, or the retained backup is missing.")
     print("  - 'MCP | [self-update-smoke vnext _exit_tree]' prints during the update window.")
     print("  - /godot-ai/status is down or reports the wrong server_version after update.")
     print("")
@@ -1297,13 +1255,13 @@ def verify_post_run(
         ok = False
 
     try:
-        transaction, backup = verify_transaction_recovery(project_dir, next_version)
+        marker, backup = verify_lean_update_state(project_dir, next_version)
         print(
-            f"PASS: transaction {transaction} durably completed migration; "
-            f"backup retained at {backup}"
+            f"PASS: update marker records success from {marker.get('from_version')} "
+            f"to {marker.get('to_version')}; backup retained at {backup}"
         )
     except Exception as exc:
-        print(f"FAIL: transaction recovery evidence is invalid: {exc}")
+        print(f"FAIL: update evidence is invalid: {exc}")
         ok = False
 
     if vnext_exit_tree_during_update(lines):
@@ -1362,30 +1320,31 @@ def verify_post_run(
     return ok
 
 
-def verify_transaction_recovery(project_dir: Path, next_version: str) -> tuple[str, Path]:
+def verify_lean_update_state(project_dir: Path, next_version: str) -> tuple[dict, Path]:
+    """Check the on-disk state one successful update leaves (docs/self-update.md)."""
     project = project_dir.resolve(strict=True)
     live = (project / "addons" / "godot_ai").resolve(strict=True)
-    root = project.parent / ".godot-ai-recovery" / install_id(project, live)
-    if (root / "activation.lock").exists():
-        raise HarnessError("activation lock remains after the editor closed")
-    backup = root / "retained-backup"
-    if not backup.is_dir():
-        raise HarnessError("retained successful backup is missing")
-    transactions = root / "transactions"
-    if not transactions.is_dir():
-        raise HarnessError("transaction evidence directory is missing")
-    directories = [path for path in transactions.iterdir() if path.is_dir()]
-    if len(directories) != 1:
-        raise HarnessError(f"expected one transaction, found {len(directories)}")
-    paths = TransactionPaths.for_transaction(root, directories[0].name)
-    intent = load_intent(paths)
-    claim = validate_terminal(paths.claim, intent)
-    if claim["outcome"] != "success" or intent.to_version != next_version:
-        raise HarnessError("terminal claim does not prove the expected successful version")
-    if hash_tree(live) != intent.new_tree:
-        raise HarnessError("live tree differs from the transaction's staged identity")
-    validate_migration_complete(paths, intent)
-    return intent.transaction, backup
+    state = project / UPDATE_STATE_DIR
+    marker_path = state / "pending.json"
+    if not marker_path.is_file():
+        raise HarnessError("update marker is missing")
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    if not isinstance(marker, dict) or marker.get("status") != "success":
+        raise HarnessError(f"update marker does not record success: {marker!r}")
+    if marker.get("to_version") != next_version:
+        raise HarnessError(
+            f"update marker ends at {marker.get('to_version')!r}, not {next_version!r}"
+        )
+    if release_verify.hash_tree(live)["tree_sha256"] != marker.get("expected_tree_sha256"):
+        raise HarnessError("live tree differs from the hash the update marker expected")
+    from_version = str(marker.get("from_version", ""))
+    backup = state / "backup" / from_version
+    if not from_version or not backup.is_dir():
+        raise HarnessError("retained backup of the previous version is missing")
+    for leftover in ("lock.json", "stage", "quarantine"):
+        if (state / leftover).exists():
+            raise HarnessError(f"update left {leftover} behind")
+    return marker, backup
 
 
 def vnext_exit_tree_during_update(lines: list[str]) -> bool:
