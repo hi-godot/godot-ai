@@ -40,6 +40,7 @@ from tests.integration._self_update_fixture import (
     PRE_INSTANCE_ID_FILE,
     RESTARTED_EDITOR_LOG,
     UPDATE_STATE_RELATIVE,
+    AttachedAgent,
     append_driver_autoload,
     assert_no_update_parse_errors,
     godot_bin_or_skip,
@@ -365,6 +366,7 @@ def test_signed_update_restarts_into_matching_live_server(
         http_port=http_port,
         base_version=base_version,
         next_version=next_version,
+        agent_gate=True,
     )
     base_addon = project / "addons" / "godot_ai"
     patch_restart_diagnostics(base_addon, project / RESTARTED_EDITOR_LOG)
@@ -401,15 +403,48 @@ def test_signed_update_restarts_into_matching_live_server(
     assert f"godot-ai=={base_version}" in (codex_home / "config.toml").read_text(encoding="utf-8")
     remove_configure_client_driver(project)
 
-    log = run_godot_editor(
-        project,
-        godot_bin,
-        allow_headless=True,
-        timeout=240,
-        environment=environment,
-        live_probe=lambda: _authenticated_tool_probe(http_port, capability_dir),
-        restart_completion_file=POST_UPDATE_COMPLETE_FILE,
+    # An agent stays attached through the whole update, exactly as a user's
+    # AI client would be. Its bridge loses server A, spawns a backend of the
+    # old version into the restart window, and the restarted editor must
+    # replace that backend on its own rather than ask the user to.
+    with AttachedAgent(project, http_port, ws_port, capability_dir=capability_dir) as agent:
+        try:
+            log = run_godot_editor(
+                project,
+                godot_bin,
+                allow_headless=True,
+                timeout=240,
+                environment=environment,
+                live_probe=lambda: _authenticated_tool_probe(http_port, capability_dir),
+                restart_completion_file=POST_UPDATE_COMPLETE_FILE,
+            )
+        except AssertionError as exc:
+            raise AssertionError(
+                f"agent ok={agent.ok} fault={agent.fault!r} errors={agent.errors[:3]}\n{exc}"
+            ) from exc
+    assert not agent.fault, agent.fault
+    assert agent.ok >= 1, agent.errors
+    # What the old bridge reports afterwards varies with timing (a refused
+    # incompatible backend, a lost lease, a backend without an editor); the
+    # contract is only that the editor came back live on its own, above.
+    print(f"attached agent: ok={agent.ok} errors={len(agent.errors)} last={agent.errors[-1:]}")
+    # Whether the bridge's spawned backend occupied the port before the
+    # editor's own launch is a race; when it did, the editor replaced it on
+    # its own, and either way no server start stayed blocked.
+    replaced_line = (
+        f"MCP | replacing the v{base_version} server left on port {http_port} by the update"
     )
+    restarted_log = log[log.index("SELF_UPDATE_HARNESS | replacement editor log:") :]
+    print(f"replacement: {'needed' if replaced_line in restarted_log else 'not needed'}")
+    blocked = [line for line in restarted_log.splitlines() if "MCP | server start blocked:" in line]
+    started_at = restarted_log.index("MCP | started server (PID ")
+    lasting_blocks = [
+        line
+        for line in blocked
+        if restarted_log.index(line) < started_at and "occupied" not in line
+    ]
+    assert not lasting_blocks, lasting_blocks
+    assert f"MCP | AI clients attached before the update must restart to use v{next_version}" in log
 
     initial_editor, restarted_editor = read_editor_receipts(project)
     assert initial_editor["pid"] != restarted_editor["pid"], (initial_editor, restarted_editor)

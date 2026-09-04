@@ -121,6 +121,19 @@ var _update_manager
 ## Process identity continuity and the immutable terminal outcome cross only
 ## as values. The coordinator retains neither this plugin nor its objects.
 var _post_update_outcome: Dictionary = {}
+## The version an update just replaced. An AI client attached through the
+## update may spawn a backend of that version into the restart window; the
+## restarted editor replaces it once instead of asking the user to.
+var _post_update_replaced_version := ""
+var _last_logged_block := ""
+## Bounded re-probes while that backend is still binding its port: a port
+## that is bound but not yet answering status reads as merely occupied.
+const POST_UPDATE_REPROBE_LIMIT := 10
+var _post_update_reprobes_left := POST_UPDATE_REPROBE_LIMIT
+## An old bridge spawns again as soon as the port frees, so one replacement
+## may not be the last; a few are allowed before the dock takes over.
+const POST_UPDATE_REPLACEMENT_LIMIT := 3
+var _post_update_replacements_left := POST_UPDATE_REPLACEMENT_LIMIT
 ## Set once the live tree has been renamed; the lock then belongs to the restart.
 var _update_swapped := false
 var _post_update_action := ""
@@ -825,6 +838,13 @@ func _finish_post_update() -> void:
 	## Backups are named by the version they hold: keep the one this update
 	## just retained (the previous version) and drop older ones.
 	UpdateInstaller.prune_backups(str(_post_update_outcome.get("from_version", "")))
+	_post_update_replaced_version = str(_post_update_outcome.get("from_version", ""))
+	_post_update_reprobes_left = POST_UPDATE_REPROBE_LIMIT
+	_post_update_replacements_left = POST_UPDATE_REPLACEMENT_LIMIT
+	print(
+		"MCP | AI clients attached before the update must restart to use v%s"
+		% str(_post_update_outcome.get("to_version", ""))
+	)
 	_present_post_update_complete()
 	_fan_post_update_outcome()
 	_release_normal_startup()
@@ -852,8 +872,11 @@ func _present_post_update_complete() -> void:
 			"install_in_flight": false,
 			"button_text": "Update complete",
 			"button_disabled": true,
-			"label_text": "",
-			"banner_visible": false,
+			"label_text": (
+				"Restart AI clients that were connected during the update so they use v%s."
+				% str(_post_update_outcome.get("to_version", ""))
+			),
+			"banner_visible": true,
 			"post_update_action": "",
 			"outcome": "success",
 		})
@@ -1200,6 +1223,8 @@ func _on_lifecycle_snapshot_changed(snapshot: Dictionary) -> void:
 	if _connection != null and bool(snapshot.get("connection_blocked", true)):
 		_connection.connect_blocked = true
 		_connection.connect_block_reason = str(snapshot.get("message", ""))
+	_log_lifecycle_block(snapshot)
+	_replace_server_left_by_update(snapshot)
 	if _client_jobs != null:
 		_client_jobs.set_client_health_blocked(
 			ServerStateScript.blocks_client_health(
@@ -1207,6 +1232,65 @@ func _on_lifecycle_snapshot_changed(snapshot: Dictionary) -> void:
 			)
 		)
 	_publish_dock_status_snapshots()
+
+
+## The dock shows why a server start blocked; the editor log should too, once
+## per distinct reason, so a report from the field carries it.
+func _log_lifecycle_block(snapshot: Dictionary) -> void:
+	if str(snapshot.get("episode_state", "")) != "BLOCKED":
+		_last_logged_block = ""
+		return
+	var message := str(snapshot.get("message", ""))
+	if message.is_empty() or message == _last_logged_block:
+		return
+	_last_logged_block = message
+	print("MCP | server start blocked: %s" % message)
+
+
+## Once, right after an update: a godot-ai server at the version we just
+## replaced is on our port (typically spawned by an attach bridge that lost
+## server A during the restart). Replace it instead of asking the user to.
+## Any other conflict keeps the dock's explicit Restart Server authority.
+func _replace_server_left_by_update(snapshot: Dictionary) -> void:
+	if _post_update_replaced_version.is_empty():
+		return
+	if not bool(snapshot.get("connection_blocked", true)):
+		_post_update_replaced_version = ""
+		return
+	if not bool(snapshot.get("can_recover_incompatible", false)):
+		## Bound but not answering yet: the spawned backend is still starting.
+		## Probe again shortly, a bounded number of times, then leave the
+		## dock's Restart Server as the remaining path.
+		var occupied := (
+			str(snapshot.get("episode_state", "")) == "BLOCKED"
+			and str(snapshot.get("conflict_version", "")).is_empty()
+			and int(snapshot.get("conflict_port", 0)) > 0
+		)
+		if occupied and _post_update_reprobes_left > 0:
+			_post_update_reprobes_left -= 1
+			get_tree().create_timer(1.0).timeout.connect(_reprobe_after_update, CONNECT_ONE_SHOT)
+		return
+	if str(snapshot.get("conflict_version", "")) != _post_update_replaced_version:
+		return
+	if _post_update_replacements_left <= 0:
+		return
+	_post_update_replacements_left -= 1
+	var version := _post_update_replaced_version
+	print(
+		"MCP | replacing the v%s server left on port %d by the update"
+		% [version, int(snapshot.get("conflict_port", 0))]
+	)
+	if not _lifecycle.request_replacement():
+		push_warning(
+			"MCP | could not replace the v%s server automatically; use Restart Server in the dock"
+			% version
+		)
+
+
+func _reprobe_after_update() -> void:
+	if _post_update_replaced_version.is_empty() or _lifecycle == null or not _normal_start_released:
+		return
+	_lifecycle.start_server()
 
 
 func _on_lifecycle_transport_ready(ws_port: int, ws_capability: String) -> void:

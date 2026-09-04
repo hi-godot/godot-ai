@@ -215,6 +215,19 @@ func test_replacement_authorization_expires_and_requires_fresh_action() -> void:
 	assert_eq(manager.episode_snapshot().state, Lifecycle.RECOVERING)
 
 
+func test_status_dict_names_the_conflicting_server_version() -> void:
+	var manager := _manager()
+	_block_replaceable(manager)
+	var target: Dictionary = manager.episode_snapshot().blocked_target
+	var status := manager.get_status_dict()
+	assert_true(bool(status.can_recover_incompatible))
+	assert_eq(str(status.conflict_version), str(target.version), "the plugin's post-update arm compares this")
+	assert_false(str(status.conflict_version).is_empty())
+	assert_eq(int(status.conflict_port), int(target.port))
+	manager.stop_server()
+	assert_eq(str(manager.get_status_dict().conflict_version), "", "cleared with the blocked target")
+
+
 func test_generic_restart_never_escalates_to_unowned_replacement() -> void:
 	var manager := _manager()
 	var effects: Array[String] = []

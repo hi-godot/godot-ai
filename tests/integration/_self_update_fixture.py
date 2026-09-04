@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+import sys
+import threading
 import time
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -12,6 +15,8 @@ from types import ModuleType
 from typing import Callable
 
 import pytest
+
+from godot_ai.transport.capability import CAPABILITY_DIR_ENV, read_capabilities
 
 ROOT = Path(__file__).resolve().parents[2]
 PLUGIN_ROOT = ROOT / "plugin" / "addons" / "godot_ai"
@@ -30,6 +35,7 @@ INITIAL_EDITOR_RECEIPT = "_test_initial_editor.json"
 RESTARTED_EDITOR_RECEIPT = "_test_restarted_editor.json"
 PRE_INSTANCE_ID_FILE = "_test_pre_instance_id.txt"
 RESTARTED_EDITOR_LOG = "_test_restarted_editor.log"
+AGENT_ATTACHED_FILE = "_test_agent_attached.done"
 
 PARSE_ERROR_PATTERNS = (
     "SCRIPT ERROR: Parse Error",
@@ -527,6 +533,84 @@ func _process(_delta: float) -> void:
     )
 
 
+class AttachedAgent:
+    """An MCP client attached through ``godot-ai attach`` for the whole update.
+
+    It polls ``editor_state`` on a thread, writes the gate file after its first
+    success so the driver can click Update, and records what the same bridge
+    saw during and after the update.
+    """
+
+    def __init__(
+        self, project_dir: Path, http_port: int, ws_port: int, *, capability_dir: Path
+    ) -> None:
+        self.project_dir = project_dir
+        self.http_port = http_port
+        self.ws_port = ws_port
+        self.capability_dir = capability_dir
+        self.ok = 0
+        self.errors: list[str] = []
+        self.fault: str = ""
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="attached-agent", daemon=True)
+
+    def __enter__(self) -> AttachedAgent:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=60)
+
+    def _run(self) -> None:
+        try:
+            asyncio.run(self._poll())
+        except Exception as exc:  # surfaced by the test after the run
+            self.fault = f"{type(exc).__name__}: {exc}"
+
+    async def _poll(self) -> None:
+        from fastmcp import Client
+        from fastmcp.client.transports import StdioTransport
+
+        capability_dir = self.capability_dir
+        deadline = time.monotonic() + 120
+        while read_capabilities(self.http_port, capability_dir) is None:
+            if self._stop.is_set() or time.monotonic() > deadline:
+                raise AssertionError("server A never published capabilities")
+            await asyncio.sleep(0.25)
+        transport = StdioTransport(
+            command=str(Path(sys.executable).parent / "godot-ai"),
+            args=[
+                "attach",
+                "--port",
+                str(self.http_port),
+                "--ws-port",
+                str(self.ws_port),
+                "--disable-telemetry",
+            ],
+            env={
+                **os.environ,
+                CAPABILITY_DIR_ENV: str(capability_dir),
+                "GODOT_AI_DISABLE_TELEMETRY": "true",
+            },
+        )
+        async with Client(transport, timeout=20, init_timeout=30) as client:
+            while not self._stop.is_set():
+                try:
+                    result = await client.call_tool("editor_state", {}, raise_on_error=False)
+                    if result.is_error:
+                        texts = [getattr(c, "text", "") for c in result.content]
+                        self.errors.append(str(texts)[:300])
+                    else:
+                        self.ok += 1
+                        gate = self.project_dir / AGENT_ATTACHED_FILE
+                        if not gate.exists():
+                            gate.write_text("attached\n", encoding="utf-8")
+                except Exception as exc:
+                    self.errors.append(f"{type(exc).__name__}: {exc}"[:300])
+                await asyncio.sleep(0.5)
+
+
 def append_driver_autoload(project_file: Path) -> None:
     text = project_file.read_text(encoding="utf-8")
     text += '\n[autoload]\n_SelfUpdateRunnerDriver="*res://_test_runner_driver.gd"\n'
@@ -652,7 +736,12 @@ def remove_configure_client_driver(project_dir: Path) -> None:
 
 
 def write_install_update_driver(
-    project_dir: Path, *, http_port: int, base_version: str, next_version: str
+    project_dir: Path,
+    *,
+    http_port: int,
+    base_version: str,
+    next_version: str,
+    agent_gate: bool = False,
 ) -> None:
     """Click Update in the base editor, then prove B live after the restart.
 
@@ -675,6 +764,8 @@ const STATUS_PATH := "res://{POST_UPDATE_STATUS_FILE}"
 const TOOL_PROBE_DONE_PATH := "res://{POST_UPDATE_TOOL_PROBE_FILE}"
 const COMPLETE_PATH := "res://{POST_UPDATE_COMPLETE_FILE}"
 const PRE_ID_PATH := "res://{PRE_INSTANCE_ID_FILE}"
+const AGENT_GATE_PATH := "res://{AGENT_ATTACHED_FILE}"
+const AGENT_GATE := {"true" if agent_gate else "false"}
 const DriverSupport := preload("res://_test_self_update_driver_support.gd")
 const START_AFTER_FRAMES := 45
 const MAX_FRAMES := 1800
@@ -715,6 +806,10 @@ func _process(_delta: float) -> void:
 \t\t\t\t_fail(10, "signed install did not restart the editor")
 \t\t\treturn
 \t\tif _frames < START_AFTER_FRAMES:
+\t\t\treturn
+\t\tif AGENT_GATE and not FileAccess.file_exists(AGENT_GATE_PATH):
+\t\t\tif Time.get_ticks_msec() > STATUS_WAIT_MS:
+\t\t\t\t_fail(16, "the attached agent never made a successful call")
 \t\t\treturn
 \t\tif _frames > MAX_FRAMES:
 \t\t\t_fail(12, "pre-update /godot-ai/status timed out")

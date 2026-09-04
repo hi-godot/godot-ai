@@ -1132,6 +1132,7 @@ func get_status_dict() -> Dictionary:
 		"connection_blocked": state != READY,
 		"can_recover_incompatible": can_recover_incompatible_server(),
 		"conflict_port": int(_episode.get("blocked_target", {}).get("port", 0)),
+		"conflict_version": str(_episode.get("blocked_target", {}).get("version", "")),
 		"keep_alive": bool(_plan.get("keep_alive", false)),
 	}
 
