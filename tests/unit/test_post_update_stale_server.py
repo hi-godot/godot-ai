@@ -209,7 +209,9 @@ def test_root_starts_only_after_lifecycle_configuration() -> None:
     assert "_start_server()" in release
 
 
-def test_export_plugin_is_constructed_inside_the_update_startup_barrier() -> None:
+def test_export_plugin_is_constructed_after_post_restart_verification() -> None:
+    """A swapped tree proves itself in `_enter_tree` before any plugin object is built."""
+
     plugin = (PLUGIN / "plugin.gd").read_text(encoding="utf-8")
     enter = get_func_block(plugin, "func _enter_tree() -> void:")
     compose = get_func_block(
@@ -217,9 +219,11 @@ def test_export_plugin_is_constructed_inside_the_update_startup_barrier() -> Non
         "func _continue_enter_tree_after_update_barrier() -> void:",
     )
 
-    assert "_run_update_startup_barrier()" in enter
-    assert "_start_update_startup_barrier()" in enter
+    assert "ExportPlugin.new()" not in enter
     assert "_continue_enter_tree_after_update_barrier()" in enter
+    assert enter.index("UpdateInstaller.verify_after_restart(") < enter.index(
+        "_continue_enter_tree_after_update_barrier()"
+    )
     assert compose.index("ExportPlugin.new()") < compose.index(
         "_mcp_disabled_for_headless_launch()"
     )
