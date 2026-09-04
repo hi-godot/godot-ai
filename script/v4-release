@@ -77,23 +77,7 @@ MIGRATION_MARKER_KIND = "pre_v4_migration"
 MIGRATION_MARKER_SCHEMA = 1
 SUPPORTED_PYTHON_MIN = (3, 11)
 SUPPORTED_PYTHON_MAX_EXCLUSIVE = (3, 15)
-UPDATE_ACTOR_PROTOCOL_VERSION = 1
-UPDATE_ACTOR_PREWARM_TIMEOUT_SECONDS = 120
-UPDATE_ACTOR_IDENTITY_MAX_BYTES = 4096
-PUBLIC_PYPI_INDEX = "https://pypi.org/simple"
-PUBLIC_PYPI_FLAT_INDEX = "https://pypi.org/simple/godot-ai/"
-QUALIFICATION_PYTHON_INDEX_ENV = "GODOT_AI_QUALIFICATION_PYTHON_INDEX"
-UPDATE_ACTOR_UVX_BASE_ARGS = (
-    "--isolated",
-    "--no-config",
-    "--no-env-file",
-    "--no-sources",
-    "--no-build",
-    "--index-strategy",
-    "first-index",
-    "--keyring-provider",
-    "disabled",
-)
+
 
 
 def _require_supported_python(version: tuple[int, int] | None = None) -> None:
@@ -104,98 +88,6 @@ def _require_supported_python(version: tuple[int, int] | None = None) -> None:
             "python runtime",
             "v4 release verification requires Python 3.11 through 3.14",
         )
-
-
-def _qualification_python_index_authorized(environment: dict[str, str]) -> bool:
-    return environment.get(QUALIFICATION_PYTHON_INDEX_ENV) == "1"
-
-
-def _update_actor_uvx_command(
-    executable: str, version: str, *, qualification: bool
-) -> list[str]:
-    command = [executable, *UPDATE_ACTOR_UVX_BASE_ARGS]
-    if not qualification:
-        command.extend(
-            (
-                "--index",
-                PUBLIC_PYPI_INDEX,
-                "--default-index",
-                PUBLIC_PYPI_INDEX,
-                "--find-links",
-                PUBLIC_PYPI_FLAT_INDEX,
-            )
-        )
-    command.extend(
-        ("--from", f"godot-ai=={version}", "godot-ai-update-transaction", "identity")
-    )
-    return command
-
-
-def _update_actor_environment() -> tuple[dict[str, str], bool]:
-    environment = os.environ.copy()
-    qualification = _qualification_python_index_authorized(environment)
-    if qualification:
-        if not any(
-            environment.get(name)
-            for name in ("UV_INDEX", "UV_DEFAULT_INDEX", "UV_INDEX_URL")
-        ):
-            _fail(
-                "update actor",
-                "qualification index authorization requires an explicit UV index",
-            )
-    else:
-        # Production actor code mutates the live add-on tree. Do not let a
-        # shell/user uv configuration redirect it to another package source or
-        # change its interpreter/cache; the explicit argv below is the second
-        # half of this boundary.
-        for name in tuple(environment):
-            if name.startswith("UV_"):
-                environment.pop(name)
-    environment["UV_NO_PROGRESS"] = "1"
-    return environment, qualification
-
-
-def _prewarm_update_actor(version: str) -> None:
-    """Resolve the required actor through the authorized package trust root."""
-    executable = shutil.which("uvx")
-    if not executable:
-        _fail(
-            "update actor",
-            "uvx is required; install uv and make uvx available before migration",
-        )
-    environment, qualification = _update_actor_environment()
-    command = _update_actor_uvx_command(executable, version, qualification=qualification)
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            check=False,
-            env=environment,
-            timeout=UPDATE_ACTOR_PREWARM_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise ReleaseError(
-            "update actor: exact target package did not resolve before the 120-second deadline"
-        ) from exc
-    except OSError as exc:
-        raise ReleaseError(f"update actor: could not execute uvx: {exc}") from exc
-    if completed.returncode:
-        raise ReleaseError(
-            f"update actor: exact target package refused identity ({completed.returncode})"
-        )
-    if len(completed.stdout) > UPDATE_ACTOR_IDENTITY_MAX_BYTES:
-        _fail("update actor", "identity response exceeds the fixed bound")
-    try:
-        response = _strict_json(completed.stdout, "update actor identity")
-    except ReleaseError as exc:
-        raise ReleaseError(f"update actor identity: {exc}") from exc
-    expected = {
-        "package_version": version,
-        "protocol_version": UPDATE_ACTOR_PROTOCOL_VERSION,
-        "status": "identity",
-    }
-    if type(response) is not dict or response != expected:
-        _fail("update actor", "identity does not match the exact target package and protocol")
 
 
 def verify_release(archive: Path, manifest: Path, signature: Path, expected: tuple[str, ...]):
@@ -625,9 +517,6 @@ def install_verified_release(
         getattr(project_file, "st_file_attributes", 0) & 0x400
     ):
         _fail("project root", "project.godot must be a regular non-link file")
-    # The installed plugin fails closed without this actor. Prove a cold exact
-    # resolution before creating even the install claim or add-ons directory.
-    _prewarm_update_actor(expected[3])
     addons_path = project / "addons"
     created_addons = False
     if os.path.lexists(addons_path):

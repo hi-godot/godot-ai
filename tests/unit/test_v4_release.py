@@ -25,13 +25,6 @@ v4_release = importlib.util.module_from_spec(spec)
 loader.exec_module(v4_release)
 
 IDENTITY = (v4_release.REPOSITORY, "stable", "v4.0.0", "4.0.0")
-_REAL_PREWARM_UPDATE_ACTOR = v4_release._prewarm_update_actor
-
-
-@pytest.fixture(autouse=True)
-def _avoid_public_actor_resolution(monkeypatch):
-    """Unit installs exercise bytes and durability; focused tests own uvx."""
-    monkeypatch.setattr(v4_release, "_prewarm_update_actor", lambda _version: None)
 
 
 def _run(*command: str, cwd: Path | None = None) -> bytes:
@@ -143,143 +136,6 @@ def test_release_cli_checks_python_before_command_parsing(monkeypatch, capsys):
 
     assert v4_release.main(["verify"]) == 1
     assert "unqualified runtime" in capsys.readouterr().err
-
-
-def test_update_actor_prewarm_resolves_only_from_canonical_public_index(monkeypatch):
-    calls: list[tuple[list[str], dict[str, Any]]] = []
-
-    def complete(command: list[str], **kwargs):
-        calls.append((command, kwargs))
-        response = {
-            "package_version": "4.0.0",
-            "protocol_version": 1,
-            "status": "identity",
-        }
-        return subprocess.CompletedProcess(
-            command,
-            0,
-            stdout=json.dumps(response).encode(),
-            stderr=b"",
-        )
-
-    monkeypatch.setattr(v4_release.shutil, "which", lambda name: "/trusted/bin/uvx")
-    monkeypatch.setattr(v4_release.subprocess, "run", complete)
-    monkeypatch.delenv(v4_release.QUALIFICATION_PYTHON_INDEX_ENV, raising=False)
-    monkeypatch.setenv("UV_INDEX", "https://counterfeit.invalid/simple")
-    monkeypatch.setenv("UV_FIND_LINKS", "/counterfeit/wheels")
-    monkeypatch.setenv("UV_PYTHON", "/counterfeit/python")
-
-    _REAL_PREWARM_UPDATE_ACTOR("4.0.0")
-
-    command, kwargs = calls.pop()
-    assert command == [
-        "/trusted/bin/uvx",
-        *v4_release.UPDATE_ACTOR_UVX_BASE_ARGS,
-        "--index",
-        v4_release.PUBLIC_PYPI_INDEX,
-        "--default-index",
-        v4_release.PUBLIC_PYPI_INDEX,
-        "--find-links",
-        v4_release.PUBLIC_PYPI_FLAT_INDEX,
-        "--from",
-        "godot-ai==4.0.0",
-        "godot-ai-update-transaction",
-        "identity",
-    ]
-    assert kwargs["timeout"] == v4_release.UPDATE_ACTOR_PREWARM_TIMEOUT_SECONDS
-    assert kwargs["capture_output"] is True
-    assert kwargs["check"] is False
-    assert kwargs["env"]["UV_NO_PROGRESS"] == "1"
-    assert "UV_INDEX" not in kwargs["env"]
-    assert "UV_FIND_LINKS" not in kwargs["env"]
-    assert "UV_PYTHON" not in kwargs["env"]
-
-
-def test_update_actor_prewarm_private_index_requires_explicit_qualification_authority(
-    monkeypatch,
-):
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: "/trusted/bin/uvx")
-    monkeypatch.setenv(v4_release.QUALIFICATION_PYTHON_INDEX_ENV, "1")
-    monkeypatch.delenv("UV_INDEX", raising=False)
-    monkeypatch.delenv("UV_DEFAULT_INDEX", raising=False)
-    monkeypatch.delenv("UV_INDEX_URL", raising=False)
-
-    with pytest.raises(v4_release.ReleaseError, match="requires an explicit UV index"):
-        _REAL_PREWARM_UPDATE_ACTOR("4.0.1")
-
-
-def test_update_actor_prewarm_preserves_only_explicitly_authorized_qualification_index(
-    monkeypatch,
-):
-    calls: list[tuple[list[str], dict[str, Any]]] = []
-
-    def complete(command: list[str], **kwargs):
-        calls.append((command, kwargs))
-        return subprocess.CompletedProcess(
-            command,
-            0,
-            stdout=(b'{"package_version":"4.0.1","protocol_version":1,"status":"identity"}'),
-            stderr=b"",
-        )
-
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: "/trusted/bin/uvx")
-    monkeypatch.setattr(v4_release.subprocess, "run", complete)
-    monkeypatch.setenv(v4_release.QUALIFICATION_PYTHON_INDEX_ENV, "1")
-    monkeypatch.setenv("UV_INDEX", "https://qualification.invalid/simple")
-
-    _REAL_PREWARM_UPDATE_ACTOR("4.0.1")
-
-    command, kwargs = calls.pop()
-    assert command == [
-        "/trusted/bin/uvx",
-        *v4_release.UPDATE_ACTOR_UVX_BASE_ARGS,
-        "--from",
-        "godot-ai==4.0.1",
-        "godot-ai-update-transaction",
-        "identity",
-    ]
-    assert "--index" not in command
-    assert kwargs["env"]["UV_INDEX"] == "https://qualification.invalid/simple"
-
-
-def test_update_actor_prewarm_requires_uvx(monkeypatch):
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: None)
-    with pytest.raises(v4_release.ReleaseError, match="uvx is required"):
-        _REAL_PREWARM_UPDATE_ACTOR("4.0.0")
-
-
-def test_update_actor_prewarm_has_a_fixed_deadline(monkeypatch):
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: "/trusted/bin/uvx")
-
-    def time_out(command: list[str], **_kwargs):
-        raise subprocess.TimeoutExpired(command, 120)
-
-    monkeypatch.setattr(v4_release.subprocess, "run", time_out)
-    with pytest.raises(v4_release.ReleaseError, match="120-second deadline"):
-        _REAL_PREWARM_UPDATE_ACTOR("4.0.0")
-
-
-@pytest.mark.parametrize(
-    "stdout",
-    [
-        b"not-json",
-        b'{"package_version":"4.0.1","protocol_version":1,"status":"identity"}',
-        b'{"extra":true,"package_version":"4.0.0","protocol_version":1,"status":"identity"}',
-        b'{"package_version":"4.0.1","package_version":"4.0.0",'
-        b'"protocol_version":1,"status":"identity"}',
-    ],
-)
-def test_update_actor_prewarm_rejects_any_nonexact_identity(monkeypatch, stdout):
-    monkeypatch.setattr(v4_release.shutil, "which", lambda _name: "/trusted/bin/uvx")
-    monkeypatch.setattr(
-        v4_release.subprocess,
-        "run",
-        lambda command, **_kwargs: subprocess.CompletedProcess(
-            command, 0, stdout=stdout, stderr=b""
-        ),
-    )
-    with pytest.raises(v4_release.ReleaseError, match="identity"):
-        _REAL_PREWARM_UPDATE_ACTOR("4.0.0")
 
 
 @pytest.fixture(scope="module")
@@ -477,13 +333,9 @@ def test_standalone_verify_accepts_exact_explicit_identity(signed_release):
 
 
 def test_release_limits_match_every_self_update_acceptor():
-    import godot_ai.update_transaction as transaction
-
     assert v4_release.MAX_ARCHIVE_SIZE == 64 * 1024 * 1024
     assert v4_release.MAX_TREE_SIZE == v4_release.MAX_ARCHIVE_SIZE
     assert v4_release.MAX_MANIFEST_SIZE == 1024 * 1024
-    assert transaction.DOWNLOAD_LIMITS[transaction.ASSET_NAME] == v4_release.MAX_ARCHIVE_SIZE
-    assert transaction.DOWNLOAD_LIMITS[transaction.MANIFEST_NAME] == v4_release.MAX_MANIFEST_SIZE
     manager = (ROOT / "plugin/addons/godot_ai/utils/update_manager.gd").read_text(encoding="utf-8")
     assert "const MAX_ARCHIVE_SIZE_BYTES := 64 * 1024 * 1024" in manager
     assert "const MAX_MANIFEST_SIZE_BYTES := 1024 * 1024" in manager
@@ -573,32 +425,6 @@ def _fresh_project(root: Path) -> Path:
     project.mkdir()
     (project / "project.godot").write_text('[application]\nconfig/name="fresh"\n')
     return project
-
-
-def test_install_proves_actor_before_any_project_mutation(signed_release, tmp_path, monkeypatch):
-    project, old = _old_project(tmp_path)
-    recovery = tmp_path / "recovery"
-
-    def reject_actor(version: str) -> None:
-        assert version == "4.0.0"
-        raise v4_release.ReleaseError("update actor: unavailable fixture")
-
-    monkeypatch.setattr(v4_release, "_prewarm_update_actor", reject_actor)
-    with pytest.raises(v4_release.ReleaseError, match="unavailable fixture"):
-        v4_release.install_verified_release(
-            *signed_release["outputs"],
-            signed_release["expected"],
-            project,
-            recovery,
-            editors_closed=True,
-            clients_and_backend_stopped=True,
-        )
-
-    addon = project / "addons/godot_ai"
-    assert {path.name: path.read_bytes() for path in addon.iterdir()} == old
-    assert not recovery.exists()
-    assert not (project / "addons/.godot-ai-v4-installing").exists()
-    assert not (project / v4_release.MIGRATION_MARKER_RELATIVE).exists()
 
 
 def test_install_atomically_creates_an_exact_tree_for_a_fresh_project(signed_release, tmp_path):
