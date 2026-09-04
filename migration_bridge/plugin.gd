@@ -139,11 +139,20 @@ static func _meets_floor() -> bool:
 static func _editor_available() -> bool:
 	if not Engine.is_editor_hint():
 		return false
+	if _truthy(OS.get_environment("GODOT_AI_ALLOW_HEADLESS")):
+		## The override the v4 plugin honours too, so CI can drive the
+		## crossing in a headless editor. Never set it for a real install.
+		return EditorInterface.get_base_control() != null
 	if DisplayServer.get_name().to_lower() == "headless":
 		return false
 	if _args_request_headless(OS.get_cmdline_args()):
 		return false
 	return EditorInterface.get_base_control() != null
+
+
+static func _truthy(value: String) -> bool:
+	var lowered := value.strip_edges().to_lower()
+	return lowered == "1" or lowered == "true" or lowered == "yes" or lowered == "on"
 
 
 static func _args_request_headless(args: PackedStringArray) -> bool:

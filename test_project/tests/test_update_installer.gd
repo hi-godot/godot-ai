@@ -279,6 +279,7 @@ func test_swap_moves_trees_and_writes_the_marker_verbatim() -> void:
 		assert_eq(marker.get(key), record[key], "record key %s preserved verbatim" % key)
 	assert_eq(marker.get("replace_owned_mismatches"), true)
 	assert_gt(int(marker.get("swapped_unix", 0)), 0)
+	assert_false(_exists(McpUpdateInstaller.STAGE_DIR), "the emptied stage scaffold is removed")
 
 
 func test_swap_refuses_an_existing_backup() -> void:
@@ -401,6 +402,26 @@ func test_verify_after_restart_returns_a_settled_marker_unchanged() -> void:
 	assert_eq(Fixtures.read_fixture(McpUpdateInstaller.PENDING_FILE), before, "a settled marker is not rewritten")
 	assert_eq(_text(LIVE_ROOT + "/plugin.gd"), OLD_PLUGIN_GD, "nothing on disk moves")
 	assert_true(McpUpdateInstaller.verify_after_restart(TEST_DIR + "/absent").has("status"), "any non-swapped status is returned as-is")
+
+
+func test_a_migrated_success_marker_is_nothing_pending() -> void:
+	_stage_and_swap()
+	var settled := McpUpdateInstaller.verify_after_restart(LIVE_ROOT)
+	assert_eq(str(settled.get("status", "")), "success")
+	assert_false(settled.has("clients_migrated"), "migration is the plugin's to record")
+	assert_eq(McpUpdateInstaller.record_clients_migrated(), OK)
+	var marker := McpUpdateInstaller.read_pending()
+	assert_eq(marker.get("clients_migrated"), true, "recorded on disk")
+	assert_eq(str(marker.get("status", "")), "success", "the durable record stays")
+	assert_eq(str(marker.get("to_version", "")), TO_VERSION)
+	assert_true(McpUpdateInstaller.verify_after_restart(LIVE_ROOT).is_empty(), "later starts see nothing pending")
+	assert_true(_exists(McpUpdateInstaller.BACKUP_DIR + "/" + FROM_VERSION + "/plugin.gd"), "nothing on disk moves")
+	McpUpdateInstaller.clear_pending()
+	assert_eq(McpUpdateInstaller.record_clients_migrated(), ERR_UNAVAILABLE, "nothing to record without a success marker")
+	var rolled := {"status": "rolled_back", "from_version": "4.0.0", "to_version": "4.0.1", "error": "x"}
+	assert_true(Fixtures.write_fixture(McpUpdateInstaller.PENDING_FILE, JSON.stringify(rolled).to_utf8_buffer()))
+	assert_eq(McpUpdateInstaller.record_clients_migrated(), ERR_UNAVAILABLE, "a failure outcome is never marked migrated")
+	assert_eq(str(McpUpdateInstaller.verify_after_restart(LIVE_ROOT).get("status", "")), "rolled_back", "still surfaced")
 
 
 func test_verify_after_restart_with_nothing_pending() -> void:

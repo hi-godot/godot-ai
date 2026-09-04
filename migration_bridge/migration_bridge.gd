@@ -167,7 +167,11 @@ static func _is_pre_v4_version(value: String) -> bool:
 static func _load_script_with(path: String, method: String) -> Script:
 	if not ResourceLoader.exists(path):
 		return null
-	var loaded: Variant = load(path)
+	## Final v3 ships older files at some of these paths (utils/port_resolver.gd),
+	## already compiled into the resource cache before the capsule was extracted
+	## over the tree. Ignore the cache, deeply, so the capsule's copies and
+	## their preloads are the ones that run.
+	var loaded: Variant = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE_DEEP)
 	if not loaded is Script or not _script_declares(loaded, method):
 		return null
 	return loaded

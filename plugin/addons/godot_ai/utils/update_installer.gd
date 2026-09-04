@@ -246,6 +246,8 @@ static func swap(stage_root: String, live_root: String, record: Dictionary) -> D
 				live_abs if undo_stage != OK else stage_abs, backup_abs if undo_backup != OK else live_abs,
 			]
 		return result
+	## The staged tree now lives; only its empty scaffold is left behind.
+	discard_stage()
 	result.ok = true
 	return result
 
@@ -266,6 +268,17 @@ static func read_pending() -> Dictionary:
 			"error": "pending marker %s exists but is not a JSON object; inspect it by hand" % PENDING_FILE,
 		}
 	return marker
+
+
+## Record in the success marker that the plugin repinned client configuration,
+## so later starts do not repeat the migration. No-op unless the marker
+## records success.
+static func record_clients_migrated() -> Error:
+	var marker := read_pending()
+	if str(marker.get("status", "")) != STATUS_SUCCESS:
+		return ERR_UNAVAILABLE
+	marker["clients_migrated"] = true
+	return _write_json(PENDING_FILE, marker)
 
 
 ## Remove `pending.json`.
@@ -289,6 +302,10 @@ static func verify_after_restart(live_root: String) -> Dictionary:
 	if marker.is_empty():
 		return {}
 	if str(marker.get("status", "")) != STATUS_SWAPPED:
+		## A success marker whose client migration already ran is the durable
+		## record of the last update, not work for this start.
+		if str(marker.get("status", "")) == STATUS_SUCCESS and bool(marker.get("clients_migrated", false)):
+			return {}
 		return marker
 	var live_abs := _absolute(live_root)
 	var expected := str(marker.get("expected_tree_sha256", ""))

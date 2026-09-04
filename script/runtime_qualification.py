@@ -460,6 +460,10 @@ def _verify_lean_update(
     }
     support.require(marker.get("status") == "success", "runtime update did not succeed")
     support.require(
+        marker.get("clients_migrated") is True,
+        "runtime update did not record its client migration",
+    )
+    support.require(
         marker.get("from_version") == version_a and marker.get("to_version") == version_b,
         "runtime update marker versions differ from A/B",
     )
@@ -493,6 +497,7 @@ def _verify_lean_update(
             key: marker.get(key)
             for key in (
                 "status",
+                "clients_migrated",
                 "from_version",
                 "to_version",
                 "manifest_sha256",

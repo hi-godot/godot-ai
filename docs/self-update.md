@@ -65,20 +65,29 @@ All steps run inside the editor, on the main thread except the download.
    then run the existing `prepare_for_update_reload()` server preparation.
 6. **Lock.** `res://addons/.godot_ai_update/lock.json` holds the editor's PID
    and process fingerprint. A lock held by a live process that is not this
-   editor refuses the update; a lock from a dead process is replaced.
+   editor refuses the update; a lock from a dead process is replaced. The lock
+   covers download, stage and swap only: once the marker records the swap it
+   is released, and the marker itself refuses a second update until the
+   restarted editor has verified the tree.
 7. **Swap.** Rename the live tree to `.godot_ai_update/backup/<old version>/`,
    then rename the stage into place. Two renames, no file-by-file overlay.
    Write `.godot_ai_update/pending.json`: from and to versions, the manifest
    SHA-256, the expected tree hash, the backup path, and the editor nonce.
 8. **Restart.** Persist the add-on in `editor_plugins/enabled` without enabling
    it in the old process, then `EditorInterface.restart_editor(true)`. Updates
-   are interactive-only; headless and export launches never update.
+   are interactive-only; headless and export launches never update. The one
+   exception is the `GODOT_AI_ALLOW_HEADLESS` override the plugin and the
+   capsule both honour, which exists so CI can drive these paths in a
+   headless editor and is never set for a real install.
 9. **Verify again, in the new process.** On start, if `pending.json` exists,
    hash the live tree and compare it to the expected tree hash:
    - equal: delete the marker's pending state, record success in the marker
      (`status: success`, `from_version`, `to_version`, which the existing
      stale-server recovery arm and the pin-only auto-repin gate already read),
-     emit the `self_update` telemetry event, and continue normal startup;
+     repin owned client configuration once and record `clients_migrated` in
+     the marker, emit the `self_update` telemetry event, and continue normal
+     startup. A success marker that records its migration is the durable
+     record of the last update and is nothing pending on later starts;
    - different: rename the live tree to `.godot_ai_update/quarantine/`, rename
      the backup back into place, mark `status: rolled_back` with the reason,
      and show it in the dock. If the backup is missing too, mark
@@ -134,9 +143,12 @@ dependency only; the server package imports nothing from it at runtime.
   pure functions with a fixture key pair injected: signature, identity,
   archive and inventory rejections, stage hashing, marker states, rollback and
   repair decisions.
-- Three real-editor scenarios in `tests/integration/test_self_update_upgrade_paths.py`:
+- Four real-editor scenarios in `tests/integration/test_self_update_upgrade_paths.py`:
   a signed v4-to-v4 update restarts into a working server; a final-v3 install
-  crosses the capsule; a tampered live tree after a swap is rolled back. They
-  run on Linux on every pull request and on all three desktop OSes nightly,
-  and the release pipeline's A-to-B row runs the first one on the exact signed
-  candidate on every OS before publication.
+  crosses the capsule; a tampered live tree after a swap is rolled back; the
+  closed-editor installer's first start completes client migration. With the
+  capsule coordinator's restart handoff in
+  `tests/integration/test_migration_bridge_failures.py`, they run on Linux on
+  every pull request and on all three desktop OSes nightly, and the release
+  pipeline's A-to-B row runs the signed update on the exact signed candidate
+  on every OS before publication.

@@ -435,6 +435,7 @@ def test_lean_update_state_requires_success_marker_backup_and_clean_state(
         "to_version": "4.0.1",
         "expected_tree_sha256": "tree-live",
         "backup_root": "res://addons/.godot_ai_update/backup/4.0.0",
+        "clients_migrated": True,
     }
     monkeypatch.setattr(
         smoke.release_verify,
@@ -456,6 +457,9 @@ def test_lean_update_state_requires_success_marker_backup_and_clean_state(
 
     write(status="rolled_back")
     with pytest.raises(smoke.HarnessError, match="does not record success"):
+        smoke.verify_lean_update_state(project, "4.0.1")
+    write(clients_migrated=False)
+    with pytest.raises(smoke.HarnessError, match="does not record client migration"):
         smoke.verify_lean_update_state(project, "4.0.1")
     write(to_version="4.0.2")
     with pytest.raises(smoke.HarnessError, match="ends at"):

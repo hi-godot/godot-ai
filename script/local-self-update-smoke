@@ -44,6 +44,7 @@ SMOKE_DIR = "self_update_smoke"
 SMOKE_ARCHIVE_NAME = "godot-ai-v4-plugin.zip"
 SMOKE_MANIFEST_NAME = "godot-ai-v4-plugin.manifest.json"
 SMOKE_SIGNATURE_NAME = "godot-ai-v4-plugin.manifest.sig"
+SMOKE_PUBLIC_KEY_NAME = "smoke-release-key.pub.pem"
 SMOKE_SOURCE = "0123456789abcdef0123456789abcdef01234567"
 SMOKE_STAGED_LOG = "MCP | self-update smoke: staged signed local bundle"
 # The lean updater keeps its marker, lock and retained backup beside the live
@@ -452,6 +453,7 @@ def prepare_project(
         isolate_client_migration=isolate_client_migration,
         client_launch_command=client_launch_command,
     )
+    patch_release_signing_key(base_addon / "utils" / "update_manager.gd", public_key)
 
     vnext_root = project_dir / ".godot-ai-self-update-smoke" / "vnext" / "addons" / "godot_ai"
     shutil.copytree(PLUGIN_ROOT, vnext_root, ignore=copy_ignore)
@@ -834,6 +836,23 @@ def prepare_server_selector(
     return [str(smoke_python()), "-I", str(selector)]
 
 
+def patch_release_signing_key(update_manager: Path, public_key: str) -> None:
+    """Trust the one-run fixture key in the tree that will verify the bundle.
+
+    The plugin verifies release manifests in GDScript against the key embedded
+    in ``utils/update_manager.gd`` (docs/self-update.md, step 3), so the tree
+    that installs a fixture-signed bundle must carry the fixture public key.
+    """
+    text = subn_once(
+        update_manager,
+        update_manager.read_text(encoding="utf-8"),
+        r'const RELEASE_SIGNING_PUBLIC_KEY_PEM := """[\s\S]*?"""',
+        'const RELEASE_SIGNING_PUBLIC_KEY_PEM := """' + public_key.strip() + '"""',
+        "fixture release signing key",
+    )
+    update_manager.write_text(text, encoding="utf-8")
+
+
 def prepare_smoke_signing_key(marker_dir: Path) -> tuple[Path, str]:
     """Mint the one-run release signing pair the fixture bundle is signed with."""
     private = marker_dir / "smoke-release-key.pem"
@@ -857,7 +876,15 @@ def prepare_smoke_signing_key(marker_dir: Path) -> tuple[Path, str]:
         capture_output=True,
         text=True,
     ).stdout
+    ## The private key is deleted once the bundle is signed; the public half
+    ## stays so a later fixture step can re-trust it in a tree it rebuilds.
+    (marker_dir / SMOKE_PUBLIC_KEY_NAME).write_text(public, encoding="utf-8")
     return private, public
+
+
+def smoke_public_key_path(project_dir: Path) -> Path:
+    """The fixture public key `prepare_project` left beside its marker."""
+    return project_dir / ".godot-ai-self-update-smoke" / SMOKE_PUBLIC_KEY_NAME
 
 
 def _load_v4_release():
@@ -1331,6 +1358,8 @@ def verify_lean_update_state(project_dir: Path, next_version: str) -> tuple[dict
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     if not isinstance(marker, dict) or marker.get("status") != "success":
         raise HarnessError(f"update marker does not record success: {marker!r}")
+    if marker.get("clients_migrated") is not True:
+        raise HarnessError("the update marker does not record client migration")
     if marker.get("to_version") != next_version:
         raise HarnessError(
             f"update marker ends at {marker.get('to_version')!r}, not {next_version!r}"

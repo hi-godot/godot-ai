@@ -52,8 +52,14 @@ def signed_smoke_https_delivery(project: Path, version: str):
     smoke = load_smoke_script()
     manager = Path("utils/update_manager.gd")
     # Restore the production manager, removing the fixture's local-file I/O
-    # substitutions entirely. Neither candidate's manager source is patched.
+    # substitutions entirely. The only patch left in A is its trust root: the
+    # plugin verifies manifests in GDScript against the key embedded here, so
+    # A must trust the disposable key that signed the served triple.
     shutil.copy2(PLUGIN_ROOT / manager, project / "addons/godot_ai" / manager)
+    smoke.patch_release_signing_key(
+        project / "addons/godot_ai" / manager,
+        smoke.smoke_public_key_path(project).read_text(encoding="utf-8"),
+    )
     assets = project.parent / "https-assets"
     assets.mkdir()
     for name in (smoke.SMOKE_ARCHIVE_NAME, smoke.SMOKE_MANIFEST_NAME, smoke.SMOKE_SIGNATURE_NAME):

@@ -370,6 +370,7 @@ def _lean_update_project(tmp_path: Path) -> tuple[Path, Path, dict[str, dict[str
     (backup / "plugin.cfg").write_bytes(b"a")
     marker = {
         "status": "success",
+        "clients_migrated": True,
         "from_version": "4.0.0",
         "to_version": "4.0.1",
         "manifest_sha256": hashlib.sha256(manifests["b"].read_bytes()).hexdigest(),
@@ -417,6 +418,7 @@ def test_lean_update_evidence_binds_marker_live_tree_and_backup(monkeypatch, tmp
     assert evidence["update_marker"] == support.fingerprint(marker)
     assert evidence["update_state"] == {
         "status": "success",
+        "clients_migrated": True,
         "from_version": "4.0.0",
         "to_version": "4.0.1",
         "manifest_sha256": hashlib.sha256(
@@ -449,6 +451,7 @@ def test_lean_update_evidence_binds_marker_live_tree_and_backup(monkeypatch, tmp
             "retain exactly A",
         ),
         (_rewrite_marker(status="rolled_back"), "did not succeed"),
+        (_rewrite_marker(clients_migrated=False), "did not record its client migration"),
         (_rewrite_marker(to_version="4.0.2"), "versions differ"),
         (_rewrite_marker(expected_tree_sha256="tree-x"), "not bound to B"),
         (_rewrite_marker(manifest_sha256="0" * 64), "not bound to B"),

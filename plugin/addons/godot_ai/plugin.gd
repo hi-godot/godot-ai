@@ -727,7 +727,6 @@ func _begin_startup_release() -> void:
 		if not _post_update_outcome.is_empty():
 			_present_post_update_failure()
 			UpdateInstaller.clear_pending()
-			UpdateInstaller.release_lock()
 		_fan_post_update_outcome()
 		_release_normal_startup()
 		return
@@ -793,9 +792,13 @@ func _finish_post_update() -> void:
 	print("MCP | client migration completed")
 	## The success marker stays as the durable record of the last update; the
 	## next swap overwrites it and preflight only refuses swapped/repair states.
-	UpdateInstaller.prune_backups(str(_post_update_outcome.get("to_version", "")))
-	## The lock was taken by the editor that performed the swap; it is dead now.
-	UpdateInstaller.release_lock()
+	## Recording the migration keeps later starts from repeating it.
+	var recorded := UpdateInstaller.record_clients_migrated()
+	if recorded != OK:
+		push_warning("MCP | could not record client migration in the update marker: %s" % error_string(recorded))
+	## Backups are named by the version they hold: keep the one this update
+	## just retained (the previous version) and drop older ones.
+	UpdateInstaller.prune_backups(str(_post_update_outcome.get("from_version", "")))
 	_present_post_update_complete()
 	_fan_post_update_outcome()
 	_release_normal_startup()
@@ -1370,6 +1373,10 @@ func install_downloaded_update(package: Dictionary) -> void:
 		_fail_update("Update failed — previous version kept", "update swap refused: %s" % str(swapped.get("error", "")))
 		return
 	_update_swapped = true
+	## The lock covered download, stage and swap. From here the marker itself
+	## refuses a second update until the restarted editor verifies the tree,
+	## and that editor cannot prove this process dead, so release it now.
+	UpdateInstaller.release_lock()
 	UpdateInstaller.persist_next_start_enabled(PLUGIN_CFG)
 	print("MCP | update to %s swapped in; restarting the editor" % to_version)
 	UpdateInstaller.request_restart.call_deferred()

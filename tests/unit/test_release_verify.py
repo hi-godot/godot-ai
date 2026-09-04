@@ -393,7 +393,8 @@ def _install_args(release, project: Path) -> list[str]:
 
 
 def _marker(project: Path) -> dict:
-    return json.loads((project / "addons/.godot_ai_update/pending.json").read_text(encoding="utf-8"))
+    marker = project / "addons/.godot_ai_update/pending.json"
+    return json.loads(marker.read_text(encoding="utf-8"))
 
 
 def test_install_swaps_the_old_tree_for_the_signed_tree_and_retains_a_backup(
