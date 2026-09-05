@@ -283,7 +283,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
     (
         "resource",
         "  resource_manage  search, load, assign, get_info, create,\n"
-        "                   curve_set_points, environment_create,\n"
+        "                   set_property, curve_set_points, environment_create,\n"
         "                   physics_shape_autofit, gradient_texture_create,\n"
         "                   noise_texture_create\n",
     ),

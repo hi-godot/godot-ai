@@ -591,6 +591,16 @@ class StubClient:
                 "properties_applied": len(params.get("properties", {}) or {}),
                 "undoable": True,
             }
+        if command == "set_resource_property":
+            return {
+                "resource_path": params.get("resource_path", ""),
+                "resource_class": "BoxShape3D",
+                "properties_applied": len(params.get("properties", {}) or {}),
+                "overwritten": True,
+                "uid_preserved": True,
+                "undoable": False,
+                "reason": "File save is persistent; edit the .tres file manually to revert",
+            }
         if command == "read_file":
             return {
                 "path": params.get("path", ""),
@@ -3165,6 +3175,24 @@ async def test_resource_create_minimal_omits_empty_params():
     assert "properties" not in params
 
 
+async def test_resource_set_property_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await resource_handlers.resource_set_property(
+        runtime,
+        resource_path="res://shapes/box.tres",
+        properties={"size": {"x": 1, "y": 2, "z": 3}},
+    )
+    assert result["properties_applied"] == 1
+    assert result["undoable"] is False
+    assert result["uid_preserved"] is True
+    assert client.calls[-1]["command"] == "set_resource_property"
+    assert client.calls[-1]["params"] == {
+        "resource_path": "res://shapes/box.tres",
+        "properties": {"size": {"x": 1, "y": 2, "z": 3}},
+    }
+
+
 async def test_resource_get_info_handler_forwards_type():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
@@ -3531,6 +3559,32 @@ async def test_resource_create_requires_writable():
             type="BoxMesh",
             path="/Main/Mesh",
             property="mesh",
+        )
+
+
+async def test_resource_set_property_requires_writable():
+    """set_property writes a file — it must gate on readiness like create."""
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    client.live_readiness = "importing"
+    session = Session(
+        session_id="s1",
+        godot_version="4.4",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+
+    with pytest.raises(GodotCommandError):
+        await resource_handlers.resource_set_property(
+            runtime,
+            resource_path="res://shapes/box.tres",
+            properties={"size": {"x": 1, "y": 1, "z": 1}},
         )
 
 

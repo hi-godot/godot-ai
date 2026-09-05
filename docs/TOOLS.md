@@ -213,7 +213,7 @@ Calls take the form:
 | `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `build_layout`, `draw_recipe` |
-| `resource_manage` | `search`, `load`, `assign`, `get_info`, `create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `gradient_texture_create`, `noise_texture_create` |
+| `resource_manage` | `search`, `load`, `assign`, `get_info`, `create`, `set_property`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `gradient_texture_create`, `noise_texture_create` |
 | `api_manage` | `get_class` |
 | `client_manage` | `status`, `configure`, `remove` |
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
@@ -235,6 +235,20 @@ models, and audio. Godot scripts (`.gd`) are not imported resources: a successfu
 `.gd` entry only refreshes its editor filesystem cache entry and does not prove the
 script was parsed or diagnostics were produced. Use `script_patch` or
 `script_create` to save scripts and receive fresh diagnostics.
+
+`resource_manage(op="set_property")` is the **only safe way to change a field on
+an existing `.tres`/`.res` while the editor is running.** Editing the file as
+text from outside Godot is not: the editor holds the resource in `ResourceCache`,
+nothing reachable from the MCP evicts that cache (a `filesystem_manage(op="scan")`,
+a `scene_open(force_reload=true)`, and a fresh `resource_manage(op="load")` all
+keep returning the stale copy — see godotengine/godot#73602 and #75865), and the
+editor re-serializes its stale copy over the file as soon as anything marks the
+resource dirty. `set_property` mutates the instance the editor is already holding
+and saves that, so the cache and the file cannot diverge — the same property that
+makes `node_set_property` + `scene_save` safe for scenes. It requires the file to
+already exist (creating one is `op="create"`), takes a `{name: value}` dict so
+several fields land in one save, and is not undoable (it writes the file). Editing
+a sub-resource in place (`path.tres::SubID`) is not supported yet.
 
 `api_manage(op="get_class")` inspects Godot API/ClassDB metadata for a class
 without creating an instance. By default it returns **only `properties`**

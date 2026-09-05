@@ -415,6 +415,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("load_resource", "resource", &"load_resource")
 	_dispatcher.register_lazy("assign_resource", "resource", &"assign_resource")
 	_dispatcher.register_lazy("create_resource", "resource", &"create_resource")
+	_dispatcher.register_lazy("set_resource_property", "resource", &"set_resource_property")
 	_dispatcher.register_lazy("get_resource_info", "resource", &"get_resource_info")
 	_dispatcher.register_lazy("get_class_info", "api", &"get_class_info")
 	_dispatcher.register_lazy("read_file", "filesystem", &"read_file")

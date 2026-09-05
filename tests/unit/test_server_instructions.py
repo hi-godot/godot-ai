@@ -74,7 +74,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "                   set_stylebox_flat, apply\n"
     "  ui_manage        set_anchor_preset, set_text, build_layout, draw_recipe\n"
     "  resource_manage  search, load, assign, get_info, create,\n"
-    "                   curve_set_points, environment_create,\n"
+    "                   set_property, curve_set_points, environment_create,\n"
     "                   physics_shape_autofit, gradient_texture_create,\n"
     "                   noise_texture_create\n"
     "  api_manage       get_class\n"
