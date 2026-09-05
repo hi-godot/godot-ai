@@ -68,6 +68,9 @@ const EVAL_COMPILE_GRACE_SEC := 3.0
 ## ticking, so it drives the poll. 0.35s keeps detection well under a second
 ## without flooding the channel; most evals reply before the first probe.
 const EVAL_PROBE_INTERVAL_SEC := 0.35
+const GAME_DEBUG_CONTROL_TIMEOUT_SEC := 5.0
+const EMBED_SUSPEND_TOGGLE := 0
+const EMBED_NEXT_FRAME := 1
 
 const VisionRoutingScript := preload("res://addons/godot_ai/vision_routing.gd")
 
@@ -239,6 +242,9 @@ func _editor_log_cursor() -> int:
 func end_game_run() -> void:
 	_fail_pending_evals_not_ready(
 		"The game run ended before game_eval completed — the game stopped, crashed, or is restarting. Confirm it is running and retry."
+	)
+	_fail_pending_game_debug_controls_not_ready(
+		"The game run ended before runtime control completed — confirm it is running and retry."
 	)
 	## Never carry a held beacon across a run boundary (#891).
 	_pending_hello_session_id = -1
@@ -856,6 +862,9 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 			return true
 		"mcp:eval_liveness_response":
 			_on_eval_liveness_response(data)
+			return true
+		"mcp:debug_status_response":
+			_on_debug_status_response(data)
 			return true
 		"mcp:eval_response":
 			_on_eval_response(data)
@@ -1594,6 +1603,349 @@ func _on_eval_probe_tick(request_id: String) -> void:
 	if session != null and session.is_active():
 		session.send_message("mcp:eval_check", [request_id])
 	_arm_eval_probe(request_id)
+
+
+## --- native embedded Game View runtime control (#939) ---
+
+static func game_debug_verification(
+	action: String, state_before: Dictionary, state_after: Dictionary
+) -> Dictionary:
+	var before_ticks := int(state_before.get("process_ticks", -1))
+	var after_ticks := int(state_after.get("process_ticks", -1))
+	var ticks_advanced := after_ticks - before_ticks if before_ticks >= 0 and after_ticks >= 0 else -1
+	match action:
+		"suspend":
+			return {"status": "verified" if bool(state_after.get("suspended", false)) else "pending", "ticks_advanced": ticks_advanced}
+		"resume":
+			return {"status": "verified" if not bool(state_after.get("suspended", true)) else "pending", "ticks_advanced": ticks_advanced}
+		"next_frame":
+			if before_ticks < 0 or after_ticks < 0:
+				return {"status": "failed", "reason": "missing_process_ticks", "ticks_advanced": ticks_advanced}
+			if ticks_advanced > 1:
+				return {"status": "failed", "reason": "multiple_process_ticks", "ticks_advanced": ticks_advanced}
+			if ticks_advanced == 1 and bool(state_after.get("suspended", false)):
+				return {"status": "verified", "ticks_advanced": 1}
+			return {"status": "pending", "ticks_advanced": ticks_advanced}
+	return {"status": "failed", "reason": "unsupported_action", "ticks_advanced": ticks_advanced}
+
+
+func _active_game_debug_mutation() -> Dictionary:
+	for raw_request_id in _pending.keys():
+		var pending_entry: Dictionary = _pending.get(raw_request_id, {})
+		if str(pending_entry.get("kind", "")) != "game_debug_control":
+			continue
+		var active_action := str(pending_entry.get("action", ""))
+		if active_action in ["suspend", "resume", "next_frame"]:
+			return {"request_id": str(raw_request_id), "action": active_action}
+	return {}
+
+
+func request_game_debug_control(
+	action: String,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float = GAME_DEBUG_CONTROL_TIMEOUT_SEC,
+) -> void:
+	if request_id.is_empty():
+		push_warning("MCP debugger: game debug control missing request_id")
+		return
+	## The dispatcher registers the deferred request only after the handler returns.
+	## Start the entire guard/control flow deferred so even fast failures cannot race
+	## that registration and get dropped as an expired response.
+	_begin_game_debug_control.call_deferred(action, request_id, connection, timeout_sec)
+
+
+func _begin_game_debug_control(
+	action: String,
+	request_id: String,
+	connection: McpConnection,
+	timeout_sec: float,
+) -> void:
+	if action not in ["suspend", "resume", "next_frame", "debug_status"]:
+		_send_error(connection, request_id, ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Unsupported game debug action: %s" % action)
+		return
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+			"Editor main loop is not a SceneTree — cannot schedule game debug control")
+		return
+	if not is_game_capture_ready():
+		_send_error_response(connection, request_id,
+			_explain_not_live(get_game_status(-1, GAME_READY_WAIT_SEC), ErrorCodes.INTERNAL_ERROR))
+		return
+	if action != "debug_status":
+		var active_mutation := _active_game_debug_mutation()
+		if not active_mutation.is_empty():
+			var busy := ErrorCodes.make(
+				ErrorCodes.EDITOR_NOT_READY,
+				"Another game runtime-control mutation is already in flight — retry after it completes."
+			)
+			busy["error"]["data"] = {
+				"action": action,
+				"active_action": str(active_mutation.get("action", "")),
+				"retryable": true,
+			}
+			_send_error_response(connection, request_id, busy)
+			return
+	var session := _first_active_session()
+	if session == null:
+		_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+			"No active debugger session — is the game actually running?")
+		return
+	var timer := tree.create_timer(timeout_sec)
+	var timeout_callable := func() -> void:
+		var pending_entry: Dictionary = _pending.get(request_id, {})
+		if pending_entry.is_empty():
+			return
+		_pending.erase(request_id)
+		var conn: McpConnection = pending_entry.get("connection")
+		if conn != null and is_instance_valid(conn):
+			var err := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+				"Game debug action '%s' timed out after %.0fs" % [action, timeout_sec])
+			err["error"]["data"] = {
+				"action": action,
+				"state_before": pending_entry.get("state_before", {}),
+				"state_after": pending_entry.get("state_after", {}),
+				"focus_handoff": pending_entry.get("focus_handoff", {}),
+				"path": pending_entry.get("path", ""),
+				"game_view_ui_synced": pending_entry.get("game_view_ui_synced", false),
+			}
+			_send_error_response(conn, request_id, err)
+	timer.timeout.connect(timeout_callable)
+	_pending[request_id] = {
+		"kind": "game_debug_control",
+		"phase": "before",
+		"action": action,
+		"connection": connection,
+		"timer": timer,
+		"timeout_callable": timeout_callable,
+		"run_token": _game_run_token,
+	}
+	session.send_message("mcp:debug_status", [request_id])
+
+
+func _on_debug_status_response(data: Array) -> void:
+	if data.size() < 2 or not (data[1] is Dictionary):
+		push_warning("MCP debugger: malformed debug_status response")
+		return
+	var request_id := str(data[0])
+	var pending_entry: Dictionary = _pending.get(request_id, {})
+	if str(pending_entry.get("kind", "")) != "game_debug_control":
+		return
+	var connection: McpConnection = pending_entry.get("connection")
+	if not _is_current_game_run(int(pending_entry.get("run_token", -1))):
+		_clear_pending(request_id)
+		if connection != null and is_instance_valid(connection):
+			_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
+				"The game run changed while runtime control was in flight — retry against the current run.")
+		return
+	var state: Dictionary = (data[1] as Dictionary).duplicate(true)
+	pending_entry["state_after"] = state
+	match str(pending_entry.get("phase", "before")):
+		"before":
+			_handle_game_debug_before(request_id, pending_entry, state)
+		"verify":
+			_handle_game_debug_verify(request_id, pending_entry, state)
+		_:
+			_clear_pending(request_id)
+			if connection != null and is_instance_valid(connection):
+				_send_error(connection, request_id, ErrorCodes.INTERNAL_ERROR,
+					"Invalid game debug control phase")
+
+
+func _default_focus_handoff() -> Dictionary:
+	return {"attempted": false, "main_screen": "", "embedded_process_found": false, "focused": false}
+
+
+func _handle_game_debug_before(
+	request_id: String, pending_entry: Dictionary, state: Dictionary
+) -> void:
+	var action := str(pending_entry.get("action", ""))
+	var connection: McpConnection = pending_entry.get("connection")
+	var focus_handoff := _default_focus_handoff()
+	if action == "debug_status":
+		_clear_pending(request_id)
+		if connection != null and is_instance_valid(connection):
+			connection.send_deferred_response(request_id, {"data": {
+				"action": action, "state": state, "focus_handoff": focus_handoff,
+			}})
+		return
+	var suspended := bool(state.get("suspended", false))
+	if action in ["suspend", "resume"]:
+		var desired := action == "suspend"
+		if suspended == desired:
+			_clear_pending(request_id)
+			if connection != null and is_instance_valid(connection):
+				connection.send_deferred_response(request_id, {"data": {
+					"action": action, "changed": false, "verified": true,
+					"state_before": state, "state_after": state,
+					"focus_handoff": focus_handoff,
+				}})
+			return
+	elif action == "next_frame" and not suspended:
+		_clear_pending(request_id)
+		if connection != null and is_instance_valid(connection):
+			_send_error(connection, request_id, ErrorCodes.INVALID_PARAMS,
+				"next_frame requires a suspended game — call suspend first")
+		return
+	if action == "next_frame":
+		focus_handoff = _focus_embedded_game_view()
+	var desired_suspended := action == "suspend"
+	var control := _emit_game_debug_runtime_action(action, desired_suspended)
+	if not bool(control.get("ok", false)):
+		var err := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"No active debugger path accepted the native game runtime action")
+		err["error"]["data"] = {
+			"action": action,
+			"reason": control.get("reason", "runtime_control_unavailable"),
+			"focus_handoff": focus_handoff,
+		}
+		_clear_pending(request_id)
+		if connection != null and is_instance_valid(connection):
+			_send_error_response(connection, request_id, err)
+		return
+	pending_entry["phase"] = "verify"
+	pending_entry["state_before"] = state
+	pending_entry["focus_handoff"] = focus_handoff
+	pending_entry["path"] = str(control.get("path", ""))
+	pending_entry["game_view_ui_synced"] = bool(control.get("game_view_ui_synced", false))
+	_request_game_debug_verify.call_deferred(request_id)
+
+
+func _request_game_debug_verify(request_id: String) -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return
+	await tree.process_frame
+	var pending_entry: Dictionary = _pending.get(request_id, {})
+	if str(pending_entry.get("phase", "")) != "verify":
+		return
+	var session := _first_active_session()
+	if session == null:
+		var connection: McpConnection = pending_entry.get("connection")
+		_clear_pending(request_id)
+		if connection != null and is_instance_valid(connection):
+			_send_error(connection, request_id, ErrorCodes.EVAL_GAME_NOT_READY,
+				"The debugger session ended before runtime control could be verified")
+		return
+	session.send_message("mcp:debug_status", [request_id])
+
+
+func _handle_game_debug_verify(
+	request_id: String, pending_entry: Dictionary, state_after: Dictionary
+) -> void:
+	var action := str(pending_entry.get("action", ""))
+	var connection: McpConnection = pending_entry.get("connection")
+	var state_before: Dictionary = pending_entry.get("state_before", {})
+	var verdict := game_debug_verification(action, state_before, state_after)
+	match str(verdict.get("status", "failed")):
+		"pending":
+			_request_game_debug_verify.call_deferred(request_id)
+			return
+		"verified":
+			pass
+		_:
+			var err := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+				"Game debug action '%s' violated its verification contract" % action)
+			err["error"]["data"] = {
+				"action": action,
+				"reason": verdict.get("reason", "verification_failed"),
+				"ticks_advanced": verdict.get("ticks_advanced", -1),
+				"state_before": state_before,
+				"state_after": state_after,
+				"focus_handoff": pending_entry.get("focus_handoff", {}),
+				"path": pending_entry.get("path", ""),
+				"game_view_ui_synced": pending_entry.get("game_view_ui_synced", false),
+			}
+			_clear_pending(request_id)
+			if connection != null and is_instance_valid(connection):
+				_send_error_response(connection, request_id, err)
+			return
+	var payload := {
+		"action": action,
+		"changed": true,
+		"verified": true,
+		"state_before": state_before,
+		"state_after": state_after,
+		"focus_handoff": pending_entry.get("focus_handoff", {}),
+		"path": pending_entry.get("path", ""),
+		"game_view_ui_synced": pending_entry.get("game_view_ui_synced", false),
+	}
+	if action == "next_frame":
+		payload["ticks_advanced"] = int(verdict.get("ticks_advanced", -1))
+	_clear_pending(request_id)
+	if connection != null and is_instance_valid(connection):
+		connection.send_deferred_response(request_id, {"data": payload})
+
+
+func _focus_embedded_game_view() -> Dictionary:
+	var result := {
+		"attempted": true,
+		"main_screen": "Game",
+		"embedded_process_found": false,
+		"focused": false,
+	}
+	EditorInterface.set_main_screen_editor("Game")
+	var base := EditorInterface.get_base_control()
+	if base == null:
+		return result
+	var embedded_nodes: Array[Node] = []
+	_collect_nodes_of_class(base, "EmbeddedProcess", embedded_nodes)
+	for node in embedded_nodes:
+		if node is Control:
+			var embedded := node as Control
+			result["embedded_process_found"] = true
+			embedded.grab_focus()
+			result["focused"] = embedded.has_focus()
+			break
+	return result
+
+
+static func direct_game_debug_message(action: String, desired_suspended: bool) -> Dictionary:
+	match action:
+		"suspend", "resume":
+			return {"message": "scene:suspend_changed", "data": [desired_suspended]}
+		"next_frame":
+			return {"message": "scene:next_frame", "data": []}
+	return {}
+
+
+func _emit_game_debug_runtime_action(action: String, desired_suspended: bool) -> Dictionary:
+	var embed_action := EMBED_NEXT_FRAME if action == "next_frame" else EMBED_SUSPEND_TOGGLE
+	var base := EditorInterface.get_base_control()
+	if base != null:
+		var debuggers: Array[Node] = []
+		_collect_nodes_of_class(base, "ScriptEditorDebugger", debuggers)
+		for debugger in debuggers:
+			if not debugger.has_signal("embed_shortcut_requested"):
+				continue
+			if debugger.get_signal_connection_list("embed_shortcut_requested").is_empty():
+				continue
+			debugger.emit_signal("embed_shortcut_requested", embed_action)
+			return {"ok": true, "path": "embed_signal", "game_view_ui_synced": true}
+
+	var session := _first_active_session()
+	if session == null or not session.is_active():
+		return {"ok": false, "reason": "no_active_debugger_session"}
+	var direct := direct_game_debug_message(action, desired_suspended)
+	if direct.is_empty():
+		return {"ok": false, "reason": "unsupported_action"}
+	session.send_message(str(direct.message), direct.data as Array)
+	## The direct debugger-session path works without embedding, but bypasses
+	## Game View's suspend button, so its visual pressed state is not synchronized.
+	return {"ok": true, "path": "direct_session", "game_view_ui_synced": false}
+
+
+func _fail_pending_game_debug_controls_not_ready(message: String) -> void:
+	for request_id in _pending.keys():
+		var pending_entry: Dictionary = _pending.get(request_id, {})
+		if str(pending_entry.get("kind", "")) != "game_debug_control":
+			continue
+		var connection: McpConnection = pending_entry.get("connection")
+		_clear_pending(str(request_id))
+		if connection != null and is_instance_valid(connection):
+			_send_error(connection, str(request_id), ErrorCodes.EVAL_GAME_NOT_READY, message)
 
 
 ## --- game_command: curated runtime game operations ---

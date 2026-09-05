@@ -24,6 +24,19 @@ Ops:
                     include_disabled=True, max_depth=10)
         Inspect visible runtime Control nodes for UI testing. Includes path,
         type, text where present, disabled state, and rect metadata.
+  - suspend()
+        Suspend the running game through Godot's native debugger path.
+  - resume()
+        Resume a suspended game. Idempotent when it is already running.
+  - next_frame()
+        Advance exactly one process tick while suspended. The response reports
+        verification and any Embedded Game View focus handoff. Runtime-control
+        mutations also report path="embed_signal" or "direct_session"; the
+        direct fallback works without embedding but cannot synchronize the
+        Game View suspend button's visual pressed state.
+  - debug_status()
+        Probe suspend state and the game-helper process tick counter through
+        the debugger capture, including while SceneTree processing is suspended.
   - input_key(key, pressed=True, echo=False)
         Send a key press/release to the running game.
   - input_mouse(event, position=None, button="left", pressed=True)
@@ -59,6 +72,10 @@ def register_game_tools(mcp: FastMCP) -> None:
             "get_scene_tree": game_handlers.game_get_scene_tree,
             "get_node_info": game_handlers.game_get_node_info,
             "get_ui_elements": game_handlers.game_get_ui_elements,
+            "suspend": game_handlers.game_suspend,
+            "resume": game_handlers.game_resume,
+            "next_frame": game_handlers.game_next_frame,
+            "debug_status": game_handlers.game_debug_status,
             "input_key": game_handlers.game_input_key,
             "input_mouse": game_handlers.game_input_mouse,
             "input_gamepad": game_handlers.game_input_gamepad,
@@ -70,6 +87,10 @@ def register_game_tools(mcp: FastMCP) -> None:
             "get_scene_tree": None,
             "get_node_info": None,
             "get_ui_elements": None,
+            "suspend": None,
+            "resume": None,
+            "next_frame": None,
+            "debug_status": None,
             "input_key": None,
             "input_mouse": None,
             "input_gamepad": None,

@@ -1759,6 +1759,23 @@ async def test_logs_read_handler_plugin_normalizes_structured_payload():
 # ---------------------------------------------------------------------------
 
 
+async def test_game_debug_control_ops_use_editor_bridge():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    cases = [
+        (game_handlers.game_suspend, "suspend"),
+        (game_handlers.game_resume, "resume"),
+        (game_handlers.game_next_frame, "next_frame"),
+        (game_handlers.game_debug_status, "debug_status"),
+    ]
+    for handler, action in cases:
+        await handler(runtime)
+        assert client.calls[-1]["command"] == "game_debug_control"
+        assert client.calls[-1]["params"] == {"action": action}
+        assert client.calls[-1]["timeout"] == game_handlers.GAME_DEBUG_TIMEOUT_SEC
+
+
 async def test_game_get_scene_tree_sends_game_command():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

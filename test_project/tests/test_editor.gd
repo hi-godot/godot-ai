@@ -229,6 +229,42 @@ func test_screenshot_game_not_playing() -> void:
 	assert_eq(result.error.data.sub_code, ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING)
 
 
+# ----- game debug control (#939) -----
+
+func test_game_debug_verification_requires_exact_tick() -> void:
+	var before := {"process_ticks": 10, "suspended": true}
+	var pending := McpDebuggerPlugin.game_debug_verification(
+		"next_frame", before, {"process_ticks": 10, "suspended": true})
+	assert_eq(pending.status, "pending")
+	assert_eq(pending.ticks_advanced, 0)
+	var exact := McpDebuggerPlugin.game_debug_verification(
+		"next_frame", before, {"process_ticks": 11, "suspended": true})
+	assert_eq(exact.status, "verified")
+	assert_eq(exact.ticks_advanced, 1)
+	var not_resuspended := McpDebuggerPlugin.game_debug_verification(
+		"next_frame", before, {"process_ticks": 11, "suspended": false})
+	assert_eq(not_resuspended.status, "pending")
+	var too_many := McpDebuggerPlugin.game_debug_verification(
+		"next_frame", before, {"process_ticks": 12, "suspended": true})
+	assert_eq(too_many.status, "failed")
+	assert_eq(too_many.reason, "multiple_process_ticks")
+
+
+func test_game_debug_verification_suspend_resume_state() -> void:
+	var before := {"process_ticks": 3, "suspended": false}
+	var suspended := McpDebuggerPlugin.game_debug_verification(
+		"suspend", before, {"process_ticks": 3, "suspended": true})
+	assert_eq(suspended.status, "verified")
+	var resumed := McpDebuggerPlugin.game_debug_verification(
+		"resume", {"process_ticks": 3, "suspended": true},
+		{"process_ticks": 3, "suspended": false})
+	assert_eq(resumed.status, "verified")
+	var still_suspended := McpDebuggerPlugin.game_debug_verification(
+		"resume", {"process_ticks": 3, "suspended": true},
+		{"process_ticks": 3, "suspended": true})
+	assert_eq(still_suspended.status, "pending")
+
+
 # ----- game_command -----
 
 func test_game_command_missing_op() -> void:
@@ -440,6 +476,53 @@ class _StubConnection:
 
 	func send_deferred_response(request_id: String, payload: Dictionary) -> void:
 		captured.append({"request_id": request_id, "payload": payload})
+
+
+func test_game_debug_direct_session_message_mapping() -> void:
+	var suspend := McpDebuggerPlugin.direct_game_debug_message("suspend", true)
+	assert_eq(suspend.message, "scene:suspend_changed")
+	assert_eq(suspend.data, [true])
+	var resume := McpDebuggerPlugin.direct_game_debug_message("resume", false)
+	assert_eq(resume.message, "scene:suspend_changed")
+	assert_eq(resume.data, [false])
+	var step := McpDebuggerPlugin.direct_game_debug_message("next_frame", false)
+	assert_eq(step.message, "scene:next_frame")
+	assert_eq(step.data, [])
+	assert_true(McpDebuggerPlugin.direct_game_debug_message("bad", false).is_empty())
+
+
+func test_game_debug_control_rejects_overlapping_mutation() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	_mark_game_live(plugin)
+	plugin._pending["rid-active-suspend"] = {
+		"kind": "game_debug_control",
+		"action": "suspend",
+	}
+	plugin._begin_game_debug_control("resume", "rid-overlap", conn, 5.0)
+	assert_eq(conn.captured.size(), 1, "overlapping mutation must fail before another native toggle")
+	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(conn.captured[0].payload.error.data.active_action, "suspend")
+	assert_eq(conn.captured[0].payload.error.data.action, "resume")
+	assert_true(conn.captured[0].payload.error.data.retryable)
+	plugin._pending.erase("rid-active-suspend")
+	conn.free()
+
+
+func test_game_debug_control_guard_reply_waits_for_deferred_registration() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		skip("No SceneTree available")
+		return
+	var plugin := McpDebuggerPlugin.new()
+	var conn := _StubConnection.new()
+	plugin.request_game_debug_control("not_an_action", "rid-debug-guard", conn)
+	assert_eq(conn.captured.size(), 0, "guard reply must not race the dispatcher registration")
+	await tree.process_frame
+	assert_eq(conn.captured.size(), 1, "deferred guard should reply on a later editor turn")
+	assert_eq(conn.captured[0].request_id, "rid-debug-guard")
+	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.VALUE_OUT_OF_RANGE)
+	conn.free()
 
 
 ## Records the positive liveness transition without requiring a real debugger

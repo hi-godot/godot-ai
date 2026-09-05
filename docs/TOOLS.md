@@ -208,7 +208,7 @@ Calls take the form:
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
 | `signal_manage` | `list`, `connect`, `disconnect` |
 | `input_map_manage` | `list`, `add_action`, `ensure_action`, `remove_action`, `bind_event`, `ensure_binding` |
-| `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_sequence`, `input_state` |
+| `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `suspend`, `resume`, `next_frame`, `debug_status`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_sequence`, `input_state` |
 | `autoload_manage` | `list`, `add`, `remove` |
 | `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `apply` |
@@ -257,6 +257,13 @@ the running game in a single call — the frame-accurate, multi-step form of
 network round-trip happens to complete on, so the timing drifts and the run
 isn't reproducible. The game applies each step's action on its scheduled frame,
 awaits `settle_frames` more, then replies once.
+
+`game_manage(op="suspend"|"resume"|"next_frame")` uses Godot's native debugger
+control path. Successful mutations report `path="embed_signal"` when Embedded
+Game View accepted the shortcut, or `path="direct_session"` when the plugin
+sent the native scene debugger message directly. The direct fallback works for
+standalone/non-embedded runs, but `game_view_ui_synced=false` warns that the
+Game View suspend button's visual pressed state was not updated.
 
 Each step is `{at_frame, action, pressed=True, strength=1.0}`. Steps must be
 ordered by non-decreasing `at_frame`; two steps sharing a frame is a valid

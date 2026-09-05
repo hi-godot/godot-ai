@@ -307,6 +307,50 @@ func test_eval_liveness_probe_reports_loop_beacon() -> void:
 	helper.free()
 
 
+func test_debug_status_probe_reports_tick_counter() -> void:
+	var helper: Node = GameHelper.new()
+	helper._mcp_runtime_process_ticks = 7
+	helper._last_loop_tick_msec = Time.get_ticks_msec()
+	var state: Dictionary = helper._debug_status_snapshot()
+	assert_eq(state.probe_version, 1)
+	assert_eq(state.process_ticks, 7)
+	assert_false(state.suspended, "a detached helper must not report debugger suspension")
+	assert_has_key(state, "time_scale")
+	assert_true(helper._on_debug_message("mcp:debug_status", ["rid-status"]),
+		"the helper should capture suspended-runtime status probes")
+	assert_eq(helper._last_debug_status_reply.request_id, "rid-status")
+	assert_eq(helper._last_debug_status_reply.state.process_ticks, 7)
+	helper._process(0.016)
+	assert_eq(helper._mcp_runtime_process_ticks, 8,
+		"each helper _process call advances the verification counter exactly once")
+	helper.free()
+
+
+func test_debug_status_suspend_signal_ignores_pause_and_user_time_scale() -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null:
+		skip("No SceneTree available")
+		return
+	var helper := GameHelper.new()
+	helper.process_mode = Node.PROCESS_MODE_ALWAYS
+	tree.root.add_child(helper)
+	var was_paused := tree.paused
+	var was_time_scale := Engine.time_scale
+	tree.paused = true
+	Engine.time_scale = 0.0
+	var state: Dictionary = helper._debug_status_snapshot()
+	var can_process_without_suspend := helper.can_process()
+	Engine.time_scale = was_time_scale
+	tree.paused = was_paused
+	helper.free()
+	assert_true(can_process_without_suspend,
+		"PROCESS_MODE_ALWAYS stays processable through pause and user time_scale=0")
+	assert_false(state.suspended,
+		"debugger suspension must not be inferred from pause or project-writable time scale")
+	assert_true(state.tree_paused)
+	assert_eq(state.time_scale, 0.0)
+
+
 func test_rendering_appears_stalled_false_before_first_advance() -> void:
 	## A game that has never presented (booting, render-less) has no
 	## trustworthy frame — the -1 sentinel must read as NOT render-stalled so
