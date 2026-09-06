@@ -572,6 +572,20 @@ class StubClient:
                 "size": {"x": 2.0, "y": 1.0, "z": 1.0},
                 "undoable": True,
             }
+        if command == "physics_shape_generate":
+            return {
+                "created": [
+                    {
+                        "mesh_path": path,
+                        "body_path": f"{path}Collider",
+                        "shape_path": f"{path}Collider/CollisionShape3D",
+                        "shape_type": params.get("shape_type", "box"),
+                        "body_type": params.get("body_type", "static"),
+                    }
+                    for path in params.get("paths", [])
+                ],
+                "undoable": True,
+            }
         if command == "create_resource":
             if params.get("resource_path"):
                 return {
@@ -3505,6 +3519,57 @@ async def test_physics_shape_autofit_requires_writable():
     runtime = DirectRuntime(registry=registry, client=client)
     with pytest.raises(GodotCommandError):
         await physics_shape_handlers.physics_shape_autofit(runtime, path="/Main/Body/Collision")
+
+
+async def test_physics_shape_generate_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await physics_shape_handlers.physics_shape_generate(
+        runtime,
+        paths=["/Main/Body", "/Main/Wing"],
+        shape_type="sphere",
+        body_type="area",
+    )
+    assert result["created"][0]["shape_type"] == "sphere"
+    assert result["created"][0]["body_type"] == "area"
+    assert client.calls[-1]["command"] == "physics_shape_generate"
+    assert client.calls[-1]["params"] == {
+        "paths": ["/Main/Body", "/Main/Wing"],
+        "shape_type": "sphere",
+        "body_type": "area",
+    }
+    assert client.calls[-1]["timeout"] == physics_shape_handlers.PHYSICS_SHAPE_GENERATE_TIMEOUT_SEC
+
+
+async def test_physics_shape_generate_defaults():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
+    assert client.calls[-1]["params"] == {
+        "paths": ["/Main/Body"],
+        "shape_type": "box",
+        "body_type": "static",
+    }
+
+
+async def test_physics_shape_generate_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    client.live_readiness = "importing"
+    session = Session(
+        session_id="s1",
+        godot_version="4.5",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
 
 
 async def test_resource_create_requires_writable():
