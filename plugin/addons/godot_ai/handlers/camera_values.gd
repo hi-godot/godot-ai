@@ -110,10 +110,10 @@ static func coerce(property: String, value: Variant, target_type: int) -> Dictio
 				return {"ok": true, "value": int(value)}
 			return {"ok": false, "error": "Expected int for %s" % property}
 		TYPE_FLOAT:
-			if value is float:
-				return {"ok": true, "value": value}
-			if value is int:
-				return {"ok": true, "value": float(value)}
+			## Canonical scalar parser (#964): numeric strings coerce too.
+			var parsed: Variant = McpJsonValues.parse_float(value)
+			if parsed != null:
+				return {"ok": true, "value": parsed}
 			return {"ok": false, "error": "Expected number for %s" % property}
 		TYPE_STRING:
 			return {"ok": true, "value": String(value)}

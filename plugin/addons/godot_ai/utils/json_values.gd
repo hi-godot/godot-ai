@@ -88,5 +88,21 @@ static func parse_vector3(value: Variant) -> Variant:
 	return null
 
 
+## Parse a scalar float from the wire shapes agents send: float passthrough,
+## int (JSON integers land as numbers, not strings), and strictly-numeric
+## strings — some MCP clients stringify float arguments ("4.0"; #964).
+## Anything else returns null so callers turn it into their own typed
+## error; null input stays null (callers gate on the input's type first
+## when null is a meaningful "clear" value).
+static func parse_float(value: Variant) -> Variant:
+	if _is_number(value):
+		return float(value)
+	if value is String:
+		var text := value as String
+		if text.is_valid_float():
+			return text.to_float()
+	return null
+
+
 static func _is_number(v: Variant) -> bool:
 	return v is int or v is float

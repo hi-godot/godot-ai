@@ -374,8 +374,12 @@ static func coerce_for_type(value: Variant, prop_type: int, prop_name: String) -
 				return {"ok": v3}
 			return {"error": "Cannot coerce value to Vector3 for property '%s' (expected {x,y,z}, [x,y,z], or Vector3)" % prop_name}
 		TYPE_FLOAT:
-			if value is int or value is float:
-				return {"ok": float(value)}
+			## Canonical scalar parser (#964): int/float passthrough plus
+			## strictly-numeric strings. Null falls through to the generic
+			## passthrough below, matching the old behavior for garbage.
+			var parsed: Variant = McpJsonValues.parse_float(value)
+			if parsed != null:
+				return {"ok": parsed}
 		TYPE_INT:
 			if value is float or value is int:
 				return {"ok": int(value)}

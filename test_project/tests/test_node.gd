@@ -561,6 +561,47 @@ func test_set_property_float() -> void:
 	assert_true(editor_undo(_undo_redo), "undo should succeed")
 
 
+func test_set_property_float_accepts_numeric_string() -> void:
+	## #964: MCP clients that stringify float arguments ("4.0") used to hit
+	## "Cannot write String to a float property". Strictly-numeric strings
+	## must coerce and land — read back the stored Variant, not just status.
+	var result := _handler.set_property({
+		"path": "/Main/Camera3D",
+		"property": "fov",
+		"value": "75.5",
+	})
+	assert_has_key(result, "data")
+	var cam := EditorInterface.get_edited_scene_root().get_node("Camera3D") as Camera3D
+	assert_eq(cam.fov, 75.5, "numeric string must land as the float value")
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+
+
+func test_set_property_float_rejects_non_numeric_string() -> void:
+	## #964 negative guard: only strictly-numeric strings coerce — garbage
+	## still returns the typed WRONG_TYPE error instead of silently
+	## writing 0.0 or null.
+	var cam := EditorInterface.get_edited_scene_root().get_node("Camera3D") as Camera3D
+	var original := cam.fov
+	var result := _handler.set_property({
+		"path": "/Main/Camera3D",
+		"property": "fov",
+		"value": "ninety",
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_eq(cam.fov, original, "fov must be unchanged after a rejected coerce")
+
+
+func test_coerce_value_float_from_numeric_string() -> void:
+	## #964 regression at the coercer boundary: a valid string coerces to a
+	## real float; garbage flows through unchanged so _check_coerced flags it.
+	var coerced = NodeHandler._coerce_value("4.0", TYPE_FLOAT)
+	assert_true(coerced is float, "numeric string must coerce to float")
+	assert_eq(coerced, 4.0)
+	var garbage = NodeHandler._coerce_value("4.0.1", TYPE_FLOAT)
+	assert_true(garbage is String, "unparseable string must flow through unchanged")
+	assert_is_error(NodeHandler._check_coerced(garbage, TYPE_FLOAT), ErrorCodes.WRONG_TYPE)
+
+
 func test_set_property_missing_property() -> void:
 	var result := _handler.set_property({"path": "/Main/Camera3D", "value": 10})
 	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)

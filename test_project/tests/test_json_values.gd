@@ -81,6 +81,32 @@ func test_vector3_rejects_wrong_shapes() -> void:
 	assert_eq(McpJsonValues.parse_vector3({"x": 1, "y": 2, "z": "3"}), null)
 
 
+# ----- parse_float -----
+
+func test_float_passthrough_int_and_numeric_string() -> void:
+	## #964: some MCP clients stringify float arguments; the canonical
+	## scalar parser accepts them alongside ints and floats.
+	assert_eq(McpJsonValues.parse_float(4.5), 4.5)
+	assert_eq(McpJsonValues.parse_float(4), 4.0)
+	assert_true(McpJsonValues.parse_float(4) is float, "int input must land as float, not int")
+	assert_eq(McpJsonValues.parse_float("4.0"), 4.0)
+	assert_eq(McpJsonValues.parse_float("4"), 4.0)
+	assert_eq(McpJsonValues.parse_float("-2.5"), -2.5)
+	assert_eq(McpJsonValues.parse_float("1e2"), 100.0)
+
+
+func test_float_rejects_non_numeric_and_wrong_shapes() -> void:
+	## Strict contract: garbage returns null (never a silent 0.0) so
+	## callers turn it into their own typed error.
+	assert_eq(McpJsonValues.parse_float("4.0.1"), null)
+	assert_eq(McpJsonValues.parse_float("not-a-number"), null)
+	assert_eq(McpJsonValues.parse_float(""), null)
+	assert_eq(McpJsonValues.parse_float(true), null)
+	assert_eq(McpJsonValues.parse_float([4.0]), null)
+	assert_eq(McpJsonValues.parse_float({"x": 4}), null)
+	assert_eq(McpJsonValues.parse_float(null), null)
+
+
 # ----- delegation spot checks: the handler copies now share one parser -----
 
 func test_material_theme_parsers_accept_arrays() -> void:
@@ -109,3 +135,22 @@ func test_animation_serialize_value_round_trips_quaternion() -> void:
 	assert_true(serialized is Dictionary, "Quaternion must serialize to a dict, not str()")
 	assert_true(abs(float(serialized.x) - 0.1) < 0.0001)
 	assert_true(abs(float(serialized.w) - 0.9273618) < 0.0001)
+
+
+func test_handler_float_coercers_accept_numeric_strings() -> void:
+	## #964 delegation: every float-coercing handler accepts the same
+	## strictly-numeric strings through the canonical parser.
+	var cam_script := preload("res://addons/godot_ai/handlers/camera_values.gd")
+	var cam: Dictionary = cam_script.coerce("fov", "4.0", TYPE_FLOAT)
+	assert_true(cam.ok, "camera float coercion must accept numeric strings")
+	assert_eq(cam.value, 4.0)
+	var mat_script := preload("res://addons/godot_ai/handlers/material_values.gd")
+	var mat: Dictionary = mat_script.coerce_material_value("metallic", "0.5", TYPE_FLOAT)
+	assert_true(mat.ok, "material float coercion must accept numeric strings")
+	assert_eq(mat.value, 0.5)
+	var anim_script := preload("res://addons/godot_ai/handlers/animation_values.gd")
+	var anim: Dictionary = anim_script.coerce_for_type("2.5", TYPE_FLOAT, "value")
+	assert_eq(anim.get("ok"), 2.5, "animation float coercion must accept numeric strings")
+	var audio_script := preload("res://addons/godot_ai/handlers/audio_handler.gd")
+	var audio: Variant = audio_script._coerce_playback_value("0.8", TYPE_FLOAT)
+	assert_eq(audio, 0.8, "audio float coercion must accept numeric strings")
