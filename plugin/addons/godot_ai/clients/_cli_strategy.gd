@@ -159,7 +159,9 @@ static func check_status_details(
 	## Server registered, but pointing somewhere else — drift after a
 	## port change. Surface as mismatch so the dock offers Reconfigure.
 	if text.find(expected_target) < 0:
-		return _status_details(McpClient.Status.CONFIGURED_MISMATCH)
+		return _status_details(
+			McpClient.Status.CONFIGURED_MISMATCH, "", _probe_output_launches_godot_ai(text)
+		)
 	return _status_details(McpClient.Status.CONFIGURED)
 
 
@@ -175,8 +177,10 @@ static func command_launch_error(client: McpClient, launch: Dictionary) -> Strin
 	return ""
 
 
-static func _status_details(status: McpClient.Status, error_msg: String = "") -> Dictionary:
-	return {"status": status, "error_msg": error_msg}
+static func _status_details(
+	status: McpClient.Status, error_msg: String = "", owned: bool = false
+) -> Dictionary:
+	return {"status": status, "error_msg": error_msg, "owned": owned}
 
 
 static func remove(client: McpClient, server_name: String) -> Dictionary:
@@ -345,6 +349,18 @@ static func _scope_from_probe_output(text: String) -> String:
 	return ""
 
 
+## The probe output names our server; only its launch fields decide whether
+## the existing entry is ours to rewrite after an update.
+static func _probe_output_launches_godot_ai(text: String) -> bool:
+	return McpClient.launch_mentions_godot_ai(
+		_field_from_probe_output(text, "Command:")
+		+ " "
+		+ _field_from_probe_output(text, "Args:")
+		+ " "
+		+ _field_from_probe_output(text, "URL:")
+	)
+
+
 static func _field_from_probe_output(text: String, label: String) -> String:
 	for raw_line in text.split("\n"):
 		var line := String(raw_line).strip_edges()
@@ -397,7 +413,9 @@ static func _scope_probe_verdict(
 			and _field_from_probe_output(text, "Args:") == " ".join(expected_args)
 		)
 	if not command_matches or not launch_details_match:
-		var drifted := _status_details(McpClient.Status.CONFIGURED_MISMATCH)
+		var drifted := _status_details(
+			McpClient.Status.CONFIGURED_MISMATCH, "", _probe_output_launches_godot_ai(text)
+		)
 		if not resolved.is_empty():
 			drifted["resolved_scope"] = resolved
 		return drifted
@@ -407,6 +425,7 @@ static func _scope_probe_verdict(
 		var details := _status_details(
 			McpClient.Status.CONFIGURED_MISMATCH,
 			"registered at %s scope, not %s" % [resolved, expected_scope],
+			_probe_output_launches_godot_ai(text),
 		)
 		details["resolved_scope"] = resolved
 		return details

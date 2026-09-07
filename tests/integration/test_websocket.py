@@ -1598,7 +1598,10 @@ class TestSecureV4Handshake:
         assert exc_info.value.rcvd.code == 1008
 
     async def test_absolute_deadline_covers_second_client_frame(self, harness, monkeypatch):
-        monkeypatch.setattr(websocket_transport, "DEFAULT_HANDSHAKE_TIMEOUT_SECONDS", 0.05)
+        # Long enough for hello and challenge to round-trip on a loaded CI
+        # runner (a 50 ms deadline closed the socket before the challenge was
+        # read on Windows), short enough that the close below is the deadline.
+        monkeypatch.setattr(websocket_transport, "DEFAULT_HANDSHAKE_TIMEOUT_SECONDS", 0.5)
         ws = await websockets.connect(f"ws://127.0.0.1:{harness.port}")
         nonce = await send_auth_hello(ws)
         await receive_auth_challenge(
@@ -1609,7 +1612,7 @@ class TestSecureV4Handshake:
         ## Never send auth_response: the same deadline that covered hello and
         ## challenge must close this half-authenticated socket.
         with pytest.raises(websockets.ConnectionClosed) as exc_info:
-            await asyncio.wait_for(ws.recv(), timeout=1.0)
+            await asyncio.wait_for(ws.recv(), timeout=3.0)
         assert exc_info.value.rcvd.code == 1008
         assert len(harness.registry) == 0
 

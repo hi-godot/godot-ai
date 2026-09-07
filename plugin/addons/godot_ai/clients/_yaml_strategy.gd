@@ -94,7 +94,11 @@ static func check_status_details(
 		return {"status": McpClient.Status.ERROR, "error_msg": launch_error}
 	if verify_entry(client, entry, server_url, launch):
 		return {"status": McpClient.Status.CONFIGURED, "error_msg": ""}
-	return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+	return {
+		"status": McpClient.Status.CONFIGURED_MISMATCH,
+		"error_msg": "",
+		"owned": McpClient.launch_mentions_godot_ai(McpClient.entry_launch_text(entry)),
+	}
 
 
 static func remove(client: McpClient, server_name: String) -> Dictionary:

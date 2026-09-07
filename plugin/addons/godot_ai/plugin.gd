@@ -804,6 +804,11 @@ func _on_post_update_repin_completed(result: Dictionary) -> void:
 	if not bool(result.get("ok", false)):
 		_present_post_update_barrier_failure(str(result.get("error", "Client migration failed.")))
 		return
+	for client_id in result.get("foreign_ids", []):
+		push_warning(
+			"MCP | the %s entry named godot-ai launches something else; it was left unchanged. Use Configure in the dock to replace it."
+			% str(client_id)
+		)
 	## A click cannot prove that an external client restarted. The enforceable
 	## boundary is the one we own: repin its configuration, mark the update
 	## complete, then start and authenticate that server. Clients reconnect to
@@ -1464,7 +1469,7 @@ func install_downloaded_update(package: Dictionary) -> void:
 		UpdateInstaller.discard_stage()
 		_fail_update("Update cancelled safely", "command workers refused update quiescence")
 		if bool(script_quiesced.get("reload_required", false)):
-			_reload_plugin_after_failed_update.call_deferred()
+			_reload_plugin_after_failed_update()
 		return
 	_on_update_install_state_changed({
 		"install_in_flight": true,
@@ -1484,7 +1489,18 @@ func install_downloaded_update(package: Dictionary) -> void:
 		str(staged.get("stage_root", "")), LIVE_ADDON_ROOT, record
 	)
 	if not bool(swapped.get("ok", false)):
-		_fail_update("Update failed — previous version kept", "update swap refused: %s" % str(swapped.get("error", "")))
+		var refused := "update swap refused: %s" % str(swapped.get("error", ""))
+		if not FileAccess.file_exists(PLUGIN_CFG):
+			_fail_update(
+				"Update failed — repair required",
+				refused + "; the previous tree is not live: run `script/v4-release install` or restore the backup by hand",
+			)
+			return
+		UpdateInstaller.discard_stage()
+		_fail_update("Update failed — previous version kept", refused)
+		## Quiescence already stopped the server and cleared the dispatcher;
+		## the old tree is still live, so rebuild the plugin from it.
+		_reload_plugin_after_failed_update()
 		return
 	_update_swapped = true
 	## The lock covered download, stage and swap. From here the marker itself
@@ -1510,8 +1526,10 @@ func _fail_update(button_text: String, error: String) -> void:
 func _reload_plugin_after_failed_update() -> void:
 	## The signed prepared tree was aborted before mutation. Reconstruct the
 	## unchanged old composition if any later quiescence step had already
-	## stopped vision or released handler references.
-	PluginReload.reload_enabled_plugin()
+	## stopped vision or released handler references. The reload frees this
+	## plugin, so it must not run on one of this plugin's own frames: defer
+	## the static call itself, not a method of this instance.
+	PluginReload.reload_enabled_plugin.call_deferred()
 
 
 func can_recover_incompatible_server() -> bool:

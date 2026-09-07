@@ -192,6 +192,7 @@ def prepare_clean_major_migration_project(
     http_port: int,
     ws_port: int,
     fresh: bool = False,
+    foreign_entry: bool = False,
 ) -> tuple[list[str], Path]:
     """Prepare a synthetic pre-v4 project and locally signed clean v4 release.
 
@@ -254,13 +255,16 @@ def prepare_clean_major_migration_project(
         )
         (old_addon / "old_only.gd").write_text("extends RefCounted\n", encoding="utf-8")
         (old_addon / "legacy" / "state.txt").write_text("retained pre-v4 state\n", encoding="utf-8")
-    write_owned_codex_pin(
-        codex_home,
-        command=fake_uvx,
-        version=from_version,
-        http_port=http_port,
-        ws_port=ws_port,
-    )
+    if foreign_entry:
+        write_foreign_codex_entry(codex_home)
+    else:
+        write_owned_codex_pin(
+            codex_home,
+            command=fake_uvx,
+            version=from_version,
+            http_port=http_port,
+            ws_port=ws_port,
+        )
     argv = clean_major_install_argv(
         smoke.smoke_python(),
         bundle=bundle,
@@ -363,6 +367,25 @@ def write_owned_codex_pin(
             "enabled = true\n"
             "startup_timeout_sec = 60\n"
             "tool_timeout_sec = 360\n"
+        ),
+        encoding="utf-8",
+    )
+
+
+FOREIGN_CODEX_COMMAND = "/usr/bin/python3"
+FOREIGN_CODEX_ARGS = ("my_own_mcp_server.py", "--port", "4242")
+
+
+def write_foreign_codex_entry(codex_home: Path) -> None:
+    """An entry under our server name that launches the user's own server."""
+    codex_home.mkdir(parents=True, exist_ok=True)
+    encoded_args = ", ".join(json.dumps(value) for value in FOREIGN_CODEX_ARGS)
+    (codex_home / "config.toml").write_text(
+        (
+            '[mcp_servers."godot-ai"]\n'
+            f"command = {json.dumps(FOREIGN_CODEX_COMMAND)}\n"
+            f"args = [{encoded_args}]\n"
+            "enabled = true\n"
         ),
         encoding="utf-8",
     )
@@ -742,6 +765,118 @@ def remove_configure_client_driver(project_dir: Path) -> None:
     (project_dir / "_test_configure_client.gd").unlink()
 
 
+REFUSED_SWAP_STATUS_FILE = "_test_refused_swap_status.json"
+REFUSED_SWAP_TOOL_PROBE_FILE = "_test_refused_swap_probe.done"
+
+
+def write_refused_swap_driver(project_dir: Path, *, http_port: int, base_version: str) -> None:
+    """Click Update knowing the swap will be refused, then prove A serves again.
+
+    The harness leaves a backup directory for the base version in place, so
+    the installer refuses the swap after quiescence stopped the server and
+    cleared the dispatcher. The driver then waits for the plugin the refusal
+    rebuilt, the same server version, an HTTP status, and the harness's
+    authenticated tool probe.
+    """
+    write_driver_support(project_dir)
+    (project_dir / "_test_runner_driver.gd").write_text(
+        f"""@tool
+extends Node
+
+const BASE_VERSION := "{base_version}"
+const HTTP_PORT := {http_port}
+const STATUS_PATH := "res://{REFUSED_SWAP_STATUS_FILE}"
+const TOOL_PROBE_DONE_PATH := "res://{REFUSED_SWAP_TOOL_PROBE_FILE}"
+const DriverSupport := preload("res://_test_self_update_driver_support.gd")
+const START_AFTER_FRAMES := 45
+const DEADLINE_MS := 240000
+
+var _frames := 0
+var _deadline_ms := 0
+var _clicked := false
+var _clicked_plugin_id := 0
+var _status_written := false
+var _finished := false
+
+
+func _ready() -> void:
+\tif not Engine.is_editor_hint():
+\t\tqueue_free()
+\t\treturn
+\t_deadline_ms = Time.get_ticks_msec() + DEADLINE_MS
+\tset_process(true)
+
+
+func _process(_delta: float) -> void:
+\tif _finished:
+\t\treturn
+\t_frames += 1
+\tif _frames < START_AFTER_FRAMES:
+\t\treturn
+\tif Time.get_ticks_msec() > _deadline_ms:
+\t\t_fail(31, "refused-swap scenario timed out")
+\t\treturn
+\tvar plugin := DriverSupport.find_godot_ai_plugin()
+\tif plugin == null:
+\t\treturn
+\tif not _clicked:
+\t\tif not _serving_base(plugin):
+\t\t\treturn
+\t\tvar manager: Variant = plugin.get("_update_manager")
+\t\tif manager == null or not manager.has_install_candidate():
+\t\t\treturn
+\t\t_clicked = true
+\t\t_clicked_plugin_id = plugin.get_instance_id()
+\t\tprint("REFUSED_SWAP_TEST | clicked Update with a backup collision in place")
+\t\tplugin.call("_on_dock_update_requested")
+\t\treturn
+\t## The refusal rebuilds the plugin: only a new instance counts.
+\tif plugin.get_instance_id() == _clicked_plugin_id:
+\t\treturn
+\tif not _status_written:
+\t\tif not _serving_base(plugin):
+\t\t\treturn
+\t\tvar cfg := ConfigFile.new()
+\t\tvar loaded := cfg.load("res://addons/godot_ai/plugin.cfg") == OK
+\t\tif not loaded or str(cfg.get_value("plugin", "version", "")) != BASE_VERSION:
+\t\t\t_fail(32, "live tree changed after the refused swap")
+\t\t\treturn
+\t\tvar payload := DriverSupport.fetch_status(HTTP_PORT)
+\t\tif payload.get("name") != "godot-ai" or str(payload.get("server_version", "")) != BASE_VERSION:
+\t\t\treturn
+\t\tvar file := FileAccess.open(STATUS_PATH, FileAccess.WRITE)
+\t\tif file == null:
+\t\t\t_fail(33, "failed to write refused-swap status snapshot")
+\t\t\treturn
+\t\tfile.store_string(JSON.stringify(payload))
+\t\tfile.close()
+\t\t_status_written = true
+\t\tprint("REFUSED_SWAP_TEST | old runtime serves again after the refused swap")
+\t\treturn
+\tif FileAccess.file_exists(TOOL_PROBE_DONE_PATH):
+\t\tprint("REFUSED_SWAP_TEST | authenticated tool probe completed after the refused swap")
+\t\t_finished = true
+\t\tget_tree().quit(0)
+
+
+func _serving_base(plugin: EditorPlugin) -> bool:
+\tvar lifecycle := plugin.call("get_server_status") as Dictionary
+\treturn (
+\t\tstr(lifecycle.get("episode_state", "")) == "READY"
+\t\tand str(lifecycle.get("ready_kind", "")) == "owned"
+\t\tand str(lifecycle.get("actual_version", "")) == BASE_VERSION
+\t)
+
+
+func _fail(code: int, message: String) -> void:
+\tpush_error("REFUSED_SWAP_TEST | %s" % message)
+\t_finished = true
+\tget_tree().quit(code)
+""",
+        encoding="utf-8",
+    )
+
+
 def write_install_update_driver(
     project_dir: Path,
     *,
@@ -1036,13 +1171,17 @@ static func _read_capability(port: int) -> Dictionary:
 
 
 static func client_config_has_pin(version: String) -> bool:
+\treturn client_config_text().contains("godot-ai==%s" % version)
+
+
+static func client_config_text() -> String:
 \tvar home := OS.get_environment("CODEX_HOME")
 \tif home.is_empty():
-\t\treturn false
+\t\treturn ""
 \tvar path := home.path_join("config.toml")
-\treturn FileAccess.file_exists(path) and FileAccess.get_file_as_string(path).contains(
-\t\t"godot-ai==%s" % version
-\t)
+\tif not FileAccess.file_exists(path):
+\t\treturn ""
+\treturn FileAccess.get_file_as_string(path)
 
 
 static func find_godot_ai_plugin() -> EditorPlugin:
@@ -1072,9 +1211,18 @@ static func _walk_plugin(node: Node) -> EditorPlugin:
 
 
 def write_clean_major_driver(
-    project_dir: Path, *, http_port: int, from_version: str, target_version: str
+    project_dir: Path,
+    *,
+    http_port: int,
+    from_version: str,
+    target_version: str,
+    foreign_entry: bool = False,
 ) -> None:
-    """Confirm the marker barrier, then prove the first v4 server and tools."""
+    """Confirm the marker barrier, then prove the first v4 server and tools.
+
+    With ``foreign_entry`` the Codex entry launches the user's own server and
+    must come through the migration untouched.
+    """
     write_driver_support(project_dir)
     (project_dir / "_test_runner_driver.gd").write_text(
         f"""@tool
@@ -1082,6 +1230,8 @@ extends Node
 
 const FROM_VERSION := "{from_version}"
 const TARGET_VERSION := "{target_version}"
+const FOREIGN_ENTRY := {"true" if foreign_entry else "false"}
+const FOREIGN_COMMAND := {json.dumps(FOREIGN_CODEX_COMMAND)}
 const HTTP_PORT := {http_port}
 const MARKER_PATH := "res://{CLEAN_MAJOR_MARKER_RELATIVE.as_posix()}"
 const STATUS_PATH := "res://{CLEAN_MAJOR_STATUS_FILE}"
@@ -1155,14 +1305,25 @@ func _observe_automatic_migration(plugin: EditorPlugin) -> void:
 \tif not _installed_tree_is_target():
 \t\t_fail(26, "installed add-on is not the clean v4 target")
 \t\treturn
-\tif (
+\tif FOREIGN_ENTRY:
+\t\tvar config_text := DriverSupport.client_config_text()
+\t\tif (
+\t\t\tDriverSupport.client_config_has_pin(TARGET_VERSION)
+\t\t\tor not config_text.contains(FOREIGN_COMMAND)
+\t\t):
+\t\t\t_fail(27, "foreign Codex entry was rewritten by the migration")
+\t\t\treturn
+\t\tprint("CLEAN_MAJOR_TEST | migration completed automatically")
+\t\tprint("CLEAN_MAJOR_TEST | foreign Codex entry left unchanged")
+\telif (
 \t\tnot DriverSupport.client_config_has_pin(TARGET_VERSION)
 \t\tor DriverSupport.client_config_has_pin(FROM_VERSION)
 \t):
 \t\t_fail(27, "owned Codex entry was not repinned from pre-v4 to v4")
 \t\treturn
-\tprint("CLEAN_MAJOR_TEST | migration completed automatically")
-\tprint("CLEAN_MAJOR_TEST | repinned owned Codex command pin=%s" % TARGET_VERSION)
+\telse:
+\t\tprint("CLEAN_MAJOR_TEST | migration completed automatically")
+\t\tprint("CLEAN_MAJOR_TEST | repinned owned Codex command pin=%s" % TARGET_VERSION)
 \t_migration_observed = true
 \t_status_wait_started_ms = Time.get_ticks_msec()
 

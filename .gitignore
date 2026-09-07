@@ -74,3 +74,4 @@ _stormtest/
 
 # Self-update smoke-test artifact dropped into the test project
 test_project/godot-ai-LICENSE.txt
+mcp-server.log

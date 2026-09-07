@@ -199,3 +199,34 @@ still repins owned client entries to the installed version before serving.
   command exercises the refusal instead: the capsule refuses v4, restores
   final v3 in place, and the harness verifies that restored tree rather than
   waiting for a restart.
+
+## Known limits (4.0.0)
+
+These are accepted for 4.0.0 after an independent review; each has a manual
+route and none has field incidence yet.
+
+- **A replacement tree that does not load cannot recover itself.** Recovery
+  runs inside the new tree's own `plugin.gd`, after signature, hash and
+  inventory checks passed. A signed release whose scripts fail to parse on the
+  user's Godot leaves the marker `swapped` with the previous tree intact under
+  `addons/.godot_ai_update/backup/<version>/`. Recovery is manual: run
+  `script/v4-release install` with a good release, or move the backup back
+  over `addons/godot_ai/`. A pre-swap load check or a bootstrap outside the
+  tree would remove this limit at the cost of another maintained component.
+- **The two-rename swap has crash windows.** A crash between the renames
+  leaves no live tree and no new marker; a crash after the second rename but
+  before the marker leaves an unverified replacement. Both are seconds wide and
+  both leave the backup intact. Durable pre-swap intent is a follow-up.
+- **Port handoff is bounded retry, not a guarantee.** The replacement binds as
+  soon as the incumbent releases the port, but a third listener can win that
+  race. The lifecycle retries replacement a bounded number of times and then
+  reports the occupant; the dock's Replace button remains the manual route.
+- **Signed qualification-only candidates are signed with the release key.**
+  Publication is bound to a qualification run, but the plugin's verifier does
+  not distinguish a retained candidate from a published release of the same
+  version. Whether to separate those identities cryptographically is an open
+  security decision, recorded here rather than decided in a patch.
+- **Foreign client entries are reported, not migrated.** A client entry under
+  our name that launches something other than Godot AI is left untouched by
+  the post-update migration and named in the editor output; replacing it is an
+  explicit Configure from the dock.

@@ -33,6 +33,11 @@ func _enter_tree() -> void:
 	if not prior.is_empty():
 		_present_error(str(prior.get("error", "The previous migration attempt did not finish.")))
 		return
+	if not _editor_available():
+		## Headless imports and exports must never mutate the tree, not even
+		## to restore final v3; the next interactive start handles it.
+		_present_state(EDITOR_REQUIRED, true, false)
+		return
 	if not _meets_floor():
 		print(FLOOR_REFUSAL)
 		## The user's updater already overlaid the capsule over their v3 tree.
@@ -45,9 +50,6 @@ func _enter_tree() -> void:
 			fallback.start()
 			return
 		_present_state(FLOOR_MESSAGE, true, false)
-		return
-	if not _editor_available():
-		_present_state(EDITOR_REQUIRED, true, false)
 		return
 	_start_migration.call_deferred()
 
