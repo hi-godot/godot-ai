@@ -1,0 +1,45 @@
+
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                                                                              │
+│                         ▄▀▀ ▄▀█ █▀▀ ▀█▀ █▀▄▀█ █▀▀ █▀█                        │
+│                         █▀  █▀█ ▄▄█  █  █ ▀ █ █▄▄ █▀▀                        │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                FastMCP 3.4.7                                 │
+│                            https://gofastmcp.com                             │
+│                                                                              │
+│                  🖥  Server:      Godot AI, 4.0.0                             │
+│                  🚀 Deploy free: https://horizon.prefect.io                  │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                          🎉 Update available: 4.0.3                          │
+│                      Run: pip install --upgrade fastmcp                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+godot_ai.server | WebSocket server starting on port 9500
+godot_ai.transport.websocket | Starting WebSocket server on port 9500
+websockets.server | server listening on 127.0.0.1:9500
+[09/06/26 18:48:14] INFO     Starting MCP server 'Godot AI'     transport.py:361
+                             with transport 'streamable-http'                   
+                             on http://127.0.0.1:8000/mcp                       
+INFO:     Started server process [30171]
+INFO:     Waiting for application startup.
+mcp.server.streamable_http_manager | StreamableHTTP session manager started
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+mcp.server.streamable_http_manager | Created new transport with session ID: 36cc4ada762d47a08bb6d732a6a41eb2
+mcp.server.lowlevel.server | Processing request of type CallToolRequest
+godot-ai-telemetry | Telemetry disabled
+websockets.server | connection open
+godot_ai.transport.websocket | Session connected: test-project@73eef376bad375d4 (pid=30176, Godot 4.7-beta3 (official), /Users/davidsarno/godot-ai/.claude/worktrees/lean-updater/test_project/)
+godot_ai.transport.websocket | Session test-pro: custom tools -> 0 registered (0 enabled)
+godot_ai.transport.websocket | Session test-pro opted this server out of telemetry for the rest of its life; restart it to re-enable.
+godot_ai.transport.websocket | Session test-pro: scene changed to res://main.tscn
+mcp.server.lowlevel.server | Processing request of type CallToolRequest
+mcp.server.lowlevel.server | Processing request of type CallToolRequest
+mcp.server.lowlevel.server | Processing request of type CallToolRequest

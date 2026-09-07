@@ -144,8 +144,13 @@ def _install_clean_major_fixture(
     target_version: str,
     http_port: int = LIVE_HTTP_PORT,
     ws_port: int = LIVE_WS_PORT,
+    fresh: bool = False,
 ) -> tuple[Path, Path]:
-    """Run the closed-editor installer over a synthetic pre-v4 project."""
+    """Run the closed-editor installer over a synthetic pre-v4 project.
+
+    ``fresh`` installs into a project without an add-on: the marker then
+    names no previous version and retains no backup.
+    """
     from_version = "3.2.4"
     project = tmp_path / "clean-major-migration"
     isolated = tmp_path / "clean-major-environment"
@@ -156,6 +161,7 @@ def _install_clean_major_fixture(
         target_version=target_version,
         http_port=http_port,
         ws_port=ws_port,
+        fresh=fresh,
     )
     write_clean_major_driver(
         project,
@@ -164,7 +170,7 @@ def _install_clean_major_fixture(
         target_version=target_version,
     )
     old_addon = project / "addons" / "godot_ai"
-    old_tree = _tree_bytes(old_addon)
+    old_tree = {} if fresh else _tree_bytes(old_addon)
     install_environment = os.environ.copy()
     install_environment["PATH"] = (
         str(project / ".clean-major-smoke" / "fake-bin")
@@ -185,10 +191,15 @@ def _install_clean_major_fixture(
     assert read_plugin_version(old_addon / "plugin.cfg") == target_version
     assert not (old_addon / "old_only.gd").exists()
     state = project / UPDATE_STATE_RELATIVE
-    assert _tree_bytes(state / "backup" / from_version) == old_tree
     marker = json.loads((project / CLEAN_MAJOR_MARKER_RELATIVE).read_text(encoding="utf-8"))
     assert marker["status"] == "success", marker
-    assert marker["from_version"] == from_version
+    if fresh:
+        assert not (state / "backup").exists()
+        assert marker["from_version"] == ""
+        assert marker["backup_root"] == ""
+    else:
+        assert _tree_bytes(state / "backup" / from_version) == old_tree
+        assert marker["from_version"] == from_version
     assert marker["to_version"] == target_version
     assert marker["replace_owned_mismatches"] is True
     assert not (state / "lock.json").exists()
@@ -206,10 +217,31 @@ def test_clean_major_installer_cli_retains_exact_pre_v4_tree(tmp_path: Path) -> 
 
 def test_closed_editor_install_then_first_start_completes_migration(tmp_path: Path) -> None:
     """The first editor start after a closed install repins clients, then serves."""
+    project, marker = _first_start_after_closed_install(tmp_path)
+    assert (project / UPDATE_STATE_RELATIVE / "backup" / "3.2.4" / "old_only.gd").is_file()
+    assert marker["from_version"] == "3.2.4"
+
+
+def test_closed_editor_install_into_fresh_project_then_first_start_serves(
+    tmp_path: Path,
+) -> None:
+    """No add-on before the install: the marker names no previous version.
+
+    This is how the release qualification's runtime row installs candidate A;
+    the first start must still repin the stale owned entry and serve.
+    """
+    project, marker = _first_start_after_closed_install(tmp_path, fresh=True)
+    assert not (project / UPDATE_STATE_RELATIVE / "backup").exists()
+    assert marker["from_version"] == ""
+
+
+def _first_start_after_closed_install(tmp_path: Path, *, fresh: bool = False) -> tuple[Path, dict]:
     godot_bin = godot_bin_or_skip()
     target_version = read_plugin_version(PLUGIN_ROOT / "plugin.cfg")
     http_port, ws_port = allocate_free_ports(2)
-    project, isolated = _install_clean_major_fixture(tmp_path, target_version, http_port, ws_port)
+    project, isolated = _install_clean_major_fixture(
+        tmp_path, target_version, http_port, ws_port, fresh=fresh
+    )
     environment, capability_dir = _isolated_environment(isolated)
     environment["PATH"] = (
         str(project / ".clean-major-smoke" / "fake-bin") + os.pathsep + os.environ.get("PATH", "")
@@ -247,11 +279,11 @@ def test_closed_editor_install_then_first_start_completes_migration(tmp_path: Pa
     marker = json.loads((project / CLEAN_MAJOR_MARKER_RELATIVE).read_text(encoding="utf-8"))
     assert marker["status"] == "success", marker
     assert marker["clients_migrated"] is True, marker
-    assert (project / UPDATE_STATE_RELATIVE / "backup" / "3.2.4" / "old_only.gd").is_file()
     assert not (project / UPDATE_STATE_RELATIVE / "lock.json").exists()
     assert (project / "_test_clean_major_probe.txt").read_text(encoding="utf-8") == (
         "clean major authenticated write\n"
     )
+    return project, marker
 
 
 def _authenticated_tool_probe(
@@ -271,9 +303,7 @@ def _authenticated_tool_probe(
         async with Client(transport, timeout=10, init_timeout=10) as client:
             deadline = asyncio.get_running_loop().time() + 90
             while True:
-                sessions = await client.call_tool(
-                    "session_manage", {"op": "list", "params": {}}
-                )
+                sessions = await client.call_tool("session_manage", {"op": "list", "params": {}})
                 if int(sessions.data.get("count", 0)) > 0:
                     break
                 if asyncio.get_running_loop().time() >= deadline:
@@ -689,7 +719,8 @@ func _process(_delta: float) -> void:
     initial_editor, restarted_editor = read_editor_receipts(project)
     assert initial_editor["pid"] != restarted_editor["pid"], (initial_editor, restarted_editor)
     assert initial_editor["display"] == restarted_editor["display"] == "headless", (
-        initial_editor, restarted_editor
+        initial_editor,
+        restarted_editor,
     )
     assert "Failed to create an autoload" not in log, log
     disable = log.find("MCP | v3 bridge disabling transition plugin")

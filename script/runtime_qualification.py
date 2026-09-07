@@ -37,6 +37,10 @@ MANIFEST_NAME = "release/godot-ai-v4-plugin.manifest.json"
 # The lean updater keeps its marker, lock and retained backup beside the live
 # tree; nothing of it lives outside the project (docs/self-update.md).
 UPDATE_STATE = "addons/.godot_ai_update"
+# EditorInterface.restart_editor forwards explicit display/audio driver options
+# but not the --headless shorthand (Godot 4.7). The update restarts the editor,
+# and the restarted editor must stay headless on a display-less runner.
+HEADLESS_EDITOR_ARGUMENTS = ("--display-driver", "headless", "--audio-driver", "Dummy")
 
 
 def current_python_version() -> str:
@@ -64,6 +68,24 @@ def _free_port(port: int) -> bool:
         except OSError:
             return False
     return True
+
+
+def _editor_command(executable: str | Path, project: Path) -> list[str]:
+    return [str(executable), *HEADLESS_EDITOR_ARGUMENTS, "--editor", "--path", str(project)]
+
+
+def _read_runtime_result(project: Path) -> dict[str, Any]:
+    """The driver writes its report with GDScript's JSON.stringify, not canonically."""
+    result = support.read_json(project / "runtime-result.json", canonical_required=False)
+    support.require(type(result) is dict, "runtime driver result is not an object")
+    return result
+
+
+def _wait_for_runtime_result(path: Path, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.is_file():
+        support.require(time.monotonic() < deadline, "the restarted editor did not report a result")
+        time.sleep(0.5)
 
 
 def _wait_for_ports_free(*ports: int, timeout: float = 15.0) -> None:
@@ -244,6 +266,8 @@ extends Node
 const VERSION_A := "@VERSION_A@"
 const VERSION_B := "@VERSION_B@"
 const DEADLINE_MS := 300000
+## The update restarts the editor; the restarted driver resumes from here.
+const PROGRESS_PATH := "res://runtime-progress.json"
 var deadline := 0
 var started := false
 var old_instance := ""
@@ -255,6 +279,11 @@ func _ready() -> void:
     if OS.get_environment("GODOT_AI_RUNTIME_QUALIFICATION_PARSE_ONLY") == "1":
         get_tree().quit(0)
         return
+    if FileAccess.file_exists(PROGRESS_PATH):
+        var progress: Variant = JSON.parse_string(FileAccess.get_file_as_string(PROGRESS_PATH))
+        if progress is Dictionary:
+            started = bool(progress.get("started", false))
+            old_instance = str(progress.get("old_instance", ""))
     deadline = Time.get_ticks_msec() + DEADLINE_MS
     set_process(true)
 
@@ -275,6 +304,12 @@ func _process(_delta: float) -> void:
             _finish(42, {"error": "candidate A client pin missing"})
             return
         started = true
+        var progress := FileAccess.open(PROGRESS_PATH, FileAccess.WRITE)
+        if progress == null:
+            _finish(43, {"error": "cannot record qualification progress"})
+            return
+        progress.store_string(JSON.stringify({"started": true, "old_instance": old_instance}))
+        progress.close()
         plugin.call("_on_dock_update_requested")
         return
     var config := ConfigFile.new()
@@ -586,7 +621,7 @@ def exact_a_to_b(
                     }
                 )
                 completed = subprocess.run(
-                    [str(executable), "--headless", "--editor", "--path", str(project)],
+                    _editor_command(executable, project),
                     cwd=work,
                     env=environment,
                     capture_output=True,
@@ -599,6 +634,9 @@ def exact_a_to_b(
                     (release.token, index),
                 )
                 support.require(completed.returncode == 0, "real Godot A-to-B update failed")
+                # The swap restarts the editor; the process above exits and
+                # the restarted editor finishes the case and writes the result.
+                _wait_for_runtime_result(project / "runtime-result.json", TIMEOUT_SECONDS)
                 support.require(
                     release.downloads
                     == [
@@ -609,7 +647,7 @@ def exact_a_to_b(
                     "update did not download exactly B's canonical signed triple",
                 )
             _wait_for_ports_free(HTTP_PORT, WS_PORT)
-        result = support.read_json(project / "runtime-result.json")
+        result = _read_runtime_result(project)
         support.require(result.get("status") == "passed", "runtime driver did not pass")
         live = project / "addons/godot_ai"
         support.require(
@@ -710,7 +748,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--python-row", type=Path, required=True)
     parser.add_argument("--godot", default=os.environ.get("GODOT_BIN", "godot"))
-    parser.add_argument("--godot-version", choices=qualification.GODOT_BUILDS, required=True)
+    parser.add_argument(
+        "--godot-version", choices=qualification.RUNTIME_GODOT_VERSIONS, required=True
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--os", choices=support.PLATFORMS, required=True)
     args = parser.parse_args(argv)

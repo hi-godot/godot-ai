@@ -216,10 +216,13 @@ func resume_after_quiesce() -> void:
 func begin_post_update_repin(
 	from_version: String, to_version: String, replace_owned_mismatches: bool = false
 ) -> Dictionary:
+	## `from_version` is empty when the closed-editor installer put v4 into a
+	## project that had no add-on: nothing was replaced, and owned client
+	## entries still repin to the installed version on this first start.
 	var replaced := from_version.strip_edges()
 	var installed := to_version.strip_edges()
-	if replaced.is_empty() or installed.is_empty():
-		return {"ok": false, "error": "Post-update versions are incomplete."}
+	if installed.is_empty():
+		return {"ok": false, "error": "Post-update target version is missing."}
 	if installed != ClientConfigurator.get_plugin_version():
 		return {"ok": false, "error": "Post-update target does not match the loaded plugin."}
 	if MutationLock.is_locked():

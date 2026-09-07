@@ -594,11 +594,29 @@ func test_manual_major_repin_marks_owned_mismatches_replaceable() -> void:
 	owner.free()
 
 
-func test_post_update_repin_rejects_missing_or_wrong_versions() -> void:
+func test_post_update_repin_rejects_a_missing_or_wrong_target() -> void:
 	var owner := _RepinRecordingOwner.new()
-	assert_false(bool(owner.begin_post_update_repin("", "4.0.0").get("ok", true)))
+	assert_false(bool(owner.begin_post_update_repin("3.1.2", "").get("ok", true)))
 	assert_false(bool(owner.begin_post_update_repin("3.1.2", "99.0.0").get("ok", true)))
 	assert_eq(owner._post_update_thread, null)
+	owner.free()
+
+
+## The closed-editor installer records no previous version when it installs
+## into a project without an add-on; that first start still repins.
+func test_fresh_install_repins_without_a_previous_version() -> void:
+	var owner := _RepinRecordingOwner.new()
+	var target := McpClientConfigurator.get_plugin_version()
+	var started := owner.begin_post_update_repin("", target, true)
+	assert_true(bool(started.get("ok", false)), str(started.get("error", "")))
+	while owner._post_update_thread != null and owner._post_update_thread.is_alive():
+		OS.delay_msec(1)
+	owner._poll_post_update_repin()
+	assert_eq(owner.calls, [{
+		"from": "",
+		"to": target,
+		"replace_owned_mismatches": true,
+	}])
 	owner.free()
 
 

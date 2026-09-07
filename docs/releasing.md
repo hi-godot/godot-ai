@@ -27,7 +27,10 @@ those exact bytes:
   3.11, plus one Linux row at Godot 4.7.2, the newest supported engine: one
   real-editor exact A -> B hot update through the private HTTPS
   origin and the retained package index, with the engine executable checked
-  against its reviewed pin.
+  against its reviewed pin. The row launches the editor with explicit headless
+  display and audio drivers rather than `--headless`, because Godot forwards
+  only the explicit options when the update restarts the editor, and it waits
+  for that restarted editor to report the case's result.
 
 `complete-qualification` requires every one of those rows to be present,
 passed, and bound to the same candidate pair; the runtime row's required case
