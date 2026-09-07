@@ -531,3 +531,46 @@ def test_cli_accepts_every_engine_a_required_runtime_row_names(monkeypatch, tmp_
     assert seen == versions
     with pytest.raises(SystemExit):
         runtime.main([*argv[:-4], "--godot-version", "4.7.1", *argv[-4:]])
+
+
+def test_isolated_environment_never_overrides_the_capability_dir_on_windows(monkeypatch, tmp_path):
+    # godot_ai.transport.capability refuses GODOT_AI_CAPABILITY_DIR on Windows,
+    # so the row's own server would exit before publishing capabilities.
+    monkeypatch.setattr(runtime.os, "name", "nt")
+    environment = runtime._isolated_environment(tmp_path / "environment", "http://127.0.0.1:1/")
+    assert "GODOT_AI_CAPABILITY_DIR" not in environment
+    assert environment["LOCALAPPDATA"] == str(tmp_path / "environment" / "local-app-data")
+    monkeypatch.setattr(runtime.os, "name", "posix")
+    environment = runtime._isolated_environment(tmp_path / "posix", "http://127.0.0.1:1/")
+    assert environment["GODOT_AI_CAPABILITY_DIR"] == str(tmp_path / "posix" / "capabilities")
+
+
+def test_runtime_row_accepts_the_extra_engine_row(monkeypatch, tmp_path):
+    candidates = tmp_path / "candidates"
+    python_row = tmp_path / "python-row"
+    (python_row / "packages").mkdir(parents=True)
+    bindings = _stub_candidate_validation(monkeypatch, candidates)
+    monkeypatch.setattr(runtime, "current_python_version", lambda: "3.11")
+    monkeypatch.setattr(runtime.qualification, "dependency_inventory", lambda root: [])
+    (python_row / "row.json").write_bytes(
+        support.canonical(
+            {
+                "kind": "python",
+                "status": "passed",
+                "os": "ubuntu-latest",
+                "python": "3.11",
+                "candidates": bindings,
+                "dependencies": [],
+            }
+        )
+    )
+    monkeypatch.setattr(runtime.engine, "host_row", lambda: "ubuntu-latest")
+
+    def run_case(*args):
+        args[-1].mkdir()
+        return {"status": "passed"}
+
+    monkeypatch.setattr(runtime, "exact_a_to_b", run_case)
+    output = tmp_path / "output"
+    runtime.runtime_row(candidates, python_row, "godot", "4.7.2", output, "ubuntu-latest")
+    assert support.read_json(output / "row.json")["godot_version"] == "4.7.2"

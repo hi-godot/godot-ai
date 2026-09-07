@@ -31,6 +31,7 @@ from tests.integration._self_update_fixture import (
     CLEAN_MAJOR_MARKER_RELATIVE,
     CLEAN_MAJOR_STATUS_FILE,
     CLEAN_MAJOR_TOOL_PROBE_FILE,
+    FOREIGN_CODEX_COMMAND,
     LIVE_HTTP_PORT,
     LIVE_WS_PORT,
     PLUGIN_ROOT,
@@ -38,6 +39,8 @@ from tests.integration._self_update_fixture import (
     POST_UPDATE_STATUS_FILE,
     POST_UPDATE_TOOL_PROBE_FILE,
     PRE_INSTANCE_ID_FILE,
+    REFUSED_SWAP_STATUS_FILE,
+    REFUSED_SWAP_TOOL_PROBE_FILE,
     RESTARTED_EDITOR_LOG,
     UPDATE_STATE_RELATIVE,
     AttachedAgent,
@@ -58,6 +61,7 @@ from tests.integration._self_update_fixture import (
     write_driver_support,
     write_install_update_driver,
     write_post_restart_driver,
+    write_refused_swap_driver,
 )
 
 
@@ -145,6 +149,7 @@ def _install_clean_major_fixture(
     http_port: int = LIVE_HTTP_PORT,
     ws_port: int = LIVE_WS_PORT,
     fresh: bool = False,
+    foreign_entry: bool = False,
 ) -> tuple[Path, Path]:
     """Run the closed-editor installer over a synthetic pre-v4 project.
 
@@ -162,12 +167,14 @@ def _install_clean_major_fixture(
         http_port=http_port,
         ws_port=ws_port,
         fresh=fresh,
+        foreign_entry=foreign_entry,
     )
     write_clean_major_driver(
         project,
         http_port=http_port,
         from_version=from_version,
         target_version=target_version,
+        foreign_entry=foreign_entry,
     )
     old_addon = project / "addons" / "godot_ai"
     old_tree = {} if fresh else _tree_bytes(old_addon)
@@ -235,12 +242,27 @@ def test_closed_editor_install_into_fresh_project_then_first_start_serves(
     assert marker["from_version"] == ""
 
 
-def _first_start_after_closed_install(tmp_path: Path, *, fresh: bool = False) -> tuple[Path, dict]:
+def test_closed_editor_install_leaves_a_foreign_client_entry_alone(tmp_path: Path) -> None:
+    """A Codex entry under our name that launches the user's own server survives.
+
+    The major migration may only rewrite entries that launch Godot AI; this
+    one is reported in the editor output and left for an explicit Configure.
+    """
+    project, marker = _first_start_after_closed_install(tmp_path, fresh=True, foreign_entry=True)
+    assert marker["from_version"] == ""
+    log = (project / "_test_first_start.log").read_text(encoding="utf-8")
+    assert "CLEAN_MAJOR_TEST | foreign Codex entry left unchanged" in log
+    assert "launches something else; it was left unchanged" in log
+
+
+def _first_start_after_closed_install(
+    tmp_path: Path, *, fresh: bool = False, foreign_entry: bool = False
+) -> tuple[Path, dict]:
     godot_bin = godot_bin_or_skip()
     target_version = read_plugin_version(PLUGIN_ROOT / "plugin.cfg")
     http_port, ws_port = allocate_free_ports(2)
     project, isolated = _install_clean_major_fixture(
-        tmp_path, target_version, http_port, ws_port, fresh=fresh
+        tmp_path, target_version, http_port, ws_port, fresh=fresh, foreign_entry=foreign_entry
     )
     environment, capability_dir = _isolated_environment(isolated)
     environment["PATH"] = (
@@ -264,18 +286,32 @@ def _first_start_after_closed_install(tmp_path: Path, *, fresh: bool = False) ->
     )
 
     assert_no_update_parse_errors(log)
-    _assert_ordered(
-        log,
-        (
-            "MCP | client migration completed",
-            "CLEAN_MAJOR_TEST | migration completed automatically",
-            f"CLEAN_MAJOR_TEST | repinned owned Codex command pin={target_version}",
-            "CLEAN_MAJOR_TEST | authenticated read/write tool probe completed",
-        ),
-    )
+    (project / "_test_first_start.log").write_text(log, encoding="utf-8")
     config_text = (isolated / "codex" / "config.toml").read_text(encoding="utf-8")
-    assert f"godot-ai=={target_version}" in config_text
-    assert "godot-ai==3.2.4" not in config_text
+    if foreign_entry:
+        _assert_ordered(
+            log,
+            (
+                "MCP | client migration completed",
+                "CLEAN_MAJOR_TEST | migration completed automatically",
+                "CLEAN_MAJOR_TEST | foreign Codex entry left unchanged",
+                "CLEAN_MAJOR_TEST | authenticated read/write tool probe completed",
+            ),
+        )
+        assert FOREIGN_CODEX_COMMAND in config_text
+        assert "godot-ai==" not in config_text
+    else:
+        _assert_ordered(
+            log,
+            (
+                "MCP | client migration completed",
+                "CLEAN_MAJOR_TEST | migration completed automatically",
+                f"CLEAN_MAJOR_TEST | repinned owned Codex command pin={target_version}",
+                "CLEAN_MAJOR_TEST | authenticated read/write tool probe completed",
+            ),
+        )
+        assert f"godot-ai=={target_version}" in config_text
+        assert "godot-ai==3.2.4" not in config_text
     marker = json.loads((project / CLEAN_MAJOR_MARKER_RELATIVE).read_text(encoding="utf-8"))
     assert marker["status"] == "success", marker
     assert marker["clients_migrated"] is True, marker
@@ -778,6 +814,121 @@ func _process(_delta: float) -> void:
     assert (live / "runtime" / "game_helper.gd").is_file()
 
 
+def test_final_v3_fallback_waits_for_an_interactive_editor(tmp_path: Path) -> None:
+    """Below the floor, a headless editor must not restore; the next interactive start does.
+
+    The capsule lands in the tree the moment v3's updater extracts it. A
+    headless import or export that opens the project before the user does
+    must leave every byte alone; the restore belongs to the interactive start.
+    """
+    godot_bin = godot_bin_or_skip()
+    smoke = load_smoke_script()
+    target_version = read_plugin_version(PLUGIN_ROOT / "plugin.cfg")
+    http_port, ws_port = allocate_free_ports(2)
+    project = tmp_path / "v3-floor-headless"
+    prepared = smoke.prepare_v3_crossing_project(
+        project,
+        from_version="3.2.4",
+        target_version=target_version,
+        http_port=http_port,
+        ws_port=ws_port,
+    )
+    append_driver_autoload(project / "project.godot")
+    live = prepared["live"]
+    # The state v3's updater leaves behind: the capsule overlaid on the v3 tree.
+    shutil.copytree(
+        prepared["work"] / "capsule-tree" / "addons" / "godot_ai", live, dirs_exist_ok=True
+    )
+    assert read_plugin_version(live / "plugin.cfg") == target_version
+    write_driver_support(project)
+    (project / "_test_runner_driver.gd").write_text(
+        """@tool
+extends Node
+
+const DriverSupport := preload("res://_test_self_update_driver_support.gd")
+const DEADLINE_MSEC := 180000
+
+var _deadline := 0
+var _frames := 0
+
+
+func _ready() -> void:
+\tif not Engine.is_editor_hint():
+\t\tqueue_free()
+\t\treturn
+\t_deadline = Time.get_ticks_msec() + DEADLINE_MSEC
+\tset_process(true)
+
+
+func _process(_delta: float) -> void:
+\t_frames += 1
+\tif OS.get_environment("_FALLBACK_PHASE") == "headless":
+\t\tif _frames >= 150:
+\t\t\tprint("V3_FALLBACK_TEST | headless start observed, quitting")
+\t\t\tget_tree().quit(0)
+\t\treturn
+\tif Time.get_ticks_msec() >= _deadline:
+\t\tpush_error("V3_FALLBACK_TEST | restore timed out")
+\t\tget_tree().quit(41)
+\t\treturn
+\tif FileAccess.file_exists("res://addons/godot_ai/migration_bridge.gd"):
+\t\treturn
+\tvar config := ConfigFile.new()
+\tif config.load("res://addons/godot_ai/plugin.cfg") != OK:
+\t\treturn
+\tif str(config.get_value("plugin", "version", "")) != "3.2.5":
+\t\treturn
+\tif DriverSupport.find_godot_ai_plugin() == null:
+\t\treturn
+\tprint("V3_FALLBACK_TEST | final v3 restored and enabled")
+\tget_tree().quit(0)
+""",
+        encoding="utf-8",
+    )
+    environment = dict(smoke.godot_child_environment(project))
+    environment["GODOT_AI_TEST_GODOT_FLOOR"] = "unmet"
+    bytes_before = _tree_bytes(live)
+
+    headless_log = run_godot_editor(
+        project,
+        godot_bin,
+        allow_headless=False,
+        timeout=180,
+        environment={**environment, "_FALLBACK_PHASE": "headless"},
+        phase="headless",
+    )
+    assert (
+        "MCP | v3 bridge: Godot AI v4 migration needs the interactive Godot editor" in headless_log
+    )
+    assert "v3 bridge restored" not in headless_log
+    assert "V3_FALLBACK_TEST | headless start observed, quitting" in headless_log
+    bytes_after = _tree_bytes(live)
+    # Godot writes a .uid beside any script that lacks one on scan; that is
+    # editor metadata, not the capsule touching the tree.
+    changed = sorted(
+        path
+        for path in set(bytes_before) | set(bytes_after)
+        if bytes_before.get(path) != bytes_after.get(path) and not str(path).endswith(".uid")
+    )
+    assert not changed, f"a headless editor must not touch the tree; changed: {changed}"
+    assert not (project / UPDATE_STATE_RELATIVE).exists()
+
+    interactive_log = run_godot_editor(
+        project, godot_bin, allow_headless=True, timeout=240, environment=environment
+    )
+    _assert_ordered(
+        interactive_log,
+        (
+            "Godot AI v4 migration requires Godot 4.7 or newer; bridge remains inactive.",
+            "MCP | v3 bridge restored Godot AI v3.2.5; update again on Godot 4.7 or newer",
+            "V3_FALLBACK_TEST | final v3 restored and enabled",
+        ),
+    )
+    assert read_plugin_version(live / "plugin.cfg") == "3.2.5"
+    assert not (live / "migration_payload").exists()
+    assert not (project / UPDATE_STATE_RELATIVE).exists(), "the restore stage is gone"
+
+
 def test_final_v3_capsule_restores_final_v3_when_godot_is_too_old(tmp_path: Path) -> None:
     """Below v4's Godot floor the capsule puts the final v3 add-on back, working."""
     godot_bin = godot_bin_or_skip()
@@ -885,6 +1036,80 @@ func _process(_delta: float) -> void:
     ):
         assert not (live / capsule_only).exists(), capsule_only
     assert not (project / UPDATE_STATE_RELATIVE).exists(), "nothing was staged or swapped"
+
+
+def test_refused_swap_restores_the_old_runtime(tmp_path: Path) -> None:
+    """A swap refused after quiescence leaves the old version live and serving.
+
+    Quiescence stops the server and clears the dispatcher before the swap; a
+    refusal (here: a backup directory for the base version already exists)
+    must rebuild the plugin from the unchanged tree, not leave a dead runtime
+    behind a "previous version kept" label.
+    """
+    godot_bin = godot_bin_or_skip()
+    smoke = load_smoke_script()
+    project = tmp_path / "refused-swap"
+    http_port, ws_port = allocate_free_ports(2)
+    base_version = read_plugin_version(PLUGIN_ROOT / "plugin.cfg")
+    next_version = smoke.bump_patch_version(base_version)
+    prepare_signed_update_project(
+        project,
+        base_version=base_version,
+        next_version=next_version,
+        base_server_version=base_version,
+        next_server_version=next_version,
+        http_port=http_port,
+        ws_port=ws_port,
+    )
+    write_refused_swap_driver(project, http_port=http_port, base_version=base_version)
+    live = project / "addons" / "godot_ai"
+    environment, capability_dir = _isolated_environment(project / ".self-update-integration")
+    state = project / UPDATE_STATE_RELATIVE
+    (state / "backup" / base_version).mkdir(parents=True)
+    (state / ".gdignore").write_text("", encoding="utf-8")
+    (state / ".gitignore").write_text("*\n", encoding="utf-8")
+    live_before = _tree_bytes(live)
+
+    log = run_godot_editor(
+        project,
+        godot_bin,
+        allow_headless=True,
+        timeout=240,
+        environment=environment,
+        live_probe=lambda: _authenticated_tool_probe(
+            http_port,
+            capability_dir,
+            resource_path="res://_test_refused_swap_probe.txt",
+            content="served by the old version after a refused swap\n",
+        ),
+        probe_ready_file=REFUSED_SWAP_STATUS_FILE,
+        probe_done_file=REFUSED_SWAP_TOOL_PROBE_FILE,
+    )
+
+    assert_no_update_parse_errors(log)
+    _assert_ordered(
+        log,
+        (
+            "REFUSED_SWAP_TEST | clicked Update with a backup collision in place",
+            "update swap refused: swap: backup already exists",
+            "MCP | plugin unloaded",
+            "MCP | plugin loaded",
+            "REFUSED_SWAP_TEST | old runtime serves again after the refused swap",
+            "REFUSED_SWAP_TEST | authenticated tool probe completed after the refused swap",
+        ),
+    )
+    assert "restarting the editor" not in log
+    assert _tree_bytes(live) == live_before, "the live tree must be untouched"
+    assert not (state / "stage").exists()
+    assert not (state / "lock.json").exists()
+    pending = state / "pending.json"
+    assert (
+        not pending.exists()
+        or json.loads(pending.read_text(encoding="utf-8")).get("status") != "swapped"
+    )
+    assert (project / "_test_refused_swap_probe.txt").read_text(encoding="utf-8") == (
+        "served by the old version after a refused swap\n"
+    )
 
 
 def test_tampered_tree_after_swap_is_rolled_back_and_restarted(tmp_path: Path) -> None:

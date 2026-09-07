@@ -154,7 +154,9 @@ def _isolated_environment(root: Path, index: str) -> dict[str, str]:
             "XDG_CONFIG_HOME": str(config),
             "XDG_DATA_HOME": str(data),
             "XDG_CACHE_HOME": str(cache),
-            "GODOT_AI_CAPABILITY_DIR": str(capabilities),
+            # The server refuses this override on Windows; there the isolated
+            # LOCALAPPDATA below already relocates the capability directory.
+            **({} if os.name == "nt" else {"GODOT_AI_CAPABILITY_DIR": str(capabilities)}),
             "GODOT_AI_DISABLE_TELEMETRY": "true",
             "GODOT_AI_ALLOW_HEADLESS": "1",
             "GODOT_AI_MODE": "user",
@@ -693,7 +695,9 @@ def runtime_row(
     support.require(os_label == engine.host_row(), "runtime row differs from actual host")
     python_version = current_python_version()
     support.require(python_version in {"3.11", "3.14"}, "unsupported runtime Python row")
-    support.require(godot_version in qualification.GODOT_BUILDS, "unsupported runtime Godot row")
+    support.require(
+        godot_version in qualification.RUNTIME_GODOT_VERSIONS, "unsupported runtime Godot row"
+    )
     support.require(not output.exists(), "qualification output already exists")
     records = {name: support.verify_candidate(candidates / name, name) for name in ("a", "b")}
     source_row = support.read_json(python_row / "row.json")

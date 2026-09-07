@@ -531,3 +531,21 @@ static func _packed_slice(packed: PackedStringArray, from: int, to: int) -> Pack
 	for i in range(from, to):
 		out.append(packed[i])
 	return out
+
+
+## Whether an existing entry's launch text refers to Godot AI at all: the
+## PyPI/console name `godot-ai` or the module `godot_ai`. The post-update
+## major migration rewrites only such entries; anything else is the user's
+## own server and stays for an explicit Configure.
+static func launch_mentions_godot_ai(text: String) -> bool:
+	return text.contains("godot-ai") or text.contains("godot_ai")
+
+
+## The launch-bearing fields of an entry, as text for the check above. The
+## entry sits under our server name, so the name itself must not count.
+static func entry_launch_text(entry: Dictionary) -> String:
+	var launch := {}
+	for key in ["command", "args", "url"]:
+		if entry.has(key):
+			launch[key] = entry[key]
+	return JSON.stringify(launch)

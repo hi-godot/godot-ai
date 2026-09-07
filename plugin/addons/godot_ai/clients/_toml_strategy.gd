@@ -138,6 +138,18 @@ static func check_status_details(
 		var key := str(item.get("key", ""))
 		if not key.is_empty() and not by_key.has(key):
 			by_key[key] = item
+	## Whether the existing entry launches Godot AI at all: a major migration
+	## may rewrite such an entry, never a foreign one (client_job_owner.gd).
+	## Only the launch values count; the section header carries our name.
+	var launch_text := ""
+	for launch_key in ["command", "args", "url"]:
+		if by_key.has(launch_key):
+			launch_text += _item_value(by_key[launch_key]) + "\n"
+	var mismatch := {
+		"status": McpClient.Status.CONFIGURED_MISMATCH,
+		"error_msg": "",
+		"owned": McpClient.launch_mentions_godot_ai(launch_text),
+	}
 
 	if client.command_shape != McpClient.CommandShape.NONE:
 		if not bool(launch.get("ok", false)):
@@ -147,31 +159,31 @@ static func check_status_details(
 			}
 		for legacy_key in client.command_legacy_keys:
 			if by_key.has(String(legacy_key)):
-				return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+				return mismatch
 		if not by_key.has("command") or not by_key.has("args"):
-			return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+			return mismatch
 		var command_value := _decode_toml_string(_item_value(by_key["command"]))
 		var args_value := _decode_toml_string_array(_item_value(by_key["args"]))
 		if not bool(command_value.get("ok", false)) or not bool(args_value.get("ok", false)):
-			return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+			return mismatch
 		if str(command_value.get("value", "")) != str(launch.get("command", "")):
-			return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+			return mismatch
 		if not _string_arrays_equal(args_value.get("value", []), launch.get("args", [])):
-			return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+			return mismatch
 		if not client.command_transport_key.is_empty():
 			var transport_key := client.command_transport_key
 			if not by_key.has(transport_key):
-				return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+				return mismatch
 			var decoded_transport := _decode_toml_scalar(_item_value(by_key[transport_key]))
 			if not bool(decoded_transport.get("ok", false)) or decoded_transport.get("value") != client.command_transport_value:
-				return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+				return mismatch
 		return {"status": McpClient.Status.CONFIGURED, "error_msg": ""}
 
 	if not by_key.has("url"):
-		return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+		return mismatch
 	var url_value := _decode_toml_string(_item_value(by_key["url"]))
 	if not bool(url_value.get("ok", false)) or str(url_value.get("value", "")) != server_url:
-		return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": ""}
+		return mismatch
 	return {"status": McpClient.Status.CONFIGURED, "error_msg": ""}
 
 
