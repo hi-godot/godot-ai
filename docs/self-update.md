@@ -136,7 +136,10 @@ v4, the capsule triple stops being published and the fallback goes with it.
 `script/v4-release install` performs the same verify, stage, swap sequence from
 outside a running editor, for release qualification and for recovery. It uses
 the `cryptography` package for signature verification and is a development
-dependency only; the server package imports nothing from it at runtime.
+dependency only; the server package imports nothing from it at runtime. Into a
+project that has no add-on (how release qualification installs candidate A) it
+records an empty `from_version` and retains no backup; the first editor start
+still repins owned client entries to the installed version before serving.
 
 ## What this defends against
 

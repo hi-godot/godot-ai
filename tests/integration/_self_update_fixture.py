@@ -191,8 +191,14 @@ def prepare_clean_major_migration_project(
     target_version: str,
     http_port: int,
     ws_port: int,
+    fresh: bool = False,
 ) -> tuple[list[str], Path]:
-    """Prepare a synthetic pre-v4 project and locally signed clean v4 release."""
+    """Prepare a synthetic pre-v4 project and locally signed clean v4 release.
+
+    ``fresh`` leaves the project without any add-on, as the release
+    qualification's runtime row installs it; the owned Codex entry still
+    carries a stale ``from_version`` pin for the first start to repin.
+    """
     smoke = load_smoke_script()
     project_dir.mkdir()
     smoke.write_project_files(project_dir)
@@ -240,11 +246,14 @@ def prepare_clean_major_migration_project(
 
     verifier_root = work / "verifier"
     _write_fixture_verifier(verifier_root, public_key)
-    old_addon = project_dir / "addons" / "godot_ai"
-    (old_addon / "legacy").mkdir(parents=True)
-    (old_addon / "plugin.cfg").write_text(f'[plugin]\nversion="{from_version}"\n', encoding="utf-8")
-    (old_addon / "old_only.gd").write_text("extends RefCounted\n", encoding="utf-8")
-    (old_addon / "legacy" / "state.txt").write_text("retained pre-v4 state\n", encoding="utf-8")
+    if not fresh:
+        old_addon = project_dir / "addons" / "godot_ai"
+        (old_addon / "legacy").mkdir(parents=True)
+        (old_addon / "plugin.cfg").write_text(
+            f'[plugin]\nversion="{from_version}"\n', encoding="utf-8"
+        )
+        (old_addon / "old_only.gd").write_text("extends RefCounted\n", encoding="utf-8")
+        (old_addon / "legacy" / "state.txt").write_text("retained pre-v4 state\n", encoding="utf-8")
     write_owned_codex_pin(
         codex_home,
         command=fake_uvx,
@@ -455,9 +464,7 @@ func _write_receipt() -> bool:
 """
 
 
-def write_post_restart_driver(
-    project_dir: Path, *, http_port: int, expected_version: str
-) -> None:
+def write_post_restart_driver(project_dir: Path, *, http_port: int, expected_version: str) -> None:
     """Wait through a plugin-initiated restart, then prove the live server.
 
     The initial process only writes its receipt: the plugin under test decides
@@ -936,6 +943,7 @@ func _try_write_status() -> bool:
 {_RECEIPT_GDSCRIPT}""",
         encoding="utf-8",
     )
+
 
 def write_driver_support(project_dir: Path) -> None:
     """Write shared authenticated status and plugin-discovery primitives."""

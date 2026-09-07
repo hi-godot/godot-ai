@@ -35,6 +35,10 @@ RUNTIME_PYTHONS = ("3.11",)
 # One extra real-editor row at the newest supported engine on Linux, so a
 # 4.7.x regression is caught before publication without tripling the matrix.
 EXTRA_RUNTIME_ROWS = (("ubuntu-latest", "3.11", "4.7.2"),)
+# Every engine a runtime row may name: the pinned matrix plus the extra rows.
+RUNTIME_GODOT_VERSIONS = GODOT_BUILDS + tuple(
+    sorted({godot for _os, _python, godot in EXTRA_RUNTIME_ROWS} - set(GODOT_BUILDS))
+)
 
 # The release gate is the exact-artifact Python rows plus one real-editor
 # A -> B hot update per desktop OS. Failpoint/crash and storm matrices are

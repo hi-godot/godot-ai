@@ -202,6 +202,38 @@ def test_runtime_project_driver_is_external_to_candidate_tree(tmp_path):
     assert 'const VERSION_A := "4.0.0"' in driver
     assert 'const VERSION_B := "4.0.1"' in driver
     assert 'plugin.call("_on_dock_update_requested")' in driver
+    # The update restarts the editor; the driver must resume as "started" there.
+    assert driver.index("FileAccess.file_exists(PROGRESS_PATH)") < driver.index("set_process(true)")
+    assert driver.index('{"started": true') < driver.index(
+        'plugin.call("_on_dock_update_requested")'
+    )
+
+
+def test_editor_launch_keeps_the_restarted_editor_headless(tmp_path):
+    command = runtime._editor_command("godot", tmp_path / "project")
+    assert "--headless" not in command
+    assert command[1:5] == ["--display-driver", "headless", "--audio-driver", "Dummy"]
+    assert command[-3:] == ["--editor", "--path", str(tmp_path / "project")]
+
+
+def test_runtime_result_is_read_as_the_driver_writes_it(tmp_path):
+    # GDScript's JSON.stringify keeps insertion order and spacing; the driver's
+    # report is a plain object, not canonical signed evidence.
+    (tmp_path / "runtime-result.json").write_text(
+        '{"status": "passed", "to_version": "4.0.1", "from_version": "4.0.0"}', encoding="utf-8"
+    )
+    assert runtime._read_runtime_result(tmp_path)["status"] == "passed"
+    (tmp_path / "runtime-result.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(support.ReleaseError, match="not an object"):
+        runtime._read_runtime_result(tmp_path)
+
+
+def test_runtime_result_wait_needs_the_restarted_editor_to_report(tmp_path):
+    result = tmp_path / "runtime-result.json"
+    with pytest.raises(support.ReleaseError, match="restarted editor did not report"):
+        runtime._wait_for_runtime_result(result, 0.3)
+    result.write_text("{}", encoding="utf-8")
+    runtime._wait_for_runtime_result(result, 0.3)
 
 
 def test_private_capability_is_never_written_to_retained_log(tmp_path):
@@ -472,3 +504,30 @@ def test_lean_update_evidence_rejects_every_leftover_or_mismatch(
 
     with pytest.raises(support.ReleaseError, match=message):
         runtime._verify_lean_update(project, candidates, records)
+
+
+def test_cli_accepts_every_engine_a_required_runtime_row_names(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(runtime, "runtime_row", lambda *args: seen.append(args[3]))
+    versions = sorted({key[3] for key in qualification.required_row_keys() if key[0] == "runtime"})
+    assert versions == ["4.7.0", "4.7.2"]
+    assert set(versions) <= set(qualification.RUNTIME_GODOT_VERSIONS)
+    for version in versions:
+        argv = [
+            "--candidates",
+            str(tmp_path),
+            "--python-row",
+            str(tmp_path),
+            "--godot",
+            "godot",
+            "--godot-version",
+            version,
+            "--output",
+            str(tmp_path / "row"),
+            "--os",
+            "ubuntu-latest",
+        ]
+        assert runtime.main(argv) == 0
+    assert seen == versions
+    with pytest.raises(SystemExit):
+        runtime.main([*argv[:-4], "--godot-version", "4.7.1", *argv[-4:]])
