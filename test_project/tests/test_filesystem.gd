@@ -52,6 +52,8 @@ func suite_teardown() -> void:
 	for path in [IMPORTED_ASSET_PATH, IMPORTED_ASSET_PATH + ".import", SCRATCH_SCRIPT_PATH]:
 		if FileAccess.file_exists(path):
 			DirAccess.remove_absolute(path)
+	_fs_cleanup_move_fixtures()
+	_fs_cleanup_dir_fixtures()
 
 
 # ----- read_file -----
@@ -366,3 +368,393 @@ func test_scan_filesystem_sync_shape_and_coalesces_when_latch_set() -> void:
 		"shape: delta present in both paths"
 	)
 	assert_false(result.data.undoable)
+
+
+# ----- move / rename / remove (#907) -----
+
+const FS_SRC_SCRIPT := "res://tests/" + "_mcp_fs_move_src.gd"
+const FS_DST_SCRIPT := "res://tests/" + "_mcp_fs_move_dst.gd"
+const FS_OWNER_SCENE := "res://tests/" + "_mcp_fs_owner.tscn"
+const FS_OWNER_SCRIPT := "res://tests/" + "_mcp_fs_owner_script.gd"
+const FS_PLAIN := "res://tests/" + "_mcp_fs_plain.txt"
+const FS_PLAIN_2 := "res://tests/" + "_mcp_fs_plain_2.txt"
+const FS_PLAIN_RENAMED := "res://tests/" + "_mcp_fs_plain_renamed.txt"
+const FS_TRASH_PROBE := "res://tests/" + "_mcp_fs_trash_probe.txt"
+const FS_DIR := "res://tests/" + "_mcp_fs_dir"
+const FS_DIR_MOVED := "res://tests/" + "_mcp_fs_dir_moved"
+const FS_OUTSIDE_SCENE := "res://tests/" + "_mcp_fs_outside.tscn"
+
+
+func _fs_write(path: String, content: String) -> void:
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	assert_true(f != null, "fixture must be writable: %s" % path)
+	if f == null:
+		return
+	f.store_string(content)
+	f.close()
+	## Register with the editor filesystem the way write_file does — the
+	## owner search walks the EFS tree, not the disk.
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs != null:
+		efs.update_file(path)
+
+
+## A script carrying a uid. Godot 4.4+ mints the `.uid` sidecar itself on
+## `update_file`; older behaviour is covered by minting one here.
+func _fs_write_script_with_uid(path: String) -> int:
+	_fs_write(path, "extends Node\n")
+	var id := ResourceLoader.get_resource_uid(path)
+	if id == ResourceUID.INVALID_ID:
+		id = ResourceUID.create_id()
+		var f := FileAccess.open(path + ".uid", FileAccess.WRITE)
+		if f != null:
+			f.store_string(ResourceUID.id_to_text(id))
+			f.close()
+		ResourceUID.add_id(id, path)
+	return id
+
+
+func _fs_scene_text(script_path: String) -> String:
+	return (
+		"[gd_scene format=3]\n\n"
+		+ "[ext_resource type=\"Script\" path=\"%s\" id=\"1_s\"]\n\n" % script_path
+		+ "[node name=\"Root\" type=\"Node\"]\nscript = ExtResource(\"1_s\")\n"
+	)
+
+
+func _fs_read(path: String) -> String:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return ""
+	var text := f.get_as_text()
+	f.close()
+	return text
+
+
+func _fs_rm(path: String) -> void:
+	if DirAccess.dir_exists_absolute(path):
+		FilesystemHandler._remove_dir_recursive(path)
+	for candidate in [path, path + ".uid", path + ".import"]:
+		if FileAccess.file_exists(candidate):
+			DirAccess.remove_absolute(candidate)
+	## Tell the editor filesystem the file is gone, so a stale entry can't
+	## leak parse errors into later suites' capture windows.
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs != null:
+		efs.update_file(path)
+
+
+func _fs_cleanup_move_fixtures() -> void:
+	for path in [
+		FS_SRC_SCRIPT, FS_DST_SCRIPT, FS_OWNER_SCENE, FS_OWNER_SCRIPT,
+		FS_PLAIN, FS_PLAIN_2, FS_PLAIN_RENAMED, FS_TRASH_PROBE,
+	]:
+		_fs_rm(path)
+
+
+func _fs_cleanup_dir_fixtures() -> void:
+	for dir_path in [FS_DIR, FS_DIR_MOVED]:
+		for rel in ["inner.gd", "inner.tscn", "a.txt", "sub/b.txt"]:
+			_fs_rm(dir_path.path_join(rel))
+		if DirAccess.dir_exists_absolute(dir_path):
+			FilesystemHandler._remove_dir_recursive(dir_path)
+	_fs_rm(FS_OUTSIDE_SCENE)
+
+
+func test_move_file_rewrites_owner_scene_and_keeps_uid() -> void:
+	_fs_cleanup_move_fixtures()
+	var uid := _fs_write_script_with_uid(FS_SRC_SCRIPT)
+	var had_sidecar := FileAccess.file_exists(FS_SRC_SCRIPT + ".uid")
+	_fs_write(FS_OWNER_SCENE, _fs_scene_text(FS_SRC_SCRIPT))
+	var result := _handler.move_file({"path": FS_SRC_SCRIPT, "new_path": FS_DST_SCRIPT})
+	assert_has_key(result, "data")
+	if result.has("data"):
+		assert_eq(result.data.kind, "file")
+		assert_eq(result.data.moved_count, 1)
+		assert_eq(result.data.uids_updated, 1)
+		assert_false(result.data.undoable)
+		assert_contains(result.data.dependencies_updated, FS_OWNER_SCENE)
+		assert_eq(result.data.script_references_unfixed, [])
+	assert_false(FileAccess.file_exists(FS_SRC_SCRIPT), "source must be gone")
+	assert_true(FileAccess.file_exists(FS_DST_SCRIPT), "destination must exist")
+	assert_eq(FileAccess.file_exists(FS_DST_SCRIPT + ".uid"), had_sidecar, ".uid sidecar travels with the script")
+	assert_eq(ResourceLoader.get_resource_uid(FS_DST_SCRIPT), uid, "uid is preserved across the move")
+	assert_eq(ResourceUID.get_id_path(uid), FS_DST_SCRIPT, "ResourceUID points at the new path")
+	var scene_text := _fs_read(FS_OWNER_SCENE)
+	assert_contains(scene_text, "path=\"%s\"" % FS_DST_SCRIPT)
+	assert_false(FS_SRC_SCRIPT in scene_text, "old path must not linger in the owner scene")
+	_fs_cleanup_move_fixtures()
+
+
+func test_move_file_reports_script_preload_references() -> void:
+	## A script that preload()s the moved file by string path: the dock
+	## doesn't rewrite those, so the response must point at it instead.
+	_fs_cleanup_move_fixtures()
+	_fs_write_script_with_uid(FS_SRC_SCRIPT)
+	_fs_write(FS_OWNER_SCRIPT, "extends Node\nconst Dep := preload(\"%s\")\n" % FS_SRC_SCRIPT)
+	var result := _handler.move_file({"path": FS_SRC_SCRIPT, "new_path": FS_DST_SCRIPT})
+	assert_has_key(result, "data")
+	if result.has("data"):
+		assert_eq(result.data.script_references_unfixed.size(), 1, "the preloading script is reported")
+		if result.data.script_references_unfixed.size() == 1:
+			assert_eq(result.data.script_references_unfixed[0].script, FS_OWNER_SCRIPT)
+			assert_contains(result.data.script_references_unfixed[0].references, FS_SRC_SCRIPT)
+		assert_has_key(result.data, "script_references_hint")
+		assert_eq(result.data.dependencies_updated, [], "a .gd owner is never rewritten")
+	_fs_cleanup_move_fixtures()
+
+
+func test_move_file_refuses_existing_destination() -> void:
+	_fs_cleanup_move_fixtures()
+	_fs_write(FS_PLAIN, "a\n")
+	_fs_write(FS_PLAIN_2, "b\n")
+	var result := _handler.move_file({"path": FS_PLAIN, "new_path": FS_PLAIN_2})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "already exists")
+	assert_eq(_fs_read(FS_PLAIN_2), "b\n", "existing destination must be untouched")
+	assert_true(FileAccess.file_exists(FS_PLAIN), "source untouched on refusal")
+	_fs_cleanup_move_fixtures()
+
+
+func test_move_file_refuses_when_sidecar_destination_is_taken() -> void:
+	## A stray folder sitting where the `.uid` sidecar would land must be
+	## refused up front — the file and its sidecar move as one unit, never
+	## halfway.
+	_fs_cleanup_move_fixtures()
+	var uid := _fs_write_script_with_uid(FS_SRC_SCRIPT)
+	if not FileAccess.file_exists(FS_SRC_SCRIPT + ".uid"):
+		_fs_cleanup_move_fixtures()
+		skip("no .uid sidecar was minted for the fixture")
+		return
+	DirAccess.make_dir_recursive_absolute(FS_DST_SCRIPT + ".uid")
+	var result := _handler.move_file({"path": FS_SRC_SCRIPT, "new_path": FS_DST_SCRIPT})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "sidecar")
+	assert_true(FileAccess.file_exists(FS_SRC_SCRIPT), "source untouched on refusal")
+	assert_true(FileAccess.file_exists(FS_SRC_SCRIPT + ".uid"), "source sidecar untouched on refusal")
+	assert_false(FileAccess.file_exists(FS_DST_SCRIPT), "nothing landed at the destination")
+	assert_eq(ResourceUID.get_id_path(uid), FS_SRC_SCRIPT, "ResourceUID still points at the source")
+	DirAccess.remove_absolute(FS_DST_SCRIPT + ".uid")
+	_fs_cleanup_move_fixtures()
+
+
+func test_move_file_missing_source() -> void:
+	var result := _handler.move_file({
+		"path": "res://tests/_mcp_fs_nope.txt", "new_path": "res://tests/_mcp_fs_nope_2.txt",
+	})
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
+
+
+func test_move_file_rejects_traversal_destination() -> void:
+	_fs_cleanup_move_fixtures()
+	_fs_write(FS_PLAIN, "a\n")
+	var result := _handler.move_file({"path": FS_PLAIN, "new_path": "res://../_mcp_fs_escaped.txt"})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "..")
+	assert_true(FileAccess.file_exists(FS_PLAIN), "source untouched on refusal")
+	_fs_cleanup_move_fixtures()
+
+
+func test_move_file_refuses_sidecar_plugin_ancestor_and_plugin_file() -> void:
+	var sidecar := _handler.move_file({
+		"path": "res://tests/test_filesystem.gd.uid", "new_path": "res://tests/_mcp_fs_x.uid",
+	})
+	assert_is_error(sidecar, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(sidecar.error.message, "sidecar")
+	## `res://addons` is above the validator's blocked tree but contains it.
+	var ancestor := _handler.move_file({"path": "res://addons", "new_path": "res://_mcp_fs_addons_moved"})
+	assert_is_error(ancestor, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(ancestor.error.message, "plugin")
+	assert_true(DirAccess.dir_exists_absolute("res://addons"), "addons must not move")
+	var plugin_file := _handler.move_file({
+		"path": "res://addons/godot_ai/plugin.gd", "new_path": "res://_mcp_fs_plugin.gd",
+	})
+	assert_is_error(plugin_file, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_true(FileAccess.file_exists("res://addons/godot_ai/plugin.gd"))
+
+
+func test_rename_file_in_place() -> void:
+	_fs_cleanup_move_fixtures()
+	_fs_write(FS_PLAIN, "hello\n")
+	var result := _handler.rename_file({"path": FS_PLAIN, "new_name": FS_PLAIN_RENAMED.get_file()})
+	assert_has_key(result, "data")
+	if result.has("data"):
+		assert_eq(result.data.new_path, FS_PLAIN_RENAMED)
+		assert_eq(result.data.kind, "file")
+	assert_false(FileAccess.file_exists(FS_PLAIN))
+	assert_eq(_fs_read(FS_PLAIN_RENAMED), "hello\n")
+	_fs_cleanup_move_fixtures()
+
+
+func test_rename_file_rejects_path_separators_and_missing_name() -> void:
+	_fs_cleanup_move_fixtures()
+	_fs_write(FS_PLAIN, "a\n")
+	var slashed := _handler.rename_file({"path": FS_PLAIN, "new_name": "sub/other.txt"})
+	assert_is_error(slashed, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(slashed.error.message, "bare name")
+	var missing := _handler.rename_file({"path": FS_PLAIN})
+	assert_is_error(missing, ErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_true(FileAccess.file_exists(FS_PLAIN))
+	_fs_cleanup_move_fixtures()
+
+
+func test_move_directory_remaps_nested_and_outside_references() -> void:
+	_fs_cleanup_dir_fixtures()
+	var inner_script := FS_DIR + "/inner.gd"
+	var inner_scene := FS_DIR + "/inner.tscn"
+	_fs_write_script_with_uid(inner_script)
+	_fs_write(inner_scene, _fs_scene_text(inner_script))
+	_fs_write(FS_OUTSIDE_SCENE, _fs_scene_text(inner_script))
+	## Suppress the post-move scan kick: a real scan mid-suite would race
+	## other suites' capture windows. Same latch trick as the scan test.
+	FilesystemHandler._scan_in_flight = true
+	var result := _handler.move_file({"path": FS_DIR, "new_path": FS_DIR_MOVED})
+	FilesystemHandler._scan_in_flight = false
+	assert_has_key(result, "data")
+	if result.has("data"):
+		assert_eq(result.data.kind, "directory")
+		assert_eq(result.data.moved_count, 2)
+		assert_false(result.data.scan_kicked, "latch set → no scan kicked")
+		var moved_scene := FS_DIR_MOVED + "/inner.tscn"
+		var moved_script := FS_DIR_MOVED + "/inner.gd"
+		assert_contains(result.data.dependencies_updated, moved_scene)
+		assert_contains(result.data.dependencies_updated, FS_OUTSIDE_SCENE)
+		assert_contains(_fs_read(moved_scene), "path=\"%s\"" % moved_script)
+		assert_contains(_fs_read(FS_OUTSIDE_SCENE), "path=\"%s\"" % moved_script)
+		assert_true(FileAccess.file_exists(moved_script))
+	assert_false(DirAccess.dir_exists_absolute(FS_DIR), "old folder must be gone")
+	_fs_cleanup_dir_fixtures()
+
+
+func test_remove_file_refuses_referenced_without_force() -> void:
+	_fs_cleanup_move_fixtures()
+	_fs_write_script_with_uid(FS_SRC_SCRIPT)
+	_fs_write(FS_OWNER_SCENE, _fs_scene_text(FS_SRC_SCRIPT))
+	var result := _handler.remove_file({"path": FS_SRC_SCRIPT, "permanent": true})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "force=true")
+	assert_has_key(result.error, "data")
+	if result.error.has("data"):
+		assert_eq(result.error.data.referenced_by.size(), 1)
+		assert_eq(result.error.data.referenced_by[0].path, FS_OWNER_SCENE)
+		assert_contains(result.error.data.referenced_by[0].references, FS_SRC_SCRIPT)
+	assert_true(FileAccess.file_exists(FS_SRC_SCRIPT), "refusal must leave the file alone")
+	_fs_cleanup_move_fixtures()
+
+
+func test_remove_file_refuses_script_string_reference_without_force() -> void:
+	## A preload()ing script is an owner too, even though the loader's
+	## dependency list never mentions it.
+	_fs_cleanup_move_fixtures()
+	_fs_write_script_with_uid(FS_SRC_SCRIPT)
+	_fs_write(FS_OWNER_SCRIPT, "extends Node\nconst Dep := preload(\"%s\")\n" % FS_SRC_SCRIPT)
+	var result := _handler.remove_file({"path": FS_SRC_SCRIPT, "permanent": true})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_has_key(result.error, "data")
+	if result.error.has("data"):
+		assert_eq(result.error.data.referenced_by.size(), 1)
+		assert_eq(result.error.data.referenced_by[0].path, FS_OWNER_SCRIPT)
+	assert_true(FileAccess.file_exists(FS_SRC_SCRIPT), "refusal must leave the file alone")
+	_fs_cleanup_move_fixtures()
+
+
+func test_remove_file_force_permanent_deletes_file_sidecar_and_uid() -> void:
+	_fs_cleanup_move_fixtures()
+	var uid := _fs_write_script_with_uid(FS_SRC_SCRIPT)
+	_fs_write(FS_OWNER_SCENE, _fs_scene_text(FS_SRC_SCRIPT))
+	var result := _handler.remove_file({"path": FS_SRC_SCRIPT, "force": true, "permanent": true})
+	assert_has_key(result, "data")
+	if result.has("data"):
+		assert_eq(result.data.removed, [FS_SRC_SCRIPT])
+		assert_false(result.data.trashed)
+		assert_false(result.data.undoable)
+		assert_eq(result.data.uids_released, 1)
+		assert_has_key(result.data, "referenced_by")
+		if result.data.has("referenced_by"):
+			assert_eq(result.data.referenced_by.size(), 1, "forced removal still reports the dangling owner")
+	assert_false(FileAccess.file_exists(FS_SRC_SCRIPT))
+	assert_false(FileAccess.file_exists(FS_SRC_SCRIPT + ".uid"), "sidecar removed with the script")
+	assert_false(ResourceUID.has_id(uid), "uid released")
+	_fs_cleanup_move_fixtures()
+
+
+func test_remove_unreferenced_file_permanent() -> void:
+	_fs_cleanup_move_fixtures()
+	_fs_write(FS_PLAIN, "bye\n")
+	var result := _handler.remove_file({"path": FS_PLAIN, "permanent": true})
+	assert_has_key(result, "data")
+	if result.has("data"):
+		assert_eq(result.data.removed_count, 1)
+		assert_eq(result.data.kind, "file")
+		assert_false(result.data.has("referenced_by"), "no dangling owners → no referenced_by field")
+	assert_false(FileAccess.file_exists(FS_PLAIN))
+
+
+func test_remove_file_default_uses_os_trash() -> void:
+	## Probe the OS trash first: a headless box without a trash
+	## implementation is an environment precondition, not a handler bug.
+	_fs_cleanup_move_fixtures()
+	_fs_write(FS_TRASH_PROBE, "probe\n")
+	var probe_err := OS.move_to_trash(ProjectSettings.globalize_path(FS_TRASH_PROBE))
+	if probe_err != OK:
+		_fs_rm(FS_TRASH_PROBE)
+		skip("OS trash unavailable here: %s" % error_string(probe_err))
+		return
+	_fs_write(FS_PLAIN, "trash me\n")
+	var result := _handler.remove_file({"path": FS_PLAIN})
+	assert_has_key(result, "data")
+	if result.has("data"):
+		assert_true(result.data.trashed, "default removal goes to the OS trash")
+		assert_contains(result.data.reason, "trash")
+	assert_false(FileAccess.file_exists(FS_PLAIN))
+
+
+func test_remove_refuses_missing_root_sidecar_plugin_ancestor_and_manifest() -> void:
+	var missing := _handler.remove_file({"path": "res://tests/_mcp_fs_nope.txt", "permanent": true})
+	assert_is_error(missing, ErrorCodes.RESOURCE_NOT_FOUND)
+	var root := _handler.remove_file({"path": "res://", "permanent": true, "force": true})
+	assert_is_error(root, ErrorCodes.VALUE_OUT_OF_RANGE)
+	var sidecar := _handler.remove_file({"path": "res://tests/test_filesystem.gd.uid", "permanent": true})
+	assert_is_error(sidecar, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_true(FileAccess.file_exists("res://tests/test_filesystem.gd.uid"))
+	var ancestor := _handler.remove_file({"path": "res://addons", "force": true, "permanent": true})
+	assert_is_error(ancestor, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_true(DirAccess.dir_exists_absolute("res://addons"))
+	var manifest := _handler.remove_file({"path": "res://project.godot", "force": true, "permanent": true})
+	assert_is_error(manifest, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_true(FileAccess.file_exists("res://project.godot"))
+
+
+func test_remove_directory_refuses_outside_owner_but_not_inside_owner() -> void:
+	_fs_cleanup_dir_fixtures()
+	var inner_script := FS_DIR + "/inner.gd"
+	_fs_write_script_with_uid(inner_script)
+	_fs_write(FS_DIR + "/inner.tscn", _fs_scene_text(inner_script))
+	_fs_write(FS_OUTSIDE_SCENE, _fs_scene_text(inner_script))
+	var result := _handler.remove_file({"path": FS_DIR, "permanent": true})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_has_key(result.error, "data")
+	if result.error.has("data"):
+		var owners: Array = result.error.data.referenced_by
+		assert_eq(owners.size(), 1, "only the owner OUTSIDE the folder blocks removal")
+		if owners.size() == 1:
+			assert_eq(owners[0].path, FS_OUTSIDE_SCENE)
+	assert_true(DirAccess.dir_exists_absolute(FS_DIR), "refusal leaves the folder alone")
+	_fs_cleanup_dir_fixtures()
+
+
+func test_remove_directory_permanent_removes_nested_files() -> void:
+	_fs_cleanup_dir_fixtures()
+	_fs_write(FS_DIR + "/a.txt", "a\n")
+	_fs_write(FS_DIR + "/sub/b.txt", "b\n")
+	FilesystemHandler._scan_in_flight = true
+	var result := _handler.remove_file({"path": FS_DIR, "permanent": true})
+	FilesystemHandler._scan_in_flight = false
+	assert_has_key(result, "data")
+	if result.has("data"):
+		assert_eq(result.data.kind, "directory")
+		assert_eq(result.data.removed_count, 2)
+		assert_false(result.data.scan_kicked, "latch set → no scan kicked")
+	assert_false(DirAccess.dir_exists_absolute(FS_DIR), "folder must be gone")
+	_fs_cleanup_dir_fixtures()

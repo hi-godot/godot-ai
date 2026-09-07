@@ -210,7 +210,7 @@ Calls take the form:
 | `input_map_manage` | `list`, `add_action`, `ensure_action`, `remove_action`, `bind_event`, `ensure_binding` |
 | `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_sequence`, `input_state` |
 | `autoload_manage` | `list`, `add`, `remove` |
-| `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search` |
+| `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `build_layout`, `draw_recipe` |
 | `resource_manage` | `search`, `load`, `assign`, `get_info`, `create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `gradient_texture_create`, `noise_texture_create` |
@@ -235,6 +235,27 @@ models, and audio. Godot scripts (`.gd`) are not imported resources: a successfu
 `.gd` entry only refreshes its editor filesystem cache entry and does not prove the
 script was parsed or diagnostics were produced. Use `script_patch` or
 `script_create` to save scripts and receive fresh diagnostics.
+
+`filesystem_manage(op="move"|"rename"|"remove")` reorganize the project the
+way the editor's FileSystem dock does, rather than touching the OS filesystem
+behind the editor's back (#907). Godot exposes no public move/delete API to
+GDScript, so the plugin mirrors the dock's own steps: the `.uid` and `.import`
+sidecars move with the file, `ResourceUID` is re-pointed so `uid://` references
+keep resolving, dependent `.tscn`/`.tres` files get their `path=` references
+rewritten, autoloads and file-typed project settings are updated, and the
+editor filesystem cache is refreshed. Owners are found by walking the project
+on disk (not the editor's filesystem tree, which does not know files written
+into a new folder until the next scan): resources answer through
+`ResourceLoader.get_dependencies`, scripts through a search for the quoted
+path, since the loader reports nothing for a `.gd` that `preload()`s a path.
+Two limits mirror the editor: GDScript string paths are not rewritten (they
+are listed under `script_references_unfixed` for a follow-up `script_patch`),
+and binary `.scn`/`.res` owners are not rewritten textually (they resolve
+through the preserved `uid`, and are listed under `binary_owners_unresolved`).
+`remove` refuses a target that another resource or script still references
+unless `force=true`, and defaults to the OS trash like the editor's Delete;
+pass `permanent=true` for a hard delete. None of the three is undoable via
+editor undo.
 
 `api_manage(op="get_class")` inspects Godot API/ClassDB metadata for a class
 without creating an instance. By default it returns **only `properties`**

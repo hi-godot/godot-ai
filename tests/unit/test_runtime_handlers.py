@@ -613,6 +613,31 @@ class StubClient:
                 "not_found_count": 0,
                 "undoable": False,
             }
+        if command == "move_file":
+            return {
+                "path": params["path"],
+                "new_path": params["new_path"],
+                "kind": "file",
+                "moved_count": 1,
+                "dependencies_updated": ["res://main.tscn"],
+                "undoable": False,
+            }
+        if command == "rename_file":
+            return {
+                "path": params["path"],
+                "new_path": "res://old/hero.gd",
+                "kind": "file",
+                "moved_count": 1,
+                "undoable": False,
+            }
+        if command == "remove_file":
+            return {
+                "path": params["path"],
+                "kind": "file",
+                "removed_count": 1,
+                "trashed": not params.get("permanent", False),
+                "undoable": False,
+            }
         if command == "scan_filesystem":
             return {
                 "scan_completed": True,
@@ -3616,6 +3641,83 @@ async def test_filesystem_scan_runs_while_importing():
     # ...while a write op (reimport) on the identical importing session is gated.
     with pytest.raises(GodotCommandError):
         await filesystem_handlers.filesystem_reimport(runtime, paths=["res://a.png"])
+
+
+async def test_filesystem_move_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await filesystem_handlers.filesystem_move(
+        runtime, path="res://old/player.gd", new_path="res://actors/player.gd"
+    )
+    assert result["new_path"] == "res://actors/player.gd"
+    assert result["dependencies_updated"] == ["res://main.tscn"]
+    last = client.calls[-1]
+    assert last["command"] == "move_file"
+    assert last["params"] == {"path": "res://old/player.gd", "new_path": "res://actors/player.gd"}
+    # The plugin walks every resource in the project to find owners; give it
+    # scan-class headroom rather than the 5s default.
+    assert last["timeout"] == 30.0
+
+
+async def test_filesystem_rename_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await filesystem_handlers.filesystem_rename(
+        runtime, path="res://old/player.gd", new_name="hero.gd"
+    )
+    assert result["new_path"] == "res://old/hero.gd"
+    last = client.calls[-1]
+    assert last["command"] == "rename_file"
+    assert last["params"] == {"path": "res://old/player.gd", "new_name": "hero.gd"}
+    assert last["timeout"] == 30.0
+
+
+async def test_filesystem_remove_handler_defaults_to_trash():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await filesystem_handlers.filesystem_remove(runtime, path="res://scratch.txt")
+    assert result["trashed"] is True
+    last = client.calls[-1]
+    assert last["command"] == "remove_file"
+    # Both flags are always sent explicitly so the plugin never guesses.
+    assert last["params"] == {"path": "res://scratch.txt", "force": False, "permanent": False}
+    assert last["timeout"] == 30.0
+
+
+async def test_filesystem_remove_handler_passes_force_and_permanent():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await filesystem_handlers.filesystem_remove(
+        runtime, path="res://scratch.txt", force=True, permanent=True
+    )
+    assert result["trashed"] is False
+    assert client.calls[-1]["params"] == {
+        "path": "res://scratch.txt",
+        "force": True,
+        "permanent": True,
+    }
+
+
+async def test_filesystem_reorganize_ops_are_gated_while_importing():
+    # move/rename/remove mutate the project on disk and must respect the
+    # same readiness gate as write_text/reimport (unlike scan).
+    from godot_ai.godot_client.client import GodotCommandError
+
+    client = StubClient()
+    client.live_readiness = "importing"
+    session = _make_session("importing-2", readiness="importing")
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+
+    with pytest.raises(GodotCommandError):
+        await filesystem_handlers.filesystem_move(runtime, path="res://a.gd", new_path="res://b.gd")
+    with pytest.raises(GodotCommandError):
+        await filesystem_handlers.filesystem_rename(runtime, path="res://a.gd", new_name="b.gd")
+    with pytest.raises(GodotCommandError):
+        await filesystem_handlers.filesystem_remove(runtime, path="res://a.gd")
+    reorganize_commands = {"move_file", "rename_file", "remove_file"}
+    assert not [c for c in client.calls if c["command"] in reorganize_commands]
 
 
 async def test_filesystem_search_handler_empty_params():

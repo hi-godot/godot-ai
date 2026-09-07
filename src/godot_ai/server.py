@@ -273,7 +273,10 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "                   input_state\n",
     ),
     ("autoload", "  autoload_manage  list, add, remove\n"),
-    ("filesystem", "  filesystem_manage read_text, write_text, reimport, scan, search\n"),
+    (
+        "filesystem",
+        "  filesystem_manage read_text, write_text, reimport, scan, search, move, rename, remove\n",
+    ),
     (
         "theme",
         "  theme_manage     create, set_color, set_constant, set_font_size,\n"

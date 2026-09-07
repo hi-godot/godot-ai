@@ -2734,6 +2734,115 @@ class TestFilesystemWriteTextTool:
 # ---------------------------------------------------------------------------
 
 
+class TestFilesystemReorganizeTools:
+    """#907: move / rename / remove ride the filesystem_manage rollup."""
+
+    async def test_move(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "move_file"
+            assert cmd["params"] == {
+                "path": "res://old/player.gd",
+                "new_path": "res://actors/player.gd",
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://old/player.gd",
+                    "new_path": "res://actors/player.gd",
+                    "kind": "file",
+                    "moved_count": 1,
+                    "dependencies_updated": ["res://main.tscn"],
+                    "script_references_unfixed": [],
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "filesystem_manage",
+            {
+                "op": "move",
+                "params": {"path": "res://old/player.gd", "new_path": "res://actors/player.gd"},
+            },
+        )
+        await task
+
+        assert result.data["new_path"] == "res://actors/player.gd"
+        assert result.data["dependencies_updated"] == ["res://main.tscn"]
+        assert result.data["undoable"] is False
+
+    async def test_rename(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "rename_file"
+            assert cmd["params"] == {"path": "res://old/player.gd", "new_name": "hero.gd"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://old/player.gd",
+                    "new_path": "res://old/hero.gd",
+                    "kind": "file",
+                    "moved_count": 1,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "filesystem_manage",
+            {"op": "rename", "params": {"path": "res://old/player.gd", "new_name": "hero.gd"}},
+        )
+        await task
+
+        assert result.data["new_path"] == "res://old/hero.gd"
+
+    async def test_remove_passes_flags_through(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "remove_file"
+            assert cmd["params"] == {"path": "res://scratch.gd", "force": True, "permanent": True}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://scratch.gd",
+                    "kind": "file",
+                    "removed": ["res://scratch.gd"],
+                    "removed_count": 1,
+                    "trashed": False,
+                    "referenced_by": [
+                        {"path": "res://main.tscn", "references": ["res://scratch.gd"]}
+                    ],
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "filesystem_manage",
+            {
+                "op": "remove",
+                "params": {"path": "res://scratch.gd", "force": True, "permanent": True},
+            },
+        )
+        await task
+
+        assert result.data["removed"] == ["res://scratch.gd"]
+        assert result.data["trashed"] is False
+        assert result.data["referenced_by"][0]["path"] == "res://main.tscn"
+
+
+# ---------------------------------------------------------------------------
+# import_reimport
+# ---------------------------------------------------------------------------
+
+
 class TestImportReimportTool:
     async def test_reimport(self, mcp_stack):
         client, plugin = mcp_stack
