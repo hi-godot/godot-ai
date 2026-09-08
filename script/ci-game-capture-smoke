@@ -6,7 +6,9 @@ Drives a running Godot editor (launched separately by CI with a real
 rendering driver, typically under xvfb-run on Linux) through the MCP
 streamable-HTTP transport:
 
-  1. wait for the plugin's WebSocket session to register
+  1. wait for the plugin's WebSocket session to register, streaming the
+     editor's own stdout (GODOT_EDITOR_LOG, default godot-editor.log) into
+     this log as it boots so a slow or stuck editor leaves a timeline
   2. open res://capture_smoke.tscn (four colored quadrants)
   3. run the project in that scene
   4. poll editor_state until is_playing=true AND game_capture_ready=true
@@ -42,6 +44,7 @@ import base64
 import io
 import json
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -94,6 +97,34 @@ DIAG_DIR = os.environ.get("CAPTURE_DIAG_DIR", "capture-smoke-diag")
 ## editor bridge is gone and the remaining minutes of ready-wait can only
 ## end in a misleading "never registered" timeout (#675).
 SESSION_LOSS_GRACE_SEC = 45.0
+## Editor-registration wait: how long the editor may take from launch to
+## its WebSocket session appearing in session_manage(op="list"). The poll
+## exits the moment the session registers, so the ceiling only costs time
+## when something is genuinely wrong.
+##
+## 240s, not 120 (2026-09-08, runs 34268748773 and 34270440762): the macOS
+## job failed twice in 39 runs with "Godot session never registered; last
+## err: None". Every poll got a clean count=0 reply, godot-editor.log held
+## only the engine banner and the Metal driver line, and mcp-server.log
+## showed no WebSocket attempt — the editor was still booting when the
+## budget ran out. Launch→registered measured over the preceding 41 passing
+## macOS runs: median 60s, p90 73s, max 90s (Linux 8–25s, Windows 20–57s)
+## against an effective ~125s budget, so the failures are the tail of that
+## distribution on a busy paravirtualized runner, not a connection bug.
+## 240s is ~2.7× the observed maximum; the CI step timeout covers it.
+SESSION_WAIT_SEC = float(os.environ.get("SESSION_WAIT_SEC", "240"))
+SESSION_POLL_DELAY_SEC = 2.0
+## Cadence of the "[session-wait +Ns]" progress line. New editor-log lines
+## are streamed on every poll regardless, so the plugin's boot markers
+## ("MCP startup trace | phase=...", "MCP | plugin loaded", "MCP | connected
+## to server") land here with an elapsed stamp the moment they print.
+SESSION_WAIT_PROGRESS_SEC = 15.0
+## The editor's redirected stdout/stderr — the workflow starts it with
+## `godot ... > godot-editor.log 2>&1 &`. Streamed during the session wait
+## and tailed on timeout. Missing locally is fine: the wait then only
+## reports elapsed time.
+EDITOR_LOG = os.environ.get("GODOT_EDITOR_LOG", "godot-editor.log")
+EDITOR_LOG_TAIL_LINES = 40
 
 
 def _post(session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
@@ -173,19 +204,176 @@ def _initialize_session() -> str:
     return session_id
 
 
-def _wait_for_godot_session(session_id: str, timeout: float = 120.0) -> None:
-    deadline = time.monotonic() + timeout
+class _EditorLogTail:
+    """Stream new lines of the editor's redirected stdout as they land.
+
+    Reads incrementally from a byte offset so a multi-minute wait costs one
+    small read per poll, tolerates the file not existing yet (the editor is
+    started by a separate CI step), and caps what one flush prints so a
+    chatty editor cannot flood the job log.
+    """
+
+    MAX_LINES_PER_FLUSH = 40
+
+    def __init__(self, path: str, sink) -> None:
+        self._path = path
+        self.sink = sink
+        self._offset = 0
+        self._partial = b""
+        self.lines_seen = 0
+
+    def flush(self) -> None:
+        try:
+            with open(self._path, "rb") as fh:
+                fh.seek(self._offset)
+                chunk = fh.read()
+        except OSError:
+            return
+        if not chunk:
+            return
+        self._offset += len(chunk)
+        pieces = (self._partial + chunk).split(b"\n")
+        self._partial = pieces.pop()
+        lines = [piece.decode("utf-8", "replace").rstrip("\r") for piece in pieces]
+        lines = [line for line in lines if line.strip()]
+        if not lines:
+            return
+        self.lines_seen += len(lines)
+        for line in lines[: self.MAX_LINES_PER_FLUSH]:
+            self.sink(f"[editor-log] {line}")
+        hidden = len(lines) - self.MAX_LINES_PER_FLUSH
+        if hidden > 0:
+            self.sink(f"[editor-log] (+{hidden} more lines)")
+
+    def tail(self, count: int = EDITOR_LOG_TAIL_LINES) -> list[str]:
+        try:
+            with open(self._path, "rb") as fh:
+                data = fh.read()
+        except OSError as exc:
+            return [f"({self._path} unreadable: {exc})"]
+        lines = [line.decode("utf-8", "replace").rstrip("\r") for line in data.split(b"\n")]
+        lines = [line for line in lines if line.strip()]
+        if not lines:
+            return [f"({self._path} is empty)"]
+        return lines[-count:]
+
+
+def _godot_process_snapshot() -> list[str]:
+    """Best-effort `ps`/`tasklist` rows for Godot processes.
+
+    On a session-wait timeout this is what separates "the editor is still
+    booting" (alive, burning CPU, silent log) from "the editor died" (no
+    row, no crash banner) from "the plugin is up but cannot connect"
+    (alive, MCP lines in the log).
+    """
+    if sys.platform == "win32":
+        cmd = ["tasklist", "/FI", "IMAGENAME eq godot*"]
+    else:
+        cmd = ["ps", "-eo", "pid,etime,pcpu,rss,command"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [f"(process snapshot unavailable: {exc})"]
+    rows = [line.rstrip() for line in proc.stdout.splitlines() if "godot" in line.lower()]
+    return rows or ["(no godot process found)"]
+
+
+def _summarize_session_reply(reply: dict | None) -> str:
+    if reply is None:
+        return "no reply yet"
+    if "count" in reply:
+        return f"count={reply['count']}"
+    ## A reply without `count` is a tool error or an unexpected shape —
+    ## surfacing it is the difference between "server said no sessions" and
+    ## "server said something else entirely" (both used to read as
+    ## "last err: None").
+    return "unexpected reply " + json.dumps(reply, default=str)[:300]
+
+
+def _wait_for_godot_session(
+    session_id: str,
+    timeout: float = SESSION_WAIT_SEC,
+    editor_log: _EditorLogTail | None = None,
+    history: list[str] | None = None,
+) -> float:
+    """Poll until the editor's session registers; return the seconds it took.
+
+    Every poll streams whatever the editor has printed since the last one,
+    so the job log carries the boot timeline (engine banner → rendering
+    driver → plugin startup-trace phases → "plugin loaded" → probing →
+    connected) stamped with elapsed time. On timeout the raise names how
+    long it waited and what the server said, and the editor-log tail plus a
+    process snapshot go to the job log and the diag artifacts — the old
+    "never registered; last err: None" carried none of that (2026-09-08).
+    """
+    start = time.monotonic()
+    deadline = start + timeout
+
+    def _note(line: str) -> None:
+        stamped = f"[session-wait +{time.monotonic() - start:.1f}s] {line}"
+        print(stamped)
+        if history is not None:
+            history.append(stamped)
+
+    if editor_log is None:
+        editor_log = _EditorLogTail(EDITOR_LOG, _note)
+    else:
+        editor_log.sink = _note
     last_err: Exception | None = None
-    while time.monotonic() < deadline:
+    last_reply: dict | None = None
+    polls = 0
+    next_progress = start + SESSION_WAIT_PROGRESS_SEC
+    print(
+        f"Waiting up to {timeout:.0f}s for the editor's session to register "
+        f"(streaming {EDITOR_LOG})"
+    )
+    while True:
+        polls += 1
         try:
             result = _tool_call(session_id, "session_manage", {"op": "list"}, 2)
-            if result.get("count", 0) > 0:
-                print(f"Godot session connected: {result.get('active_session_id') or result}")
-                return
-        except (urllib.error.URLError, RuntimeError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
             last_err = exc
-        time.sleep(2)
-    raise RuntimeError(f"Godot session never registered; last err: {last_err}")
+        else:
+            last_reply = result
+            if isinstance(result.get("count"), (int, float)) and result["count"] > 0:
+                elapsed = time.monotonic() - start
+                editor_log.flush()
+                print(
+                    f"Godot session connected after {elapsed:.1f}s ({polls} polls): "
+                    f"{result.get('active_session_id') or result}"
+                )
+                return elapsed
+        editor_log.flush()
+        now = time.monotonic()
+        if now >= next_progress:
+            _note(
+                f"no editor session yet ({polls} polls; server reply: "
+                f"{_summarize_session_reply(last_reply)}; transport error: {last_err!r})"
+            )
+            next_progress = now + SESSION_WAIT_PROGRESS_SEC
+        if now >= deadline:
+            break
+        time.sleep(min(SESSION_POLL_DELAY_SEC, max(0.0, deadline - now)))
+
+    _note(f"giving up after {polls} polls; last {EDITOR_LOG_TAIL_LINES} editor-log lines:")
+    for line in editor_log.tail():
+        _note(f"    {line}")
+    _note("godot processes:")
+    for row in _godot_process_snapshot():
+        _note(f"    {row}")
+    if last_err is None:
+        verdict = (
+            "every poll got a reply with no sessions — the MCP server was up and the "
+            "editor never connected to it, so look at the editor-log timeline above "
+            "(still booting, crashed, or plugin loaded but not connecting), not at "
+            "the transport"
+        )
+    else:
+        verdict = f"last transport error: {last_err!r}"
+    raise RuntimeError(
+        f"Godot session never registered within {timeout:.0f}s ({polls} polls; "
+        f"server reply: {_summarize_session_reply(last_reply)}); {verdict}"
+    )
 
 
 ## 180s, not 60: run 28326896176 (macOS) showed the game subprocess taking
@@ -411,7 +599,18 @@ def _write_diag_artifacts(attempt_log: list[str], last_png: bytes | None) -> Non
 def main() -> int:
     print(f"Connecting to MCP server at {SERVER_URL}")
     session_id = _initialize_session()
-    _wait_for_godot_session(session_id)
+    attempt_log: list[str] = []
+    editor_log = _EditorLogTail(EDITOR_LOG, print)
+    try:
+        _wait_for_godot_session(session_id, editor_log=editor_log, history=attempt_log)
+    except Exception:
+        ## The wait's own timeline (streamed editor lines, log tail, process
+        ## snapshot) is the evidence for a boot-time failure; keep it in the
+        ## uploaded artifacts alongside the traceback.
+        attempt_log.append("")
+        attempt_log.append(traceback.format_exc().rstrip())
+        _write_diag_artifacts(attempt_log, None)
+        raise
 
     ## Dump autoload state BEFORE we touch the game — tells us whether the
     ## plugin's _enter_tree actually persisted _mcp_game_helper, which is the
@@ -422,7 +621,6 @@ def main() -> int:
     _tool_call(session_id, "scene_open", {"path": SCENE_PATH}, 10)
     time.sleep(1)
 
-    attempt_log: list[str] = []
     last_png: bytes | None = None
     try:
         print("Running project (current scene)")
@@ -483,6 +681,11 @@ def main() -> int:
         _write_diag_artifacts(attempt_log, last_png)
         raise
     finally:
+        ## Whatever the editor printed after registration (the startup
+        ## trace's "done" line, game-run output) belongs in the job log on
+        ## pass as well as fail — it is the only per-run record of where the
+        ## editor's boot time went.
+        editor_log.flush()
         try:
             ## "stop" has no named tool — it lives only under the project_manage
             ## rollup, so calling "project_stop" returns an unknown-tool error
