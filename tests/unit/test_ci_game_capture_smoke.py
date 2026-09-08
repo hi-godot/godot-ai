@@ -94,7 +94,7 @@ def test_wait_returns_elapsed_and_streams_editor_log(
     out = capsys.readouterr().out
     assert "Godot session connected after 4.0s (3 polls): test-project@abc" in out
     ## The editor's boot lines were streamed with an elapsed stamp.
-    assert "[session-wait +0.0s] [editor-log] Godot Engine v4.7" in out
+    assert "[+0.0s] [editor-log] Godot Engine v4.7" in out
     assert "[editor-log] Metal 4.0 - Forward+" in out
     assert any("[editor-log] Godot Engine v4.7" in line for line in history)
 

@@ -309,16 +309,24 @@ def _wait_for_godot_session(
     start = time.monotonic()
     deadline = start + timeout
 
-    def _note(line: str) -> None:
-        stamped = f"[session-wait +{time.monotonic() - start:.1f}s] {line}"
+    def _record(stamped: str) -> None:
         print(stamped)
         if history is not None:
             history.append(stamped)
 
+    def _note(line: str) -> None:
+        _record(f"[session-wait +{time.monotonic() - start:.1f}s] {line}")
+
+    ## Editor lines keep flowing through this sink after registration (the
+    ## caller flushes once more at exit), so they carry a bare elapsed stamp
+    ## rather than the wait's own label.
+    def _stamp_editor_line(line: str) -> None:
+        _record(f"[+{time.monotonic() - start:.1f}s] {line}")
+
     if editor_log is None:
-        editor_log = _EditorLogTail(EDITOR_LOG, _note)
+        editor_log = _EditorLogTail(EDITOR_LOG, _stamp_editor_line)
     else:
-        editor_log.sink = _note
+        editor_log.sink = _stamp_editor_line
     last_err: Exception | None = None
     last_reply: dict | None = None
     polls = 0
