@@ -36,7 +36,7 @@ dependencies = [
     # boundaries float underneath it, so every behavior-defining distribution
     # is exact and checked again at process startup. Dependency upgrades are a
     # reviewed release change, not a resolver-time event.
-    "fastmcp==3.4.7",
+    "fastmcp==4.0.3",
     # attach/proxy.py uses AnyIO's stream exceptions directly. Keep that
     # contract explicit instead of inheriting FastMCP's transitive choice.
     "anyio==4.14.2",
