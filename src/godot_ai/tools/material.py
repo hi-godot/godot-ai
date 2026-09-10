@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from godot_ai.handlers import material as material_handlers
+from godot_ai.handlers import visual_shader as visual_shader_handlers
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
@@ -15,10 +16,20 @@ shader uniforms.
 Resource form: ``godot://materials`` — prefer for active-session reads.
 
 Ops:
+  • visual_shader_create_graph(resource_path, stages, shader_type="spatial", overwrite=False)
+        Create/save a VisualShader .tres only (not undoable). Each stages entry is
+        {stage, nodes: [{id, type, position?, params?}], connections:
+        [{from_node, from_port, to_node, to_port}]}. Explicit stages must match
+        spatial/canvas_item (vertex/fragment/light), particles
+        (start/process/collide/start_custom/process_custom), sky (sky), or fog (fog).
+        IDs are stage-local integers >=2 or nonempty strings; output is "output"/0.
+        Limits: 256 nodes, 1024 connections total. Existing destination directory
+        required. Returns id_map by stage as [{id, node_id}] in request order.
+        Use create(type="shader", shader_path=<saved .tres>) then assign separately.
   • create(path, type="standard", shader_path="", overwrite=False)
         Create + save a material .tres at a res:// path. type:
         "standard" | "orm" | "canvas_item" | "shader". For "shader",
-        shader_path points to the .gdshader.
+        shader_path points to a .gdshader or VisualShader .tres.
   • set_param(path, param, value)
         Set a built-in property on a .tres material. Enum-valued params
         accept names ("alpha" -> TRANSPARENCY_ALPHA). Color/Vector dicts.
@@ -51,6 +62,7 @@ def register_material_tools(mcp: FastMCP) -> None:
         tool_name="material_manage",
         description=_DESCRIPTION,
         ops={
+            "visual_shader_create_graph": visual_shader_handlers.create_graph,
             "create": material_handlers.material_create,
             "set_param": material_handlers.material_set_param,
             "set_shader_param": material_handlers.material_set_shader_param,
