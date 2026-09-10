@@ -1,6 +1,8 @@
 @tool
 extends McpTestSuite
 
+signal generate_driver_frame
+
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ScriptWork := preload("res://addons/godot_ai/utils/script_work.gd")
 
@@ -1206,7 +1208,14 @@ func test_generate_driver_abandonment_and_success_release_script_work() -> void:
 	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
 	connection.dispatcher = null
 	var success := _generate_job_for(paths, connection)
-	assert_true(PhysicsShapeHandler._generate_step(success, -1))
+	PhysicsShapeHandler._drive_generate_job(success, connection, generate_driver_frame)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 1)
+	for _frame in range(10):
+		if ScriptWork.active_count("physics_shape_generate") == 0:
+			break
+		generate_driver_frame.emit()
+	assert_eq(connection.captured.size(), 1)
+	assert_eq(connection.captured[0].payload.data.created.size(), 2)
 	assert_eq(success.result.data.created.size(), 2)
 	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
 	var body_a := _find_named_child(root, "DriverLifecycleACollider")
