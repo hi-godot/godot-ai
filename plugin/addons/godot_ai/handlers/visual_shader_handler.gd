@@ -173,11 +173,12 @@ func _build_stage(shader: VisualShader, spec: Dictionary) -> Dictionary:
 			return _invalid("Connection port exceeds the supported maximum of 64")
 		if source_node == null:
 			return _invalid("Stage %s: source node %s is unavailable" % [spec.stage, str(edge.from_node)])
-		## This hidden array controls the number of exposed outputs, so it must be
-		## contiguous. Setting only [1] still exposes one port (index 0).
-		var expanded: PackedInt32Array = source_node.get("expanded_output_ports")
-		for port in range(from_port + 1):
-			if port not in expanded:
+		## This hidden Array names base output ports whose vector components are
+		## exposed. Expand only existing base ports needed to reach a component.
+		var raw_expanded: Variant = source_node.get("expanded_output_ports")
+		var expanded: Array = raw_expanded if raw_expanded is Array else Array(raw_expanded)
+		for port in range(from_port):
+			if not expanded.has(port):
 				expanded.append(port)
 		expanded.sort()
 		source_node.set("expanded_output_ports", expanded)

@@ -228,7 +228,9 @@ func test_texture_alpha_and_aliases_survive_reload() -> void:
 	if not result.has("data"):
 		return
 	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
-	assert_true(shader.get_node(VisualShader.TYPE_FRAGMENT, 2).get("texture") is Texture2D)
+	var texture_node := shader.get_node(VisualShader.TYPE_FRAGMENT, 2)
+	assert_true(texture_node.get("texture") is Texture2D)
+	assert_eq(texture_node.get("expanded_output_ports"), [0])
 	assert_eq(shader.get_node_connections(VisualShader.TYPE_FRAGMENT)[0].from_port, 1)
 	assert_eq(shader.get_node(VisualShader.TYPE_FRAGMENT, 3).get("input_name"), "time")
 
