@@ -13,9 +13,10 @@ async def test_graph_forwards_stages_and_defaults_after_readiness(monkeypatch):
     async def ready(runtime):
         events.append("ready")
 
-    async def send(command, params):
+    async def send(command, params, *, timeout):
         events.append("send")
         assert command == "visual_shader_create_graph"
+        assert timeout == visual_shader.VISUAL_SHADER_CREATE_TIMEOUT_SECONDS
         assert params == {
             "resource_path": "res://graph.tres",
             "stages": [{"stage": "vertex", "nodes": [], "connections": []}],
