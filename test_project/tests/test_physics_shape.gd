@@ -2,6 +2,7 @@
 extends McpTestSuite
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const ScriptWork := preload("res://addons/godot_ai/utils/script_work.gd")
 
 const PhysicsShapeHandler := preload("res://addons/godot_ai/handlers/physics_shape_handler.gd")
 
@@ -17,7 +18,16 @@ func suite_name() -> String:
 
 func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.get("undo_redo")
+	if _undo_redo != null:
+		_undo_redo.clear_history()
 	_handler = PhysicsShapeHandler.new(_undo_redo)
+
+
+func teardown() -> void:
+	## Generated bodies are committed as editor actions. Release each test's
+	## history so a later undo cannot resurrect a collider removed by cleanup.
+	if _undo_redo != null:
+		_undo_redo.clear_history()
 
 
 # ----- helpers -----
@@ -615,7 +625,7 @@ func _add_generate_mesh(
 
 func _find_named_child(parent: Node, child_name: String) -> Node:
 	for child in parent.get_children():
-		if child.name == child_name:
+		if is_instance_valid(child) and child.name == child_name:
 			return child
 	return null
 
@@ -984,7 +994,7 @@ func test_generate_rejects_duplicate_paths_and_existing_colliders() -> void:
 	assert_contains(again.error.message, "already has a collider sibling")
 	var colliders := 0
 	for child in scene_root.get_children():
-		if str(child.name).begins_with("GenerateOnceCollider"):
+		if is_instance_valid(child) and str(child.name).begins_with("GenerateOnceCollider"):
 			colliders += 1
 	assert_eq(colliders, 1, "the retry must leave exactly one collider")
 	_remove_node(_find_named_child(scene_root, "GenerateOnceCollider"))
@@ -1139,3 +1149,116 @@ func test_generate_bounds_direct_and_total_batch_sizes() -> void:
 	var oversized_result := _handler.generate({"paths": oversized_paths})
 	assert_is_error(oversized_result, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(oversized_result.error.message, "at most")
+
+
+func test_generate_driver_disconnect_rolls_back_and_releases_script_work() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var first := _add_generate_mesh("DriverDisconnectA", Vector3.ONE)
+	var second := _add_generate_mesh("DriverDisconnectB", Vector3.ONE)
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	var job := _generate_job_for([McpScenePath.from_node(first, root), McpScenePath.from_node(second, root)], connection)
+	PhysicsShapeHandler._generate_step(job, 0)
+	PhysicsShapeHandler._generate_step(job, 0)
+	assert_false(PhysicsShapeHandler._generate_step(job, 0))
+	assert_eq(job.created.size(), 1, "disconnect must interrupt actual partial mutation")
+	PhysicsShapeHandler._drive_generate_job(job, connection)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 1, "worker is tracked before the first yield")
+	root.remove_child(connection)
+	connection.free()
+	assert_eq(job.phase, "done")
+	assert_eq(job.created.size(), 0)
+	assert_true(job.result.is_empty())
+	assert_true(_find_named_child(root, "DriverDisconnectACollider") == null)
+	assert_true(_find_named_child(root, "DriverDisconnectBCollider") == null)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
+	_remove_node(first)
+	_remove_node(second)
+
+
+func test_generate_driver_abandonment_and_success_release_script_work() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var first := _add_generate_mesh("DriverLifecycleA", Vector3.ONE)
+	var second := _add_generate_mesh("DriverLifecycleB", Vector3.ONE)
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	var paths := [McpScenePath.from_node(first, root), McpScenePath.from_node(second, root)]
+	var abandoned := _generate_job_for(paths, connection)
+	PhysicsShapeHandler._generate_step(abandoned, 0)
+	PhysicsShapeHandler._generate_step(abandoned, 0)
+	assert_false(PhysicsShapeHandler._generate_step(abandoned, 0))
+	assert_eq(abandoned.created.size(), 1)
+	connection.dispatcher = _GoneDispatcher.new()
+	PhysicsShapeHandler._drive_generate_job(abandoned, connection)
+	assert_true(abandoned.result.is_empty())
+	assert_eq(abandoned.created.size(), 0)
+	assert_eq(connection.captured.size(), 0)
+	assert_true(_find_named_child(root, "DriverLifecycleACollider") == null)
+	assert_true(_find_named_child(root, "DriverLifecycleBCollider") == null)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
+	connection.dispatcher = null
+	var success := _generate_job_for(paths, connection)
+	assert_true(PhysicsShapeHandler._generate_step(success, -1))
+	assert_eq(success.result.data.created.size(), 2)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
+	var body_a := _find_named_child(root, "DriverLifecycleACollider")
+	var body_b := _find_named_child(root, "DriverLifecycleBCollider")
+	assert_true(body_a != null and body_b != null)
+	assert_true(editor_undo(_undo_redo))
+	assert_true(body_a.get_parent() == null and body_b.get_parent() == null)
+	assert_true(editor_redo(_undo_redo))
+	assert_eq(body_a.get_parent(), root)
+	assert_eq(body_b.get_parent(), root)
+	_remove_node(body_a)
+	_remove_node(body_b)
+	_remove_node(first)
+	_remove_node(second)
+	connection.free()
+
+
+func test_generate_driver_early_exit_preserves_committed_results() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var detached_mesh := _add_generate_mesh("DriverDetachedCommitted", Vector3.ONE)
+	var detached_connection := _CapturingConnection.new()
+	var detached_job := _generate_job_for([
+		McpScenePath.from_node(detached_mesh, root),
+	], detached_connection)
+	assert_true(PhysicsShapeHandler._generate_step(detached_job, -1))
+	assert_true(detached_job.committed)
+	PhysicsShapeHandler._drive_generate_job(detached_job, detached_connection)
+	var detached_body := _find_named_child(root, "DriverDetachedCommittedCollider")
+	assert_true(detached_body != null, "a detached reply target must not undo committed work")
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0, "detached early exit releases ScriptWork")
+
+	var freed_mesh := _add_generate_mesh("DriverFreedCommitted", Vector3.ONE)
+	var freed_connection := _CapturingConnection.new()
+	root.add_child(freed_connection)
+	freed_connection.set_process(false)
+	var freed_job := _generate_job_for([
+		McpScenePath.from_node(freed_mesh, root),
+	], freed_connection)
+	assert_true(PhysicsShapeHandler._generate_step(freed_job, -1))
+	assert_true(freed_job.committed)
+	root.remove_child(freed_connection)
+	freed_connection.free()
+	PhysicsShapeHandler._drive_generate_job(freed_job, freed_connection)
+	var freed_body := _find_named_child(root, "DriverFreedCommittedCollider")
+	assert_true(freed_body != null, "a lost reply target must not undo committed work")
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0, "invalid-connection early exit releases ScriptWork")
+
+	_remove_node(detached_body)
+	_remove_node(freed_body)
+	_remove_node(detached_mesh)
+	_remove_node(freed_mesh)
+	detached_connection.free()
