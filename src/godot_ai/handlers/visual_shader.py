@@ -3,6 +3,8 @@
 from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
+VISUAL_SHADER_CREATE_TIMEOUT_SECONDS = 30.0
+
 
 async def create_graph(
     runtime: DirectRuntime,
@@ -21,4 +23,5 @@ async def create_graph(
             "shader_type": shader_type,
             "overwrite": overwrite,
         },
+        timeout=VISUAL_SHADER_CREATE_TIMEOUT_SECONDS,
     )
