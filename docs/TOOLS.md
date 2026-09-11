@@ -202,7 +202,7 @@ Calls take the form:
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
 | `animation_manage` | `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
-| `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph` |
+| `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit` |
 | `audio_manage` | `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
@@ -324,6 +324,7 @@ don't, and the only path that supports `session_id` pinning.
 | `godot://project/info` | Active project metadata |
 | `godot://project/settings` | Common project settings subset |
 | `godot://materials` | All Material resources under res:// |
+| `godot://visual_shader/{path}` | VisualShader graph: stages, nodes, params, connections, varyings |
 | `godot://input_map` | Project input actions and their bound events |
 | `godot://performance` | Performance singleton snapshot |
 | `godot://test/results` | Most recent `test_run` results |
