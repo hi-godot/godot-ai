@@ -191,7 +191,7 @@ These are not the next things to do blindly. They are the extensions that matter
 
 - [x] `material_*` — StandardMaterial3D / ORMMaterial3D / CanvasItemMaterial / ShaderMaterial authoring shipped. Tools: `material_create`, `material_set_param`, `material_set_shader_param`, `material_get`, `material_list`, `material_assign` (with `create_if_missing`), `material_apply_to_node` (inline material builder, one-undo), `material_apply_preset` (metal, glass, emissive, unlit, matte, ceramic). Enum-by-name coercion for transparency / shading_mode / blend_mode / cull_mode / etc. Shader uniform setting via `material_set_shader_param` drives arbitrary `.gdshader` parameters.
 - [x] `particle_*` — GPUParticles2D/3D + CPUParticles2D/3D shipped with 7 presets (`fire`, `smoke`, `spark_burst`, `magic_swirl`, `rain`, `explosion`, `lightning`). Tools: `particle_create`, `particle_set_main`, `particle_set_process` (auto-creates `ParticleProcessMaterial` in-one-undo if missing), `particle_set_draw_pass` (grows `draw_passes` count + auto-default QuadMesh if slot empty), `particle_restart`, `particle_get`, `particle_apply_preset`. Every auto-create draw pass gets a billboard `StandardMaterial3D` with `vertex_color_use_as_albedo=true` so `color_ramp` actually renders — the default Godot draw pass has no material and silently ignores the gradient.
-- [ ] `shader.*` for CRUD on `.gdshader` files (currently shaders can only be created by writing them via `filesystem_write_text` and loading with `material_set_shader_param`)
+- [x] `shader.*` for CRUD on `.gdshader` files — shipped as `material_manage` ops `shader_create`, `shader_get`, `shader_validate`, `shader_list`, `shader_patch`; writes are compile-validated before touching disk and `material_create(type="shader", code=...)` embeds inline shader source
 - `physics.*` helpers for layers, masks, bodies, and common 2D setup
 - light `tilemap.*` and/or `navigation.*` if the benchmark moves from a single arena to authored rooms
 
@@ -263,7 +263,7 @@ tracked above.
 - [~] `ui.*` for HUD and upgrade selection — anchor presets, declarative `ui_build_layout` composer, `ui_set_text`, `control_draw_recipe` runtime, and `theme_*` authoring shipped; still need `theme_set_font`, `theme_set_stylebox_texture` for pixel-art / custom typography
 - [~] `camera_*` for follow, bounds, zoom, damping — 2D surface shipped (see Tier 1 above); 3D follow / SpringArm3D rig and screen shake (`animation_preset_shake`) still pending
 - [x] `animation_player.*` shipped; `audio.*` shipped (`audio_player_create` 1D/2D/3D + `set_stream`/`set_playback`/`play`/`stop`/`list` under `audio_manage`)
-- [~] `material_*` and `particle_*` shipped (see Tier 2 above); still need a dedicated `shader_*` CRUD surface for `.gdshader` editing outside of `filesystem_write_text`
+- [x] `material_*` and `particle_*` shipped (see Tier 2 above); the dedicated `shader_*` surface for `.gdshader` editing outside of `filesystem_write_text` is shipped under `material_manage`
 - [~] light `physics.*` started (`physics_shape_autofit` op under `resource_manage` derives a `Shape2D`/`Shape3D` from a target node's bounds and walks parent-siblings); still need layer/mask/body helpers, plus optional `tilemap.*` / `navigation.*` if rooms become more authored
 
 ### Versioned Milestones (v1 / v2 / v3)
