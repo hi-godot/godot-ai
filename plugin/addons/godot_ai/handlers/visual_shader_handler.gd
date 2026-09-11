@@ -337,7 +337,7 @@ func _apply_edit(
 		"add_node":
 			return _edit_add_node(shader, mode, operation, aliases)
 		"remove_node":
-			var stage := _edit_stage(operation)
+			var stage := _edit_stage(operation, mode)
 			if stage.has("error"):
 				return stage
 			var node_id := _edit_node_id(shader, stage.value, operation.get("id"), aliases)
@@ -348,7 +348,7 @@ func _apply_edit(
 			shader.remove_node(stage.value, node_id.value)
 			return {}
 		"replace_node":
-			var stage := _edit_stage(operation)
+			var stage := _edit_stage(operation, mode)
 			if stage.has("error"):
 				return stage
 			var node_id := _edit_node_id(shader, stage.value, operation.get("id"), aliases)
@@ -362,13 +362,39 @@ func _apply_edit(
 			var real_type := _resolve_type(class_name_value)
 			if real_type.is_empty():
 				return _invalid("%s is not a supported VisualShaderNode" % str(class_name_value))
-			shader.replace_node(stage.value, node_id.value, real_type)
 			var values: Variant = operation.get("params", {})
 			if not values is Dictionary:
 				return _invalid("params must be an object")
-			return _apply_properties(shader.get_node(stage.value, node_id.value), values, str(operation.id))
+			var merged: Dictionary = IMPLICIT.get(class_name_value, {}).duplicate()
+			merged.merge(values, true)
+			if ClassDB.is_parent_class(real_type, "VisualShaderNodeInput"):
+				## Engine gap: `VisualShader.replace_node` swaps the class but never
+				## wires `shader_mode`/`shader_type` on the new input node (only
+				## `add_node` does), so `input_name` reads as unavailable and codegen
+				## is wrong until a save+reload. Rebuild the node at the same id and
+				## restore its edges after the params land, when the port type is final.
+				var position := shader.get_node_position(stage.value, node_id.value)
+				var edges := _node_edges(shader, stage.value, node_id.value)
+				var input_node: VisualShaderNode = ClassDB.instantiate(real_type)
+				shader.remove_node(stage.value, node_id.value)
+				shader.add_node(stage.value, input_node, position, node_id.value)
+				var input_applied := _apply_properties(input_node, merged, str(operation.id))
+				if input_applied.has("error"):
+					return input_applied
+				for edge in edges:
+					var connect_code := shader.connect_nodes(
+						stage.value, int(edge.from_node), int(edge.from_port), int(edge.to_node), int(edge.to_port)
+					)
+					if connect_code != OK:
+						return _invalid("node %s cannot keep connection %d:%d -> %d:%d: %s" % [
+							str(operation.id), int(edge.from_node), int(edge.from_port),
+							int(edge.to_node), int(edge.to_port), error_string(connect_code),
+						])
+				return {}
+			shader.replace_node(stage.value, node_id.value, real_type)
+			return _apply_properties(shader.get_node(stage.value, node_id.value), merged, str(operation.id))
 		"set_node_params":
-			var stage := _edit_stage(operation)
+			var stage := _edit_stage(operation, mode)
 			if stage.has("error"):
 				return stage
 			var node_id := _edit_node_id(shader, stage.value, operation.get("id"), aliases)
@@ -382,7 +408,7 @@ func _apply_edit(
 				return _invalid("set_node_params requires a nonempty params object")
 			return _apply_properties(node, values, str(operation.id))
 		"set_node_position":
-			var stage := _edit_stage(operation)
+			var stage := _edit_stage(operation, mode)
 			if stage.has("error"):
 				return stage
 			var node_id := _edit_node_id(shader, stage.value, operation.get("id"), aliases)
@@ -394,7 +420,7 @@ func _apply_edit(
 			shader.set_node_position(stage.value, node_id.value, position.value)
 			return {}
 		"connect", "disconnect":
-			return _edit_connection(shader, operation, aliases, inputs)
+			return _edit_connection(shader, mode, operation, aliases, inputs)
 		"add_varying":
 			if not VARYING_MODES.has(mode):
 				return _invalid("varyings are only supported for spatial/canvas_item shaders")
@@ -419,7 +445,7 @@ func _apply_edit(
 func _edit_add_node(
 	shader: VisualShader, mode: String, operation: Dictionary, aliases: Dictionary,
 ) -> Dictionary:
-	var stage_result := _edit_stage(operation)
+	var stage_result := _edit_stage(operation, mode)
 	if stage_result.has("error"):
 		return stage_result
 	var stage: int = stage_result.value
@@ -445,8 +471,11 @@ func _edit_add_node(
 			node_id = canonical
 			public_id = canonical
 		else:
+			var alias_key := _alias_key(stage, canonical)
+			if aliases.has(alias_key):
+				return _invalid("node ID '%s' is already used in this stage" % canonical)
 			node_id = shader.get_valid_node_id(stage)
-			aliases[canonical] = node_id
+			aliases[alias_key] = node_id
 			public_id = canonical
 	var position := _typed_value(TYPE_VECTOR2, operation.get("position", {"x": 0, "y": 0}))
 	if not position.has("value"):
@@ -467,9 +496,9 @@ func _edit_add_node(
 
 
 func _edit_connection(
-	shader: VisualShader, operation: Dictionary, aliases: Dictionary, inputs: Dictionary,
+	shader: VisualShader, mode: String, operation: Dictionary, aliases: Dictionary, inputs: Dictionary,
 ) -> Dictionary:
-	var stage_result := _edit_stage(operation)
+	var stage_result := _edit_stage(operation, mode)
 	if stage_result.has("error"):
 		return stage_result
 	var stage: int = stage_result.value
@@ -490,10 +519,13 @@ func _edit_connection(
 	return _connect_nodes(shader, stage, source.value, from_port, target.value, to_port, inputs)
 
 
-func _edit_stage(operation: Dictionary) -> Dictionary:
+func _edit_stage(operation: Dictionary, mode: String) -> Dictionary:
 	var stage_name: Variant = operation.get("stage")
 	if not stage_name is String or not STAGES.has(stage_name):
 		return _invalid("stage must be one of: %s" % ", ".join(STAGES.keys()))
+	var allowed: Array = MODE_STAGES.get(mode, [])
+	if not allowed.has(stage_name):
+		return _invalid("stage '%s' is not available for %s shaders; use: %s" % [stage_name, mode, ", ".join(allowed)])
 	return {"value": STAGES[stage_name]}
 
 
@@ -502,9 +534,10 @@ func _edit_node_id(shader: VisualShader, stage: int, raw: Variant, aliases: Dict
 	if canonical is String:
 		if canonical == "output":
 			return {"value": 0}
-		if not aliases.has(canonical):
+		var alias_key := _alias_key(stage, canonical)
+		if not aliases.has(alias_key):
 			return _invalid("unknown node ID %s" % canonical)
-		return {"value": int(aliases[canonical])}
+		return {"value": int(aliases[alias_key])}
 	var number := _integral_number(canonical)
 	if number == null:
 		return _invalid("node id must be an integer or a string used by add_node in this call")
@@ -520,9 +553,10 @@ func _edit_endpoint(shader: VisualShader, stage: int, raw: Variant, aliases: Dic
 	if (canonical is String and canonical == "output") or (canonical is int and canonical == 0):
 		return {"value": 0}
 	if canonical is String:
-		if not aliases.has(canonical):
+		var alias_key := _alias_key(stage, canonical)
+		if not aliases.has(alias_key):
 			return _invalid("unknown node ID %s" % canonical)
-		return {"value": int(aliases[canonical])}
+		return {"value": int(aliases[alias_key])}
 	var number := _integral_number(canonical)
 	if number == null:
 		return _invalid("connection endpoints must be node IDs")
@@ -544,6 +578,16 @@ func _collect_inputs(shader: VisualShader, mode: String) -> Dictionary:
 			inputs["%s:%d:%d" % [stage, target, to_port]] = true
 			inputs["%s:%d:%d:%d" % [stage, target, to_port, source]] = true
 	return inputs
+
+
+## Every edge touching `node_id` in one stage, captured before a node rebuild
+## drops them so the replacement can restore the same connections.
+static func _node_edges(shader: VisualShader, stage: int, node_id: int) -> Array[Dictionary]:
+	var edges: Array[Dictionary] = []
+	for connection in shader.get_node_connections(stage):
+		if int(connection.get("from_node", -1)) == node_id or int(connection.get("to_node", -1)) == node_id:
+			edges.append(connection)
+	return edges
 
 
 func _build_stage(shader: VisualShader, spec: Dictionary) -> Dictionary:
@@ -739,10 +783,11 @@ static func _varying_from_text(text: String, varying_name: String) -> String:
 	var needle := "varyings/%s" % varying_name
 	for raw_line in text.split("\n"):
 		var line := raw_line.strip_edges()
-		if not line.begins_with(needle):
-			continue
 		var eq := line.find("=")
 		if eq < 0:
+			continue
+		var left := line.substr(0, eq).strip_edges().trim_prefix("\"").trim_suffix("\"")
+		if left != needle:
 			continue
 		var value := line.substr(eq + 1).strip_edges()
 		return value.trim_prefix("\"").trim_suffix("\"")
@@ -782,6 +827,13 @@ static func _canonical_id(value: Variant) -> Variant:
 		return value
 	var number := _integral_number(value)
 	return number if number != null else value
+
+
+## Aliases are scoped to the stage that introduced them: the same string id in
+## two stages is two different nodes, and a duplicate inside one stage is
+## ambiguous, so registration rejects it instead of overwriting.
+static func _alias_key(stage: int, canonical: String) -> String:
+	return "%d:%s" % [stage, canonical]
 
 
 static func _endpoint(value: Variant, ids: Dictionary) -> int:
