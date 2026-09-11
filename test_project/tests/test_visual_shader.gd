@@ -508,3 +508,131 @@ func test_edit_graph_failures_preserve_file() -> void:
 		"operations": [{"op": "remove_node", "stage": "fragment", "id": 2}],
 	})
 	assert_has_key(missing, "error")
+
+
+func test_edit_graph_replace_node_applies_implicit_aliases() -> void:
+	## replace_node must merge the same IMPLICIT defaults add_node applies, or a
+	## Sin/Time alias replacement silently loses function/input_name.
+	var request := _request("edit_replace_implicit")
+	request.stages[0].connections = []
+	assert_has_key(_handler.create_graph(request), "data")
+	var replaced := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "replace_node", "stage": "fragment", "id": 2, "type": "VisualShaderNodeSin"},
+		],
+	})
+	assert_has_key(replaced, "data", str(replaced.get("error", {})))
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_eq(shader.get_node(VisualShader.TYPE_FRAGMENT, 2).get("function"), VisualShaderNodeFloatFunc.FUNC_SIN)
+	var time_result := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "replace_node", "stage": "fragment", "id": 2, "type": "VisualShaderNodeTime"},
+		],
+	})
+	assert_has_key(time_result, "data", str(time_result.get("error", {})))
+	shader = ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_eq(shader.get_node(VisualShader.TYPE_FRAGMENT, 2).get("input_name"), "time")
+	## Explicit params still win over the implicit default.
+	var overridden := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "replace_node", "stage": "fragment", "id": 2, "type": "VisualShaderNodeSin",
+			 "params": {"function": "cos"}},
+		],
+	})
+	assert_has_key(overridden, "data", str(overridden.get("error", {})))
+	shader = ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_eq(shader.get_node(VisualShader.TYPE_FRAGMENT, 2).get("function"), VisualShaderNodeFloatFunc.FUNC_COS)
+
+
+func test_edit_graph_replace_input_node_keeps_connections() -> void:
+	## The engine's replace_node leaves a new input node without
+	## shader_mode/shader_type, so the handler rebuilds it through add_node.
+	## The rebuild must restore the edges the node already owned.
+	var request := _request("edit_replace_input")
+	request.stages[0].nodes = [{"id": "value", "type": "VisualShaderNodeFloatConstant", "params": {"constant": 0.5}}]
+	request.stages[0].connections = [{"from_node": "value", "from_port": 0, "to_node": "output", "to_port": 1}]
+	assert_has_key(_handler.create_graph(request), "data")
+	var replaced := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "replace_node", "stage": "fragment", "id": 2, "type": "VisualShaderNodeTime"},
+		],
+	})
+	assert_has_key(replaced, "data", str(replaced.get("error", {})))
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	var input_node := shader.get_node(VisualShader.TYPE_FRAGMENT, 2)
+	assert_eq(input_node.get("input_name"), "time")
+	var connections := shader.get_node_connections(VisualShader.TYPE_FRAGMENT)
+	assert_eq(connections.size(), 1, "the rebuilt input node must keep its edge")
+	assert_eq(int(connections[0].from_node), 2)
+	assert_eq(int(connections[0].to_node), 0)
+	assert_eq(int(connections[0].to_port), 1)
+
+
+func test_edit_graph_scopes_string_ids_by_stage_and_rejects_duplicates() -> void:
+	var request := _request("edit_alias_scope")
+	request.stages.append({"stage": "vertex", "nodes": [], "connections": []})
+	assert_has_key(_handler.create_graph(request), "data")
+	var result := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "add_node", "stage": "vertex", "id": "shared", "type": "VisualShaderNodeFloatConstant"},
+			{"op": "add_node", "stage": "fragment", "id": "shared", "type": "VisualShaderNodeFloatConstant"},
+			{"op": "set_node_params", "stage": "vertex", "id": "shared", "params": {"constant": 0.25}},
+			{"op": "set_node_params", "stage": "fragment", "id": "shared", "params": {"constant": 0.75}},
+		],
+	})
+	assert_has_key(result, "data", str(result.get("error", {})))
+	assert_eq(result.data.added.size(), 2)
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	var vertex_id: int = result.data.added[0].node_id
+	var fragment_id: int = result.data.added[1].node_id
+	assert_eq(shader.get_node(VisualShader.TYPE_VERTEX, vertex_id).get("constant"), 0.25)
+	assert_eq(shader.get_node(VisualShader.TYPE_FRAGMENT, fragment_id).get("constant"), 0.75)
+	## A duplicate string id inside one stage is rejected and the file is untouched.
+	var before := FileAccess.get_file_as_bytes(request.resource_path)
+	var duplicate := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "add_node", "stage": "vertex", "id": "dup", "type": "VisualShaderNodeFloatConstant"},
+			{"op": "add_node", "stage": "vertex", "id": "dup", "type": "VisualShaderNodeFloatConstant"},
+		],
+	})
+	assert_has_key(duplicate, "error")
+	assert_contains(str(duplicate.error.message), "already used in this stage")
+	assert_eq(FileAccess.get_file_as_bytes(request.resource_path), before, "failed edit must preserve bytes")
+
+
+func test_edit_graph_rejects_stages_outside_shader_mode() -> void:
+	var request := _request("edit_mode_stage")
+	assert_has_key(_handler.create_graph(request), "data")
+	var before := FileAccess.get_file_as_bytes(request.resource_path)
+	var cases: Array = [
+		[{"op": "add_node", "stage": "process", "type": "VisualShaderNodeFloatConstant"}],
+		[{"op": "set_node_params", "stage": "process", "id": 2, "params": {"constant": 0.5}}],
+		[{"op": "connect", "stage": "process", "from_node": 2, "from_port": 0, "to_node": "output", "to_port": 0}],
+	]
+	for operations in cases:
+		var result := _handler.edit_graph({"resource_path": request.resource_path, "operations": operations})
+		assert_has_key(result, "error", str(operations))
+		assert_contains(str(result.error.message), "not available for spatial")
+		assert_eq(FileAccess.get_file_as_bytes(request.resource_path), before, "failed edit must preserve bytes")
+	## A stage the mode does support still works.
+	var allowed := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [{"op": "add_node", "stage": "vertex", "type": "VisualShaderNodeFloatConstant"}],
+	})
+	assert_has_key(allowed, "data", str(allowed.get("error", {})))
+
+
+func test_varying_from_text_matches_the_exact_property_name() -> void:
+	## A prefix match let `varyings/glow_bar` answer for `glow` when it was
+	## serialized first. Quoted property names must still parse.
+	var text := "\"varyings/glow_bar\" = \"1,2\"\nvaryings/glow = \"0,3\"\n"
+	assert_eq(Handler._varying_from_text(text, "glow"), "0,3")
+	assert_eq(Handler._varying_from_text(text, "glow_bar"), "1,2")
+	assert_eq(Handler._varying_from_text('varyings/glow_bar = "1,2"', "glow"), "")
+	assert_eq(Handler._varying_from_text('"varyings/glow" = "0,3"', "glow"), "0,3")

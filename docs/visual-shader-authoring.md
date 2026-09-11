@@ -117,11 +117,16 @@ file untouched. Supported operations:
 | `add_varying` | `name`, `mode`, `type` |
 | `remove_varying` | `name` |
 
-`add_node` without an `id` gets the next free integer. A string `id` is
-allocated an integer and returned in `added` as `{id, node_id, stage}`, so
-later operations in the same call can reference it by that string. Numeric IDs
-address existing nodes directly. Limits are 512 operations per call and 256
-nodes / 1024 connections in the result.
+`stage` must be one of the stages the shader's mode defines — the same rule
+`visual_shader_create_graph` applies; a stage that exists in another mode is
+rejected. `add_node` without an `id` gets the next free integer. A string `id`
+is scoped to its stage and returned in `added` as `{id, node_id, stage}`: the
+same string may name one node per stage, a duplicate inside one stage is
+rejected, and later operations reference it by `stage` + string. Numeric IDs
+address existing nodes directly. `replace_node` applies the same implicit
+defaults as `add_node`, so the `VisualShaderNodeTime`/`Sin`/`Cos` aliases set
+`input_name`/`function` unless `params` overrides them. Limits are 512
+operations per call and 256 nodes / 1024 connections in the result.
 
 ```json
 {
