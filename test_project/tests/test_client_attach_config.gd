@@ -689,6 +689,7 @@ func test_registry_wide_attach_shape_declarations() -> void:
 		## DeepSeek Harness nests the launch under the loader entry's `config`
 		## and pins `transport` next to command/args (see _dsh_strategy.gd).
 		"deepseek_harness": [McpClient.CommandShape.FLAT, "stdio", ["url"]],
+		"zcode": [McpClient.CommandShape.FLAT, "stdio", ["url", "headers"]],
 	}
 	for id in McpClientRegistry.ids():
 		assert_true(expectations.has(String(id)), "client %s has no #838 shape expectation — add one" % id)
