@@ -37,6 +37,7 @@ const _CLIENT_SCRIPT_PATHS := [
 	"res://addons/godot_ai/clients/hermes.gd",
 	"res://addons/godot_ai/clients/pi.gd",
 	"res://addons/godot_ai/clients/deepseek_harness.gd",
+	"res://addons/godot_ai/clients/zcode.gd",
 ]
 
 static var _instances: Array[McpClient] = []
