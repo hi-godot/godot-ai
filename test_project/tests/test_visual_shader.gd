@@ -305,3 +305,206 @@ func test_separate_material_creation_and_undoable_assignment() -> void:
 	assert_true(mesh.material_override.shader is VisualShader)
 	root.remove_child(mesh)
 	mesh.free()
+
+
+# ============================================================================
+# visual_shader_get
+# ============================================================================
+
+func test_get_graph_reports_structure() -> void:
+	var request := _request("get_structure")
+	var created := _handler.create_graph(request)
+	assert_has_key(created, "data", str(created.get("error", {})))
+	var result := _handler.get_graph({"path": request.resource_path})
+	assert_has_key(result, "data")
+	assert_eq(result.data.shader_type, "spatial")
+	assert_eq(result.data.node_count, 1)
+	assert_eq(result.data.connection_count, 1)
+	assert_eq(result.data.stages.size(), 1)
+	var fragment: Dictionary = result.data.stages[0]
+	assert_eq(fragment.stage, "fragment")
+	assert_eq(fragment.nodes.size(), 1)
+	assert_eq(fragment.nodes[0].id, 2)
+	assert_eq(fragment.nodes[0].type, "VisualShaderNodeColorConstant")
+	assert_eq(fragment.nodes[0].params.constant.r, 1.0)
+	assert_true(is_equal_approx(fragment.nodes[0].params.constant.b, 0.1))
+	assert_eq(fragment.connections[0].from_node, 2)
+	assert_eq(fragment.connections[0].from_port, 0)
+	assert_eq(fragment.connections[0].to_node, 0)
+	assert_eq(fragment.connections[0].to_port, 0)
+
+
+func test_get_graph_errors_on_missing_and_wrong_type() -> void:
+	assert_has_key(_handler.get_graph({"path": "res://_test_visual_shader_missing_get.tres"}), "error")
+	var wrong := "res://_test_visual_shader_wrong_type.tres"
+	_paths.append(wrong)
+	assert_eq(ResourceSaver.save(Resource.new(), wrong), OK)
+	var result := _handler.get_graph({"path": wrong})
+	assert_has_key(result, "error")
+	assert_eq(result.error.code, "WRONG_TYPE")
+
+
+# ============================================================================
+# varyings
+# ============================================================================
+
+func test_create_graph_with_varyings_and_get_reports_them() -> void:
+	var request := _request("varyings")
+	request["varyings"] = [
+		{"name": "tint_var", "mode": "vertex_to_frag_light", "type": "vector4"},
+		{"name": "strength_var", "mode": "frag_to_light", "type": "float"},
+	]
+	var created := _handler.create_graph(request)
+	assert_has_key(created, "data", str(created.get("error", {})))
+	assert_eq(created.data.varyings, ["tint_var", "strength_var"])
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_true(shader.has_varying("tint_var"))
+	assert_true(shader.has_varying("strength_var"))
+	var result := _handler.get_graph({"path": request.resource_path})
+	assert_has_key(result, "data")
+	assert_eq(result.data.varyings.size(), 2)
+	for varying in result.data.varyings:
+		if varying.name == "tint_var":
+			assert_eq(varying.mode, "vertex_to_frag_light")
+			assert_eq(varying.type, "vector4")
+		elif varying.name == "strength_var":
+			assert_eq(varying.mode, "frag_to_light")
+			assert_eq(varying.type, "float")
+
+
+func test_create_graph_rejects_bad_varyings() -> void:
+	var cases: Array = [
+		[{"name": "bad name", "mode": "vertex_to_frag_light", "type": "float"}],
+		[{"name": "x", "mode": "nope", "type": "float"}],
+		[{"name": "x", "mode": "frag_to_light", "type": "nope"}],
+		[
+			{"name": "dup", "mode": "frag_to_light", "type": "float"},
+			{"name": "dup", "mode": "frag_to_light", "type": "float"},
+		],
+	]
+	for index in cases.size():
+		var request := _request("bad_varying_%d" % index)
+		request["varyings"] = cases[index]
+		assert_has_key(_handler.create_graph(request), "error", str(cases[index]))
+		assert_false(FileAccess.file_exists(request.resource_path))
+	var particles := _request("particles_varying")
+	particles.shader_type = "particles"
+	particles.stages = [{"stage": "process", "nodes": [], "connections": []}]
+	particles["varyings"] = [{"name": "x", "mode": "vertex_to_frag_light", "type": "float"}]
+	assert_has_key(_handler.create_graph(particles), "error")
+
+
+# ============================================================================
+# visual_shader_node_catalog
+# ============================================================================
+
+func test_node_catalog_lists_classes_and_params() -> void:
+	var result := _handler.node_catalog({"filter": "FloatConstant"})
+	assert_has_key(result, "data")
+	assert_gt(result.data.total, 0)
+	var found := false
+	for entry in result.data.nodes:
+		if entry.type == "VisualShaderNodeFloatConstant":
+			found = true
+			assert_true(entry.params.has("constant"))
+	assert_true(found, "catalog should include VisualShaderNodeFloatConstant")
+	assert_true(result.data.aliases.has("VisualShaderNodeScalarOp"))
+	var paged := _handler.node_catalog({"offset": 1, "limit": 1})
+	assert_has_key(paged, "data")
+	assert_eq(paged.data.count, 1)
+	assert_eq(paged.data.offset, 1)
+
+
+# ============================================================================
+# visual_shader_edit
+# ============================================================================
+
+func test_edit_graph_adds_connects_and_reports_mapping() -> void:
+	var request := _request("edit_add")
+	request.stages[0].nodes = []
+	request.stages[0].connections = []
+	assert_has_key(_handler.create_graph(request), "data")
+	var result := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "add_node", "stage": "fragment", "id": "extra",
+			 "type": "VisualShaderNodeFloatConstant", "params": {"constant": 0.75},
+			 "position": {"x": 10, "y": 20}},
+			{"op": "connect", "stage": "fragment", "from_node": "extra",
+			 "from_port": 0, "to_node": "output", "to_port": 0},
+		],
+	})
+	assert_has_key(result, "data", str(result.get("error", {})))
+	assert_eq(result.data.operations_applied, 2)
+	assert_eq(result.data.added.size(), 1)
+	assert_eq(result.data.added[0].id, "extra")
+	var node_id: int = result.data.added[0].node_id
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_eq(shader.get_node(VisualShader.TYPE_FRAGMENT, node_id).get("constant"), 0.75)
+	assert_eq(shader.get_node_connections(VisualShader.TYPE_FRAGMENT).size(), 1)
+	assert_eq(shader.get_node_position(VisualShader.TYPE_FRAGMENT, node_id), Vector2(10, 20))
+
+
+func test_edit_graph_replaces_disconnects_and_removes() -> void:
+	var request := _request("edit_mutate")
+	assert_has_key(_handler.create_graph(request), "data")
+	var result := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "set_node_params", "stage": "fragment", "id": 2,
+			 "params": {"constant": {"r": 0.1, "g": 0.2, "b": 0.3, "a": 1}}},
+			{"op": "replace_node", "stage": "fragment", "id": 2,
+			 "type": "VisualShaderNodeVec3Constant",
+			 "params": {"constant": {"x": 1, "y": 2, "z": 3}}},
+			{"op": "disconnect", "stage": "fragment", "from_node": 2,
+			 "from_port": 0, "to_node": "output", "to_port": 0},
+			{"op": "remove_node", "stage": "fragment", "id": 2},
+		],
+	})
+	assert_has_key(result, "data", str(result.get("error", {})))
+	assert_eq(result.data.node_count, 0)
+	assert_eq(result.data.connection_count, 0)
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_true(shader.get_node(VisualShader.TYPE_FRAGMENT, 2) == null)
+
+
+func test_edit_graph_varyings_round_trip() -> void:
+	var request := _request("edit_varyings")
+	assert_has_key(_handler.create_graph(request), "data")
+	var added := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [{"op": "add_varying", "name": "glow_var", "mode": "frag_to_light", "type": "vector3"}],
+	})
+	assert_has_key(added, "data", str(added.get("error", {})))
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_true(shader.has_varying("glow_var"))
+	var removed := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [{"op": "remove_varying", "name": "glow_var"}],
+	})
+	assert_has_key(removed, "data", str(removed.get("error", {})))
+	shader = ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_false(shader.has_varying("glow_var"))
+
+
+func test_edit_graph_failures_preserve_file() -> void:
+	var request := _request("edit_fail")
+	assert_has_key(_handler.create_graph(request), "data")
+	var before := FileAccess.get_file_as_bytes(request.resource_path)
+	var cases: Array = [
+		[{"op": "add_node", "stage": "fragment", "type": "Node"}],
+		[{"op": "add_node", "stage": "fragment", "id": 2, "type": "VisualShaderNodeFloatConstant"}],
+		[{"op": "connect", "stage": "fragment", "from_node": "missing", "from_port": 0, "to_node": "output", "to_port": 0}],
+		[{"op": "connect", "stage": "fragment", "from_node": 2, "from_port": 0, "to_node": "output", "to_port": 0}],
+		[{"op": "remove_node", "stage": "fragment", "id": "output"}],
+		[{"op": "unknown"}],
+	]
+	for operations in cases:
+		var result := _handler.edit_graph({"resource_path": request.resource_path, "operations": operations})
+		assert_has_key(result, "error", str(operations))
+		assert_eq(FileAccess.get_file_as_bytes(request.resource_path), before, "failed edit must preserve bytes")
+	var missing := _handler.edit_graph({
+		"resource_path": "res://_test_visual_shader_missing_edit.tres",
+		"operations": [{"op": "remove_node", "stage": "fragment", "id": 2}],
+	})
+	assert_has_key(missing, "error")
