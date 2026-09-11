@@ -12,6 +12,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const MaterialValues := preload("res://addons/godot_ai/handlers/material_values.gd")
 const MaterialPresets := preload("res://addons/godot_ai/handlers/material_presets.gd")
+const ShaderHandler := preload("res://addons/godot_ai/handlers/shader_handler.gd")
 
 const _TYPE_TO_CLASS := {
 	"standard": "StandardMaterial3D",
@@ -40,6 +41,7 @@ func create_material(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var type_str: String = params.get("type", "standard")
 	var shader_path: String = params.get("shader_path", "")
+	var code: String = params.get("code", "")
 	var overwrite: bool = params.get("overwrite", false)
 
 	var err := _validate_material_path(path, "path", true)
@@ -63,22 +65,6 @@ func create_material(params: Dictionary) -> Dictionary:
 	if mat == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate material")
 
-	if type_str == "shader":
-		if shader_path.is_empty():
-			return ErrorCodes.make(
-				ErrorCodes.INVALID_PARAMS,
-				"ShaderMaterial requires shader_path (res:// / uid:// / user:// path to a .gdshader)"
-			)
-		var shader_path_err = McpPathValidator.loadable_error(shader_path, "shader_path")
-		if shader_path_err != null:
-			return shader_path_err
-		if not ResourceLoader.exists(shader_path):
-			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Shader not found: %s" % shader_path)
-		var shader_res := ResourceLoader.load(shader_path)
-		if not (shader_res is Shader):
-			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Shader" % shader_path)
-		(mat as ShaderMaterial).shader = shader_res
-
 	var dir_path := path.get_base_dir()
 	var mkdir_err := DirAccess.make_dir_recursive_absolute(dir_path)
 	if mkdir_err != OK and mkdir_err != ERR_ALREADY_EXISTS:
@@ -86,6 +72,36 @@ func create_material(params: Dictionary) -> Dictionary:
 			ErrorCodes.INTERNAL_ERROR,
 			"Failed to create directory: %s (error %d)" % [dir_path, mkdir_err]
 		)
+
+	var inline_shader := false
+	if type_str == "shader":
+		if not shader_path.is_empty() and not code.is_empty():
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS, "Provide either shader_path or code, not both"
+			)
+		if not code.is_empty():
+			## Inline shader source is compiled before anything is saved; a parse
+			## failure returns the diagnostics instead of writing a broken .tres.
+			var built := ShaderHandler.build_inline_shader(code, dir_path)
+			if built.has("error_response"):
+				return built.error_response
+			(mat as ShaderMaterial).shader = built.shader
+			inline_shader = true
+		elif not shader_path.is_empty():
+			var shader_path_err = McpPathValidator.loadable_error(shader_path, "shader_path")
+			if shader_path_err != null:
+				return shader_path_err
+			if not ResourceLoader.exists(shader_path):
+				return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Shader not found: %s" % shader_path)
+			var shader_res := ResourceLoader.load(shader_path)
+			if not (shader_res is Shader):
+				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Shader" % shader_path)
+			(mat as ShaderMaterial).shader = shader_res
+		else:
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
+				"ShaderMaterial requires shader_path (a .gdshader or VisualShader .tres path) or code (inline .gdshader source)"
+			)
 
 	var save_err := McpResourceIO.guarded_save(mat, path, _connection)
 	if save_err != OK:
@@ -104,6 +120,7 @@ func create_material(params: Dictionary) -> Dictionary:
 			"type": type_str,
 			"class": mat.get_class(),
 			"shader_path": shader_path,
+			"inline_shader": inline_shader,
 			"overwritten": existed_before,
 			"undoable": false,
 			"reason": "File creation is persistent; delete the file manually to revert",

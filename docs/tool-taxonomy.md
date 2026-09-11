@@ -163,7 +163,7 @@ These are the tools that move the project from "functional prototype" toward "re
 
 - `material.*` — Standard / ORM / CanvasItem / Shader authoring shipped with 6 presets and shader uniform support
 - `particles.*` — GPU+CPU 2D+3D shipped with 7 presets; auto-default billboard draw material so color_ramp renders out of the box
-- `shader.*` — still pending; today shaders are authored via `filesystem_write_text` + `material_set_shader_param`
+- `shader.*` — raw `.gdshader` / `.gdshaderinc` CRUD shipped under `material_manage` (`shader_create`, `shader_get`, `shader_validate`, `shader_list`, `shader_patch`); every write is compile-validated before it touches disk, and inline shader source can be embedded through `material_manage(op="create", type="shader", code=...)`
 - `physics.*` helpers — `physics_shape_autofit` op (under `resource_manage`) derives a Shape2D/Shape3D from a target node's bounds; layer/mask/body helpers still pending
 - light `tilemap.*` — shipped (#622): `tilemap_manage` (set_cell / set_cells_rect / clear / get_cells) + `tileset_manage` (atlas tiles / atlas image)
 - light `navigation.*` — pending
