@@ -55,10 +55,10 @@ Ops:
   • shader_get(path)
         Read a .gdshader/.gdshaderinc: full source, shader_type, uniforms,
         render modes, and #include list.
-  • shader_validate(code, kind="shader", shader_type="spatial")
+  • shader_validate(code, kind="shader", shader_type="spatial", base_dir="")
         Compile shader source without writing a file. Returns valid plus
-        errors/warnings with line numbers — use it to iterate on shader code
-        before shader_create or shader_patch.
+        errors/warnings. Pass base_dir (a res:// directory) to validate
+        relative #include resolution against where the shader will live.
   • shader_list(root="res://")
         List .gdshader and .gdshaderinc files under a project directory.
   • shader_patch(path, old_text, new_text, replace_all=False)

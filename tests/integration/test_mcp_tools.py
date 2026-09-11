@@ -6069,18 +6069,22 @@ class TestShaderCreateTool:
             )
 
         task = asyncio.create_task(respond())
-        with pytest.raises(Exception, match="was not written"):
-            await client.call_tool(
-                "material_manage",
-                {
-                    "op": "shader_create",
-                    "params": {
-                        "resource_path": "res://shaders/bad.gdshader",
-                        "code": "shader_type spatial;",
-                    },
+        result = await client.call_tool(
+            "material_manage",
+            {
+                "op": "shader_create",
+                "params": {
+                    "resource_path": "res://shaders/bad.gdshader",
+                    "code": "shader_type spatial;",
                 },
-            )
+            },
+            raise_on_error=False,
+        )
         await task
+        assert result.is_error
+        error = result.structured_content["error"]
+        assert error["code"] == "INVALID_PARAMS"
+        assert error["data"]["errors"][0]["line"] == 5
 
 
 class TestShaderGetTool:
