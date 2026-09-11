@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -109,3 +110,79 @@ def test_build_resolution_does_not_require_release_package(resolution):
     report["install"][0]["metadata"] = {"name": "setuptools", "version": "84.0.0"}
     result = public.verify_resolution(report, record, require_release=False)
     assert result[0]["name"] == "setuptools" and len(reads) == 1
+
+
+def _uncanonical_directory(tmp_path):
+    """A directory whose resolve() differs from its spelling: a symlink, else an 8.3 name."""
+    import ctypes
+    import os
+
+    real = tmp_path / "real-directory-name"
+    real.mkdir()
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+        return link
+    except (OSError, NotImplementedError):
+        pass
+    if os.name == "nt":
+        buffer = ctypes.create_unicode_buffer(1024)
+        if ctypes.windll.kernel32.GetShortPathNameW(str(real), buffer, 1024):
+            short = Path(buffer.value)
+            if short != real and short.resolve() == real.resolve():
+                return short
+    pytest.skip("no symlink or short-name support")
+
+
+def test_install_location_check_uses_canonical_temporary_directory(tmp_path, monkeypatch):
+    """macOS /var -> /private/var and Windows 8.3 names must not fail the location check."""
+    import contextlib
+    import types
+
+    link = _uncanonical_directory(tmp_path)
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / "evidence.json").write_bytes(b"{}")
+    record = {"version": "4.1.0", "source": "abc", "files": {}}
+
+    @contextlib.contextmanager
+    def fake_temporary(prefix):
+        yield str(link)
+
+    commands = []
+    monkeypatch.setattr(
+        public, "sys", types.SimpleNamespace(version_info=types.SimpleNamespace(major=3, minor=11))
+    )
+    monkeypatch.setattr(public.tempfile, "TemporaryDirectory", fake_temporary)
+    monkeypatch.setattr(public.support, "verify_candidate", lambda *args: record)
+    monkeypatch.setattr(public.promotion, "verify_pypi", lambda record: {})
+    monkeypatch.setattr(
+        public.promotion,
+        "github_preflight",
+        lambda record: {
+            "draft": False,
+            "assets": [],
+            "body": f"https://github.com/{support.REPOSITORY}/blob/abc/docs/v4-migration.md",
+        },
+    )
+    monkeypatch.setattr(
+        public.venv,
+        "EnvBuilder",
+        lambda **kwargs: types.SimpleNamespace(create=lambda target: None),
+    )
+    monkeypatch.setattr(public, "build_requirements", lambda candidate, version: ["build"])
+    monkeypatch.setattr(public, "read_resolution", lambda report: {})
+    monkeypatch.setattr(public, "verify_resolution", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        public.qualification,
+        "execute",
+        lambda command, log, *, cwd, environment: commands.append(command),
+    )
+    import script.qualification_engine as engine
+
+    public.public_row(candidate, tmp_path / "row", engine.host_row())
+
+    checks = [command[-1] for command in commands if command[-2] == "-c"]
+    assert len(checks) == 2
+    for kind, check in zip(("wheel", "sdist"), checks, strict=True):
+        assert check.endswith(f".is_relative_to({str(link.resolve() / kind)!r})")

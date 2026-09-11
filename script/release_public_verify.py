@@ -117,7 +117,7 @@ def public_row(candidate: Path, output: Path, os_label: str) -> None:
         assets[asset["name"]] = {"url": url, **expected}
     resolutions = {}
     with tempfile.TemporaryDirectory(prefix="godot-ai-public-") as temporary:
-        work = Path(temporary)
+        work = Path(temporary).resolve()
         environment = {
             key: value
             for key, value in os.environ.items()
