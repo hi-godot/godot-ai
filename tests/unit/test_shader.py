@@ -83,6 +83,16 @@ async def test_shader_validate_is_read_only(monkeypatch):
     result = await shader.shader_validate(runtime, "shader_type spatial;")
     assert result["valid"] is False
     assert runtime.send_command.call_args.args[1]["kind"] == "shader"
+    assert "base_dir" not in runtime.send_command.call_args.args[1]
+
+
+async def test_shader_validate_forwards_base_dir():
+    runtime = AsyncMock()
+    runtime.send_command.return_value = {"valid": True}
+    await shader.shader_validate(
+        runtime, "shader_type spatial;", base_dir="res://shaders"
+    )
+    assert runtime.send_command.call_args.args[1]["base_dir"] == "res://shaders"
 
 
 async def test_shader_get_forwards_path():

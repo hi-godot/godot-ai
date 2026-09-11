@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
@@ -36,12 +38,13 @@ async def shader_validate(
     code: str,
     kind: str = "shader",
     shader_type: str = "spatial",
+    base_dir: str = "",
 ) -> dict:
     """Compile shader source without writing anything."""
-    return await runtime.send_command(
-        "shader_validate",
-        {"code": code, "kind": kind, "shader_type": shader_type},
-    )
+    params: dict[str, Any] = {"code": code, "kind": kind, "shader_type": shader_type}
+    if base_dir:
+        params["base_dir"] = base_dir
+    return await runtime.send_command("shader_validate", params)
 
 
 async def shader_list(runtime: DirectRuntime, root: str = "res://") -> dict:

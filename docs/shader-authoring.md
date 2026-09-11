@@ -12,7 +12,7 @@ shader file writes report `undoable: false`; delete the file to revert.
 |----|---------|
 | `shader_create(resource_path, code, overwrite=false, shader_type="spatial")` | Validate + atomically write a `.gdshader` or `.gdshaderinc`. |
 | `shader_get(path)` | Full source + parsed metadata. Resource form: `godot://shader/{path}`. |
-| `shader_validate(code, kind="shader", shader_type="spatial")` | Compile-check source without writing anything. |
+| `shader_validate(code, kind="shader", shader_type="spatial", base_dir="")` | Compile-check source without writing anything. |
 | `shader_list(root="res://")` | List `.gdshader` / `.gdshaderinc` files. |
 | `shader_patch(path, old_text, new_text, replace_all=false)` | Exact-match edit, revalidated before replacement. |
 
@@ -51,12 +51,20 @@ untouched.
   appended, and `Shader.get_shader_uniform_list()` is populated only when the
   whole translation unit parses. A missing sentinel means the code failed to
   compile.
+- `shader_create` / `shader_patch` validate through a scratch `.gdshader`
+  written beside the destination and loaded with `ResourceLoader`, so relative
+  `#include "<sibling>.gdshaderinc"` paths resolve exactly as they will for the
+  saved file. Inline shader source (embedded in a material) validates in memory,
+  where a relative include correctly fails because Godot only resolves relative
+  includes for standalone shader files.
 - `.gdshaderinc` cannot compile on its own, so it is wrapped in a minimal
   `shader_type <shader_type>; #include "<scratch>"` shader in the same
   directory. `shader_type` (default `spatial`) selects the wrapper context for
   includes that rely on stage-specific builtins.
 - `shader_validate` compiles a scratch copy under `user://` and removes it, so
-  an inspection call never registers anything with the project filesystem.
+  an inspection call never registers anything with the project filesystem. Pass
+  `base_dir` (a `res://` directory) to validate relative includes against the
+  directory the shader will live in.
 - Godot exposes no structured compile-error API to GDScript: the compiler's
   line-tagged output only reaches the editor Output panel. A failed validation
   therefore returns one synthesized `error` diagnostic pointing at the Output

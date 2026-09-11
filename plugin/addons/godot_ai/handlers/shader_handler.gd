@@ -162,6 +162,7 @@ func validate_shader(params: Dictionary) -> Dictionary:
 	var code: String = params.get("code", "")
 	var kind: String = params.get("kind", "shader")
 	var shader_type: String = params.get("shader_type", "spatial")
+	var base_dir: String = params.get("base_dir", "")
 
 	if not params.has("code") or code.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: code")
@@ -175,8 +176,21 @@ func validate_shader(params: Dictionary) -> Dictionary:
 	var type_err := _shader_type_error(shader_type)
 	if type_err != null:
 		return type_err
+	## Standalone validation defaults to user:// scratch space. Pass base_dir to
+	## validate relative #include resolution against the directory the shader
+	## will live in.
+	if not base_dir.is_empty():
+		var base_err = McpPathValidator.path_error(base_dir, "base_dir")
+		if base_err != null:
+			return base_err
+		if not DirAccess.dir_exists_absolute(base_dir):
+			return ErrorCodes.make(
+				ErrorCodes.RESOURCE_NOT_FOUND, "base_dir does not exist: %s" % base_dir
+			)
+	else:
+		base_dir = "user://"
 
-	var validation := _validate_code(code, kind, "user://", shader_type)
+	var validation := _validate_code(code, kind, base_dir, shader_type)
 	if validation.has("error"):
 		return validation.error
 	return {"data": {
@@ -312,7 +326,7 @@ static func build_inline_shader(code: String, directory: String) -> Dictionary:
 	var size_err := _size_error(code)
 	if size_err != null:
 		return {"error_response": size_err}
-	var validation := _validate_code(code, "shader", directory, "spatial")
+	var validation := _validate_code(code, "shader", directory, "spatial", false)
 	if validation.has("error"):
 		return {"error_response": validation.error}
 	if not validation.valid:
@@ -336,29 +350,42 @@ static func build_inline_shader(code: String, directory: String) -> Dictionary:
 ## validation). `.gdshaderinc` cannot compile alone, so it is wrapped in a
 ## minimal `shader_type <type>; #include "<scratch>"` shader in the same
 ## directory (include resolution is relative to the including file).
+##
+## `file_backed` writes the scratch `.gdshader` to `directory` and loads it:
+## Godot only resolves relative `#include` paths for standalone shader files,
+## so file-backed validation is required for create/patch to accept shaders
+## that include a sibling `.gdshaderinc`. Inline shaders (embedded in a
+## material) cannot use relative includes at runtime, so they validate
+## in-memory (`file_backed = false`) and a relative include fails there too.
 static func _validate_code(
-	code: String, kind: String, directory: String, shader_type: String
+	code: String, kind: String, directory: String, shader_type: String,
+	file_backed: bool = true,
 ) -> Dictionary:
 	var token := "%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
 	var sentinel := "_mcp_validate_%d" % Time.get_ticks_usec()
 	var shader: Shader = null
 	var scratch_paths: Array[String] = []
-	if kind == "include":
-		var include_path := _scratch_path(directory, token, INCLUDE_EXT)
-		var wrapper_path := _scratch_path(directory, token, SHADER_EXT)
-		var write_err = _write_scratch(include_path, code)
+	if kind == "include" or (kind == "shader" and file_backed):
+		var ext := INCLUDE_EXT if kind == "include" else SHADER_EXT
+		var scratch_path := _scratch_path(directory, token, ext)
+		var staged := code if kind == "include" else code + "\nuniform float %s;\n" % sentinel
+		var write_err = _write_scratch(scratch_path, staged)
 		if write_err != null:
 			return {"error": write_err}
-		scratch_paths.append(include_path)
-		var wrapper := "shader_type %s;\n#include \"%s\"\nuniform float %s;\n" % [
-			shader_type, include_path.get_file(), sentinel
-		]
-		write_err = _write_scratch(wrapper_path, wrapper)
-		if write_err != null:
-			_remove_paths(scratch_paths)
-			return {"error": write_err}
-		scratch_paths.append(wrapper_path)
-		shader = ResourceLoader.load(wrapper_path, "", ResourceLoader.CACHE_MODE_IGNORE) as Shader
+		scratch_paths.append(scratch_path)
+		var capture_path := scratch_path
+		if kind == "include":
+			var wrapper_path := _scratch_path(directory, token, SHADER_EXT)
+			var wrapper := "shader_type %s;\n#include \"%s\"\nuniform float %s;\n" % [
+				shader_type, scratch_path.get_file(), sentinel
+			]
+			write_err = _write_scratch(wrapper_path, wrapper)
+			if write_err != null:
+				_remove_paths(scratch_paths)
+				return {"error": write_err}
+			scratch_paths.append(wrapper_path)
+			capture_path = wrapper_path
+		shader = ResourceLoader.load(capture_path, "", ResourceLoader.CACHE_MODE_IGNORE) as Shader
 	else:
 		shader = Shader.new()
 		shader.code = code + "\nuniform float %s;\n" % sentinel
@@ -514,10 +541,11 @@ static func _kind_for_path(path: String) -> String:
 
 
 static func _size_error(code: String) -> Variant:
-	if code.length() > MAX_CODE_BYTES:
+	var byte_count := code.to_utf8_buffer().size()
+	if byte_count > MAX_CODE_BYTES:
 		return ErrorCodes.make(
 			ErrorCodes.VALUE_OUT_OF_RANGE,
-			"code exceeds the %d-byte limit (got %d)" % [MAX_CODE_BYTES, code.length()]
+			"code exceeds the %d-byte limit (got %d)" % [MAX_CODE_BYTES, byte_count]
 		)
 	return null
 

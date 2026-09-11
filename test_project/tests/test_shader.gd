@@ -247,6 +247,54 @@ func test_validate_include_kind() -> void:
 	assert_false(invalid.data.valid, "Invalid include must fail validation")
 
 
+func test_create_and_patch_validate_relative_includes() -> void:
+	_cleanup_artifact(TEST_INCLUDE_PATH)
+	var include_result := _shader_handler.create_shader({
+		"resource_path": TEST_INCLUDE_PATH, "code": VALID_INCLUDE,
+	})
+	assert_has_key(include_result, "data", str(include_result.get("error", {})))
+	var shader_code := """shader_type spatial;
+
+#include "%s"
+
+void fragment() {
+	ALBEDO = vec3(amplify(1.0));
+}
+""" % TEST_INCLUDE_PATH.get_file()
+	_cleanup_artifact(TEST_SHADER_PATH)
+	var created := _shader_handler.create_shader({
+		"resource_path": TEST_SHADER_PATH, "code": shader_code,
+	})
+	assert_has_key(created, "data", str(created.get("error", {})))
+	assert_true(created.data.uniform_count >= 1, "include uniforms should be reported")
+	var patched := _shader_handler.patch_shader({
+		"path": TEST_SHADER_PATH, "old_text": "amplify(1.0)", "new_text": "amplify(0.5)",
+	})
+	assert_has_key(patched, "data", str(patched.get("error", {})))
+	assert_eq(patched.data.replacements, 1)
+
+
+func test_validate_relative_include_needs_base_dir() -> void:
+	_cleanup_artifact(TEST_INCLUDE_PATH)
+	assert_has_key(_shader_handler.create_shader({
+		"resource_path": TEST_INCLUDE_PATH, "code": VALID_INCLUDE,
+	}), "data")
+	var shader_code := """shader_type spatial;
+
+#include "%s"
+
+void fragment() {
+	ALBEDO = vec3(amplify(1.0));
+}
+""" % TEST_INCLUDE_PATH.get_file()
+	var without_dir := _shader_handler.validate_shader({"code": shader_code})
+	assert_has_key(without_dir, "data")
+	assert_false(without_dir.data.valid, "relative include cannot resolve without base_dir")
+	var with_dir := _shader_handler.validate_shader({"code": shader_code, "base_dir": "res://tests"})
+	assert_has_key(with_dir, "data")
+	assert_true(with_dir.data.valid, "base_dir should resolve the relative include")
+
+
 # ============================================================================
 # shader_list
 # ============================================================================
