@@ -244,7 +244,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
     (
         "material",
         "  material_manage  create, set_param, set_shader_param, get, list, assign,\n"
-        "                   apply_to_node, apply_preset\n",
+        "                   apply_to_node, apply_preset, visual_shader_create_graph\n",
     ),
     (
         "audio",

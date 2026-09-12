@@ -2664,6 +2664,34 @@ class TestPhysicsShapeAutofitTool:
 # ---------------------------------------------------------------------------
 
 
+class TestVisualShaderCreateGraphTool:
+    async def test_dispatches_through_material_manage(self, mcp_stack):
+        client, plugin = mcp_stack
+        stages = [{"stage": "fragment", "nodes": [], "connections": []}]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_create_graph"
+            assert cmd["params"] == {
+                "resource_path": "res://graph.tres", "stages": stages,
+                "shader_type": "spatial", "overwrite": False,
+            }
+            await plugin.send_response(cmd["request_id"], {
+                "resource_path": "res://graph.tres", "undoable": False,
+                "id_map": {"fragment": []}, "node_count": 0, "connection_count": 0,
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_create_graph",
+            "params": {"resource_path": "res://graph.tres", "stages": stages},
+        })
+        await task
+        assert result.data["resource_path"] == "res://graph.tres"
+        assert result.data["undoable"] is False
+        assert result.data["id_map"] == {"fragment": []}
+
+
 class TestPhysicsShapeGenerateTool:
     async def test_generate_dispatches_through_resource_manage(self, mcp_stack):
         client, plugin = mcp_stack
