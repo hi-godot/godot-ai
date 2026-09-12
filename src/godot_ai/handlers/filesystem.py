@@ -40,6 +40,58 @@ async def filesystem_scan(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("scan_filesystem", {}, timeout=35.0)
 
 
+## Move/rename/remove walk the whole editor filesystem tree calling
+## ``ResourceLoader.get_dependencies`` on every resource file to find owners
+## of the affected paths (the same owner search the FileSystemDock runs). On
+## a large project that can exceed the default command timeout, so give it
+## the same headroom as ``filesystem_scan``.
+_REORGANIZE_TIMEOUT = 30.0
+
+
+async def filesystem_move(runtime: DirectRuntime, path: str, new_path: str) -> dict:
+    """Move a file or directory inside ``res://`` with editor-side fixups.
+
+    Routes through the plugin so ``.uid``/``.import`` sidecars travel with the
+    file, ``uid://`` references keep resolving, and dependent ``.tscn``/
+    ``.tres`` files get their ``path=`` references rewritten (#907).
+    """
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "move_file",
+        {"path": path, "new_path": new_path},
+        timeout=_REORGANIZE_TIMEOUT,
+    )
+
+
+async def filesystem_rename(runtime: DirectRuntime, path: str, new_name: str) -> dict:
+    """Rename a file or directory in place (``new_name`` is a bare name)."""
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "rename_file",
+        {"path": path, "new_name": new_name},
+        timeout=_REORGANIZE_TIMEOUT,
+    )
+
+
+async def filesystem_remove(
+    runtime: DirectRuntime,
+    path: str,
+    force: bool = False,
+    permanent: bool = False,
+) -> dict:
+    """Remove a file or directory, refusing referenced targets unless forced.
+
+    Defaults to the OS trash (what the editor's own Delete does) so a mistaken
+    removal is recoverable; ``permanent=True`` deletes outright.
+    """
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "remove_file",
+        {"path": path, "force": force, "permanent": permanent},
+        timeout=_REORGANIZE_TIMEOUT,
+    )
+
+
 async def filesystem_search(
     runtime: DirectRuntime,
     name: str = "",

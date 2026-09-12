@@ -45,6 +45,27 @@ Ops:
   • search(name="", type="", path="", offset=0, limit=100)
         Find files by name, resource type, or path substring. At least one
         filter must be set. Paginated.
+  • move(path, new_path)
+        Move a file or folder to a new ``res://`` path through the editor,
+        the way the FileSystem dock does it: ``.uid``/``.import`` sidecars
+        travel with the file, ``uid://`` references keep resolving, dependent
+        ``.tscn``/``.tres`` files get their ``path=`` references rewritten,
+        autoloads and file-typed project settings are updated, and the
+        editor filesystem cache is refreshed. Refuses when ``new_path``
+        already exists. Scripts that name the old path as a string
+        (``preload()``/``load()``) are not rewritten (the editor doesn't
+        either) and are listed under ``script_references_unfixed`` — patch
+        those with ``script_patch``. Not undoable.
+  • rename(path, new_name)
+        Rename a file or folder in place. ``new_name`` is a bare name (no
+        ``/``); same fixups and response shape as ``move``.
+  • remove(path, force=false, permanent=false)
+        Delete a file or folder. Refuses (with ``error.data.referenced_by``)
+        when another resource still references it unless ``force=true``.
+        Defaults to the OS trash, like the editor's own Delete, so a mistake
+        is recoverable; ``permanent=true`` deletes outright. Releases the
+        file's ``uid`` and clears autoloads / project settings that pointed
+        at it. Not undoable.
 """
 
 
@@ -59,6 +80,9 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
             "reimport": filesystem_handlers.filesystem_reimport,
             "scan": filesystem_handlers.filesystem_scan,
             "search": filesystem_handlers.filesystem_search,
+            "move": filesystem_handlers.filesystem_move,
+            "rename": filesystem_handlers.filesystem_rename,
+            "remove": filesystem_handlers.filesystem_remove,
         },
         read_resource_forms={
             ## File reads/searches are per-call queries with arbitrary path

@@ -69,7 +69,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "                   input_key, input_mouse, input_gamepad, input_action,\n"
     "                   input_state\n"
     "  autoload_manage  list, add, remove\n"
-    "  filesystem_manage read_text, write_text, reimport, scan, search\n"
+    "  filesystem_manage read_text, write_text, reimport, scan, search, move, rename, remove\n"
     "  theme_manage     create, set_color, set_constant, set_font_size,\n"
     "                   set_stylebox_flat, apply\n"
     "  ui_manage        set_anchor_preset, set_text, build_layout, draw_recipe\n"
