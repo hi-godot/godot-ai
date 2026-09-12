@@ -440,9 +440,16 @@ func _connect_script_debugger_breaked() -> void:
 
 
 static func _collect_nodes_of_class(node: Node, klass: String, out: Array[Node]) -> void:
+	## The editor rebuilds its UI while a plugin reload runs, so a child can be
+	## freed or null between `get_children()` and the recursive call. Skip it
+	## rather than erroring out of the debugger session setup.
+	if not is_instance_valid(node):
+		return
 	if node.get_class() == klass:
 		out.append(node)
 	for child in node.get_children():
+		if not is_instance_valid(child):
+			continue
 		_collect_nodes_of_class(child, klass, out)
 
 
