@@ -161,7 +161,7 @@ These are the tools that move the project from "functional prototype" toward "re
 
 ### Strong polish multipliers
 
-- `material.*` — Standard / ORM / CanvasItem / Shader authoring shipped with 6 presets and shader uniform support
+- `material.*` — Standard / ORM / CanvasItem / Shader authoring shipped with 6 presets and shader uniform support; VisualShader graphs ship as `visual_shader_create_graph`, `visual_shader_get` (resource form `godot://visual_shader/{path}`), `visual_shader_node_catalog`, and `visual_shader_edit` under `material_manage`
 - `particles.*` — GPU+CPU 2D+3D shipped with 7 presets; auto-default billboard draw material so color_ramp renders out of the box
 - `shader.*` — still pending; today shaders are authored via `filesystem_write_text` + `material_set_shader_param`
 - `physics.*` helpers — `physics_shape_autofit` op (under `resource_manage`) derives a Shape2D/Shape3D from a target node's bounds; layer/mask/body helpers still pending

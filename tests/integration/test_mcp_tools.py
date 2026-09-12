@@ -2664,6 +2664,151 @@ class TestPhysicsShapeAutofitTool:
 # ---------------------------------------------------------------------------
 
 
+class TestVisualShaderCreateGraphTool:
+    async def test_dispatches_through_material_manage(self, mcp_stack):
+        client, plugin = mcp_stack
+        stages = [{"stage": "fragment", "nodes": [], "connections": []}]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_create_graph"
+            assert cmd["params"] == {
+                "resource_path": "res://graph.tres", "stages": stages,
+                "shader_type": "spatial", "overwrite": False,
+            }
+            await plugin.send_response(cmd["request_id"], {
+                "resource_path": "res://graph.tres", "undoable": False,
+                "id_map": {"fragment": []}, "node_count": 0, "connection_count": 0,
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_create_graph",
+            "params": {"resource_path": "res://graph.tres", "stages": stages},
+        })
+        await task
+        assert result.data["resource_path"] == "res://graph.tres"
+        assert result.data["undoable"] is False
+        assert result.data["id_map"] == {"fragment": []}
+
+    async def test_forwards_varyings(self, mcp_stack):
+        client, plugin = mcp_stack
+        stages = [{"stage": "fragment", "nodes": [], "connections": []}]
+        varyings = [{"name": "glow", "mode": "frag_to_light", "type": "vector3"}]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_create_graph"
+            assert cmd["params"]["varyings"] == varyings
+            await plugin.send_response(cmd["request_id"], {
+                "resource_path": "res://graph.tres", "undoable": False,
+                "id_map": {"fragment": []}, "node_count": 0, "connection_count": 0,
+                "varyings": ["glow"],
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_create_graph",
+            "params": {
+                "resource_path": "res://graph.tres",
+                "stages": stages,
+                "varyings": varyings,
+            },
+        })
+        await task
+        assert result.data["varyings"] == ["glow"]
+
+
+class TestVisualShaderGetTool:
+    async def test_dispatches_through_material_manage(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_get"
+            assert cmd["params"] == {"path": "res://graph.tres"}
+            await plugin.send_response(cmd["request_id"], {
+                "path": "res://graph.tres",
+                "shader_type": "spatial",
+                "stages": [{
+                    "stage": "fragment",
+                    "nodes": [{"id": 2, "type": "VisualShaderNodeColorConstant",
+                               "position": {"x": 0, "y": 0}, "params": {}}],
+                    "connections": [],
+                }],
+                "node_count": 1,
+                "connection_count": 0,
+                "varyings": [{"name": "glow", "mode": "frag_to_light", "type": "vector3"}],
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_get",
+            "params": {"path": "res://graph.tres"},
+        })
+        await task
+        assert result.data["shader_type"] == "spatial"
+        assert result.data["node_count"] == 1
+        assert result.data["varyings"][0]["name"] == "glow"
+
+
+class TestVisualShaderNodeCatalogTool:
+    async def test_dispatches_through_material_manage(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_node_catalog"
+            assert cmd["params"] == {"filter": "Float", "offset": 0, "limit": 10}
+            await plugin.send_response(cmd["request_id"], {
+                "nodes": [{"type": "VisualShaderNodeFloatConstant", "params": ["constant"]}],
+                "count": 1, "total": 1, "offset": 0, "limit": 10, "aliases": {},
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_node_catalog",
+            "params": {"filter": "Float", "limit": 10},
+        })
+        await task
+        assert result.data["count"] == 1
+        assert result.data["nodes"][0]["type"] == "VisualShaderNodeFloatConstant"
+
+
+class TestVisualShaderEditTool:
+    async def test_dispatches_through_material_manage(self, mcp_stack):
+        client, plugin = mcp_stack
+        operations = [
+            {"op": "add_node", "stage": "fragment", "id": "extra",
+             "type": "VisualShaderNodeFloatConstant", "params": {"constant": 0.5}},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_edit"
+            assert cmd["params"] == {
+                "resource_path": "res://graph.tres",
+                "operations": operations,
+            }
+            await plugin.send_response(cmd["request_id"], {
+                "resource_path": "res://graph.tres",
+                "operations_applied": 1,
+                "added": [{"id": "extra", "node_id": 2, "stage": "fragment"}],
+                "node_count": 1,
+                "connection_count": 0,
+                "undoable": False,
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_edit",
+            "params": {"resource_path": "res://graph.tres", "operations": operations},
+        })
+        await task
+        assert result.data["operations_applied"] == 1
+        assert result.data["added"][0]["node_id"] == 2
+
+
 class TestPhysicsShapeGenerateTool:
     async def test_generate_dispatches_through_resource_manage(self, mcp_stack):
         client, plugin = mcp_stack
