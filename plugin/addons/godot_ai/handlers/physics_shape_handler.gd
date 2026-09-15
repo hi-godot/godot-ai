@@ -481,12 +481,12 @@ static func _drive_generate_job(job: Dictionary, connection, frame_signal: Varia
 	var exit_callback := _cancel_generate_job.bind(job, connection)
 	job["connection_exit_callback"] = exit_callback
 	connection.tree_exiting.connect(exit_callback, CONNECT_ONE_SHOT)
-	if not _deferred_request_pending(connection, str(job.request_id)):
-		_cancel_generate_job(job, connection)
-		return
 	var resume_signal: Signal = frame_signal if frame_signal is Signal else tree.process_frame
 	## The first yield lets the dispatcher register the deferred request before
-	## any validation error or successful result can be sent.
+	## any validation error or successful result can be sent. The abandoned-request
+	## check belongs in `_generate_step`, after this yield: before the handler
+	## returns its deferred sentinel the dispatcher has not registered the request
+	## yet, so checking here would cancel every real call.
 	await resume_signal
 	while is_instance_valid(connection) and not _generate_step(job, _GENERATE_FRAME_BUDGET_USEC):
 		await resume_signal

@@ -945,6 +945,14 @@ class _GoneDispatcher:
 		return false
 
 
+class _LateRegistrationDispatcher:
+	extends RefCounted
+	var registered := false
+
+	func has_pending_deferred_response(_request_id: String) -> bool:
+		return registered
+
+
 func _generate_job_for(paths: Array, connection = null) -> Dictionary:
 	var validated := PhysicsShapeHandler._validate_generate_request({"paths": paths})
 	assert_has_key(validated, "data")
@@ -1199,7 +1207,12 @@ func test_generate_driver_abandonment_and_success_release_script_work() -> void:
 	assert_false(PhysicsShapeHandler._generate_step(abandoned, 0))
 	assert_eq(abandoned.created.size(), 1)
 	connection.dispatcher = _GoneDispatcher.new()
-	PhysicsShapeHandler._drive_generate_job(abandoned, connection)
+	PhysicsShapeHandler._drive_generate_job(abandoned, connection, generate_driver_frame)
+	assert_eq(
+		ScriptWork.active_count("physics_shape_generate"), 1,
+		"the abandoned-request check runs after the dispatcher's registration window"
+	)
+	generate_driver_frame.emit()
 	assert_true(abandoned.result.is_empty())
 	assert_eq(abandoned.created.size(), 0)
 	assert_eq(connection.captured.size(), 0)
@@ -1230,6 +1243,44 @@ func test_generate_driver_abandonment_and_success_release_script_work() -> void:
 	_remove_node(body_b)
 	_remove_node(first)
 	_remove_node(second)
+	connection.free()
+
+
+func test_generate_driver_waits_for_dispatcher_registration_before_first_frame() -> void:
+	## The real dispatcher registers the deferred request only after the handler
+	## returns its sentinel. A pending check before the first yield would cancel
+	## every real call; the job must survive that window and reply once the
+	## registration lands.
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var mesh := _add_generate_mesh("DriverLateRegistration", Vector3.ONE)
+	var dispatcher := _LateRegistrationDispatcher.new()
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	connection.dispatcher = dispatcher
+	var job := _generate_job_for([McpScenePath.from_node(mesh, root)], connection)
+	PhysicsShapeHandler._drive_generate_job(job, connection, generate_driver_frame)
+	assert_eq(
+		ScriptWork.active_count("physics_shape_generate"), 1,
+		"the job must not cancel before the dispatcher registers the request"
+	)
+	dispatcher.registered = true
+	for _frame in range(10):
+		if not connection.captured.is_empty():
+			break
+		generate_driver_frame.emit()
+	assert_eq(connection.captured.size(), 1, "the job must reply once registration lands")
+	assert_eq(connection.captured[0].payload.data.created.size(), 1)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
+	var body := _find_named_child(root, "DriverLateRegistrationCollider")
+	assert_true(body != null)
+	_remove_node(body)
+	_remove_node(mesh)
+	connection.dispatcher = null
+	root.remove_child(connection)
 	connection.free()
 
 
