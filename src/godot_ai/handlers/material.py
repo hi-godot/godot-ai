@@ -13,12 +13,15 @@ async def material_create(
     path: str,
     type: str = "standard",
     shader_path: str = "",
+    code: str = "",
     overwrite: bool = False,
 ) -> dict:
     await require_writable_async(runtime)
     params: dict[str, Any] = {"path": path, "type": type, "overwrite": overwrite}
     if shader_path:
         params["shader_path"] = shader_path
+    if code:
+        params["code"] = code
     return await runtime.send_command("material_create", params)
 
 
