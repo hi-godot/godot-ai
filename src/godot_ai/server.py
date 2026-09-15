@@ -60,6 +60,7 @@ from godot_ai.resources.project import register_project_resources
 from godot_ai.resources.scenes import register_scene_resources
 from godot_ai.resources.scripts import register_script_resources
 from godot_ai.resources.sessions import register_session_resources
+from godot_ai.resources.visual_shaders import register_visual_shader_resources
 from godot_ai.runtime_info import disarm_startup_report, report_startup_failure
 from godot_ai.services.custom_tool_service import CustomToolService
 from godot_ai.services.promoted_tools import PromotedToolRegistrar
@@ -244,7 +245,9 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
     (
         "material",
         "  material_manage  create, set_param, set_shader_param, get, list, assign,\n"
-        "                   apply_to_node, apply_preset\n",
+        "                   apply_to_node, apply_preset, visual_shader_create_graph,\n"
+        "                   visual_shader_get, visual_shader_node_catalog,\n"
+        "                   visual_shader_edit\n",
     ),
     (
         "audio",
@@ -318,7 +321,8 @@ _INSTRUCTIONS_FOOTER = (
     "  godot://class/{class_name},\n"
     "  godot://script/{path}, godot://project/info, godot://project/settings,\n"
     "  godot://materials, godot://input_map, godot://performance,\n"
-    "  godot://test/results, godot://custom-tools\n\n"
+    "  godot://test/results, godot://custom-tools,\n"
+    "  godot://visual_shader/{path}\n\n"
     "Code-mode adapters keep server and member names separate: "
     "call('godot-ai', 'editor_state', {}) and "
     "readResource('godot-ai', 'godot://scene/current'). Never prefix the "
@@ -901,6 +905,7 @@ def create_server(
     register_project_resources(mcp)
     register_node_resources(mcp)
     register_script_resources(mcp)
+    register_visual_shader_resources(mcp)
     register_library_resources(mcp)
     register_class_resources(mcp)
     register_custom_tools_resources(mcp)
