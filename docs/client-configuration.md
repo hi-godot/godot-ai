@@ -193,7 +193,9 @@ removes its legacy `transport` key and honors `$KIMI_CODE_HOME`; DeepSeek
 Harness writes the loader `insert` row into `$DSH_HOME/cordis.patch.yml`
 (the home patch layer, not a per-profile file), requires `transport` next to
 command fields, rejects `url` next to them, and honors `$DSH_HOME` for the
-whole home root.
+whole home root; ZCode nests its server map under `mcp.servers` and spells its
+user-state key `enable` (not `enabled`), and a `.zcode` entry makes ZCode skip
+that scope's `.agents/mcp.json` fallback.
 
 `automatic_config_edits = false` marks a client whose settings file the dock
 never rewrites: Configure and Remove return the manual entry instead.
@@ -349,3 +351,23 @@ reporter of #941. For project scope, use the file opened by CodeBuddy IDE's
 MCP settings and the dock's manual attach entry. Project paths vary between
 CodeBuddy IDE and CodeBuddy Code (CLI); automatic project-scope selection is
 not part of this descriptor.
+
+### ZCode
+
+ZCode (Z.AI's GLM coding agent) reads MCP servers from a native
+`~/.zcode/cli/config.json` under the **nested** `mcp.servers` map, with flat
+`command`/`args`/`env` entries and `type: "stdio"` ([official MCP
+documentation](https://zcode.z.ai/en/docs/mcp-services)). Configure writes the
+user scope (`%USERPROFILE%/.zcode/cli/config.json` on Windows) so the server is
+available in every workspace; the workspace scope (`<project>/.zcode/config.json`)
+is left to the user because ZCode's working directory is unknown to the editor.
+ZCode's user-state key is `enable` (singular) — absence means enabled — so it is
+preserved, never written. `type: "stdio"` also repins a stale `type: "http"`
+left on a hand-added remote entry.
+
+ZCode also accepts an industry-standard `~/.agents/mcp.json` (`mcpServers`), but
+it is only a fallback: once any server exists in a `.zcode` config, ZCode skips
+the `.agents` file for that scope entirely — no merging. Configure therefore
+writes the native `.zcode` file, which means an existing `.agents/mcp.json` set
+stops loading once the Godot AI entry lands there. Move those entries into
+`~/.zcode/cli/config.json` if both are needed.
