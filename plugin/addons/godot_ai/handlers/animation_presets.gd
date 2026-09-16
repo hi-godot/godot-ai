@@ -20,6 +20,13 @@ const AnimationValues := preload("res://addons/godot_ai/handlers/animation_value
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ScenePath := preload("res://addons/godot_ai/utils/scene_path.gd")
 
+## Loop modes the continuous presets (pulse/orbit/sweep/drift) accept.
+const _LOOP_MODES := {
+	"none": Animation.LOOP_NONE,
+	"linear": Animation.LOOP_LINEAR,
+	"pingpong": Animation.LOOP_PINGPONG,
+}
+
 
 var _handler_weak: WeakRef
 
@@ -30,6 +37,19 @@ func _init(handler) -> void:
 
 func _h():
 	return _handler_weak.get_ref()
+
+
+## Resolve the existing animation a preset would replace. Returns
+## `{old_anim: Animation|null}` when the name is free or `overwrite` is set,
+## or `{error: <error dict>}` when the name is taken and overwrite is off.
+## One site for the duplicate-detection error keeps every preset consistent.
+static func _existing_animation(library: AnimationLibrary, anim_name: String, overwrite: bool) -> Dictionary:
+	if not library.has_animation(anim_name):
+		return {"old_anim": null}
+	if not overwrite:
+		return {"error": ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+			"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)}
+	return {"old_anim": library.get_animation(anim_name)}
 
 
 # ============================================================================
@@ -89,12 +109,10 @@ func preset_fade(params: Dictionary) -> Dictionary:
 	if anim_name.is_empty():
 		anim_name = "fade_%s" % mode
 
-	var old_anim: Animation = null
-	if library.has_animation(anim_name):
-		if not overwrite:
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
-				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
-		old_anim = library.get_animation(anim_name)
+	var existing := _existing_animation(library, anim_name, overwrite)
+	if existing.has("error"):
+		return existing.error
+	var old_anim: Animation = existing.old_anim
 
 	var start_a: float = 0.0 if mode == "in" else 1.0
 	var end_a: float = 1.0 if mode == "in" else 0.0
@@ -196,12 +214,10 @@ func preset_slide(params: Dictionary) -> Dictionary:
 	if anim_name.is_empty():
 		anim_name = "slide_%s_%s" % [mode, direction]
 
-	var old_anim: Animation = null
-	if library.has_animation(anim_name):
-		if not overwrite:
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
-				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
-		old_anim = library.get_animation(anim_name)
+	var existing := _existing_animation(library, anim_name, overwrite)
+	if existing.has("error"):
+		return existing.error
+	var old_anim: Animation = existing.old_anim
 
 	var anim := Animation.new()
 	anim.length = duration
@@ -286,12 +302,10 @@ func preset_shake(params: Dictionary) -> Dictionary:
 	if anim_name.is_empty():
 		anim_name = "shake"
 
-	var old_anim: Animation = null
-	if library.has_animation(anim_name):
-		if not overwrite:
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
-				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
-		old_anim = library.get_animation(anim_name)
+	var existing := _existing_animation(library, anim_name, overwrite)
+	if existing.has("error"):
+		return existing.error
+	var old_anim: Animation = existing.old_anim
 
 	var rng := RandomNumberGenerator.new()
 	if rng_seed != 0:
@@ -355,6 +369,7 @@ func preset_shake(params: Dictionary) -> Dictionary:
 func preset_pulse(params: Dictionary) -> Dictionary:
 	var player_path: String = params.get("player_path", "")
 	var target_path: String = params.get("target_path", "")
+	var property: String = params.get("property", "scale")
 	var from_scale: float = float(params.get("from_scale", 1.0))
 	var to_scale: float = float(params.get("to_scale", 1.1))
 	var duration: float = float(params.get("duration", 0.4))
@@ -365,12 +380,14 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 	if target_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+	if property.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: property")
 	if duration <= 0.0:
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
-	if from_scale <= 0.0:
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'from_scale' must be > 0")
-	if to_scale <= 0.0:
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'to_scale' must be > 0")
+	var loop_result := _resolve_loop_mode(params)
+	if loop_result.has("error"):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, loop_result.error)
+	var loop_mode: int = loop_result.ok
 
 	var handler = _h()
 	if handler == null:
@@ -392,31 +409,52 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 		return target_resolved
 	var kind: String = target_resolved.kind
 	var track_target: String = target_resolved.track_path_root
+	var track_path := "%s:%s" % [track_target, property]
+
+	## Two shapes: the original scale shortcut (from_scale/to_scale floats) and
+	## the general form (property + from_value/to_value coerced against the
+	## property's real type, so modulate:a breathes as floats and position
+	## jitters as vectors).
+	var from_vec: Variant
+	var to_vec: Variant
+	var used_scale_shortcut := false
+	if property == "scale" and not params.has("from_value") and not params.has("to_value"):
+		used_scale_shortcut = true
+		if from_scale <= 0.0:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'from_scale' must be > 0")
+		if to_scale <= 0.0:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'to_scale' must be > 0")
+		if kind == "3d":
+			from_vec = Vector3(from_scale, from_scale, from_scale)
+			to_vec = Vector3(to_scale, to_scale, to_scale)
+		else:
+			from_vec = Vector2(from_scale, from_scale)
+			to_vec = Vector2(to_scale, to_scale)
+	else:
+		if not (params.has("from_value") and params.has("to_value")):
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
+				"'from_value' and 'to_value' are required when 'property' is not 'scale' (got '%s')" % property)
+		var from_result := AnimationValues.coerce_value_for_track(params.get("from_value"), track_path, player)
+		if from_result.has("error"):
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, from_result.error)
+		from_vec = from_result.ok
+		var to_result := AnimationValues.coerce_value_for_track(params.get("to_value"), track_path, player)
+		if to_result.has("error"):
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, to_result.error)
+		to_vec = to_result.ok
 
 	if anim_name.is_empty():
 		anim_name = "pulse"
 
-	var old_anim: Animation = null
-	if library.has_animation(anim_name):
-		if not overwrite:
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
-				"Animation '%s' already exists. Pass overwrite=true or delete it first." % anim_name)
-		old_anim = library.get_animation(anim_name)
-
-	var from_vec: Variant
-	var to_vec: Variant
-	if kind == "3d":
-		from_vec = Vector3(from_scale, from_scale, from_scale)
-		to_vec = Vector3(to_scale, to_scale, to_scale)
-	else:
-		from_vec = Vector2(from_scale, from_scale)
-		to_vec = Vector2(to_scale, to_scale)
+	var existing := _existing_animation(library, anim_name, overwrite)
+	if existing.has("error"):
+		return existing.error
+	var old_anim: Animation = existing.old_anim
 
 	var anim := Animation.new()
 	anim.length = duration
-	anim.loop_mode = Animation.LOOP_NONE
+	anim.loop_mode = loop_mode
 
-	var track_path := "%s:scale" % track_target
 	handler._do_add_property_track(anim, track_path, "linear", [
 		{"time": 0.0, "value": from_vec, "transition": "linear"},
 		{"time": duration * 0.5, "value": to_vec, "transition": "linear"},
@@ -428,13 +466,434 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 		player, library, created_library, anim_name, anim, old_anim,
 	)
 
+	var data := {
+		"player_path": player_path,
+		"animation_name": anim_name,
+		"property": property,
+		"length": duration,
+		"loop_mode": AnimationValues.loop_mode_to_string(loop_mode),
+		"track_count": anim.get_track_count(),
+		"library_created": created_library,
+		"overwritten": old_anim != null,
+		"undoable": true,
+	}
+	if used_scale_shortcut:
+		data["from_scale"] = from_scale
+		data["to_scale"] = to_scale
+	else:
+		data["from_value"] = AnimationValues.serialize_value(from_vec)
+		data["to_value"] = AnimationValues.serialize_value(to_vec)
+	return {"data": data}
+
+
+# ============================================================================
+# animation_preset_bounce
+# ============================================================================
+
+## Center-pivot scale overshoot with a settle-back — UI press feedback.
+## Controls get `pivot_offset` recentered in the same undo action so the pop
+## originates from the middle of the widget, not its top-left corner.
+func preset_bounce(params: Dictionary) -> Dictionary:
+	var player_path: String = params.get("player_path", "")
+	var target_path: String = params.get("target_path", "")
+	var intensity: float = float(params.get("intensity", 0.15))
+	var duration: float = float(params.get("duration", 0.4))
+	var anim_name: String = params.get("animation_name", "")
+	var overwrite: bool = params.get("overwrite", false)
+
+	if player_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+	if target_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+	if duration <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
+	if intensity <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'intensity' must be > 0")
+
+	var handler = _h()
+	if handler == null:
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
+	var resolved: Dictionary = handler._resolve_player(player_path)
+	if resolved.has("error"):
+		return resolved
+	var player: AnimationPlayer = resolved.player
+	var library: AnimationLibrary = resolved.library
+	var created_library := false
+	if library == null:
+		library = AnimationLibrary.new()
+		created_library = true
+
+	var target_resolved := _resolve_preset_target(player, target_path)
+	if target_resolved.has("error"):
+		return target_resolved
+	var target: Node = target_resolved.node
+	var kind: String = target_resolved.kind
+	var track_target: String = target_resolved.track_path_root
+
+	if anim_name.is_empty():
+		anim_name = "bounce"
+
+	var existing := _existing_animation(library, anim_name, overwrite)
+	if existing.has("error"):
+		return existing.error
+	var old_anim: Animation = existing.old_anim
+
+	var peak := 1.0 + intensity
+	var dip := 1.0 - intensity * 0.25
+	var at_rest: Variant
+	var at_peak: Variant
+	var at_dip: Variant
+	if kind == "3d":
+		at_rest = Vector3.ONE
+		at_peak = Vector3(peak, peak, peak)
+		at_dip = Vector3(dip, dip, dip)
+	else:
+		at_rest = Vector2.ONE
+		at_peak = Vector2(peak, peak)
+		at_dip = Vector2(dip, dip)
+
+	var anim := Animation.new()
+	anim.length = duration
+	anim.loop_mode = Animation.LOOP_NONE
+
+	var track_path := "%s:scale" % track_target
+	handler._do_add_property_track(anim, track_path, "linear", [
+		{"time": 0.0, "value": at_rest, "transition": "linear"},
+		{"time": duration * 0.35, "value": at_peak, "transition": "ease_out"},
+		{"time": duration * 0.65, "value": at_dip, "transition": "ease_in_out"},
+		{"time": duration, "value": at_rest, "transition": "linear"},
+	])
+
+	var extra_props := _control_pivot_props(target)
+	handler._commit_animation_add(
+		"MCP: Create animation %s" % anim_name,
+		player, library, created_library, anim_name, anim, old_anim,
+		false, null, extra_props,
+	)
+
 	return {
 		"data": {
 			"player_path": player_path,
 			"animation_name": anim_name,
-			"from_scale": from_scale,
-			"to_scale": to_scale,
+			"intensity": intensity,
 			"length": duration,
+			"keyframe_count": 4,
+			"pivot_recentered": not extra_props.is_empty(),
+			"track_count": anim.get_track_count(),
+			"library_created": created_library,
+			"overwritten": old_anim != null,
+			"undoable": true,
+		}
+	}
+
+
+# ============================================================================
+# animation_preset_orbit
+# ============================================================================
+
+## Position traversing a circle around the target's current position —
+## orbiting markers and HUD satellites. 3D orbits in the XZ plane; 2D and
+## Controls orbit in screen space. The clip is seamless (last key == first),
+## so loop_mode="linear" keeps it going.
+func preset_orbit(params: Dictionary) -> Dictionary:
+	var player_path: String = params.get("player_path", "")
+	var target_path: String = params.get("target_path", "")
+	var clockwise: bool = params.get("clockwise", true)
+	var duration: float = float(params.get("duration", 2.0))
+	var anim_name: String = params.get("animation_name", "")
+	var overwrite: bool = params.get("overwrite", false)
+
+	if player_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+	if target_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+	if duration <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
+	var loop_result := _resolve_loop_mode(params)
+	if loop_result.has("error"):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, loop_result.error)
+	var loop_mode: int = loop_result.ok
+
+	var handler = _h()
+	if handler == null:
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
+	var resolved: Dictionary = handler._resolve_player(player_path)
+	if resolved.has("error"):
+		return resolved
+	var player: AnimationPlayer = resolved.player
+	var library: AnimationLibrary = resolved.library
+	var created_library := false
+	if library == null:
+		library = AnimationLibrary.new()
+		created_library = true
+
+	var target_resolved := _resolve_preset_target(player, target_path)
+	if target_resolved.has("error"):
+		return target_resolved
+	var target: Node = target_resolved.node
+	var kind: String = target_resolved.kind
+	var track_target: String = target_resolved.track_path_root
+
+	var default_radius: float = 1.0 if kind == "3d" else 100.0
+	var radius: float = float(params.get("radius", default_radius))
+	if radius <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'radius' must be > 0")
+
+	if anim_name.is_empty():
+		anim_name = "orbit"
+
+	var existing := _existing_animation(library, anim_name, overwrite)
+	if existing.has("error"):
+		return existing.error
+	var old_anim: Animation = existing.old_anim
+
+	var center: Variant = target.position
+	var direction := 1.0 if clockwise else -1.0
+	var keyframes: Array = []
+	for step in range(5):
+		var angle := direction * TAU * float(step) / 4.0
+		var offset: Variant
+		if kind == "3d":
+			offset = Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
+		else:
+			offset = Vector2(cos(angle) * radius, sin(angle) * radius)
+		keyframes.append({
+			"time": duration * float(step) / 4.0,
+			"value": center + offset,
+			"transition": "linear",
+		})
+
+	var anim := Animation.new()
+	anim.length = duration
+	anim.loop_mode = loop_mode
+
+	var track_path := "%s:position" % track_target
+	handler._do_add_property_track(anim, track_path, "linear", keyframes)
+
+	handler._commit_animation_add(
+		"MCP: Create animation %s" % anim_name,
+		player, library, created_library, anim_name, anim, old_anim,
+	)
+
+	return {
+		"data": {
+			"player_path": player_path,
+			"animation_name": anim_name,
+			"radius": radius,
+			"clockwise": clockwise,
+			"length": duration,
+			"loop_mode": AnimationValues.loop_mode_to_string(loop_mode),
+			"keyframe_count": keyframes.size(),
+			"track_count": anim.get_track_count(),
+			"library_created": created_library,
+			"overwritten": old_anim != null,
+			"undoable": true,
+		}
+	}
+
+
+# ============================================================================
+# animation_preset_sweep
+# ============================================================================
+
+## A full-turn rotation sweep — radar scans, cooldown-ring accents. Controls
+## get `pivot_offset` recentered in the same undo action so the sweep rotates
+## around the widget's middle. The clip is seamless, so loop_mode="linear"
+## turns it into a continuous sweep.
+func preset_sweep(params: Dictionary) -> Dictionary:
+	var player_path: String = params.get("player_path", "")
+	var target_path: String = params.get("target_path", "")
+	var clockwise: bool = params.get("clockwise", true)
+	var turns: float = float(params.get("turns", 1.0))
+	var duration: float = float(params.get("duration", 1.0))
+	var anim_name: String = params.get("animation_name", "")
+	var overwrite: bool = params.get("overwrite", false)
+
+	if player_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+	if target_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+	if duration <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
+	if turns <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'turns' must be > 0")
+	var loop_result := _resolve_loop_mode(params)
+	if loop_result.has("error"):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, loop_result.error)
+	var loop_mode: int = loop_result.ok
+
+	var handler = _h()
+	if handler == null:
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
+	var resolved: Dictionary = handler._resolve_player(player_path)
+	if resolved.has("error"):
+		return resolved
+	var player: AnimationPlayer = resolved.player
+	var library: AnimationLibrary = resolved.library
+	var created_library := false
+	if library == null:
+		library = AnimationLibrary.new()
+		created_library = true
+
+	var target_resolved := _resolve_preset_target(player, target_path)
+	if target_resolved.has("error"):
+		return target_resolved
+	var target: Node = target_resolved.node
+	var kind: String = target_resolved.kind
+	var track_target: String = target_resolved.track_path_root
+
+	if anim_name.is_empty():
+		anim_name = "sweep"
+
+	var existing := _existing_animation(library, anim_name, overwrite)
+	if existing.has("error"):
+		return existing.error
+	var old_anim: Animation = existing.old_anim
+
+	var direction := 1.0 if clockwise else -1.0
+	var total_radians := direction * TAU * turns
+
+	var anim := Animation.new()
+	anim.length = duration
+	anim.loop_mode = loop_mode
+
+	## 3D nodes rotate around their local Y axis; Control/Node2D have a single
+	## `rotation` property.
+	var track_path := "%s:rotation:y" % track_target if kind == "3d" else "%s:rotation" % track_target
+	handler._do_add_property_track(anim, track_path, "linear", [
+		{"time": 0.0, "value": 0.0, "transition": "linear"},
+		{"time": duration, "value": total_radians, "transition": "linear"},
+	])
+
+	var extra_props := _control_pivot_props(target)
+	handler._commit_animation_add(
+		"MCP: Create animation %s" % anim_name,
+		player, library, created_library, anim_name, anim, old_anim,
+		false, null, extra_props,
+	)
+
+	return {
+		"data": {
+			"player_path": player_path,
+			"animation_name": anim_name,
+			"clockwise": clockwise,
+			"turns": turns,
+			"length": duration,
+			"loop_mode": AnimationValues.loop_mode_to_string(loop_mode),
+			"pivot_recentered": not extra_props.is_empty(),
+			"track_count": anim.get_track_count(),
+			"library_created": created_library,
+			"overwritten": old_anim != null,
+			"undoable": true,
+		}
+	}
+
+
+# ============================================================================
+# animation_preset_drift
+# ============================================================================
+
+## A one-axis position offset over the clip — scanlines, marquee text,
+## conveyor motion. Pair with loop_mode="linear" for continuous motion.
+func preset_drift(params: Dictionary) -> Dictionary:
+	var player_path: String = params.get("player_path", "")
+	var target_path: String = params.get("target_path", "")
+	var axis: String = params.get("axis", "x")
+	var duration: float = float(params.get("duration", 1.0))
+	var anim_name: String = params.get("animation_name", "")
+	var overwrite: bool = params.get("overwrite", false)
+
+	if player_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
+	if target_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+	if duration <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'duration' must be > 0")
+	var loop_result := _resolve_loop_mode(params)
+	if loop_result.has("error"):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, loop_result.error)
+	var loop_mode: int = loop_result.ok
+
+	var handler = _h()
+	if handler == null:
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_UNAVAILABLE,
+			"AnimationHandler not available", false)
+	var resolved: Dictionary = handler._resolve_player(player_path)
+	if resolved.has("error"):
+		return resolved
+	var player: AnimationPlayer = resolved.player
+	var library: AnimationLibrary = resolved.library
+	var created_library := false
+	if library == null:
+		library = AnimationLibrary.new()
+		created_library = true
+
+	var target_resolved := _resolve_preset_target(player, target_path)
+	if target_resolved.has("error"):
+		return target_resolved
+	var target: Node = target_resolved.node
+	var kind: String = target_resolved.kind
+	var track_target: String = target_resolved.track_path_root
+
+	var default_distance: float = 1.0 if kind == "3d" else 100.0
+	var distance: float = float(params.get("distance", default_distance))
+	if distance == 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "'distance' must be non-zero")
+
+	var offset: Variant
+	if kind == "3d":
+		match axis:
+			"x": offset = Vector3(distance, 0.0, 0.0)
+			"y": offset = Vector3(0.0, distance, 0.0)
+			"z": offset = Vector3(0.0, 0.0, distance)
+			_: return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"Invalid axis '%s' for a 3D target. Valid: x, y, z" % axis)
+	else:
+		match axis:
+			"x": offset = Vector2(distance, 0.0)
+			"y": offset = Vector2(0.0, distance)
+			_: return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"Invalid axis '%s' for a 2D target. Valid: x, y" % axis)
+
+	if anim_name.is_empty():
+		anim_name = "drift"
+
+	var existing := _existing_animation(library, anim_name, overwrite)
+	if existing.has("error"):
+		return existing.error
+	var old_anim: Animation = existing.old_anim
+
+	var start_pos: Variant = target.position
+	var anim := Animation.new()
+	anim.length = duration
+	anim.loop_mode = loop_mode
+
+	var track_path := "%s:position" % track_target
+	handler._do_add_property_track(anim, track_path, "linear", [
+		{"time": 0.0, "value": start_pos, "transition": "linear"},
+		{"time": duration, "value": start_pos + offset, "transition": "linear"},
+	])
+
+	handler._commit_animation_add(
+		"MCP: Create animation %s" % anim_name,
+		player, library, created_library, anim_name, anim, old_anim,
+	)
+
+	return {
+		"data": {
+			"player_path": player_path,
+			"animation_name": anim_name,
+			"axis": axis,
+			"distance": distance,
+			"length": duration,
+			"loop_mode": AnimationValues.loop_mode_to_string(loop_mode),
 			"track_count": anim.get_track_count(),
 			"library_created": created_library,
 			"overwritten": old_anim != null,
@@ -534,3 +993,25 @@ static func _direction_offset(kind: String, direction: String, distance: float) 
 			"up": return Vector2(0.0, -distance)
 			"down": return Vector2(0.0, distance)
 	return null
+
+
+## Validate the optional `loop_mode` param the continuous presets accept.
+## Returns `{ok: <Animation.LOOP_* int>}` or `{error: msg}`.
+static func _resolve_loop_mode(params: Dictionary) -> Dictionary:
+	var mode: String = params.get("loop_mode", "none")
+	if not _LOOP_MODES.has(mode):
+		return {"error": "Invalid loop_mode '%s'. Valid: %s" % [mode, ", ".join(_LOOP_MODES.keys())]}
+	return {"ok": _LOOP_MODES[mode]}
+
+
+## Bundle a Control's `pivot_offset` recenter into the preset's undo action so
+## a scale/rotation pop originates from the widget's middle. Non-Controls and
+## already-centered pivots return an empty list.
+static func _control_pivot_props(target: Node) -> Array:
+	if not target is Control:
+		return []
+	var control := target as Control
+	var desired := control.size * 0.5
+	if control.pivot_offset.is_equal_approx(desired):
+		return []
+	return [{"object": control, "property": "pivot_offset", "value": desired, "old": control.pivot_offset}]

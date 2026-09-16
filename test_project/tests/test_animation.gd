@@ -4,6 +4,7 @@ extends McpTestSuite
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const AnimationHandler := preload("res://addons/godot_ai/handlers/animation_handler.gd")
+const AnimationValues := preload("res://addons/godot_ai/handlers/animation_values.gd")
 
 ## Tests for AnimationHandler — AnimationPlayer authoring.
 ##
@@ -2212,3 +2213,558 @@ func test_auto_create_player_missing_parent_is_node_not_found() -> void:
 	assert_contains(result.error.message, "Cannot auto-create AnimationPlayer")
 	assert_contains(result.error.message, missing_player_path,
 		"error must name the failing player_path")
+
+
+# ─── Value coercion — extended types ─────────────────────────────────────────
+
+func test_coerce_quaternion_shapes() -> void:
+	var from_dict := AnimationValues.coerce_for_type(
+		{"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}, TYPE_QUATERNION, "quaternion")
+	assert_false(from_dict.has("error"), "quaternion dict must coerce: %s" % str(from_dict))
+	assert_true(from_dict.ok is Quaternion, "dict must coerce to Quaternion")
+	assert_true((from_dict.ok as Quaternion).is_equal_approx(Quaternion.IDENTITY))
+	var from_array := AnimationValues.coerce_for_type([0.0, 0.0, 0.0, 1.0], TYPE_QUATERNION, "quaternion")
+	assert_true(from_array.ok is Quaternion, "array must coerce to Quaternion")
+	var bad := AnimationValues.coerce_for_type({"x": 0.0, "y": 0.0, "z": 0.0}, TYPE_QUATERNION, "quaternion")
+	assert_true(bad.has("error"), "a quaternion without w must be rejected")
+
+
+func test_coerce_vector3i_shapes() -> void:
+	var from_dict := AnimationValues.coerce_for_type({"x": 1, "y": 2, "z": 3}, TYPE_VECTOR3I, "cell")
+	assert_false(from_dict.has("error"), "Vector3i dict must coerce: %s" % str(from_dict))
+	assert_true(from_dict.ok is Vector3i, "dict must coerce to Vector3i")
+	assert_eq(from_dict.ok, Vector3i(1, 2, 3))
+	var from_array := AnimationValues.coerce_for_type([4, 5, 6], TYPE_VECTOR3I, "cell")
+	assert_eq(from_array.ok, Vector3i(4, 5, 6))
+	var bad := AnimationValues.coerce_for_type({"x": 1, "y": 2}, TYPE_VECTOR3I, "cell")
+	assert_true(bad.has("error"), "a Vector3i without z must be rejected")
+
+
+func test_coerce_basis_shapes() -> void:
+	var dict_shape := AnimationValues.coerce_for_type({
+		"x": {"x": 2.0, "y": 0.0, "z": 0.0},
+		"y": {"x": 0.0, "y": 1.0, "z": 0.0},
+		"z": {"x": 0.0, "y": 0.0, "z": 1.0},
+	}, TYPE_BASIS, "basis")
+	assert_false(dict_shape.has("error"), "basis dict must coerce: %s" % str(dict_shape))
+	assert_true(dict_shape.ok is Basis, "dict must coerce to Basis")
+	assert_true((dict_shape.ok as Basis).get_scale().is_equal_approx(Vector3(2, 1, 1)))
+	var array_shape := AnimationValues.coerce_for_type(
+		[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], TYPE_BASIS, "basis")
+	assert_true(array_shape.ok is Basis, "nested array must coerce to Basis")
+	var bad := AnimationValues.coerce_for_type({
+		"x": {"x": 1.0, "y": 0.0, "z": 0.0},
+		"y": {"x": 0.0, "y": 1.0, "z": 0.0},
+	}, TYPE_BASIS, "basis")
+	assert_true(bad.has("error"), "a basis without a z axis must be rejected")
+
+
+func test_coerce_transform3d_shapes() -> void:
+	var canonical := AnimationValues.coerce_for_type({
+		"basis": {"x": {"x": 1.0, "y": 0.0, "z": 0.0},
+			"y": {"x": 0.0, "y": 1.0, "z": 0.0}, "z": {"x": 0.0, "y": 0.0, "z": 1.0}},
+		"origin": {"x": 1.0, "y": 2.0, "z": 3.0},
+	}, TYPE_TRANSFORM3D, "transform")
+	assert_false(canonical.has("error"), "canonical transform must coerce: %s" % str(canonical))
+	assert_true(canonical.ok is Transform3D, "canonical shape must coerce to Transform3D")
+	assert_eq((canonical.ok as Transform3D).origin, Vector3(1, 2, 3))
+	var ergonomic := AnimationValues.coerce_for_type(
+		{"position": [1.0, 2.0, 3.0], "rotation_degrees": [0.0, 90.0, 0.0], "scale": [2.0, 2.0, 2.0]},
+		TYPE_TRANSFORM3D, "transform")
+	assert_true(ergonomic.ok is Transform3D, "ergonomic shape must coerce to Transform3D")
+	assert_eq((ergonomic.ok as Transform3D).origin, Vector3(1, 2, 3))
+	assert_true(
+		(ergonomic.ok as Transform3D).basis.get_scale().is_equal_approx(Vector3(2, 2, 2)),
+		"scale must be applied to the ergonomic shape")
+	var position_only := AnimationValues.coerce_for_type(
+		{"position": {"x": 5.0, "y": 0.0, "z": 0.0}}, TYPE_TRANSFORM3D, "transform")
+	assert_true(position_only.ok is Transform3D, "a bare position must be a valid transform")
+	assert_eq((position_only.ok as Transform3D).origin, Vector3(5, 0, 0))
+	var bad := AnimationValues.coerce_for_type(
+		{"basis": {"x": {"x": 1.0, "y": 0.0, "z": 0.0}}}, TYPE_TRANSFORM3D, "transform")
+	assert_true(bad.has("error"), "a basis without an origin must be rejected")
+
+
+func test_coerce_rect2_and_aabb_shapes() -> void:
+	var rect := AnimationValues.coerce_for_type(
+		{"position": {"x": 1.0, "y": 2.0}, "size": {"x": 8.0, "y": 4.0}}, TYPE_RECT2, "region_rect")
+	assert_false(rect.has("error"), "rect dict must coerce: %s" % str(rect))
+	assert_true(rect.ok is Rect2, "dict must coerce to Rect2")
+	assert_eq(rect.ok, Rect2(1, 2, 8, 4))
+	var rect_array := AnimationValues.coerce_for_type([0.0, 0.0, 4.0, 6.0], TYPE_RECT2, "region_rect")
+	assert_true(rect_array.ok is Rect2, "array must coerce to Rect2")
+	assert_eq(rect_array.ok, Rect2(0, 0, 4, 6))
+	var aabb := AnimationValues.coerce_for_type(
+		{"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "size": {"x": 1.0, "y": 2.0, "z": 3.0}},
+		TYPE_AABB, "custom_aabb")
+	assert_false(aabb.has("error"), "AABB dict must coerce: %s" % str(aabb))
+	assert_true(aabb.ok is AABB, "dict must coerce to AABB")
+	assert_eq((aabb.ok as AABB).size, Vector3(1, 2, 3))
+	var aabb_array := AnimationValues.coerce_for_type(
+		[0.0, 0.0, 0.0, 1.0, 1.0, 1.0], TYPE_AABB, "custom_aabb")
+	assert_eq((aabb_array.ok as AABB).size, Vector3.ONE)
+	var bad_rect := AnimationValues.coerce_for_type(
+		{"position": {"x": 0.0, "y": 0.0}}, TYPE_RECT2, "region_rect")
+	assert_true(bad_rect.has("error"), "a Rect2 without size must be rejected")
+
+
+func test_coerce_node_path_and_string_name() -> void:
+	var node_path := AnimationValues.coerce_for_type("Player/Camera", TYPE_NODE_PATH, "root_node")
+	assert_false(node_path.has("error"), "NodePath string must coerce: %s" % str(node_path))
+	assert_true(node_path.ok is NodePath, "string must coerce to NodePath")
+	assert_eq(str(node_path.ok), "Player/Camera")
+	var string_name := AnimationValues.coerce_for_type("idle", TYPE_STRING_NAME, "name")
+	assert_true(string_name.ok is StringName, "string must coerce to StringName")
+	assert_eq(str(string_name.ok), "idle")
+	var bad := AnimationValues.coerce_for_type(42, TYPE_NODE_PATH, "root_node")
+	assert_true(bad.has("error"), "a non-string NodePath must be rejected")
+
+
+func test_add_property_track_coerces_transform3d_rect2_and_aabb() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var cube: Node3D = _add_sibling(Node3D.new(), "CoerceXform") as Node3D
+	var sprite: Sprite2D = _add_sibling(Sprite2D.new(), "CoerceRect") as Sprite2D
+	var mesh: MeshInstance3D = _add_sibling(MeshInstance3D.new(), "CoerceAabb") as MeshInstance3D
+	var player_path := _add_player("TestCoerceExtended")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/CoerceXform")
+		_remove_node("/" + scene_root.name + "/CoerceRect")
+		_remove_node("/" + scene_root.name + "/CoerceAabb")
+		skip("Scene not ready")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "coerce", "length": 1.0})
+
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "coerce",
+		"track_path": "CoerceXform:transform",
+		"keyframes": [
+			{"time": 0.0, "value": {"position": [0.0, 0.0, 0.0]}},
+			{"time": 1.0, "value": {"position": [1.0, 2.0, 3.0]}},
+		],
+	})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "coerce",
+		"track_path": "CoerceRect:region_rect",
+		"keyframes": [
+			{"time": 0.0, "value": {"position": [0.0, 0.0], "size": [8.0, 4.0]}},
+			{"time": 1.0, "value": [1.0, 1.0, 16.0, 8.0]},
+		],
+	})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "coerce",
+		"track_path": "CoerceAabb:custom_aabb",
+		"keyframes": [
+			{"time": 0.0, "value": {"position": [0.0, 0.0, 0.0], "size": [1.0, 1.0, 1.0]}},
+			{"time": 1.0, "value": [0.0, 0.0, 0.0, 2.0, 2.0, 2.0]},
+		],
+	})
+
+	var anim := _fetch_anim(player_path, "coerce")
+	assert_true(anim != null, "the coerce clip must exist")
+	var xform_value = anim.track_get_key_value(0, 1)
+	assert_true(xform_value is Transform3D,
+		"transform key must coerce to Transform3D, got %s" % type_string(typeof(xform_value)))
+	assert_eq((xform_value as Transform3D).origin, Vector3(1, 2, 3))
+	var rect_value = anim.track_get_key_value(1, 1)
+	assert_true(rect_value is Rect2,
+		"region_rect key must coerce to Rect2, got %s" % type_string(typeof(rect_value)))
+	assert_eq(rect_value, Rect2(1, 1, 16, 8))
+	var aabb_value = anim.track_get_key_value(2, 1)
+	assert_true(aabb_value is AABB,
+		"custom_aabb key must coerce to AABB, got %s" % type_string(typeof(aabb_value)))
+	assert_eq((aabb_value as AABB).size, Vector3(2, 2, 2))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/CoerceXform")
+	_remove_node("/" + scene_root.name + "/CoerceRect")
+	_remove_node("/" + scene_root.name + "/CoerceAabb")
+
+
+func test_add_property_track_rejects_bad_quaternion() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var cube: Node3D = _add_sibling(Node3D.new(), "CoerceBadQuat") as Node3D
+	var player_path := _add_player("TestCoerceBadQuat")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/CoerceBadQuat")
+		skip("Scene not ready")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "bad", "length": 1.0})
+	var result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "bad",
+		"track_path": "CoerceBadQuat:quaternion",
+		"keyframes": [
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}},
+			{"time": 1.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}},
+		],
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Quaternion")
+	var anim := _fetch_anim(player_path, "bad")
+	assert_eq(anim.get_track_count(), 0, "a rejected track must not be added")
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/CoerceBadQuat")
+
+
+# ─── animation_preset_pulse — property + loop_mode ───────────────────────────
+
+func test_preset_pulse_property_modulate_alpha() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var sprite: Sprite2D = _add_sibling(Sprite2D.new(), "PulseAlpha") as Sprite2D
+	var player_path := _add_player("TestPulseAlpha")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/PulseAlpha")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_pulse({
+		"player_path": player_path,
+		"target_path": "PulseAlpha",
+		"property": "modulate:a",
+		"from_value": 0.2,
+		"to_value": 1.0,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.property, "modulate:a")
+	var anim := _fetch_anim(player_path, "pulse")
+	var track_path := String(anim.track_get_path(0))
+	assert_eq(track_path, "PulseAlpha:modulate:a")
+	var low = anim.track_get_key_value(0, 0)
+	var high = anim.track_get_key_value(0, 1)
+	assert_true(low is float, "modulate:a keys must be floats, got %s" % type_string(typeof(low)))
+	assert_eq(low, 0.2)
+	assert_eq(high, 1.0)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/PulseAlpha")
+
+
+func test_preset_pulse_property_position_vector2() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var node: Node2D = _add_sibling(Node2D.new(), "PulsePos") as Node2D
+	var player_path := _add_player("TestPulsePos")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/PulsePos")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_pulse({
+		"player_path": player_path,
+		"target_path": "PulsePos",
+		"property": "position",
+		"from_value": {"x": 0.0, "y": 0.0},
+		"to_value": {"x": 10.0, "y": -4.0},
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "pulse")
+	var peak = anim.track_get_key_value(0, 1)
+	assert_true(peak is Vector2, "position keys must be Vector2, got %s" % type_string(typeof(peak)))
+	assert_eq(peak, Vector2(10.0, -4.0))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/PulsePos")
+
+
+func test_preset_pulse_property_requires_values() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var sprite: Sprite2D = _add_sibling(Sprite2D.new(), "PulseNoVals") as Sprite2D
+	var player_path := _add_player("TestPulseNoVals")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/PulseNoVals")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_pulse({
+		"player_path": player_path,
+		"target_path": "PulseNoVals",
+		"property": "modulate:a",
+	})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_contains(result.error.message, "from_value")
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/PulseNoVals")
+
+
+func test_preset_pulse_loop_mode_linear() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var node: Node2D = _add_sibling(Node2D.new(), "PulseLoop") as Node2D
+	var player_path := _add_player("TestPulseLoop")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/PulseLoop")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_pulse({
+		"player_path": player_path,
+		"target_path": "PulseLoop",
+		"property": "modulate:a",
+		"from_value": 0.4,
+		"to_value": 1.0,
+		"loop_mode": "linear",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.loop_mode, "linear")
+	var anim := _fetch_anim(player_path, "pulse")
+	assert_eq(anim.loop_mode, Animation.LOOP_LINEAR)
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/PulseLoop")
+
+
+# ─── animation_preset_bounce ─────────────────────────────────────────────────
+
+func test_preset_bounce_shape_and_control_pivot() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var control: Control = _add_sibling(Control.new(), "BounceControl") as Control
+	control.size = Vector2(120.0, 40.0)
+	control.pivot_offset = Vector2.ZERO
+	var player_path := _add_player("TestPresetBounce")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/BounceControl")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_bounce({
+		"player_path": player_path,
+		"target_path": "BounceControl",
+		"intensity": 0.2,
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.pivot_recentered, "a Control bounce must recenter its pivot")
+	var anim := _fetch_anim(player_path, "bounce")
+	assert_eq(anim.get_track_count(), 1)
+	assert_eq(anim.track_get_key_count(0), 4, "bounce must have 4 keyframes")
+	var rest = anim.track_get_key_value(0, 0)
+	var peak = anim.track_get_key_value(0, 1)
+	assert_true(rest is Vector2, "Control scale keys must be Vector2")
+	assert_eq(rest, Vector2.ONE)
+	assert_true((peak as Vector2).x > 1.0, "peak must overshoot, got %s" % str(peak))
+	assert_true(control.pivot_offset.is_equal_approx(Vector2(60.0, 20.0)),
+		"pivot_offset must recenter to half the Control size, got %s" % str(control.pivot_offset))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/BounceControl")
+
+
+func test_preset_bounce_undo_restores_pivot() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var control: Control = _add_sibling(Control.new(), "BounceUndo") as Control
+	control.size = Vector2(80.0, 20.0)
+	control.pivot_offset = Vector2(3.0, 4.0)
+	var player_path := _add_player("TestPresetBounceUndo")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/BounceUndo")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_bounce({
+		"player_path": player_path,
+		"target_path": "BounceUndo",
+	})
+	assert_has_key(result, "data")
+	assert_true(control.pivot_offset.is_equal_approx(Vector2(40.0, 10.0)))
+	var did_undo := editor_undo(_undo_redo)
+	assert_true(did_undo, "undo should succeed")
+	assert_true(control.pivot_offset.is_equal_approx(Vector2(3.0, 4.0)),
+		"undo must restore the previous pivot_offset, got %s" % str(control.pivot_offset))
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	assert_false(player.has_animation("bounce"), "undo must remove the bounce clip")
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/BounceUndo")
+
+
+func test_preset_bounce_rejects_bad_intensity() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var node: Node2D = _add_sibling(Node2D.new(), "BounceBad") as Node2D
+	var player_path := _add_player("TestPresetBounceBad")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/BounceBad")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_bounce({
+		"player_path": player_path,
+		"target_path": "BounceBad",
+		"intensity": 0.0,
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "intensity")
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/BounceBad")
+
+
+# ─── animation_preset_orbit ──────────────────────────────────────────────────
+
+func test_preset_orbit_circle_is_seamless() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var node: Node2D = _add_sibling(Node2D.new(), "OrbitNode") as Node2D
+	node.position = Vector2(5.0, 7.0)
+	var player_path := _add_player("TestPresetOrbit")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/OrbitNode")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_orbit({
+		"player_path": player_path,
+		"target_path": "OrbitNode",
+		"radius": 50.0,
+		"duration": 2.0,
+		"loop_mode": "linear",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.radius, 50.0)
+	var anim := _fetch_anim(player_path, "orbit")
+	assert_eq(anim.track_get_key_count(0), 5, "orbit must have 5 keyframes")
+	assert_eq(anim.loop_mode, Animation.LOOP_LINEAR)
+	var first = anim.track_get_key_value(0, 0)
+	var last = anim.track_get_key_value(0, 4)
+	var quarter = anim.track_get_key_value(0, 1)
+	assert_true(first is Vector2, "orbit keys must be Vector2")
+	assert_true((first as Vector2).is_equal_approx(last as Vector2), "orbit must be seamless")
+	assert_true((quarter as Vector2).is_equal_approx(Vector2(5.0, 57.0)),
+		"a quarter turn must be radius above the center, got %s" % str(quarter))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/OrbitNode")
+
+
+# ─── animation_preset_sweep ──────────────────────────────────────────────────
+
+func test_preset_sweep_control_pivot_and_rotation() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var control: Control = _add_sibling(Control.new(), "SweepControl") as Control
+	control.size = Vector2(60.0, 60.0)
+	control.pivot_offset = Vector2.ZERO
+	var player_path := _add_player("TestPresetSweep")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/SweepControl")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_sweep({
+		"player_path": player_path,
+		"target_path": "SweepControl",
+		"turns": 1.0,
+	})
+	assert_has_key(result, "data")
+	assert_true(result.data.pivot_recentered)
+	var anim := _fetch_anim(player_path, "sweep")
+	assert_eq(String(anim.track_get_path(0)), "SweepControl:rotation")
+	var end_value = anim.track_get_key_value(0, 1)
+	assert_true(end_value is float, "Control rotation keys must be floats")
+	assert_true(absf(float(end_value) - TAU) < 0.0001, "one turn must sweep TAU radians, got %s" % str(end_value))
+	assert_true(control.pivot_offset.is_equal_approx(Vector2(30.0, 30.0)))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/SweepControl")
+
+
+func test_preset_sweep_3d_rotates_local_y() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var node: Node3D = _add_sibling(Node3D.new(), "Sweep3D") as Node3D
+	var player_path := _add_player("TestPresetSweep3D")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/Sweep3D")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_sweep({
+		"player_path": player_path,
+		"target_path": "Sweep3D",
+		"clockwise": false,
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "sweep")
+	assert_eq(String(anim.track_get_path(0)), "Sweep3D:rotation:y")
+	var end_value = anim.track_get_key_value(0, 1)
+	assert_true(absf(float(end_value) + TAU) < 0.0001,
+		"counter-clockwise one turn must sweep -TAU, got %s" % str(end_value))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/Sweep3D")
+
+
+# ─── animation_preset_drift ──────────────────────────────────────────────────
+
+func test_preset_drift_axis_and_loop() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var node: Node3D = _add_sibling(Node3D.new(), "DriftNode") as Node3D
+	node.position = Vector3(1.0, 0.0, 0.0)
+	var player_path := _add_player("TestPresetDrift")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/DriftNode")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_drift({
+		"player_path": player_path,
+		"target_path": "DriftNode",
+		"axis": "z",
+		"distance": 2.0,
+		"loop_mode": "linear",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.axis, "z")
+	var anim := _fetch_anim(player_path, "drift")
+	assert_eq(anim.loop_mode, Animation.LOOP_LINEAR)
+	var start = anim.track_get_key_value(0, 0)
+	var end = anim.track_get_key_value(0, 1)
+	assert_true(start is Vector3 and end is Vector3, "drift keys must be Vector3")
+	assert_eq(start, Vector3(1, 0, 0))
+	assert_eq(end, Vector3(1, 0, 2))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/DriftNode")
+
+
+func test_preset_drift_rejects_bad_axis_and_loop_mode() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var sprite: Sprite2D = _add_sibling(Sprite2D.new(), "DriftBad") as Sprite2D
+	var player_path := _add_player("TestPresetDriftBad")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/DriftBad")
+		skip("Scene not ready")
+		return
+	var bad_axis := _handler.preset_drift({
+		"player_path": player_path,
+		"target_path": "DriftBad",
+		"axis": "z",
+	})
+	assert_is_error(bad_axis, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(bad_axis.error.message, "Invalid axis")
+	var bad_loop := _handler.preset_drift({
+		"player_path": player_path,
+		"target_path": "DriftBad",
+		"axis": "x",
+		"loop_mode": "bogus",
+	})
+	assert_is_error(bad_loop, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(bad_loop.error.message, "Invalid loop_mode")
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/DriftBad")

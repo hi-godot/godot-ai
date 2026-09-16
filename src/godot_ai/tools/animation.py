@@ -53,9 +53,36 @@ Ops:
   • preset_shake(player_path, target_path, intensity=None, duration=0.3,
                   frequency=30.0, seed=0, animation_name="", overwrite=False)
         One-call shake (jittered position).
-  • preset_pulse(player_path, target_path, from_scale=1.0, to_scale=1.1,
-                  duration=0.4, animation_name="", overwrite=False)
-        One-call pulse / hover-bounce (3-keyframe scale ping-pong).
+  • preset_pulse(player_path, target_path, property="scale", from_scale=1.0,
+                  to_scale=1.1, from_value=None, to_value=None, duration=0.4,
+                  loop_mode="none", animation_name="", overwrite=False)
+        One-call pulse / hover-bounce (3-keyframe ping-pong). Defaults to
+        `scale` via the from_scale/to_scale shortcut; any other property
+        (e.g. "modulate:a", "modulate", "self_modulate", "position") uses
+        from_value/to_value coerced against the property's real type.
+        loop_mode="linear" turns it into a breathing loop.
+  • preset_bounce(player_path, target_path, intensity=0.15, duration=0.4,
+                   animation_name="", overwrite=False)
+        One-call press feedback: center-pivot scale overshoot with a
+        settle-back. Controls get pivot_offset recentered in the same undo.
+  • preset_orbit(player_path, target_path, radius=None, clockwise=True,
+                  duration=2.0, loop_mode="none", animation_name="",
+                  overwrite=False)
+        One-call circular position orbit around the target's current position
+        (XZ plane for 3D, screen space for 2D/Control). radius defaults to 1.0
+        (3D) / 100.0 (2D). Seamless; loop_mode="linear" keeps it going.
+  • preset_sweep(player_path, target_path, turns=1.0, clockwise=True,
+                  duration=1.0, loop_mode="none", animation_name="",
+                  overwrite=False)
+        One-call full-turn rotation sweep (radar / cooldown-ring). 3D rotates
+        around local Y; Control/Node2D rotate in-plane. Controls get
+        pivot_offset recentered in the same undo.
+  • preset_drift(player_path, target_path, axis="x", distance=None,
+                  duration=1.0, loop_mode="none", animation_name="",
+                  overwrite=False)
+        One-call one-axis position offset (scanlines, marquee, conveyor).
+        distance defaults to 1.0 (3D) / 100.0 (2D); pair with
+        loop_mode="linear" for continuous motion.
 
 Preset target_path: accepts either a scene-absolute path (e.g. "/Main/World/Cube",
 matching every other scene tool) or a path relative to the AnimationPlayer's
@@ -126,6 +153,10 @@ def register_animation_tools(mcp: FastMCP) -> None:
             "preset_slide": animation_handlers.animation_preset_slide,
             "preset_shake": animation_handlers.animation_preset_shake,
             "preset_pulse": animation_handlers.animation_preset_pulse,
+            "preset_bounce": animation_handlers.animation_preset_bounce,
+            "preset_orbit": animation_handlers.animation_preset_orbit,
+            "preset_sweep": animation_handlers.animation_preset_sweep,
+            "preset_drift": animation_handlers.animation_preset_drift,
         },
         read_resource_forms={
             ## No `godot://animations` resource exists. Animation reads are
