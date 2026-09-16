@@ -2983,6 +2983,31 @@ func test_debugger_plugin_break_signal_notices_merge_reason() -> void:
 	assert_eq(status["break"].pre_live, true, "the merged notice must keep the first notice's pre-live scope")
 
 
+func test_debugger_plugin_collection_skips_nodes_queued_for_deletion() -> void:
+	## is_instance_valid() stays true for a node queued for deletion until the
+	## end of the frame, so a doomed ScriptEditorDebugger/Tree could still be
+	## collected and then connected to, read, or emitted. Same-frame coverage:
+	## a queued node is excluded both as a walk root and as a child.
+	var base := Node.new()
+	var doomed_child := Tree.new()
+	base.add_child(doomed_child)
+	var live_child := Tree.new()
+	base.add_child(live_child)
+	doomed_child.queue_free()
+	var found: Array[Node] = []
+	McpDebuggerPlugin._collect_nodes_of_class(base, "Tree", found)
+	assert_true(found.has(live_child), "a live Tree is collected")
+	assert_false(found.has(doomed_child), "a queued-for-deletion child is skipped")
+
+	var queued_root := Tree.new()
+	base.add_child(queued_root)
+	queued_root.queue_free()
+	var rooted: Array[Node] = []
+	McpDebuggerPlugin._collect_nodes_of_class(queued_root, "Tree", rooted)
+	assert_eq(rooted.size(), 0, "a queued-for-deletion walk root is skipped")
+	base.free()
+
+
 func test_debugger_plugin_break_synthesizes_run_scoped_record() -> void:
 	var empty_tree := Tree.new()
 	empty_tree.create_item()
