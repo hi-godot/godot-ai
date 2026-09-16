@@ -339,6 +339,10 @@ static func _create_generated_entry(
 		## mesh's scale baked in so the collision node needs no scale of its own.
 		shape = _fit_mesh_shape(mesh, shape_type, plan.mesh_to_body)
 		if shape == null:
+			## Neither node is in the tree nor in `job.created` yet, so no
+			## rollback path can free them.
+			collision.free()
+			body.free()
 			return ErrorCodes.make(
 				ErrorCodes.VALUE_OUT_OF_RANGE,
 				"MeshInstance3D at %s could not produce a %s shape — the mesh geometry is degenerate"
@@ -389,6 +393,13 @@ static func _fit_mesh_shape(mesh: MeshInstance3D, shape_type: String, mesh_to_bo
 		var faces := (shape as ConcavePolygonShape3D).get_faces()
 		for index in faces.size():
 			faces[index] = faces[index] * scale
+		if scale.x * scale.y * scale.z < 0.0:
+			## A mirrored scale reverses triangle winding, and a
+			## ConcavePolygonShape3D collides with front faces only.
+			for index in range(0, faces.size(), 3):
+				var swapped := faces[index + 1]
+				faces[index + 1] = faces[index + 2]
+				faces[index + 2] = swapped
 		(shape as ConcavePolygonShape3D).set_faces(faces)
 	return shape
 

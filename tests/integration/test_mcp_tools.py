@@ -2706,9 +2706,11 @@ class TestPhysicsShapeGenerateTool:
         assert result.data["undoable"] is True
 
     async def test_generate_threads_new_options(self, mcp_stack):
+        """convex + rigid + reparent_mesh reach the plugin command unchanged."""
         client, plugin = mcp_stack
 
         async def respond():
+            """Assert the plugin command carries every new option verbatim."""
             cmd = await plugin.recv_command()
             assert cmd["command"] == "physics_shape_generate"
             assert cmd["params"] == {

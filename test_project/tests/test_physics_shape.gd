@@ -646,6 +646,16 @@ func _points_aabb(points: PackedVector3Array) -> AABB:
 	return aabb
 
 
+## Signed volume of a triangle soup: one winding gives a positive result, its
+## mirror a negative one. Comparing two generations of the same mesh avoids
+## hard-coding Godot's winding convention in the assertion.
+func _trimesh_signed_volume(faces: PackedVector3Array) -> float:
+	var volume := 0.0
+	for index in range(0, faces.size(), 3):
+		volume += faces[index].cross(faces[index + 1]).dot(faces[index + 2])
+	return volume / 6.0
+
+
 func _find_named_child(parent: Node, child_name: String) -> Node:
 	for child in parent.get_children():
 		if is_instance_valid(child) and child.name == child_name:
@@ -796,6 +806,86 @@ func test_generate_bakes_mesh_scale_into_hull_and_trimesh() -> void:
 			"the mesh's own scale must be baked into the %s vertices" % shape_type
 		)
 		_remove_node(nodes.body)
+	_remove_node(mesh)
+
+
+func test_generate_mirrored_trimesh_restores_winding() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var upright := _add_generate_mesh("GenerateWindingBase", Vector3(2, 1, 3))
+	var mirrored := _add_generate_mesh("GenerateWindingMirror", Vector3(2, 1, 3), Vector3(-1, 1, 1))
+	var base := _handler.generate({
+		"paths": [McpScenePath.from_node(upright, scene_root)],
+		"shape_type": "trimesh",
+	})
+	assert_has_key(base, "data")
+	var mirrored_result := _handler.generate({
+		"paths": [McpScenePath.from_node(mirrored, scene_root)],
+		"shape_type": "trimesh",
+	})
+	assert_has_key(mirrored_result, "data")
+	var base_nodes := _generated_nodes(base, scene_root)
+	var mirrored_nodes := _generated_nodes(mirrored_result, scene_root)
+	var base_faces: PackedVector3Array = (base_nodes.collision.shape as ConcavePolygonShape3D).get_faces()
+	var mirrored_faces: PackedVector3Array = (mirrored_nodes.collision.shape as ConcavePolygonShape3D).get_faces()
+	var base_volume := _trimesh_signed_volume(base_faces)
+	var mirrored_volume := _trimesh_signed_volume(mirrored_faces)
+	assert_true(
+		signf(base_volume) == signf(mirrored_volume),
+		"a mirrored mesh must keep its triangle winding (base %f, mirrored %f)" % [base_volume, mirrored_volume]
+	)
+	assert_true(
+		absf(absf(base_volume) - absf(mirrored_volume)) < 0.001,
+		"mirroring must preserve the collider volume (base %f, mirrored %f)" % [base_volume, mirrored_volume]
+	)
+	_remove_node(base_nodes.body)
+	_remove_node(mirrored_nodes.body)
+	_remove_node(upright)
+	_remove_node(mirrored)
+
+
+func test_generate_degenerate_hull_frees_detached_nodes() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	## The planning pre-check keeps faceless meshes out of the handler, so the
+	## entry builder's failure path is driven directly with the plan shape it
+	## receives: the engine refuses the trimesh after the entry's body and
+	## collision already exist, and neither is in the tree or the job yet.
+	var mesh := _add_generate_mesh_with_mesh("GenerateDegenerateHull", PointMesh.new())
+	var plan := {
+		"mesh": mesh,
+		"mesh_path": McpScenePath.from_node(mesh, scene_root),
+		"parent": scene_root,
+		"collider_name": "GenerateDegenerateHullCollider",
+		"top_level": false,
+		"source_transform": mesh.transform,
+		"body_transform": mesh.transform,
+		"mesh_to_body": Transform3D.IDENTITY,
+		"bounds": AABB(Vector3(-0.5, -0.5, -0.5), Vector3.ONE),
+	}
+	var before := Node.get_orphan_node_ids()
+	## Prove the orphan diff sees detached nodes before trusting it below.
+	var probe := Node3D.new()
+	var probe_id := probe.get_instance_id()
+	assert_true(probe_id in Node.get_orphan_node_ids(), "a detached node must be an orphan")
+	probe.free()
+	assert_false(probe_id in Node.get_orphan_node_ids(), "a freed node must leave the orphan list")
+	var entry := PhysicsShapeHandler._create_generated_entry(plan, "trimesh", "static", false)
+	assert_true(entry.has("error"), "a faceless mesh cannot produce a trimesh")
+	assert_contains(entry.error.message, "could not produce")
+	var leaked: Array = []
+	for orphan_id in Node.get_orphan_node_ids():
+		if orphan_id not in before:
+			leaked.append(orphan_id)
+	assert_true(
+		leaked.is_empty(),
+		"a refused hull must free its detached body and collision node (leaked %d)" % leaked.size()
+	)
+	assert_true(_find_named_child(scene_root, "GenerateDegenerateHullCollider") == null)
 	_remove_node(mesh)
 
 
