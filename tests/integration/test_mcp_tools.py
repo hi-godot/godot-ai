@@ -2705,6 +2705,40 @@ class TestPhysicsShapeGenerateTool:
         assert result.data["created"][0]["body_path"] == "/Main/BodyCollider"
         assert result.data["undoable"] is True
 
+    async def test_generate_threads_new_options(self, mcp_stack):
+        """convex + rigid + reparent_mesh reach the plugin command unchanged."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            """Assert the plugin command carries every new option verbatim."""
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "physics_shape_generate"
+            assert cmd["params"] == {
+                "paths": ["/Main/Body"],
+                "shape_type": "convex",
+                "body_type": "rigid",
+                "reparent_mesh": True,
+            }
+            await plugin.send_response(
+                cmd["request_id"], {"created": [], "undoable": True}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "resource_manage",
+            {
+                "op": "physics_shape_generate",
+                "params": {
+                    "paths": ["/Main/Body"],
+                    "shape_type": "convex",
+                    "body_type": "rigid",
+                    "reparent_mesh": True,
+                },
+            },
+        )
+        await task
+        assert result.data["undoable"] is True
+
 
 # ---------------------------------------------------------------------------
 # filesystem_read_text

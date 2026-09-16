@@ -407,12 +407,18 @@ func _free_mcp_test_nodes_recursive(root: Node) -> void:
 	var queue: Array[Node] = [root]
 	while not queue.is_empty():
 		var node: Node = queue.pop_back()
+		if not is_instance_valid(node):
+			continue
 		for child in node.get_children():
+			if not is_instance_valid(child):
+				continue
 			if str(child.name).begins_with("_McpTest"):
 				victims.append(child)
 			else:
 				queue.append(child)
 	for v in victims:
+		if not is_instance_valid(v):
+			continue
 		if v.get_parent() != null:
 			v.get_parent().remove_child(v)
 		v.queue_free()

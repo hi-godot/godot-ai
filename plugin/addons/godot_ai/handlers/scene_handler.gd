@@ -105,7 +105,8 @@ func _find_recursive(node: Node, scene_root: Node, name_filter: String, type_fil
 		})
 
 	for child in node.get_children():
-		_find_recursive(child, scene_root, name_filter, type_filter, group_filter, out)
+		if is_instance_valid(child) and not child.is_queued_for_deletion():
+			_find_recursive(child, scene_root, name_filter, type_filter, group_filter, out)
 
 
 ## Create a new scene with the given root node type, save to disk, and open it.
@@ -425,5 +426,7 @@ func _walk_tree(node: Node, out: Array[Dictionary], depth: int, max_depth: int, 
 			"children_count": node.get_child_count(),
 		})
 	for child in node.get_children():
+		if not is_instance_valid(child) or child.is_queued_for_deletion():
+			continue
 		var child_path := (node_path + "/" + String(child.name)) if incremental else ""
 		_walk_tree(child, out, depth + 1, max_depth, scene_root, offset, limit, index_ref, child_path)
