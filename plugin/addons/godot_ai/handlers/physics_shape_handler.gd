@@ -666,8 +666,18 @@ static func _restore_reparented_mesh(entry: Dictionary) -> void:
 		return
 	if mesh.get_parent() != entry.body:
 		return
-	var mesh_parent: Node = entry.mesh_parent
+	## Keep this untyped until validity is known: assigning a freed Object to
+	## a typed Node local raises before is_instance_valid() can inspect it.
+	var mesh_parent = entry.mesh_parent
 	if not is_instance_valid(mesh_parent):
+		## The captured parent was freed while the deferred job owned the
+		## mesh. Reattach it to wherever the body now lives — or at least
+		## detach it — so the rollback's `free()` cannot take it with it.
+		var fallback = entry.body.get_parent()
+		if is_instance_valid(fallback):
+			mesh.reparent(fallback, true)
+		else:
+			entry.body.remove_child(mesh)
 		return
 	mesh.reparent(mesh_parent, true)
 	var index := int(entry.mesh_index)

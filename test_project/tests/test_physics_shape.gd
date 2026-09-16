@@ -1092,6 +1092,53 @@ func test_generate_reparent_mesh_rollback_restores_mesh() -> void:
 	connection.free()
 
 
+func test_generate_rollback_keeps_mesh_when_original_parent_is_gone() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var parent := Node3D.new()
+	parent.name = "GenerateGoneParent"
+	scene_root.add_child(parent)
+	parent.set_owner(scene_root)
+	var mesh := MeshInstance3D.new()
+	mesh.name = "GenerateGoneParentMesh"
+	var box := BoxMesh.new()
+	mesh.mesh = box
+	parent.add_child(mesh)
+	mesh.set_owner(scene_root)
+	var body := StaticBody3D.new()
+	body.name = "GenerateGoneParentCollider"
+	parent.add_child(body)
+	body.set_owner(scene_root)
+	## Simulate the wrapped state: the mesh sits under the generated body.
+	mesh.reparent(body, true)
+	var entry := {
+		"mesh": mesh,
+		"mesh_local_transform": Transform3D.IDENTITY,
+		"parent": parent,
+		"body": body,
+		"collision": null,
+		"reparent_mesh": true,
+		"mesh_parent": parent,
+		"mesh_index": 0,
+		"mesh_transform": mesh.transform,
+		"mesh_owner": scene_root,
+	}
+	## The body moves elsewhere and the captured parent is freed while the
+	## deferred job still owns the entry.
+	body.reparent(scene_root, true)
+	parent.free()
+	PhysicsShapeHandler._restore_reparented_mesh(entry)
+	assert_eq(
+		mesh.get_parent(), scene_root,
+		"the mesh must survive under the body's parent when its own parent is gone"
+	)
+	_remove_node(body)
+	assert_true(is_instance_valid(mesh), "the rollback must not free the mesh with the body")
+	_remove_node(mesh)
+
+
 func test_generate_snaps_tiny_collision_offset() -> void:
 	assert_eq(
 		PhysicsShapeHandler._snap_tiny(Vector3(1.19e-07, -3.0e-07, 0.0)),
