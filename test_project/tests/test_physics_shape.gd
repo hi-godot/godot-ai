@@ -1176,10 +1176,16 @@ func test_generate_driver_disconnect_rolls_back_and_releases_script_work() -> vo
 	PhysicsShapeHandler._generate_step(job, 0)
 	assert_false(PhysicsShapeHandler._generate_step(job, 0))
 	assert_eq(job.created.size(), 1, "disconnect must interrupt actual partial mutation")
-	PhysicsShapeHandler._drive_generate_job(job, connection)
+	PhysicsShapeHandler._drive_generate_job(job, connection, generate_driver_frame)
 	assert_eq(ScriptWork.active_count("physics_shape_generate"), 1, "worker is tracked before the first yield")
 	root.remove_child(connection)
 	connection.free()
+	## The rollback waits for the next driven frame: running it from the
+	## connection's tree_exiting would call remove_child() on a parent that is
+	## still removing children, then free a still parented body, corrupting the
+	## scene tree.
+	assert_eq(job.created.size(), 1, "nothing is rolled back before the next frame")
+	generate_driver_frame.emit()
 	assert_eq(job.phase, "done")
 	assert_eq(job.created.size(), 0)
 	assert_true(job.result.is_empty())

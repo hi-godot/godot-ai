@@ -469,18 +469,15 @@ static func _drive_generate_job(job: Dictionary, connection, frame_signal: Varia
 	var work_id := ScriptWork.begin("physics_shape_generate")
 	job["work_id"] = work_id
 	if not is_instance_valid(connection):
-		_cancel_generate_job(job, connection)
+		_cancel_generate_job(job)
 		return
 	if not connection.is_inside_tree():
-		_cancel_generate_job(job, connection)
+		_cancel_generate_job(job)
 		return
 	var tree: SceneTree = connection.get_tree()
 	if tree == null:
-		_cancel_generate_job(job, connection)
+		_cancel_generate_job(job)
 		return
-	var exit_callback := _cancel_generate_job.bind(job, connection)
-	job["connection_exit_callback"] = exit_callback
-	connection.tree_exiting.connect(exit_callback, CONNECT_ONE_SHOT)
 	var resume_signal: Signal = frame_signal if frame_signal is Signal else tree.process_frame
 	## The first yield lets the dispatcher register the deferred request before
 	## any validation error or successful result can be sent. The abandoned-request
@@ -488,36 +485,39 @@ static func _drive_generate_job(job: Dictionary, connection, frame_signal: Varia
 	## returns its deferred sentinel the dispatcher has not registered the request
 	## yet, so checking here would cancel every real call.
 	await resume_signal
-	while is_instance_valid(connection) and not _generate_step(job, _GENERATE_FRAME_BUDGET_USEC):
+	## A connection that left the tree is detected here, not from `tree_exiting`:
+	## that signal runs inside the parent's `remove_child`, where a synchronous
+	## rollback's own `remove_child`/`free` is refused and then frees a still
+	## parented body, corrupting the scene tree.
+	while (
+		is_instance_valid(connection)
+		and connection.is_inside_tree()
+		and not _generate_step(job, _GENERATE_FRAME_BUDGET_USEC)
+	):
 		await resume_signal
 	if str(job.phase) != "done":
 		_generate_rollback(job)
 		job.phase = "done"
 	if is_instance_valid(connection) and connection.is_inside_tree() and not job.result.is_empty():
 		connection.send_deferred_response(str(job.request_id), job.result)
-	_finish_generate_job(job, connection)
+	_finish_generate_job(job)
 
 
-## Cancel from request abandonment or the connection's synchronous tree exit.
+## Cancel from request abandonment or a connection that left the tree.
 ## Completed actions are already committed, so rollback deliberately preserves them.
-static func _cancel_generate_job(job: Dictionary, connection = null) -> void:
+static func _cancel_generate_job(job: Dictionary) -> void:
 	if str(job.get("phase", "")) != "done":
 		_generate_rollback(job)
 		job.phase = "done"
-	_finish_generate_job(job, connection)
+	_finish_generate_job(job)
 
 
-## Release the process-wide script-work lease once, and detach the connection
-## callback after normal completion so a long-lived client retains no job state.
-static func _finish_generate_job(job: Dictionary, connection = null) -> void:
+## Release the process-wide script-work lease once.
+static func _finish_generate_job(job: Dictionary) -> void:
 	var work_id := int(job.get("work_id", 0))
 	if work_id != 0:
 		ScriptWork.finish(work_id)
 		job["work_id"] = 0
-	var exit_callback: Callable = job.get("connection_exit_callback", Callable())
-	if is_instance_valid(connection) and exit_callback.is_valid() and connection.tree_exiting.is_connected(exit_callback):
-		connection.tree_exiting.disconnect(exit_callback)
-	job.erase("connection_exit_callback")
 
 
 func autofit(params: Dictionary) -> Dictionary:
