@@ -17,6 +17,7 @@ async def physics_shape_generate(
     paths: list[str],
     shape_type: str = "box",
     body_type: str = "static",
+    reparent_mesh: bool = False,
     scene_file: str = "",
 ) -> dict:
     """Generate sibling physics bodies and shapes for 3D meshes."""
@@ -27,7 +28,10 @@ async def physics_shape_generate(
         "body_type": body_type,
     }
     ## Opt-in like every node mutation: a non-empty scene_file pins the request
-    ## to that edited scene (EDITED_SCENE_MISMATCH otherwise).
+    ## to that edited scene (EDITED_SCENE_MISMATCH otherwise). reparent_mesh is
+    ## likewise only sent when requested, so the default payload stays minimal.
+    if reparent_mesh:
+        params["reparent_mesh"] = True
     if scene_file:
         params["scene_file"] = scene_file
     return await runtime.send_command(
