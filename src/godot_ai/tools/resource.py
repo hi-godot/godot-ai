@@ -56,17 +56,22 @@ Ops:
         "capsule" for 2D) or the matching Godot class name ("BoxShape3D",
         "RectangleShape2D", etc.).
   • physics_shape_generate(paths, shape_type="box", body_type="static",
-                           scene_file="")
-        Generate a StaticBody3D or Area3D sibling (named <Mesh>Collider) with
-        a CollisionShape3D for every MeshInstance3D path. Shapes are fitted in
+                           reparent_mesh=False, scene_file="")
+        Generate a physics body sibling (named <Mesh>Collider) with a
+        CollisionShape3D for every MeshInstance3D path. Shapes are fitted in
         body-local space; a mesh that already has a collider sibling, a
         duplicate path, or a scene-root mesh is refused before anything is
-        written. shape_type: box | sphere | capsule | cylinder (or the class
-        name); a sphere/capsule/cylinder under a non-uniformly scaled parent
-        is refused. body_type: static | area. scene_file pins the request to
-        that edited scene. Up to 1024 paths are processed in bounded work
-        across editor frames; inside batch_execute at most 16. The bulk
-        write is one undo action.
+        written. shape_type: box | sphere | capsule | cylinder | convex |
+        trimesh (or the class name). convex/trimesh derive the shape from the
+        mesh's own triangles, with the mesh scale baked into the shape;
+        trimesh needs a static or area body, and a non-uniformly scaled parent
+        chain refuses every type except box. body_type: static | area | rigid
+        | character. reparent_mesh=True moves the mesh under the generated
+        body (Body → [MeshInstance3D, CollisionShape3D]) while preserving its
+        world transform; the reported mesh_path is then the post-move path.
+        scene_file pins the request to that edited scene. Up to 1024 paths are
+        processed in bounded work across editor frames; inside batch_execute
+        at most 16. The bulk write is one undo action.
         Returns: {created: [{mesh_path, body_path, shape_path, shape_type,
                   body_type}], undoable: true}.
   • gradient_texture_create(stops, width=256, height=1, fill="linear",
