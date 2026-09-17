@@ -2707,6 +2707,85 @@ class TestPhysicsShapeGenerateTool:
 
 
 # ---------------------------------------------------------------------------
+# navigation_manage
+# ---------------------------------------------------------------------------
+
+
+class TestNavigationManageTool:
+    async def test_region_create_dispatches(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "navigation_region_create"
+            assert cmd["params"] == {"parent_path": "/Main", "dimension": "3d"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/NavigationRegion3D",
+                    "parent_path": "/Main",
+                    "class": "NavigationRegion3D",
+                    "dimension": "3d",
+                    "mesh_class": "NavigationMesh",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "navigation_manage",
+            {"op": "region_create", "params": {"parent_path": "/Main"}},
+        )
+        await task
+        assert result.data["class"] == "NavigationRegion3D"
+        assert result.data["undoable"] is True
+
+    async def test_path_get_dispatches(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "navigation_path_get"
+            assert cmd["params"] == {
+                "from_point": {"x": -8.0, "y": 0.5, "z": -8.0},
+                "to_point": {"x": 8.0, "y": 0.5, "z": 8.0},
+                "dimension": "3d",
+                "optimize": True,
+                "navigation_layers": 1,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "dimension": "3d",
+                    "from_point": {"x": -8.0, "y": 0.5, "z": -8.0},
+                    "to_point": {"x": 8.0, "y": 0.5, "z": 8.0},
+                    "optimize": True,
+                    "navigation_layers": 1,
+                    "point_count": 2,
+                    "points": [
+                        {"x": -8.0, "y": 0.5, "z": -8.0},
+                        {"x": 8.0, "y": 0.5, "z": 8.0},
+                    ],
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "navigation_manage",
+            {
+                "op": "path_get",
+                "params": {
+                    "from_point": {"x": -8.0, "y": 0.5, "z": -8.0},
+                    "to_point": {"x": 8.0, "y": 0.5, "z": 8.0},
+                },
+            },
+        )
+        await task
+        assert result.data["point_count"] == 2
+        assert len(result.data["points"]) == 2
+
+
+# ---------------------------------------------------------------------------
 # filesystem_read_text
 # ---------------------------------------------------------------------------
 

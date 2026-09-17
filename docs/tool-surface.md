@@ -13,7 +13,7 @@ The MCP tool surface is shaped to satisfy two pressures at once:
 1. **Anthropic tool-search clients** (`tool_search_tool_bm25_20251119` / `tool_search_tool_regex_20251119`) — non-core tools are tagged `meta={"defer_loading": True}` so the client only loads schemas it searches for.
 2. **Tool-count caps in non-search clients** (Antigravity, etc., that ignore `defer_loading` and refuse to start past ~40 tools) — long-tail verbs collapse into per-domain `<domain>_manage` rollups (`op="<verb>"` + `params` dict). Schema-aware clients still see every op via the dynamic `Literal[...]` enum built by `register_manage_tool` in `tools/_meta_tool.py`.
 
-Result: 46 MCP tools (4 always-loaded core tools + 15 deferred named tools + 27 deferred rollups), down from a flat surface that crossed 100. Plugin command names over WebSocket stay independent — they're documented in `tool_catalog.gd` and unchanged by the rollup refactor. Treat [TOOLS.md](TOOLS.md) and `plugin/addons/godot_ai/tool_catalog.gd` as the inventory authorities when this surface changes.
+Result: 47 MCP tools (4 always-loaded core tools + 15 deferred named tools + 28 deferred rollups), down from a flat surface that crossed 100. Plugin command names over WebSocket stay independent — they're documented in `tool_catalog.gd` and unchanged by the rollup refactor. Treat [TOOLS.md](TOOLS.md) and `plugin/addons/godot_ai/tool_catalog.gd` as the inventory authorities when this surface changes.
 
 - All tools follow `domain_action` namespacing — no ambiguous prefixes
 - Core tools loaded upfront (no `meta=`): `editor_state`, `scene_get_hierarchy`, `node_get_properties`, `session_activate`
