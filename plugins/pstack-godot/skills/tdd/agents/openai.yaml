@@ -1,0 +1,5 @@
+interface:
+  display_name: Tdd
+  short_description: Invoke the pstack tdd workflow.
+policy:
+  allow_implicit_invocation: false

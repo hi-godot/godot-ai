@@ -1,0 +1,5 @@
+interface:
+  display_name: Bro
+  short_description: Invoke the pstack bro workflow.
+policy:
+  allow_implicit_invocation: false

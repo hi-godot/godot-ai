@@ -1,0 +1,5 @@
+interface:
+  display_name: How
+  short_description: Invoke the pstack how workflow.
+policy:
+  allow_implicit_invocation: false

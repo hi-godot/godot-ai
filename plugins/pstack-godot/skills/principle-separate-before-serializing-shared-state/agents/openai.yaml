@@ -1,0 +1,6 @@
+interface:
+  display_name: Principle Separate Before Serializing Shared State
+  short_description: Invoke the pstack principle-separate-before-serializing-shared-state
+    workflow.
+policy:
+  allow_implicit_invocation: false

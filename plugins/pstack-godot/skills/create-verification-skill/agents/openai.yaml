@@ -1,0 +1,5 @@
+interface:
+  display_name: Create Verification Skill
+  short_description: Invoke the pstack create-verification-skill workflow.
+policy:
+  allow_implicit_invocation: false

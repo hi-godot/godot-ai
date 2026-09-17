@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Type System Discipline
+  short_description: Invoke the pstack principle-type-system-discipline workflow.
+policy:
+  allow_implicit_invocation: false

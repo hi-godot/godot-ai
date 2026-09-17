@@ -2,6 +2,14 @@
 
 This guide is for any AI assistant working in this repository. Keep Claude-specific files such as `.claude/CLAUDE.md` and `.claude/skills/*` as thin pointers to this shared guidance.
 
+## Opt-in poteto sessions
+
+If the session environment sets `GODOT_AI_POTETO_SESSION=1`, read and follow
+[docs/poteto-session.md](docs/poteto-session.md) before starting the task. This
+selects poteto-mode for that dedicated session; it does not change ordinary
+sessions. An explicit user request or the `script/poteto` / `script/poteto.ps1`
+launcher can select the same mode without the environment variable.
+
 ## PR activity monitoring
 
 Whenever a PR is created, opened, or identified in the conversation, check its

@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Redesign From First Principles
+  short_description: Invoke the pstack principle-redesign-from-first-principles workflow.
+policy:
+  allow_implicit_invocation: false

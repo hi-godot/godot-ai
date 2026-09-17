@@ -1,0 +1,23 @@
+{
+  "name": "pstack-godot",
+  "version": "0.15.0-godot.1+codex.session-launchers",
+  "description": "Opt-in pstack engineering workflows for Codex and Claude Code, with inherited models and Godot AI verification.",
+  "author": {
+    "name": "Godot AI contributors"
+  },
+  "homepage": "https://github.com/hi-godot/godot-ai",
+  "repository": "https://github.com/hi-godot/godot-ai",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Pstack for Godot AI",
+    "shortDescription": "Opt-in engineering workflows with inherited models.",
+    "longDescription": "Pstack 0.15.0 adapted for Codex and Claude Code. Invoke poteto-mode for deliberate engineering workflows. Shared defaults contain no personal configuration.",
+    "developerName": "Godot AI contributors",
+    "category": "Productivity",
+    "defaultPrompt": [
+      "Use $poteto-mode for this Godot AI task."
+    ],
+    "capabilities": []
+  }
+}

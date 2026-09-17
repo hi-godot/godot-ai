@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Guard The Context Window
+  short_description: Invoke the pstack principle-guard-the-context-window workflow.
+policy:
+  allow_implicit_invocation: false

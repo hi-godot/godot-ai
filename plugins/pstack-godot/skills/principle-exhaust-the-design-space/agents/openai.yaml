@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Exhaust The Design Space
+  short_description: Invoke the pstack principle-exhaust-the-design-space workflow.
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Laziness Protocol
+  short_description: Invoke the pstack principle-laziness-protocol workflow.
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Encode Lessons In Structure
+  short_description: Invoke the pstack principle-encode-lessons-in-structure workflow.
+policy:
+  allow_implicit_invocation: false

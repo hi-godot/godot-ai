@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+client="${1:-}"
+case "$client" in
+  codex|claude) shift ;;
+  *) echo 'Usage: bash script/poteto codex|claude [--remote] [task]' >&2; exit 2 ;;
+esac
+
+args=()
+if [[ "${1:-}" == '--remote' ]]; then
+  if [[ "$client" != 'claude' ]]; then
+    echo 'For Codex, enable and pair its native remote-control daemon separately; see docs/pstack.md.' >&2
+    exit 2
+  fi
+  args+=(--remote-control 'Godot AI poteto')
+  shift
+fi
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+test -f "$repo_root/docs/poteto-session.md"
+command -v "$client" >/dev/null || { echo "Install and sign in to $client first." >&2; exit 1; }
+prompt='This is an explicitly requested poteto session. Read docs/poteto-session.md and follow it for every task in this session until I turn the mode off.'
+if [[ $# -gt 0 ]]; then
+  prompt+=$'\n\nTask:\n'"$*"
+else
+  prompt+=' Confirm the mode and wait for my task.'
+fi
+cd -- "$repo_root"
+exec "$client" "${args[@]}" "$prompt"

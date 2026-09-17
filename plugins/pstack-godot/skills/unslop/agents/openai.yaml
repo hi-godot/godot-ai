@@ -1,0 +1,5 @@
+interface:
+  display_name: Unslop
+  short_description: Invoke the pstack unslop workflow.
+policy:
+  allow_implicit_invocation: false

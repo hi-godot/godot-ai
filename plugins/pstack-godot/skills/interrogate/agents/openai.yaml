@@ -1,0 +1,5 @@
+interface:
+  display_name: Interrogate
+  short_description: Invoke the pstack interrogate workflow.
+policy:
+  allow_implicit_invocation: false

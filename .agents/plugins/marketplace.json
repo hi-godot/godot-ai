@@ -1,0 +1,20 @@
+{
+  "name": "godot-ai-local",
+  "interface": {
+    "displayName": "Godot Ai Local"
+  },
+  "plugins": [
+    {
+      "name": "pstack-godot",
+      "source": {
+        "source": "local",
+        "path": "./plugins/pstack-godot"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

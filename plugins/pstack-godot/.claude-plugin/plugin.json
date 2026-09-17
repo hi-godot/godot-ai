@@ -1,0 +1,12 @@
+{
+  "name": "pstack-godot",
+  "version": "0.15.0-godot.1+codex.session-launchers",
+  "description": "Opt-in pstack engineering workflows for Codex and Claude Code, with inherited models and Godot AI verification.",
+  "author": {
+    "name": "Godot AI contributors"
+  },
+  "homepage": "https://github.com/hi-godot/godot-ai",
+  "repository": "https://github.com/hi-godot/godot-ai",
+  "license": "MIT",
+  "skills": "./skills/"
+}

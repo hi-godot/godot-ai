@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Subtract Before You Add
+  short_description: Invoke the pstack principle-subtract-before-you-add workflow.
+policy:
+  allow_implicit_invocation: false

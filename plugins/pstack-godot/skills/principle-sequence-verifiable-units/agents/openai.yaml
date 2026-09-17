@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Sequence Verifiable Units
+  short_description: Invoke the pstack principle-sequence-verifiable-units workflow.
+policy:
+  allow_implicit_invocation: false

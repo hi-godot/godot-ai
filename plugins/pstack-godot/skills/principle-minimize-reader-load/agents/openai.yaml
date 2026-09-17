@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Minimize Reader Load
+  short_description: Invoke the pstack principle-minimize-reader-load workflow.
+policy:
+  allow_implicit_invocation: false

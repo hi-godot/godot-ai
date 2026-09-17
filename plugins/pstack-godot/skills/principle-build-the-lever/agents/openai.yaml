@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Build The Lever
+  short_description: Invoke the pstack principle-build-the-lever workflow.
+policy:
+  allow_implicit_invocation: false

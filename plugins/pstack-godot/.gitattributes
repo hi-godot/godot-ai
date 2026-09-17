@@ -1,0 +1,2 @@
+# Preserve the pinned upstream bytes across Windows and Unix checkouts.
+upstream/pstack/** -text

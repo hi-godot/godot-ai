@@ -1,0 +1,5 @@
+interface:
+  display_name: Figure It Out
+  short_description: Invoke the pstack figure-it-out workflow.
+policy:
+  allow_implicit_invocation: false

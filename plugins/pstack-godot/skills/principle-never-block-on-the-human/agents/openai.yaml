@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Never Block On The Human
+  short_description: Invoke the pstack principle-never-block-on-the-human workflow.
+policy:
+  allow_implicit_invocation: false

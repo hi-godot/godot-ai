@@ -1,0 +1,5 @@
+interface:
+  display_name: Principle Make Operations Idempotent
+  short_description: Invoke the pstack principle-make-operations-idempotent workflow.
+policy:
+  allow_implicit_invocation: false
