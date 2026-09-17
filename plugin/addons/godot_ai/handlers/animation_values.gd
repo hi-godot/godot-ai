@@ -386,6 +386,46 @@ static func coerce_for_type(value: Variant, prop_type: int, prop_name: String) -
 		TYPE_BOOL:
 			if value is int or value is float or value is bool:
 				return {"ok": bool(value)}
+		TYPE_VECTOR3I:
+			var v3i = McpJsonValues.parse_vector3i(value)
+			if v3i != null:
+				return {"ok": v3i}
+			return {"error": "Cannot coerce value to Vector3i for property '%s' (expected {x,y,z}, [x,y,z], or Vector3i)" % prop_name}
+		TYPE_QUATERNION:
+			var quat = McpJsonValues.parse_quaternion(value)
+			if quat != null:
+				return {"ok": quat}
+			return {"error": "Cannot coerce value to Quaternion for property '%s' (expected {x,y,z,w}, [x,y,z,w], or Quaternion)" % prop_name}
+		TYPE_BASIS:
+			var basis = McpJsonValues.parse_basis(value)
+			if basis != null:
+				return {"ok": basis}
+			return {"error": "Cannot coerce value to Basis for property '%s' (expected {x,y,z} axis vectors, a 3x3 nested array, or Basis)" % prop_name}
+		TYPE_TRANSFORM3D:
+			var xform = McpJsonValues.parse_transform3d(value)
+			if xform != null:
+				return {"ok": xform}
+			return {"error": "Cannot coerce value to Transform3D for property '%s' (expected {basis,origin}, {position,rotation_degrees?,scale?}, or Transform3D)" % prop_name}
+		TYPE_RECT2:
+			var rect = McpJsonValues.parse_rect2(value)
+			if rect != null:
+				return {"ok": rect}
+			return {"error": "Cannot coerce value to Rect2 for property '%s' (expected {position,size}, [x,y,w,h], or Rect2)" % prop_name}
+		TYPE_AABB:
+			var aabb = McpJsonValues.parse_aabb(value)
+			if aabb != null:
+				return {"ok": aabb}
+			return {"error": "Cannot coerce value to AABB for property '%s' (expected {position,size}, [x,y,z,w,h,d], or AABB)" % prop_name}
+		TYPE_NODE_PATH:
+			var node_path = McpJsonValues.parse_node_path(value)
+			if node_path != null:
+				return {"ok": node_path}
+			return {"error": "Cannot coerce value to NodePath for property '%s' (expected a string path)" % prop_name}
+		TYPE_STRING_NAME:
+			var string_name = McpJsonValues.parse_string_name(value)
+			if string_name != null:
+				return {"ok": string_name}
+			return {"error": "Cannot coerce value to StringName for property '%s' (expected a string)" % prop_name}
 	return {"ok": value}
 
 
