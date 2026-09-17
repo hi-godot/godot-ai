@@ -27,6 +27,10 @@ const _LOOP_MODES := {
 	"pingpong": Animation.LOOP_PINGPONG,
 }
 
+## Angular segments per orbit turn. Linear interpolation between keys is
+## straight, so this is the circle approximation density.
+const _ORBIT_SEGMENTS := 16
+
 
 var _handler_weak: WeakRef
 
@@ -528,7 +532,8 @@ func preset_bounce(params: Dictionary) -> Dictionary:
 	var target_resolved := _resolve_preset_target(player, target_path)
 	if target_resolved.has("error"):
 		return target_resolved
-	var target: Node = target_resolved.node
+	## Untyped: `scale` lives on Control/Node2D/Node3D, not on the Node base.
+	var target = target_resolved.node
 	var kind: String = target_resolved.kind
 	var track_target: String = target_resolved.track_path_root
 
@@ -542,17 +547,17 @@ func preset_bounce(params: Dictionary) -> Dictionary:
 
 	var peak := 1.0 + intensity
 	var dip := 1.0 - intensity * 0.25
-	var at_rest: Variant
+	## Pop from the target's current scale, not identity: a widget that is
+	## already scaled must not snap to 1.0 when the animation starts.
+	var at_rest: Variant = target.scale
 	var at_peak: Variant
 	var at_dip: Variant
 	if kind == "3d":
-		at_rest = Vector3.ONE
-		at_peak = Vector3(peak, peak, peak)
-		at_dip = Vector3(dip, dip, dip)
+		at_peak = at_rest * Vector3(peak, peak, peak)
+		at_dip = at_rest * Vector3(dip, dip, dip)
 	else:
-		at_rest = Vector2.ONE
-		at_peak = Vector2(peak, peak)
-		at_dip = Vector2(dip, dip)
+		at_peak = at_rest * Vector2(peak, peak)
+		at_dip = at_rest * Vector2(dip, dip)
 
 	var anim := Animation.new()
 	anim.length = duration
@@ -653,16 +658,19 @@ func preset_orbit(params: Dictionary) -> Dictionary:
 
 	var center: Variant = target.position
 	var direction := 1.0 if clockwise else -1.0
+	## Linear interpolation between keyframes is straight, so four quarter-turn
+	## keys trace a diamond. Sixteen segments keep the chord error under ~2% of
+	## the radius while staying cheap to evaluate.
 	var keyframes: Array = []
-	for step in range(5):
-		var angle := direction * TAU * float(step) / 4.0
+	for step in range(_ORBIT_SEGMENTS + 1):
+		var angle := direction * TAU * float(step) / float(_ORBIT_SEGMENTS)
 		var offset: Variant
 		if kind == "3d":
 			offset = Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
 		else:
 			offset = Vector2(cos(angle) * radius, sin(angle) * radius)
 		keyframes.append({
-			"time": duration * float(step) / 4.0,
+			"time": duration * float(step) / float(_ORBIT_SEGMENTS),
 			"value": center + offset,
 			"transition": "linear",
 		})
@@ -744,7 +752,8 @@ func preset_sweep(params: Dictionary) -> Dictionary:
 	var target_resolved := _resolve_preset_target(player, target_path)
 	if target_resolved.has("error"):
 		return target_resolved
-	var target: Node = target_resolved.node
+	## Untyped: `rotation` lives on Control/Node2D/Node3D, not on the Node base.
+	var target = target_resolved.node
 	var kind: String = target_resolved.kind
 	var track_target: String = target_resolved.track_path_root
 
@@ -758,6 +767,8 @@ func preset_sweep(params: Dictionary) -> Dictionary:
 
 	var direction := 1.0 if clockwise else -1.0
 	var total_radians := direction * TAU * turns
+	## Sweep from the target's current orientation instead of snapping it to 0.
+	var start_rotation: float = float(target.rotation.y) if kind == "3d" else float(target.rotation)
 
 	var anim := Animation.new()
 	anim.length = duration
@@ -767,8 +778,8 @@ func preset_sweep(params: Dictionary) -> Dictionary:
 	## `rotation` property.
 	var track_path := "%s:rotation:y" % track_target if kind == "3d" else "%s:rotation" % track_target
 	handler._do_add_property_track(anim, track_path, "linear", [
-		{"time": 0.0, "value": 0.0, "transition": "linear"},
-		{"time": duration, "value": total_radians, "transition": "linear"},
+		{"time": 0.0, "value": start_rotation, "transition": "linear"},
+		{"time": duration, "value": start_rotation + total_radians, "transition": "linear"},
 	])
 
 	var extra_props := _control_pivot_props(target)
@@ -784,6 +795,7 @@ func preset_sweep(params: Dictionary) -> Dictionary:
 			"animation_name": anim_name,
 			"clockwise": clockwise,
 			"turns": turns,
+			"start_rotation": start_rotation,
 			"length": duration,
 			"loop_mode": AnimationValues.loop_mode_to_string(loop_mode),
 			"pivot_recentered": not extra_props.is_empty(),
@@ -800,7 +812,9 @@ func preset_sweep(params: Dictionary) -> Dictionary:
 # ============================================================================
 
 ## A one-axis position offset over the clip — scanlines, marquee text,
-## conveyor motion. Pair with loop_mode="linear" for continuous motion.
+## conveyor motion. The clip ends at a net offset from its start, so
+## loop_mode="linear" would snap the target back each cycle; use "pingpong"
+## (back and forth) or "none" (play once).
 func preset_drift(params: Dictionary) -> Dictionary:
 	var player_path: String = params.get("player_path", "")
 	var target_path: String = params.get("target_path", "")
@@ -819,6 +833,14 @@ func preset_drift(params: Dictionary) -> Dictionary:
 	if loop_result.has("error"):
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, loop_result.error)
 	var loop_mode: int = loop_result.ok
+	if loop_mode == Animation.LOOP_LINEAR:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			(
+				"preset_drift ends at a net offset from its start, so loop_mode 'linear' "
+				+ "would snap the target back each cycle — use 'pingpong' or 'none'"
+			),
+		)
 
 	var handler = _h()
 	if handler == null:

@@ -216,7 +216,10 @@ static func parse_transform3d(value: Variant) -> Variant:
 			var scale: Variant = parse_vector3(d.scale)
 			if scale == null:
 				return null
-			rot_basis = rot_basis.scaled(scale)
+			## Local axes: the ergonomic shape describes a node transform, and
+			## `scaled()` would apply the scale in global axes (skewing the
+			## rotation for a non-uniform scale).
+			rot_basis = rot_basis.scaled_local(scale)
 		return Transform3D(rot_basis, pos)
 	return null
 

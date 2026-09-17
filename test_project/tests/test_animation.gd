@@ -2280,6 +2280,20 @@ func test_coerce_transform3d_shapes() -> void:
 		{"position": {"x": 5.0, "y": 0.0, "z": 0.0}}, TYPE_TRANSFORM3D, "transform")
 	assert_true(position_only.ok is Transform3D, "a bare position must be a valid transform")
 	assert_eq((position_only.ok as Transform3D).origin, Vector3(5, 0, 0))
+	## Rotation + non-uniform scale must scale in the rotated (local) axes; a
+	## global-axis scale would skew the basis.
+	var rotated_scaled := AnimationValues.coerce_for_type(
+		{"position": [0.0, 0.0, 0.0], "rotation_degrees": [0.0, 45.0, 0.0], "scale": [2.0, 1.0, 1.0]},
+		TYPE_TRANSFORM3D, "transform")
+	assert_true(rotated_scaled.ok is Transform3D, "rotated non-uniform scale must coerce")
+	var rotated_basis: Basis = (rotated_scaled.ok as Transform3D).basis
+	var plain_basis := Basis.from_euler(Vector3(0.0, deg_to_rad(45.0), 0.0))
+	assert_true(
+		rotated_basis.x.normalized().is_equal_approx(plain_basis.x.normalized()),
+		"local scale must keep the x axis direction, got %s vs %s" % [str(rotated_basis.x), str(plain_basis.x)]
+	)
+	assert_true(absf(rotated_basis.x.length() - 2.0) < 0.001, "the x axis must carry the x scale")
+	assert_true(absf(rotated_basis.y.length() - 1.0) < 0.001, "the y axis must stay unscaled")
 	var bad := AnimationValues.coerce_for_type(
 		{"basis": {"x": {"x": 1.0, "y": 0.0, "z": 0.0}}}, TYPE_TRANSFORM3D, "transform")
 	assert_true(bad.has("error"), "a basis without an origin must be rejected")
@@ -2589,6 +2603,36 @@ func test_preset_bounce_undo_restores_pivot() -> void:
 	_remove_node("/" + scene_root.name + "/BounceUndo")
 
 
+func test_preset_bounce_preserves_current_scale() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var node: Node3D = _add_sibling(Node3D.new(), "BounceScaled") as Node3D
+	node.scale = Vector3(2.0, 3.0, 4.0)
+	var player_path := _add_player("TestPresetBounceScaled")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/BounceScaled")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_bounce({
+		"player_path": player_path,
+		"target_path": "BounceScaled",
+		"intensity": 0.5,
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "bounce")
+	var rest = anim.track_get_key_value(0, 0)
+	var peak = anim.track_get_key_value(0, 1)
+	assert_true(rest is Vector3, "3D bounce keys must be Vector3")
+	assert_true((rest as Vector3).is_equal_approx(Vector3(2.0, 3.0, 4.0)),
+		"bounce must start from the target's current scale, got %s" % str(rest))
+	assert_true((peak as Vector3).is_equal_approx(Vector3(3.0, 4.5, 6.0)),
+		"peak must scale the current baseline, got %s" % str(peak))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/BounceScaled")
+
+
 func test_preset_bounce_rejects_bad_intensity() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -2635,15 +2679,22 @@ func test_preset_orbit_circle_is_seamless() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.radius, 50.0)
 	var anim := _fetch_anim(player_path, "orbit")
-	assert_eq(anim.track_get_key_count(0), 5, "orbit must have 5 keyframes")
+	assert_eq(anim.track_get_key_count(0), 17, "orbit must sample 16 angular segments")
 	assert_eq(anim.loop_mode, Animation.LOOP_LINEAR)
 	var first = anim.track_get_key_value(0, 0)
-	var last = anim.track_get_key_value(0, 4)
-	var quarter = anim.track_get_key_value(0, 1)
+	var last = anim.track_get_key_value(0, 16)
+	var quarter = anim.track_get_key_value(0, 4)
+	var eighth = anim.track_get_key_value(0, 2)
 	assert_true(first is Vector2, "orbit keys must be Vector2")
 	assert_true((first as Vector2).is_equal_approx(last as Vector2), "orbit must be seamless")
 	assert_true((quarter as Vector2).is_equal_approx(Vector2(5.0, 57.0)),
 		"a quarter turn must be radius above the center, got %s" % str(quarter))
+	## The 45-degree sample must sit on the circle, not on the diamond chord
+	## the old four-key version traced.
+	assert_true(
+		(eighth as Vector2).is_equal_approx(Vector2(5.0 + 50.0 * sqrt(0.5), 7.0 + 50.0 * sqrt(0.5))),
+		"a 45-degree sample must lie on the circle, got %s" % str(eighth)
+	)
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/OrbitNode")
 
@@ -2678,6 +2729,36 @@ func test_preset_sweep_control_pivot_and_rotation() -> void:
 	assert_true(control.pivot_offset.is_equal_approx(Vector2(30.0, 30.0)))
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/SweepControl")
+
+
+func test_preset_sweep_preserves_current_rotation() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var node: Node3D = _add_sibling(Node3D.new(), "SweepRotated") as Node3D
+	node.rotation.y = 0.5
+	var player_path := _add_player("TestPresetSweepRotated")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/SweepRotated")
+		skip("Scene not ready")
+		return
+	var result := _handler.preset_sweep({
+		"player_path": player_path,
+		"target_path": "SweepRotated",
+	})
+	assert_has_key(result, "data")
+	assert_true(absf(float(result.data.start_rotation) - 0.5) < 0.0001,
+		"the response must report the starting rotation, got %s" % str(result.data.start_rotation))
+	var anim := _fetch_anim(player_path, "sweep")
+	var start = anim.track_get_key_value(0, 0)
+	var end = anim.track_get_key_value(0, 1)
+	assert_true(absf(float(start) - 0.5) < 0.0001,
+		"sweep must start at the current rotation, got %s" % str(start))
+	assert_true(absf(float(end) - (0.5 + TAU)) < 0.0001,
+		"sweep must add a full turn to the current rotation, got %s" % str(end))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/SweepRotated")
 
 
 func test_preset_sweep_3d_rotates_local_y() -> void:
@@ -2725,12 +2806,12 @@ func test_preset_drift_axis_and_loop() -> void:
 		"target_path": "DriftNode",
 		"axis": "z",
 		"distance": 2.0,
-		"loop_mode": "linear",
+		"loop_mode": "pingpong",
 	})
 	assert_has_key(result, "data")
 	assert_eq(result.data.axis, "z")
 	var anim := _fetch_anim(player_path, "drift")
-	assert_eq(anim.loop_mode, Animation.LOOP_LINEAR)
+	assert_eq(anim.loop_mode, Animation.LOOP_PINGPONG)
 	var start = anim.track_get_key_value(0, 0)
 	var end = anim.track_get_key_value(0, 1)
 	assert_true(start is Vector3 and end is Vector3, "drift keys must be Vector3")
@@ -2766,5 +2847,14 @@ func test_preset_drift_rejects_bad_axis_and_loop_mode() -> void:
 	})
 	assert_is_error(bad_loop, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(bad_loop.error.message, "Invalid loop_mode")
+	## A net-offset drift must not loop linearly (it would snap back each cycle).
+	var linear_loop := _handler.preset_drift({
+		"player_path": player_path,
+		"target_path": "DriftBad",
+		"axis": "x",
+		"loop_mode": "linear",
+	})
+	assert_is_error(linear_loop, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(linear_loop.error.message, "pingpong")
 	_remove_node(player_path)
 	_remove_node("/" + scene_root.name + "/DriftBad")

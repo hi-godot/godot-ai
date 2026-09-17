@@ -81,8 +81,9 @@ Ops:
                   duration=1.0, loop_mode="none", animation_name="",
                   overwrite=False)
         One-call one-axis position offset (scanlines, marquee, conveyor).
-        distance defaults to 1.0 (3D) / 100.0 (2D); pair with
-        loop_mode="linear" for continuous motion.
+        distance defaults to 1.0 (3D) / 100.0 (2D). The clip ends at a net
+        offset, so loop_mode="linear" is refused (it would snap back each
+        cycle) — use "pingpong" for back-and-forth or "none" for a one-shot.
 
 Preset target_path: accepts either a scene-absolute path (e.g. "/Main/World/Cube",
 matching every other scene tool) or a path relative to the AnimationPlayer's
