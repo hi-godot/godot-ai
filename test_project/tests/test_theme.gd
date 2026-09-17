@@ -5,7 +5,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const ThemeHandler := preload("res://addons/godot_ai/handlers/theme_handler.gd")
 
-## Tests for ThemeHandler â€” Theme resource authoring.
+## Tests for ThemeHandler — Theme resource authoring.
 
 var _handler: ThemeHandler
 var _undo_redo: EditorUndoRedoManager
@@ -80,7 +80,7 @@ func test_create_theme_overwrite_allowed() -> void:
 
 
 ## Spy McpConnection that counts pause()/resume() calls instead of actually
-## touching WebSocket processing state â€” proves a handler routes its
+## touching WebSocket processing state — proves a handler routes its
 ## ResourceSaver.save through the #288 reentrancy guard without needing a
 ## live connection.
 class _PauseSpyConnection:
@@ -345,7 +345,7 @@ func test_theme_apply_to_control() -> void:
 	_make_theme()
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		skip("No scene root â€” is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var panel := Panel.new()
 	panel.name = "TestThemedPanel"
@@ -370,7 +370,7 @@ func test_theme_apply_clear_with_empty_path() -> void:
 	_make_theme()
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		skip("No scene root â€” is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
 	var panel := Panel.new()
 	panel.name = "TestClearThemePanel"
@@ -392,9 +392,9 @@ func test_theme_apply_rejects_non_control() -> void:
 	_make_theme()
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
-		skip("No scene root â€” is a scene open?")
+		skip("No scene root — is a scene open?")
 		return
-	# Scene root is a Node3D â€” not a Control.
+	# Scene root is a Node3D — not a Control.
 	var result := _handler.apply_theme({
 		"node_path": "/" + scene_root.name,
 		"theme_path": TEST_THEME_PATH,
@@ -418,7 +418,7 @@ func test_theme_set_color_rejects_null_value() -> void:
 
 
 func test_create_theme_overwritten_flag_tracks_pre_save_state() -> void:
-	# Fresh location â€” overwritten must be false even when overwrite=true.
+	# Fresh location — overwritten must be false even when overwrite=true.
 	if FileAccess.file_exists(TEST_THEME_PATH):
 		DirAccess.remove_absolute(TEST_THEME_PATH)
 	var result := _handler.create_theme({"path": TEST_THEME_PATH, "overwrite": true})
