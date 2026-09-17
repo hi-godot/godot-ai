@@ -205,6 +205,58 @@ func set_text(params: Dictionary) -> Dictionary:
 
 
 # ============================================================================
+# set_richtext — RichTextLabel text (BBcode-aware)
+# ============================================================================
+
+## Set a RichTextLabel's text in one undo action. `bbcode` (default true)
+## toggles BBcode parsing before the text is written, so "[color=red]HP[/color]"
+## renders as markup rather than literal characters.
+func set_richtext(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("path", "")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+
+	if not params.has("text"):
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: text")
+	var text_value: Variant = params["text"]
+	if typeof(text_value) != TYPE_STRING:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "text must be a string")
+
+	var resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	if not node is RichTextLabel:
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Node %s is not a RichTextLabel (got %s)" % [node_path, node.get_class()]
+		)
+	var label := node as RichTextLabel
+
+	var bbcode := bool(params.get("bbcode", true))
+	var old_text: String = label.text
+	var old_bbcode: bool = label.bbcode_enabled
+
+	_undo_redo.create_action("MCP: Set rich text on %s" % node.name)
+	## bbcode_enabled first: RichTextLabel parses `text` as BBcode only when
+	## the flag is already set.
+	_undo_redo.add_do_property(node, "bbcode_enabled", bbcode)
+	_undo_redo.add_do_property(node, "text", text_value)
+	_undo_redo.add_undo_property(node, "text", old_text)
+	_undo_redo.add_undo_property(node, "bbcode_enabled", old_bbcode)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": McpScenePath.from_node(node, resolved.scene_root),
+			"bbcode": bbcode,
+			"length": (text_value as String).length(),
+			"undoable": true,
+		}
+	}
+
+
+# ============================================================================
 # build_layout — declarative nested-dict → Control tree in one undo action
 # ============================================================================
 

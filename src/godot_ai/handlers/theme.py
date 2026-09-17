@@ -123,3 +123,89 @@ async def theme_apply(
         "apply_theme",
         {"node_path": node_path, "theme_path": theme_path},
     )
+
+
+async def theme_set_stylebox_texture(
+    runtime: DirectRuntime,
+    theme_path: str,
+    class_name: str,
+    name: str,
+    texture_path: str,
+    region: Any = None,
+    margins: dict[str, Any] | None = None,
+    axis_stretch_horizontal: str | None = None,
+    axis_stretch_vertical: str | None = None,
+    modulate_color: Any = None,
+    draw_center: bool | None = None,
+) -> dict:
+    await require_writable_async(runtime)
+    params: dict[str, Any] = {
+        "theme_path": theme_path,
+        "class_name": class_name,
+        "name": name,
+        "texture_path": texture_path,
+    }
+    if region is not None:
+        params["region"] = region
+    if margins is not None:
+        params["margins"] = margins
+    if axis_stretch_horizontal is not None:
+        params["axis_stretch_horizontal"] = axis_stretch_horizontal
+    if axis_stretch_vertical is not None:
+        params["axis_stretch_vertical"] = axis_stretch_vertical
+    if modulate_color is not None:
+        params["modulate_color"] = modulate_color
+    if draw_center is not None:
+        params["draw_center"] = draw_center
+    return await runtime.send_command("theme_set_stylebox_texture", params)
+
+
+async def theme_set_font(
+    runtime: DirectRuntime,
+    theme_path: str,
+    class_name: str,
+    name: str,
+    font_path: str,
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "theme_set_font",
+        {
+            "theme_path": theme_path,
+            "class_name": class_name,
+            "name": name,
+            "font_path": font_path,
+        },
+    )
+
+
+async def theme_set_icon(
+    runtime: DirectRuntime,
+    theme_path: str,
+    class_name: str,
+    name: str,
+    texture_path: str,
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "theme_set_icon",
+        {
+            "theme_path": theme_path,
+            "class_name": class_name,
+            "name": name,
+            "texture_path": texture_path,
+        },
+    )
+
+
+async def theme_stylebox_override(
+    runtime: DirectRuntime,
+    path: str,
+    slot: str,
+    patch: dict[str, Any],
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "theme_stylebox_override",
+        {"path": path, "slot": slot, "patch": patch},
+    )

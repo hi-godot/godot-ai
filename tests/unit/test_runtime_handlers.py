@@ -4588,6 +4588,25 @@ async def test_ui_build_layout_handler_defaults_parent_to_empty():
     assert client.calls[-1]["params"]["parent_path"] == ""
 
 
+async def test_ui_set_richtext_handler():
+    """set_richtext threads the bbcode flag (default True)."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await ui_handlers.ui_set_richtext(
+        runtime, path="/Main/HUD/Log", text="[color=red]HP[/color]"
+    )
+    assert client.calls[-1]["command"] == "set_richtext"
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/HUD/Log",
+        "text": "[color=red]HP[/color]",
+        "bbcode": True,
+    }
+    await ui_handlers.ui_set_richtext(
+        runtime, path="/Main/HUD/Log", text="plain", bbcode=False
+    )
+    assert client.calls[-1]["params"]["bbcode"] is False
+
+
 # ---------------------------------------------------------------------------
 # control_draw_recipe handler tests
 # ---------------------------------------------------------------------------
@@ -4743,6 +4762,72 @@ async def test_theme_set_stylebox_flat_handler_forwards_nested_dicts():
     assert params["corners"] == {"all": 10}
     assert params["margins"] == {"all": 12.0, "bottom": 20.0}
     assert params["shadow"]["offset_y"] == 4
+
+
+async def test_theme_set_stylebox_texture_handler_threads_fields():
+    """Unset optional fields stay out; set fields reach the plugin verbatim."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_set_stylebox_texture(
+        runtime,
+        theme_path="res://ui/themes/game.tres",
+        class_name="Button",
+        name="normal",
+        texture_path="res://ui/panel.png",
+        region=[1, 2, 4, 4],
+        margins={"all": 2.0},
+        axis_stretch_horizontal="tile",
+        draw_center=False,
+    )
+    assert client.calls[-1]["command"] == "theme_set_stylebox_texture"
+    params = client.calls[-1]["params"]
+    assert params["texture_path"] == "res://ui/panel.png"
+    assert params["region"] == [1, 2, 4, 4]
+    assert params["margins"] == {"all": 2.0}
+    assert params["axis_stretch_horizontal"] == "tile"
+    assert params["draw_center"] is False
+    assert "modulate_color" not in params
+    assert "axis_stretch_vertical" not in params
+
+
+async def test_theme_set_font_and_icon_handlers():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_set_font(
+        runtime,
+        theme_path="res://ui/themes/game.tres",
+        class_name="Button",
+        name="font",
+        font_path="res://ui/fonts/body.ttf",
+    )
+    assert client.calls[-1]["command"] == "theme_set_font"
+    assert client.calls[-1]["params"]["font_path"] == "res://ui/fonts/body.ttf"
+    await theme_handlers.theme_set_icon(
+        runtime,
+        theme_path="res://ui/themes/game.tres",
+        class_name="CheckBox",
+        name="checked",
+        texture_path="res://ui/icons/check.svg",
+    )
+    assert client.calls[-1]["command"] == "theme_set_icon"
+    assert client.calls[-1]["params"]["texture_path"] == "res://ui/icons/check.svg"
+
+
+async def test_theme_stylebox_override_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await theme_handlers.theme_stylebox_override(
+        runtime,
+        path="/Main/HUD/Frame",
+        slot="panel",
+        patch={"border": {"all": 0}},
+    )
+    assert client.calls[-1]["command"] == "theme_stylebox_override"
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/HUD/Frame",
+        "slot": "panel",
+        "patch": {"border": {"all": 0}},
+    }
 
 
 async def test_theme_apply_handler():

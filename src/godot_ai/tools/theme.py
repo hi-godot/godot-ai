@@ -34,6 +34,24 @@ Ops (pass via op="..." plus a params dict):
                        border?, corners?, margins?, shadow?, anti_aliasing?)
         Compose a StyleBoxFlat (panels, button states, line edits).
         border/corners/margins/shadow each accept "all" + per-side keys.
+  • set_stylebox_texture(theme_path, class_name, name, texture_path,
+                          region?, margins?, axis_stretch_horizontal?,
+                          axis_stretch_vertical?, modulate_color?, draw_center?)
+        Compose a 9-slice StyleBoxTexture from an imported image — pixel-art
+        buttons and artwork-backed panels. region is {position, size} or
+        [x,y,w,h]; margins are {all|left|top|right|bottom}; axis stretch modes
+        are "stretch" | "tile" | "tile_fit".
+  • set_font(theme_path, class_name, name, font_path)
+        Assign a Font resource (FontFile .ttf/.otf, FontVariation) to a font
+        slot. Loads the imported resource from res://.
+  • set_icon(theme_path, class_name, name, texture_path)
+        Assign a Texture2D to an icon slot (checkbox marks, dropdown arrows).
+  • stylebox_override(path, slot, patch)
+        Per-node stylebox override: duplicate the stylebox the Control
+        resolves for `slot`, apply a StyleBoxFlat patch (same keys as
+        set_stylebox_flat), and attach it via add_theme_stylebox_override.
+        Undo restores the previous override or removes it. The zero-border
+        angular-frame / flash-the-bar-bg pattern without mutating the theme.
   • apply(node_path, theme_path="")
         Assign the theme to a Control (cascades to descendants). Empty
         theme_path clears.
@@ -53,6 +71,10 @@ def register_theme_tools(mcp: FastMCP) -> None:
             "set_constant": theme_handlers.theme_set_constant,
             "set_font_size": theme_handlers.theme_set_font_size,
             "set_stylebox_flat": theme_handlers.theme_set_stylebox_flat,
+            "set_stylebox_texture": theme_handlers.theme_set_stylebox_texture,
+            "set_font": theme_handlers.theme_set_font,
+            "set_icon": theme_handlers.theme_set_icon,
+            "stylebox_override": theme_handlers.theme_stylebox_override,
             "apply": theme_handlers.theme_apply,
         },
     )
