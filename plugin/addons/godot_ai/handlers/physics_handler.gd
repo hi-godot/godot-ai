@@ -186,9 +186,21 @@ func layers_set(params: Dictionary) -> Dictionary:
 				ErrorCodes.VALUE_OUT_OF_RANGE,
 				"Layer index %s is out of range (1-%d)" % [str(raw_index), _LAYER_COUNT],
 			)
+		var raw_name: Variant = layer_dict[raw_index]
+		if not raw_name is String:
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
+				"Layer name must be a string, got %s" % type_string(typeof(raw_name)),
+			)
 		var key := _LAYER_NAMES_PREFIX % dimension + str(index)
 		previous.append({"key": key, "name": str(ProjectSettings.get_setting(key, ""))})
-		updates.append({"index": index, "key": key, "name": str(layer_dict[raw_index])})
+		updates.append({"index": index, "key": key, "name": raw_name})
+
+	## A name that lands on two indices cannot be resolved unambiguously by
+	## body_configure's name arrays, so refuse the update before writing.
+	var duplicate_error := _duplicate_layer_name_error(dimension, updates)
+	if duplicate_error != null:
+		return duplicate_error
 
 	for update in updates:
 		ProjectSettings.set_setting(str(update.key), str(update.name))
@@ -213,6 +225,50 @@ func layers_set(params: Dictionary) -> Dictionary:
 			"reason": "ProjectSettings layer names are saved to disk",
 		}
 	}
+
+
+## The error to surface when applying `updates` would leave one non-empty
+## layer name on more than one index, or null when the result is unique.
+##
+## Only names the call touches (the written names and whatever currently sits
+## at the updated indices) are checked: a pre-existing duplicate elsewhere in
+## project.godot must not block unrelated layer edits — `_coerce_layers`
+## already refuses to resolve such a name. Because the check runs on the
+## post-update state, moving a name between indices in one call is allowed.
+static func _duplicate_layer_name_error(dimension: String, updates: Array[Dictionary]) -> Variant:
+	var touched := {}
+	for update in updates:
+		touched[str(update.name)] = true
+		var current := _layer_name(dimension, int(update.index))
+		if not current.is_empty():
+			touched[current] = true
+	var final_names := {}
+	for index in range(1, _LAYER_COUNT + 1):
+		final_names[index] = _layer_name(dimension, index)
+	for update in updates:
+		final_names[int(update.index)] = str(update.name)
+	var by_name := {}
+	for index in final_names:
+		var layer_name: String = final_names[index]
+		if layer_name.is_empty() or not touched.has(layer_name):
+			continue
+		if not by_name.has(layer_name):
+			by_name[layer_name] = []
+		(by_name[layer_name] as Array).append(index)
+	for layer_name in by_name:
+		var indices: Array = by_name[layer_name]
+		if indices.size() > 1:
+			var labels: Array[String] = []
+			for index in indices:
+				labels.append(str(index))
+			return ErrorCodes.make(
+				ErrorCodes.VALUE_OUT_OF_RANGE,
+				(
+					"Layer name '%s' would be assigned to layers %s — names must be unique "
+					+ "so collision_layer name arrays resolve to one bit"
+				) % [layer_name, ", ".join(labels)],
+			)
+	return null
 
 
 # ============================================================================
@@ -301,7 +357,19 @@ static func _coerce_layers(raw: Variant, dimension: String) -> Dictionary:
 						+ "Define names with physics_manage(op='layers_set')."
 					) % [dimension, entry, named],
 				)
-			bits |= 1 << (int(known[entry]) - 1)
+			var indices: Array = known[entry]
+			if indices.size() > 1:
+				var labels: Array[String] = []
+				for index in indices:
+					labels.append(str(index))
+				return ErrorCodes.make(
+					ErrorCodes.VALUE_OUT_OF_RANGE,
+					(
+						"Layer name '%s' is ambiguous — it is assigned to layers %s. "
+						+ "Make names unique with physics_manage(op='layers_set')."
+					) % [entry, ", ".join(labels)],
+				)
+			bits |= 1 << (int(indices[0]) - 1)
 		return {"ok": bits}
 	return ErrorCodes.make(
 		ErrorCodes.WRONG_TYPE,
@@ -368,13 +436,17 @@ static func _layer_name(dimension: String, index: int) -> String:
 	return str(ProjectSettings.get_setting(_LAYER_NAMES_PREFIX % dimension + str(index), ""))
 
 
-## `{layer_name: layer_index}` for the named layers of one dimension.
+## `{layer_name: [layer_index, ...]}` for the named layers of one dimension.
+## A list per name keeps pre-existing duplicates (project.godot edited by
+## hand) visible, so `_coerce_layers` can refuse to guess which bit was meant.
 static func _layer_name_index(dimension: String) -> Dictionary:
 	var out := {}
 	for index in range(1, _LAYER_COUNT + 1):
 		var layer_name := _layer_name(dimension, index)
 		if not layer_name.is_empty():
-			out[layer_name] = index
+			if not out.has(layer_name):
+				out[layer_name] = []
+			(out[layer_name] as Array).append(index)
 	return out
 
 

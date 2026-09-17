@@ -43,10 +43,14 @@ func suite_teardown() -> void:
 # ----- helpers -----
 
 ## Save the current names of `indexes` for one dimension so the suite can put
-## project.godot back exactly as it found it.
+## project.godot back exactly as it found it. Merges into any earlier capture
+## for the dimension and keeps the earliest value, so a later test in the same
+## suite cannot overwrite the restore record of an earlier one.
 func _save_layer_names(dimension: String, indexes: Array) -> void:
-	var saved: Dictionary = {}
+	var saved: Dictionary = _saved_layer_names.get(dimension, {})
 	for index in indexes:
+		if saved.has(index):
+			continue
 		saved[index] = str(
 			ProjectSettings.get_setting("layer_names/%s_physics/layer_%d" % [dimension, index], "")
 		)
@@ -363,3 +367,73 @@ func test_layers_set_rejects_bad_index_and_shape() -> void:
 	var bad_dimension := _handler.layers_get({"dimension": "4d"})
 	assert_is_error(bad_dimension, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(bad_dimension.error.message, "4d")
+
+
+func test_layers_set_rejects_non_string_name() -> void:
+	_save_layer_names("3d", [11])
+	var result := _handler.layers_set({"dimension": "3d", "layers": {"11": 42}})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "string")
+	assert_eq(_handler.layers_get({"dimension": "3d"}).data.layers.filter(
+		func(entry): return entry.index == 11
+	).size(), 0, "a refused name must not be written")
+
+
+func test_layers_set_rejects_duplicate_names() -> void:
+	_save_layer_names("3d", [12, 13, 14])
+	var same_call := _handler.layers_set({
+		"dimension": "3d",
+		"layers": {"12": "physics_probe_dup", "13": "physics_probe_dup"},
+	})
+	assert_is_error(same_call, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(same_call.error.message, "physics_probe_dup")
+	assert_contains(same_call.error.message, "12")
+	assert_contains(same_call.error.message, "13")
+	## Neither index may have been written.
+	for entry in _handler.layers_get({"dimension": "3d"}).data.layers:
+		assert_false(entry.name == "physics_probe_dup", "a refused batch must not be written")
+
+	var first := _handler.layers_set({"dimension": "3d", "layers": {"12": "physics_probe_taken"}})
+	assert_has_key(first, "data")
+	var collides := _handler.layers_set({"dimension": "3d", "layers": {"13": "physics_probe_taken"}})
+	assert_is_error(collides, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(collides.error.message, "physics_probe_taken")
+	## Moving the name between indices in one call is allowed: the post-update
+	## state has the name exactly once.
+	var moved := _handler.layers_set({
+		"dimension": "3d",
+		"layers": {"12": "physics_probe_moved", "13": "physics_probe_taken"},
+	})
+	assert_has_key(moved, "data")
+	var names := {}
+	for entry in _handler.layers_get({"dimension": "3d"}).data.layers:
+		names[entry.index] = entry.name
+	assert_eq(names.get(12, ""), "physics_probe_moved")
+	assert_eq(names.get(13, ""), "physics_probe_taken")
+
+
+func test_body_configure_rejects_ambiguous_layer_name() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	## Write duplicates directly (layers_set refuses them) to model a
+	## project.godot edited by hand.
+	_save_layer_names("3d", [15, 16])
+	ProjectSettings.set_setting("layer_names/3d_physics/layer_15", "physics_probe_ambiguous")
+	ProjectSettings.set_setting("layer_names/3d_physics/layer_16", "physics_probe_ambiguous")
+	ProjectSettings.save()
+	var body := _add_node(StaticBody3D.new(), "AmbiguousLayerBody") as StaticBody3D
+	if body == null:
+		skip("Scene not ready")
+		return
+	var result := _handler.body_configure({
+		"path": "/" + scene_root.name + "/AmbiguousLayerBody",
+		"collision_layer": ["physics_probe_ambiguous"],
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "ambiguous")
+	assert_contains(result.error.message, "15")
+	assert_contains(result.error.message, "16")
+	assert_eq(body.collision_layer, 1, "an ambiguous name must not change the body")
+	_remove_node(body)
