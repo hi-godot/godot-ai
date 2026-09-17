@@ -52,6 +52,7 @@ const DOMAINS := [
 	{"id": "material", "label": "material", "count": 1, "tools": ["material_manage"]},
 	{"id": "node", "label": "node", "count": 4, "tools": ["node_create", "node_find", "node_manage", "node_set_property"]},
 	{"id": "particle", "label": "particle", "count": 1, "tools": ["particle_manage"]},
+	{"id": "physics", "label": "physics", "count": 1, "tools": ["physics_manage"]},
 	{"id": "project", "label": "project", "count": 2, "tools": ["project_manage", "project_run"]},
 	{"id": "resource", "label": "resource", "count": 1, "tools": ["resource_manage"]},
 	{"id": "scene", "label": "scene", "count": 3, "tools": ["scene_manage", "scene_open", "scene_save"]},

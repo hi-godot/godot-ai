@@ -368,6 +368,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("particle", HANDLERS_DIR + "particle_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("camera", HANDLERS_DIR + "camera_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("audio", HANDLERS_DIR + "audio_handler.gd", [undo])
+	_dispatcher.register_lazy_handler("physics", HANDLERS_DIR + "physics_handler.gd", [undo])
 	_dispatcher.register_lazy_handler(
 		"physics_shape", HANDLERS_DIR + "physics_shape_handler.gd", [undo, _connection]
 	)
@@ -505,6 +506,10 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("audio_play", "audio", &"play")
 	_dispatcher.register_lazy("audio_stop", "audio", &"stop")
 	_dispatcher.register_lazy("audio_list", "audio", &"list_streams")
+	_dispatcher.register_lazy("physics_body_get", "physics", &"body_get")
+	_dispatcher.register_lazy("physics_body_configure", "physics", &"body_configure")
+	_dispatcher.register_lazy("physics_layers_get", "physics", &"layers_get")
+	_dispatcher.register_lazy("physics_layers_set", "physics", &"layers_set")
 	_dispatcher.register_lazy("physics_shape_autofit", "physics_shape", &"autofit")
 	_dispatcher.register_lazy("physics_shape_generate", "physics_shape", &"generate")
 	_dispatcher.register_lazy("environment_create", "environment", &"create_environment")

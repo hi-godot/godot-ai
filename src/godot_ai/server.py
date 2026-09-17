@@ -91,6 +91,7 @@ from godot_ai.tools.input_map import register_input_map_tools
 from godot_ai.tools.material import register_material_tools
 from godot_ai.tools.node import register_node_tools
 from godot_ai.tools.particle import register_particle_tools
+from godot_ai.tools.physics import register_physics_tools
 from godot_ai.tools.project import register_project_tools
 from godot_ai.tools.resource import register_resource_tools
 from godot_ai.tools.scene import register_scene_tools
@@ -260,6 +261,10 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "camera",
         "  camera_manage    create, configure, set_limits_2d, set_damping_2d,\n"
         "                   follow_2d, get, list, apply_preset\n",
+    ),
+    (
+        "physics",
+        "  physics_manage   body_get, body_configure, layers_get, layers_set\n",
     ),
     ("signal", "  signal_manage    list, connect, disconnect\n"),
     (
@@ -882,6 +887,8 @@ def create_server(
         register_particle_tools(mcp)
     if "camera" not in exclude:
         register_camera_tools(mcp)
+    if "physics" not in exclude:
+        register_physics_tools(mcp)
     if "audio" not in exclude:
         register_audio_tools(mcp)
     if "tilemap" not in exclude:

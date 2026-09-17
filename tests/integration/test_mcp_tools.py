@@ -2707,6 +2707,81 @@ class TestPhysicsShapeGenerateTool:
 
 
 # ---------------------------------------------------------------------------
+# physics_manage
+# ---------------------------------------------------------------------------
+
+
+class TestPhysicsManageTool:
+    async def test_body_configure_dispatches(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "physics_body_configure"
+            assert cmd["params"] == {
+                "path": "/Main/Body",
+                "collision_layer": ["player"],
+                "mass": 2.0,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Body",
+                    "class": "RigidBody3D",
+                    "dimension": "3d",
+                    "applied": {"collision_layer": 1, "mass": 2.0},
+                    "previous": {"collision_layer": 1, "mass": 1.0},
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "physics_manage",
+            {
+                "op": "body_configure",
+                "params": {
+                    "path": "/Main/Body",
+                    "collision_layer": ["player"],
+                    "mass": 2.0,
+                },
+            },
+        )
+        await task
+        assert result.data["applied"]["mass"] == 2.0
+        assert result.data["undoable"] is True
+
+    async def test_layers_set_dispatches(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "physics_layers_set"
+            assert cmd["params"] == {"dimension": "3d", "layers": {"1": "player"}}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "dimension": "3d",
+                    "updated": [{"index": 1, "bit": 1, "name": "player"}],
+                    "undoable": False,
+                    "reason": "ProjectSettings layer names are saved to disk",
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "physics_manage",
+            {
+                "op": "layers_set",
+                "params": {"dimension": "3d", "layers": {"1": "player"}},
+            },
+        )
+        await task
+        assert result.data["updated"][0]["bit"] == 1
+        assert result.data["undoable"] is False
+
+
+# ---------------------------------------------------------------------------
 # filesystem_read_text
 # ---------------------------------------------------------------------------
 

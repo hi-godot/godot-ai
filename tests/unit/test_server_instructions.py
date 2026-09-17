@@ -62,6 +62,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "                   get, apply_preset\n"
     "  camera_manage    create, configure, set_limits_2d, set_damping_2d,\n"
     "                   follow_2d, get, list, apply_preset\n"
+    "  physics_manage   body_get, body_configure, layers_get, layers_set\n"
     "  signal_manage    list, connect, disconnect\n"
     "  input_map_manage list, add_action, ensure_action, remove_action,\n"
     "                   bind_event, ensure_binding\n"

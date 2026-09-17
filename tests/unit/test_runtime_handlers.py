@@ -29,6 +29,7 @@ from godot_ai.handlers import input_map as input_map_handlers
 from godot_ai.handlers import material as material_handlers
 from godot_ai.handlers import node as node_handlers
 from godot_ai.handlers import particle as particle_handlers
+from godot_ai.handlers import physics as physics_handlers
 from godot_ai.handlers import physics_shape as physics_shape_handlers
 from godot_ai.handlers import project as project_handlers
 from godot_ai.handlers import resource as resource_handlers
@@ -5864,3 +5865,77 @@ async def test_audio_player_create_blocks_when_not_writable():
     ## happened is the actual write command leaving the server.
     sent = [call["command"] for call in client.calls]
     assert "audio_player_create" not in sent
+
+
+async def test_physics_body_get_handler():
+    """body_get threads the path and pins scene_file only when given."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_handlers.physics_body_get(
+        runtime, path="/Main/Body", scene_file="res://main.tscn"
+    )
+    assert client.calls[-1]["command"] == "physics_body_get"
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Body",
+        "scene_file": "res://main.tscn",
+    }
+    await physics_handlers.physics_body_get(runtime, path="/Main/Body")
+    assert "scene_file" not in client.calls[-1]["params"]
+
+
+async def test_physics_body_configure_threads_only_given_properties():
+    """Only the supplied properties travel; False is a value, not an omission."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_handlers.physics_body_configure(
+        runtime,
+        path="/Main/Body",
+        collision_layer=["player", "enemy"],
+        mass=2.0,
+        freeze=False,
+    )
+    assert client.calls[-1]["command"] == "physics_body_configure"
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Body",
+        "collision_layer": ["player", "enemy"],
+        "mass": 2.0,
+        "freeze": False,
+    }
+
+
+async def test_physics_layers_handlers():
+    """layers_get/set carry their dimension and layer dict verbatim."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_handlers.physics_layers_get(runtime, dimension="2d")
+    assert client.calls[-1]["command"] == "physics_layers_get"
+    assert client.calls[-1]["params"] == {"dimension": "2d"}
+    await physics_handlers.physics_layers_set(
+        runtime, dimension="3d", layers={1: "player", 3: "world"}
+    )
+    assert client.calls[-1]["command"] == "physics_layers_set"
+    assert client.calls[-1]["params"] == {
+        "dimension": "3d",
+        "layers": {1: "player", 3: "world"},
+    }
+
+
+async def test_physics_body_configure_requires_writable():
+    """The configure write must be gated on session readiness."""
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    client.live_readiness = "importing"
+    session = Session(
+        session_id="s1",
+        godot_version="4.5",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await physics_handlers.physics_body_configure(runtime, path="/Main/Body", mass=1.0)
