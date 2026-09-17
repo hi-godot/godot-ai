@@ -360,8 +360,8 @@ func _commit_stylebox(
 ##   texture_path             res:// path to a Texture2D
 ##   region                   {position: {x,y}, size: {x,y}} or [x,y,w,h]
 ##   margins                  {all|left|top|right|bottom: float} texture margins
-##   axis_stretch_horizontal  "stretch" | "tile" | "keep"
-##   axis_stretch_vertical    "stretch" | "tile" | "keep"
+##   axis_stretch_horizontal  "stretch" | "tile" | "tile_fit"
+##   axis_stretch_vertical    "stretch" | "tile" | "tile_fit"
 ##   modulate_color           Color
 ##   draw_center              bool
 func set_stylebox_texture(params: Dictionary) -> Dictionary:

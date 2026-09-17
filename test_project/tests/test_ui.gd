@@ -656,6 +656,10 @@ func test_set_richtext_plain_text_disables_bbcode() -> void:
 	assert_false(result.data.bbcode)
 	assert_false(label.bbcode_enabled)
 	assert_eq(label.text, literal)
+	## A stringified flag must not coerce: "false" is truthy in GDScript.
+	var bad_bbcode := _handler.set_richtext({"path": path, "text": "x", "bbcode": "false"})
+	assert_is_error(bad_bbcode, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_bbcode.error.message, "bbcode")
 	_remove_control(path)
 
 

@@ -233,7 +233,11 @@ func set_richtext(params: Dictionary) -> Dictionary:
 		)
 	var label := node as RichTextLabel
 
-	var bbcode := bool(params.get("bbcode", true))
+	if params.has("bbcode") and typeof(params["bbcode"]) != TYPE_BOOL:
+		## Strict: a stringified "false" would coerce to true and silently
+		## render markup as literal text (or the reverse).
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "bbcode must be a boolean")
+	var bbcode: bool = params.get("bbcode", true)
 	var old_text: String = label.text
 	var old_bbcode: bool = label.bbcode_enabled
 

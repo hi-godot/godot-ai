@@ -1,4 +1,4 @@
-﻿@tool
+@tool
 extends McpTestSuite
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
@@ -159,7 +159,7 @@ func test_theme_set_color_accepts_dict() -> void:
 		"value": {"r": 0.5, "g": 0.3, "b": 0.1, "a": 1.0},
 	})
 	assert_has_key(result, "data")
-	# Read back from disk so a missing dictâ†’Color coercion can't pass by
+	# Read back from disk so a missing dict→Color coercion can't pass by
 	# returning a successful envelope while storing a raw Dict.
 	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
 	assert_true(theme.has_color("font_color", "Label"))
