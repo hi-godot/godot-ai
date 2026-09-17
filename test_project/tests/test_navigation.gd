@@ -144,6 +144,17 @@ func test_mesh_configure_rejects_unknown_and_bad_enum() -> void:
 	})
 	assert_is_error(bad_enum, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(bad_enum.error.message, "mesh_instances")
+	assert_false(
+		bad_enum.error.message.contains("root_children"),
+		"the error must list only the property's own vocabulary"
+	)
+	## Enum names must not be accepted for plain integer properties.
+	var wrong_property_enum := _handler.mesh_configure({
+		"path": created.data.path,
+		"vertices_per_polygon": "both",
+	})
+	assert_is_error(wrong_property_enum, ErrorCodes.WRONG_TYPE)
+	assert_contains(wrong_property_enum.error.message, "vertices_per_polygon")
 	var cross_dimension := _handler.mesh_configure({
 		"path": created.data.path,
 		"parsed_geometry_type": "both",
@@ -239,6 +250,39 @@ func test_bake_3d_produces_polygons_and_undoes() -> void:
 	var did_undo := editor_undo(_undo_redo)
 	assert_true(did_undo, "undo should succeed")
 	assert_eq(region.navigation_mesh.get_polygon_count(), 0, "undo must restore the pre-bake mesh")
+	_remove_node(region)
+
+
+func test_bake_undo_redo_restores_prebake_state() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var created := _handler.region_create({
+		"parent_path": "/" + scene_root.name,
+		"name": "NavBakeCycle",
+	})
+	assert_has_key(created, "data")
+	var region := McpScenePath.resolve(created.data.path, scene_root) as NavigationRegion3D
+	_add_child_node(region, _make_box_mesh(Vector3(20, 1, 20)), "Floor")
+	_undo_redo.clear_history()
+	var baked := _handler.bake({"path": created.data.path})
+	assert_has_key(baked, "data")
+	assert_true(baked.data.polygon_count > 0, "bake must produce polygons")
+	var did_undo := editor_undo(_undo_redo)
+	assert_true(did_undo, "undo should succeed")
+	assert_eq(region.navigation_mesh.get_polygon_count(), 0, "undo restores the pre-bake mesh")
+	var did_redo := editor_redo(_undo_redo)
+	assert_true(did_redo, "redo should succeed")
+	assert_true(region.navigation_mesh.get_polygon_count() > 0, "redo re-bakes the mesh")
+	## A second undo must still reach the pre-bake state: the first redo must
+	## not have mutated the resource the undo action restores.
+	did_undo = editor_undo(_undo_redo)
+	assert_true(did_undo, "the second undo should succeed")
+	assert_eq(
+		region.navigation_mesh.get_polygon_count(), 0,
+		"the second undo must still restore the pre-bake mesh"
+	)
 	_remove_node(region)
 
 

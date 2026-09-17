@@ -209,26 +209,27 @@ func mesh_configure(params: Dictionary) -> Dictionary:
 
 ## Bake a region's navigation mesh/polygon synchronously from its source
 ## geometry and force the server map to sync, so a path query right after the
-## call sees the baked region. Undo restores the pre-bake mesh resource.
+## call sees the baked region. Undo restores the exact pre-bake resource.
 func bake(params: Dictionary) -> Dictionary:
 	var resolved := _resolve_navigation_node(params, "region")
 	if resolved.has("error"):
 		return resolved
 	var region: Node = resolved.node
 	var dimension: String = resolved.dimension
-	var mesh: Resource = _get_region_mesh(region, dimension)
-	if mesh == null:
+	var original: Resource = _get_region_mesh(region, dimension)
+	if original == null:
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
 			"%s has no %s resource" % [resolved.path, _CLASSES[dimension].mesh])
 
-	var before: Resource = mesh.duplicate()
 	_undo_redo.create_action("MCP: Bake navigation on %s" % region.name)
-	_undo_redo.add_do_method(self, "_do_bake", region, dimension)
-	_undo_redo.add_undo_reference(before)
+	## `_do_bake` bakes into a duplicate, so redo never mutates `original` —
+	## the resource this action's undo method restores.
+	_undo_redo.add_do_method(self, "_do_bake", region, dimension, original)
+	_undo_redo.add_undo_reference(original)
 	if dimension == "3d":
-		_undo_redo.add_undo_method(region, "set_navigation_mesh", before)
+		_undo_redo.add_undo_method(region, "set_navigation_mesh", original)
 	else:
-		_undo_redo.add_undo_method(region, "set_navigation_polygon", before)
+		_undo_redo.add_undo_method(region, "set_navigation_polygon", original)
 	_undo_redo.commit_action()
 
 	var baked: Resource = _get_region_mesh(region, dimension)
@@ -455,21 +456,29 @@ static func _find_navigation_region(root: Node, dimension: String) -> Node:
 # Helpers — bake
 # ============================================================================
 
-func _do_bake(region: Node, dimension: String) -> void:
+## Bake `original` into a fresh duplicate and install it. Baking in place
+## would mutate the resource the undo action restores, so a second undo after
+## a redo could no longer reach the pre-bake state.
+func _do_bake(region: Node, dimension: String, original: Resource) -> void:
+	if original == null:
+		return
+	var working: Resource = original.duplicate()
 	if dimension == "3d":
+		region.call("set_navigation_mesh", working)
 		region.call("bake_navigation_mesh", false)
 		var rid: RID = region.call("get_region_rid")
 		if rid.is_valid():
 			## Push the baked resource to the server explicitly: the region's
 			## own change signal alone can leave the server map with the
 			## pre-bake (empty) mesh until the next physics sync.
-			NavigationServer3D.region_set_navigation_mesh(rid, region.get("navigation_mesh"))
+			NavigationServer3D.region_set_navigation_mesh(rid, working)
 			_force_map_sync_3d(region.call("get_navigation_map"))
 	else:
+		region.call("set_navigation_polygon", working)
 		region.call("bake_navigation_polygon", false)
 		var rid_2d: RID = region.call("get_region_rid")
 		if rid_2d.is_valid():
-			NavigationServer2D.region_set_navigation_polygon(rid_2d, region.get("navigation_polygon"))
+			NavigationServer2D.region_set_navigation_polygon(rid_2d, working)
 			_force_map_sync_2d(region.call("get_navigation_map"))
 
 
@@ -577,14 +586,16 @@ static func _property_type(object: Object, prop: String) -> int:
 ## enum-by-name support for the source-geometry selectors.
 static func _coerce_mesh_value(raw: Variant, prop_type: int, key: String) -> Dictionary:
 	if prop_type == TYPE_INT and raw is String:
-		if _PARSED_GEOMETRY_TYPES.has(raw):
-			return {"ok": int(_PARSED_GEOMETRY_TYPES[raw])}
-		if _SOURCE_GEOMETRY_MODES.has(raw):
-			return {"ok": int(_SOURCE_GEOMETRY_MODES[raw])}
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
-			(
-				"Invalid '%s' value '%s'. Valid names: %s (parsed geometry) / %s (source mode)"
-			) % [key, raw, ", ".join(_PARSED_GEOMETRY_TYPES.keys()), ", ".join(_SOURCE_GEOMETRY_MODES.keys())])
+		## Enum names are only accepted for the property that owns the
+		## vocabulary: `vertices_per_polygon: "both"` must not silently store 2.
+		var enum_map := _enum_map_for_property(key)
+		if not enum_map.is_empty():
+			if enum_map.has(raw):
+				return {"ok": int(enum_map[raw])}
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"Invalid '%s' value '%s'. Valid names: %s" % [key, raw, ", ".join(enum_map.keys())])
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"Cannot set '%s' to %s (expected %s)" % [key, type_string(typeof(raw)), type_string(prop_type)])
 	match prop_type:
 		TYPE_FLOAT:
 			var parsed: Variant = McpJsonValues.parse_float(raw)
@@ -601,6 +612,18 @@ static func _coerce_mesh_value(raw: Variant, prop_type: int, key: String) -> Dic
 				return {"ok": raw}
 	return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
 		"Cannot set '%s' to %s (expected %s)" % [key, type_string(typeof(raw)), type_string(prop_type)])
+
+
+## The enum-name vocabulary a property accepts, or an empty dict for plain
+## integer properties. The 2D and 3D source-geometry selectors share their
+## tables because the enum values are identical.
+static func _enum_map_for_property(key: String) -> Dictionary:
+	match key:
+		"geometry_parsed_geometry_type", "parsed_geometry_type":
+			return _PARSED_GEOMETRY_TYPES
+		"geometry_source_geometry_mode", "source_geometry_mode":
+			return _SOURCE_GEOMETRY_MODES
+	return {}
 
 
 ## Parse a world point for path queries from {x,y[,z]} / [x,y[,z]].
