@@ -50,6 +50,7 @@ const DOMAINS := [
 	{"id": "game", "label": "game", "count": 1, "tools": ["game_manage"]},
 	{"id": "input_map", "label": "input_map", "count": 1, "tools": ["input_map_manage"]},
 	{"id": "material", "label": "material", "count": 1, "tools": ["material_manage"]},
+	{"id": "navigation", "label": "navigation", "count": 1, "tools": ["navigation_manage"]},
 	{"id": "node", "label": "node", "count": 4, "tools": ["node_create", "node_find", "node_manage", "node_set_property"]},
 	{"id": "particle", "label": "particle", "count": 1, "tools": ["particle_manage"]},
 	{"id": "project", "label": "project", "count": 2, "tools": ["project_manage", "project_run"]},

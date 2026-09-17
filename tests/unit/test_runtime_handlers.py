@@ -27,6 +27,7 @@ from godot_ai.handlers import filesystem as filesystem_handlers
 from godot_ai.handlers import game as game_handlers
 from godot_ai.handlers import input_map as input_map_handlers
 from godot_ai.handlers import material as material_handlers
+from godot_ai.handlers import navigation as navigation_handlers
 from godot_ai.handlers import node as node_handlers
 from godot_ai.handlers import particle as particle_handlers
 from godot_ai.handlers import physics_shape as physics_shape_handlers
@@ -5864,3 +5865,98 @@ async def test_audio_player_create_blocks_when_not_writable():
     ## happened is the actual write command leaving the server.
     sent = [call["command"] for call in client.calls]
     assert "audio_player_create" not in sent
+
+
+async def test_navigation_region_create_handler():
+    """Defaults keep the payload minimal; explicit values pass through."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await navigation_handlers.navigation_region_create(runtime)
+    assert client.calls[-1]["command"] == "navigation_region_create"
+    assert client.calls[-1]["params"] == {"parent_path": "", "dimension": "3d"}
+    await navigation_handlers.navigation_region_create(
+        runtime, parent_path="/Main", dimension="2d", name="Nav2D", scene_file="res://main.tscn"
+    )
+    assert client.calls[-1]["params"] == {
+        "parent_path": "/Main",
+        "dimension": "2d",
+        "name": "Nav2D",
+        "scene_file": "res://main.tscn",
+    }
+
+
+async def test_navigation_configure_handlers_forward_flat_properties():
+    """Configure ops forward flat params and keep the explicit path."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await navigation_handlers.navigation_mesh_configure(
+        runtime, path="/Main/Region", agent_radius=0.75, cell_size=0.5
+    )
+    assert client.calls[-1]["command"] == "navigation_mesh_configure"
+    assert client.calls[-1]["params"] == {
+        "agent_radius": 0.75,
+        "cell_size": 0.5,
+        "path": "/Main/Region",
+    }
+    await navigation_handlers.navigation_agent_configure(
+        runtime, path="/Main/Agent", radius=0.8, avoidance_enabled=True
+    )
+    assert client.calls[-1]["command"] == "navigation_agent_configure"
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Agent",
+        "radius": 0.8,
+        "avoidance_enabled": True,
+    }
+    await navigation_handlers.navigation_obstacle_configure(
+        runtime, path="/Main/Obstacle", radius=1.2, scene_file="res://main.tscn"
+    )
+    assert client.calls[-1]["command"] == "navigation_obstacle_configure"
+    assert client.calls[-1]["params"] == {
+        "radius": 1.2,
+        "path": "/Main/Obstacle",
+        "scene_file": "res://main.tscn",
+    }
+
+
+async def test_navigation_bake_and_path_get_handlers():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await navigation_handlers.navigation_bake(runtime, path="/Main/Region")
+    assert client.calls[-1]["command"] == "navigation_bake"
+    assert client.calls[-1]["params"] == {"path": "/Main/Region"}
+    await navigation_handlers.navigation_path_get(
+        runtime,
+        from_point={"x": -8.0, "y": 0.5, "z": -8.0},
+        to_point=[8.0, 0.5, 8.0],
+        dimension="3d",
+        optimize=False,
+        navigation_layers=2,
+    )
+    assert client.calls[-1]["command"] == "navigation_path_get"
+    assert client.calls[-1]["params"] == {
+        "from_point": {"x": -8.0, "y": 0.5, "z": -8.0},
+        "to_point": [8.0, 0.5, 8.0],
+        "dimension": "3d",
+        "optimize": False,
+        "navigation_layers": 2,
+    }
+
+
+async def test_navigation_region_create_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    client.live_readiness = "importing"
+    session = Session(
+        session_id="s1",
+        godot_version="4.5",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await navigation_handlers.navigation_region_create(runtime, parent_path="/Main")

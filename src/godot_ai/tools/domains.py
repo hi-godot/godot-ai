@@ -52,6 +52,7 @@ DOMAINS: tuple[str, ...] = (
     "tilemap",
     "tileset",
     "gridmap",
+    "navigation",
     "csg",
     "custom",
 )

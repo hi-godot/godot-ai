@@ -378,6 +378,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("tilemap", HANDLERS_DIR + "tilemap_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("tileset", HANDLERS_DIR + "tileset_handler.gd", [])
 	_dispatcher.register_lazy_handler("gridmap", HANDLERS_DIR + "gridmap_handler.gd", [undo])
+	_dispatcher.register_lazy_handler("navigation", HANDLERS_DIR + "navigation_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("csg", HANDLERS_DIR + "csg_handler.gd", [undo])
 
 	_dispatcher.register_lazy("get_editor_state", "editor", &"get_editor_state")
@@ -523,6 +524,14 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("gridmap_clear", "gridmap", &"clear_layer")
 	_dispatcher.register_lazy("gridmap_get_used_cells", "gridmap", &"get_used_cells")
 	_dispatcher.register_lazy("gridmap_list_library_items", "gridmap", &"list_library_items")
+	_dispatcher.register_lazy("navigation_region_create", "navigation", &"region_create")
+	_dispatcher.register_lazy("navigation_mesh_configure", "navigation", &"mesh_configure")
+	_dispatcher.register_lazy("navigation_bake", "navigation", &"bake")
+	_dispatcher.register_lazy("navigation_agent_create", "navigation", &"agent_create")
+	_dispatcher.register_lazy("navigation_agent_configure", "navigation", &"agent_configure")
+	_dispatcher.register_lazy("navigation_obstacle_create", "navigation", &"obstacle_create")
+	_dispatcher.register_lazy("navigation_obstacle_configure", "navigation", &"obstacle_configure")
+	_dispatcher.register_lazy("navigation_path_get", "navigation", &"path_get")
 	_dispatcher.register_lazy("csg_create", "csg", &"create")
 	_dispatcher.register_lazy("csg_set_operation", "csg", &"set_operation")
 
