@@ -226,6 +226,48 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
 
 	var sb := StyleBoxFlat.new()
+	var applied := _apply_flat_props(sb, params)
+	if applied.has("error"):
+		return applied
+
+	var had_before := theme.has_stylebox(name, class_name_param)
+	var before_sb: StyleBox = theme.get_stylebox(name, class_name_param) if had_before else null
+	_commit_stylebox(theme_path, name, class_name_param, sb, before_sb, had_before)
+
+	return {
+		"data": {
+			"path": theme_path,
+			"class_name": class_name_param,
+			"name": name,
+			"stylebox_class": "StyleBoxFlat",
+			"bg_color": _serialize_value(sb.bg_color),
+			"border": {
+				"top": sb.border_width_top,
+				"bottom": sb.border_width_bottom,
+				"left": sb.border_width_left,
+				"right": sb.border_width_right,
+			},
+			"corners": {
+				"top_left": sb.corner_radius_top_left,
+				"top_right": sb.corner_radius_top_right,
+				"bottom_left": sb.corner_radius_bottom_left,
+				"bottom_right": sb.corner_radius_bottom_right,
+			},
+			"margins": {
+				"top": sb.content_margin_top,
+				"bottom": sb.content_margin_bottom,
+				"left": sb.content_margin_left,
+				"right": sb.content_margin_right,
+			},
+			"undoable": true,
+		}
+	}
+
+
+## Apply the StyleBoxFlat property vocabulary shared by `set_stylebox_flat`
+## and `stylebox_override` to an existing StyleBoxFlat. Returns `{ok: true}`
+## or the error dict to surface.
+func _apply_flat_props(sb: StyleBoxFlat, params: Dictionary) -> Dictionary:
 	if params.has("bg_color"):
 		var bg := _parse_color(params.bg_color)
 		if bg == null:
@@ -290,10 +332,15 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 
 	if params.has("anti_aliasing"):
 		sb.anti_aliasing = bool(params.anti_aliasing)
+	return {"ok": true}
 
-	var had_before := theme.has_stylebox(name, class_name_param)
-	var before_sb: StyleBox = theme.get_stylebox(name, class_name_param) if had_before else null
 
+## Record one stylebox set as an undoable action (apply new, restore or clear
+## the previous slot). Shared by set_stylebox_flat and set_stylebox_texture.
+func _commit_stylebox(
+	theme_path: String, name: String, class_name_param: String,
+	sb: StyleBox, before_sb: StyleBox, had_before: bool
+) -> void:
 	_undo_redo.create_action("MCP: Theme set stylebox %s/%s" % [class_name_param, name])
 	_undo_redo.add_do_method(self, "_apply_stylebox", theme_path, name, class_name_param, sb)
 	if had_before:
@@ -302,34 +349,248 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 		_undo_redo.add_undo_method(self, "_clear_stylebox", theme_path, name, class_name_param)
 	_undo_redo.commit_action()
 
+
+# ============================================================================
+# theme_set_stylebox_texture
+# ============================================================================
+
+## Compose a StyleBoxTexture (9-slice) and assign it to a theme slot.
+##
+## Parameters (beyond theme_path / class_name / name):
+##   texture_path             res:// path to a Texture2D
+##   region                   {position: {x,y}, size: {x,y}} or [x,y,w,h]
+##   margins                  {all|left|top|right|bottom: float} texture margins
+##   axis_stretch_horizontal  "stretch" | "tile" | "tile_fit"
+##   axis_stretch_vertical    "stretch" | "tile" | "tile_fit"
+##   modulate_color           Color
+##   draw_center              bool
+func set_stylebox_texture(params: Dictionary) -> Dictionary:
+	var load_result := _load_theme_from_params(params)
+	if load_result.has("error"):
+		return load_result
+	var theme: Theme = load_result.theme
+	var theme_path: String = load_result.path
+
+	var class_name_param: String = params.get("class_name", "")
+	if class_name_param.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: class_name")
+	var name: String = params.get("name", "")
+	if name.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
+	var texture_path: String = params.get("texture_path", "")
+	if texture_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: texture_path")
+	var path_err = McpPathValidator.loadable_error(texture_path, "texture_path")
+	if path_err != null:
+		return path_err
+	if not ResourceLoader.exists(texture_path):
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Texture not found: %s" % texture_path)
+	var texture := ResourceLoader.load(texture_path)
+	if texture == null or not (texture is Texture2D):
+		var got := texture.get_class() if texture != null else "null"
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"Resource at %s is not a Texture2D (got %s)" % [texture_path, got])
+
+	var sb := StyleBoxTexture.new()
+	sb.texture = texture
+	if params.has("region"):
+		var region := _parse_rect2(params.region)
+		if region == null:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"Invalid region: %s (expected {position, size} or [x,y,w,h])" % str(params.region))
+		sb.region_rect = region
+	if params.has("margins"):
+		var margin_err := _apply_texture_margins(sb, params.margins)
+		if margin_err != "":
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, margin_err)
+	if params.has("modulate_color"):
+		var mc := _parse_color(params.modulate_color)
+		if mc == null:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"Invalid modulate_color: %s (%s)" % [str(params.modulate_color), _COLOR_HINT])
+		sb.modulate_color = mc
+	if params.has("draw_center"):
+		sb.draw_center = bool(params.draw_center)
+	if params.has("axis_stretch_horizontal"):
+		var ash := _parse_axis_stretch(str(params.axis_stretch_horizontal))
+		if ash == null:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"Invalid axis_stretch_horizontal '%s'. Valid: stretch, tile, tile_fit" % str(params.axis_stretch_horizontal))
+		sb.axis_stretch_horizontal = ash
+	if params.has("axis_stretch_vertical"):
+		var asv := _parse_axis_stretch(str(params.axis_stretch_vertical))
+		if asv == null:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"Invalid axis_stretch_vertical '%s'. Valid: stretch, tile, tile_fit" % str(params.axis_stretch_vertical))
+		sb.axis_stretch_vertical = asv
+
+	var had_before := theme.has_stylebox(name, class_name_param)
+	var before_sb: StyleBox = theme.get_stylebox(name, class_name_param) if had_before else null
+	_commit_stylebox(theme_path, name, class_name_param, sb, before_sb, had_before)
+
 	return {
 		"data": {
 			"path": theme_path,
 			"class_name": class_name_param,
 			"name": name,
-			"stylebox_class": "StyleBoxFlat",
-			"bg_color": _serialize_value(sb.bg_color),
-			"border": {
-				"top": sb.border_width_top,
-				"bottom": sb.border_width_bottom,
-				"left": sb.border_width_left,
-				"right": sb.border_width_right,
-			},
-			"corners": {
-				"top_left": sb.corner_radius_top_left,
-				"top_right": sb.corner_radius_top_right,
-				"bottom_left": sb.corner_radius_bottom_left,
-				"bottom_right": sb.corner_radius_bottom_right,
-			},
+			"stylebox_class": "StyleBoxTexture",
+			"texture_path": texture_path,
+			"region": _serialize_value(sb.region_rect),
 			"margins": {
-				"top": sb.content_margin_top,
-				"bottom": sb.content_margin_bottom,
-				"left": sb.content_margin_left,
-				"right": sb.content_margin_right,
+				"left": sb.texture_margin_left,
+				"top": sb.texture_margin_top,
+				"right": sb.texture_margin_right,
+				"bottom": sb.texture_margin_bottom,
 			},
+			"draw_center": sb.draw_center,
 			"undoable": true,
 		}
 	}
+
+
+# ============================================================================
+# theme_set_font / theme_set_icon
+# ============================================================================
+
+## Assign a Font resource to a theme font slot (button/body/heading fonts).
+func set_font(params: Dictionary) -> Dictionary:
+	return _set_resource_slot(params, "font", "font_path", "Font")
+
+
+## Assign a Texture2D to a theme icon slot (checkbox marks, dropdown arrows).
+func set_icon(params: Dictionary) -> Dictionary:
+	return _set_resource_slot(params, "icon", "texture_path", "Texture2D")
+
+
+## Shared implementation for font/icon slots: load the resource, verify its
+## class, then set/clear the slot as one undoable action.
+func _set_resource_slot(
+	params: Dictionary, kind: String, path_param: String, expected_class: String
+) -> Dictionary:
+	var load_result := _load_theme_from_params(params)
+	if load_result.has("error"):
+		return load_result
+	var theme: Theme = load_result.theme
+	var theme_path: String = load_result.path
+
+	var class_name_param: String = params.get("class_name", "")
+	if class_name_param.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: class_name")
+	var name: String = params.get("name", "")
+	if name.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: name")
+	var resource_path: String = params.get(path_param, "")
+	if resource_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % path_param)
+	var path_err = McpPathValidator.loadable_error(resource_path, path_param)
+	if path_err != null:
+		return path_err
+	if not ResourceLoader.exists(resource_path):
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "%s not found: %s" % [expected_class, resource_path])
+	var loaded := ResourceLoader.load(resource_path)
+	if loaded == null or not _is_instance_of_class(loaded, expected_class):
+		var got := loaded.get_class() if loaded != null else "null"
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"Resource at %s is not a %s (got %s)" % [resource_path, expected_class, got])
+
+	var had_before := theme.has_font(name, class_name_param) if kind == "font" else theme.has_icon(name, class_name_param)
+	var before_value = theme.get_font(name, class_name_param) if kind == "font" else theme.get_icon(name, class_name_param)
+	if not had_before:
+		before_value = null
+
+	_undo_redo.create_action("MCP: Theme set %s %s/%s" % [kind, class_name_param, name])
+	_undo_redo.add_do_method(self, "_apply_slot", theme_path, kind, name, class_name_param, loaded)
+	if had_before:
+		_undo_redo.add_undo_method(self, "_apply_slot", theme_path, kind, name, class_name_param, before_value)
+	else:
+		_undo_redo.add_undo_method(self, "_clear_slot", theme_path, kind, name, class_name_param)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": theme_path,
+			"kind": kind,
+			"class_name": class_name_param,
+			"name": name,
+			"resource_path": resource_path,
+			"resource_class": loaded.get_class(),
+			"undoable": true,
+		}
+	}
+
+
+## True when `resource` is an instance of `class_name` (or a subclass).
+static func _is_instance_of_class(resource: Resource, expected_class: String) -> bool:
+	return ClassDB.is_parent_class(resource.get_class(), expected_class)
+
+
+# ============================================================================
+# theme_stylebox_override — per-node override
+# ============================================================================
+
+## Duplicate the stylebox a Control resolves for `slot`, apply a StyleBoxFlat
+## patch (same keys as set_stylebox_flat), and attach it as a per-node
+## override. Undo restores the previous override, or removes the override when
+## the node had none.
+func stylebox_override(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("path", "")
+	if node_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+	var slot: String = params.get("slot", "")
+	if slot.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: slot")
+	var patch: Variant = params.get("patch", {})
+	if typeof(patch) != TYPE_DICTIONARY:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "'patch' must be a dict of StyleBoxFlat properties")
+
+	var resolved := McpNodeValidator.resolve_or_error(node_path, "path")
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	if not node is Control:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"Node %s is not a Control (got %s)" % [node_path, node.get_class()])
+	var control := node as Control
+
+	var base: StyleBox = control.get_theme_stylebox(slot)
+	if base == null:
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
+			"No stylebox resolves for slot '%s' on %s" % [slot, node.get_class()])
+	var patched: StyleBox = base.duplicate()
+	if not patched is StyleBoxFlat:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"Slot '%s' resolves to %s; stylebox_override patches StyleBoxFlat slots only"
+			% [slot, patched.get_class()])
+	var applied := _apply_flat_props(patched as StyleBoxFlat, patch)
+	if applied.has("error"):
+		return applied
+
+	var had_override: bool = control.has_theme_stylebox_override(slot)
+	_undo_redo.create_action("MCP: Stylebox override %s on %s" % [slot, node.name])
+	_undo_redo.add_do_method(self, "_apply_node_stylebox", control, slot, patched)
+	if had_override:
+		_undo_redo.add_undo_method(self, "_apply_node_stylebox", control, slot, base)
+	else:
+		_undo_redo.add_undo_method(self, "_remove_node_stylebox", control, slot)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": McpScenePath.from_node(node, resolved.scene_root),
+			"slot": slot,
+			"stylebox_class": patched.get_class(),
+			"overrode_existing": had_override,
+			"undoable": true,
+		}
+	}
+
+
+func _apply_node_stylebox(control: Control, slot: String, sb: StyleBox) -> void:
+	control.add_theme_stylebox_override(slot, sb)
+
+
+func _remove_node_stylebox(control: Control, slot: String) -> void:
+	control.remove_theme_stylebox_override(slot)
 
 
 ## Parse a {all, <side1>, <side2>, ...} dict and apply it to StyleBoxFlat via
@@ -473,4 +734,95 @@ static func _serialize_value(value: Variant) -> Variant:
 		return {"r": value.r, "g": value.g, "b": value.b, "a": value.a}
 	if value is Vector2:
 		return {"x": value.x, "y": value.y}
+	if value is Rect2:
+		return {
+			"position": {"x": value.position.x, "y": value.position.y},
+			"size": {"x": value.size.x, "y": value.size.y},
+		}
 	return value
+
+
+## Set a font/icon slot from inside an undo action. Stylebox slots use the
+## dedicated `_apply_stylebox` path (they need the StyleBox-typed setter).
+func _apply_slot(theme_path: String, kind: String, name: String, class_name_param: String, value: Variant) -> void:
+	var theme: Theme = ResourceLoader.load(theme_path)
+	if theme == null:
+		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
+		return
+	match kind:
+		"font":
+			theme.set_font(name, class_name_param, value)
+		"icon":
+			theme.set_icon(name, class_name_param, value)
+	McpResourceIO.guarded_save(theme, theme_path, _connection)
+
+
+func _clear_slot(theme_path: String, kind: String, name: String, class_name_param: String) -> void:
+	var theme: Theme = ResourceLoader.load(theme_path)
+	if theme == null:
+		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
+		return
+	match kind:
+		"font":
+			theme.clear_font(name, class_name_param)
+		"icon":
+			theme.clear_icon(name, class_name_param)
+	McpResourceIO.guarded_save(theme, theme_path, _connection)
+
+
+## Parse a 9-slice region from {position: {x,y}, size: {x,y}} or [x,y,w,h].
+static func _parse_rect2(value: Variant) -> Variant:
+	if value is Rect2:
+		return value
+	if value is Dictionary:
+		var d: Dictionary = value
+		if not (d.has("position") and d.has("size")):
+			return null
+		var pos := McpJsonValues.parse_vector2(d.position)
+		var size := McpJsonValues.parse_vector2(d.size)
+		if pos == null or size == null:
+			return null
+		return Rect2(pos, size)
+	if value is Array:
+		var arr: Array = value
+		if arr.size() != 4:
+			return null
+		for item in arr:
+			if not (item is int or item is float):
+				return null
+		return Rect2(float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3]))
+	return null
+
+
+## StyleBoxTexture axis stretch mode by name. Returns null on an unknown name.
+static func _parse_axis_stretch(value: String) -> Variant:
+	match value:
+		"stretch":
+			return StyleBoxTexture.AXIS_STRETCH_MODE_STRETCH
+		"tile":
+			return StyleBoxTexture.AXIS_STRETCH_MODE_TILE
+		"tile_fit":
+			return StyleBoxTexture.AXIS_STRETCH_MODE_TILE_FIT
+	return null
+
+
+## Apply {all, left, top, right, bottom} texture margins to a StyleBoxTexture.
+## Returns "" on success, an error message on failure.
+func _apply_texture_margins(sb: StyleBoxTexture, margins: Variant) -> String:
+	if typeof(margins) != TYPE_DICTIONARY:
+		return "'margins' must be a dict with 'all' and/or side-specific keys"
+	var side_names := ["left", "top", "right", "bottom"]
+	var valid_keys := {"all": true}
+	for s in side_names:
+		valid_keys[s] = true
+	for k in margins.keys():
+		if not valid_keys.has(k):
+			return "Unknown key in 'margins': %s (valid: all, %s)" % [k, ", ".join(side_names)]
+	if margins.has("all"):
+		var all_val := float(margins.all)
+		for s in side_names:
+			sb.set("texture_margin_" + s, all_val)
+	for s in side_names:
+		if margins.has(s):
+			sb.set("texture_margin_" + s, float(margins[s]))
+	return ""

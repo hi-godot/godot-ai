@@ -10,6 +10,11 @@ const ThemeHandler := preload("res://addons/godot_ai/handlers/theme_handler.gd")
 var _handler: ThemeHandler
 var _undo_redo: EditorUndoRedoManager
 
+## Suite-scoped Texture2D / Font fixtures under user:// (recreated on every
+## save so a stale ResourceLoader cache can't outlive the file).
+var _texture_fixture: String = ""
+var _font_fixture: String = ""
+
 const TEST_THEME_PATH := "res://tests/_mcp_test_theme.tres"
 
 
@@ -20,11 +25,14 @@ func suite_name() -> String:
 func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.get("undo_redo")
 	_handler = ThemeHandler.new(_undo_redo)
+	_texture_fixture = _make_texture_fixture()
+	_font_fixture = _make_font_fixture()
 
 
 func suite_teardown() -> void:
 	if FileAccess.file_exists(TEST_THEME_PATH):
 		DirAccess.remove_absolute(TEST_THEME_PATH)
+	_remove_fixtures()
 
 
 func _make_theme() -> void:
@@ -505,3 +513,305 @@ func test_set_stylebox_flat_per_side_content_margin() -> void:
 	assert_eq(sb.content_margin_bottom, 8.0)
 	assert_eq(sb.content_margin_left, 8.0)
 	assert_eq(sb.content_margin_right, 8.0)
+
+
+# ----- stylebox_texture / font / icon fixtures -----
+
+const TEST_THEME_TEXTURE_PATH := "user://test_theme_texture.tres"
+const TEST_THEME_FONT_PATH := "user://test_theme_font.tres"
+
+
+func _make_texture_fixture() -> String:
+	if FileAccess.file_exists(TEST_THEME_TEXTURE_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_THEME_TEXTURE_PATH))
+	var image := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	image.fill(Color(1.0, 0.5, 0.0, 1.0))
+	var texture := ImageTexture.create_from_image(image)
+	if ResourceSaver.save(texture, TEST_THEME_TEXTURE_PATH) != OK:
+		return ""
+	return TEST_THEME_TEXTURE_PATH
+
+
+func _make_font_fixture() -> String:
+	if FileAccess.file_exists(TEST_THEME_FONT_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_THEME_FONT_PATH))
+	var font := SystemFont.new()
+	font.font_names = PackedStringArray(["Arial"])
+	if ResourceSaver.save(font, TEST_THEME_FONT_PATH) != OK:
+		return ""
+	return TEST_THEME_FONT_PATH
+
+
+func _remove_fixtures() -> void:
+	for path in [TEST_THEME_TEXTURE_PATH, TEST_THEME_FONT_PATH]:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+# ----- set_stylebox_texture -----
+
+func test_set_stylebox_texture_composes_fields() -> void:
+	var texture_path := _texture_fixture
+	if texture_path.is_empty():
+		skip("Texture fixture could not be created")
+		return
+	_make_theme()
+	var result := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "normal",
+		"texture_path": texture_path,
+		"region": {"position": {"x": 1.0, "y": 2.0}, "size": {"x": 4.0, "y": 4.0}},
+		"margins": {"all": 2.0, "left": 3.0},
+		"draw_center": false,
+		"axis_stretch_horizontal": "tile",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.stylebox_class, "StyleBoxTexture")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	var sb: StyleBoxTexture = theme.get_stylebox("normal", "Button")
+	assert_true(sb is StyleBoxTexture, "slot must hold a StyleBoxTexture")
+	assert_true(sb.texture != null, "texture must be assigned")
+	assert_eq(sb.region_rect, Rect2(1, 2, 4, 4))
+	assert_eq(sb.texture_margin_left, 3.0, "per-side margin must override all")
+	assert_eq(sb.texture_margin_top, 2.0)
+	assert_false(sb.draw_center)
+	assert_eq(sb.axis_stretch_horizontal, StyleBoxTexture.AXIS_STRETCH_MODE_TILE)
+
+
+func test_set_stylebox_texture_is_undoable() -> void:
+	var texture_path := _texture_fixture
+	if texture_path.is_empty():
+		skip("Texture fixture could not be created")
+		return
+	_make_theme()
+	## Earlier suites leave actions in the scene history; clear so
+	## `editor_undo` can only reach this test's action.
+	_undo_redo.clear_history()
+	var result := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "hover",
+		"texture_path": texture_path,
+	})
+	assert_has_key(result, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	assert_true(theme.has_stylebox("hover", "Button"))
+	var did_undo := editor_undo(_undo_redo)
+	assert_true(did_undo, "undo should succeed")
+	var reloaded: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	assert_false(reloaded.has_stylebox("hover", "Button"), "undo must clear the added slot")
+
+
+func test_set_stylebox_texture_rejects_bad_inputs() -> void:
+	var texture_path := _texture_fixture
+	if texture_path.is_empty():
+		skip("Texture fixture could not be created")
+		return
+	_make_theme()
+	var bad_region := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "bad_region",
+		"texture_path": texture_path,
+		"region": {"x": 1.0},
+	})
+	assert_is_error(bad_region, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(bad_region.error.message, "region")
+	var bad_axis := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "bad_axis",
+		"texture_path": texture_path,
+		"axis_stretch_vertical": "wobble",
+	})
+	assert_is_error(bad_axis, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(bad_axis.error.message, "axis_stretch_vertical")
+	var bad_resource := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "bad_resource",
+		"texture_path": TEST_THEME_PATH,
+	})
+	assert_is_error(bad_resource, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_resource.error.message, "Texture2D")
+
+
+# ----- set_font / set_icon -----
+
+func test_set_font_assigns_and_undoes() -> void:
+	var font_path := _font_fixture
+	if font_path.is_empty():
+		skip("Font fixture could not be created")
+		return
+	_make_theme()
+	_undo_redo.clear_history()
+	var result := _handler.set_font({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "font",
+		"font_path": font_path,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.kind, "font")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	assert_true(theme.has_font("font", "Button"))
+	assert_true(theme.get_font("font", "Button") is Font)
+	var did_undo := editor_undo(_undo_redo)
+	assert_true(did_undo, "undo should succeed")
+	var reloaded: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	assert_false(reloaded.has_font("font", "Button"), "undo must clear the font slot")
+
+
+func test_set_icon_rejects_wrong_resource_class() -> void:
+	var font_path := _font_fixture
+	if font_path.is_empty():
+		skip("Font fixture could not be created")
+		return
+	_make_theme()
+	var result := _handler.set_icon({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "CheckBox",
+		"name": "checked",
+		"texture_path": font_path,
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "Texture2D")
+
+
+func test_set_icon_assigns_texture() -> void:
+	var texture_path := _texture_fixture
+	if texture_path.is_empty():
+		skip("Texture fixture could not be created")
+		return
+	_make_theme()
+	var result := _handler.set_icon({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "CheckBox",
+		"name": "checked",
+		"texture_path": texture_path,
+	})
+	assert_has_key(result, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	assert_true(theme.has_icon("checked", "CheckBox"))
+
+
+# ----- stylebox_override -----
+
+func test_stylebox_override_patches_control_and_undoes() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var panel := Panel.new()
+	panel.name = "OverridePanel"
+	scene_root.add_child(panel)
+	panel.owner = scene_root
+	_undo_redo.clear_history()
+	var result := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverridePanel",
+		"slot": "panel",
+		"patch": {"bg_color": {"r": 0.2, "g": 0.1, "b": 0.1, "a": 1.0}, "border": {"all": 0}},
+	})
+	assert_has_key(result, "data")
+	assert_false(result.data.overrode_existing, "the node had no override before")
+	assert_true(panel.has_theme_stylebox_override("panel"),
+		"the override must be present after the call")
+	var resolved: StyleBox = panel.get_theme_stylebox("panel")
+	assert_true(resolved is StyleBoxFlat, "the override must be a StyleBoxFlat")
+	assert_true(
+		(resolved as StyleBoxFlat).bg_color.is_equal_approx(Color(0.2, 0.1, 0.1, 1.0)),
+		"patched bg_color must be stored"
+	)
+	var did_undo := editor_undo(_undo_redo)
+	assert_true(did_undo, "undo should succeed")
+	assert_false(panel.has_theme_stylebox_override("panel"),
+		"undo must remove an override the node did not have before")
+	panel.get_parent().remove_child(panel)
+	panel.queue_free()
+
+
+func test_stylebox_override_restores_previous_override() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var panel := Panel.new()
+	panel.name = "OverridePanelExisting"
+	var existing := StyleBoxFlat.new()
+	existing.bg_color = Color(0.0, 0.5, 0.0, 1.0)
+	panel.add_theme_stylebox_override("panel", existing)
+	scene_root.add_child(panel)
+	panel.owner = scene_root
+	_undo_redo.clear_history()
+	var result := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverridePanelExisting",
+		"slot": "panel",
+		"patch": {"bg_color": {"r": 0.9, "g": 0.0, "b": 0.0, "a": 1.0}},
+	})
+	assert_has_key(result, "data")
+	var did_undo := editor_undo(_undo_redo)
+	assert_true(did_undo, "undo should succeed")
+	var restored: StyleBox = panel.get_theme_stylebox("panel")
+	assert_true(restored is StyleBoxFlat)
+	assert_true(
+		(restored as StyleBoxFlat).bg_color.is_equal_approx(Color(0.0, 0.5, 0.0, 1.0)),
+		"undo must restore the previous override, got %s" % str((restored as StyleBoxFlat).bg_color)
+	)
+	panel.get_parent().remove_child(panel)
+	panel.queue_free()
+
+
+func test_stylebox_override_rejects_non_control_and_non_flat_slot() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var node3d := Node3D.new()
+	node3d.name = "OverrideNotControl"
+	scene_root.add_child(node3d)
+	node3d.owner = scene_root
+	var non_control := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverrideNotControl",
+		"slot": "panel",
+		"patch": {},
+	})
+	assert_is_error(non_control, ErrorCodes.WRONG_TYPE)
+	node3d.get_parent().remove_child(node3d)
+	node3d.queue_free()
+
+	var label := RichTextLabel.new()
+	label.name = "OverrideNonFlat"
+	scene_root.add_child(label)
+	label.owner = scene_root
+	var non_flat := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverrideNonFlat",
+		"slot": "normal",
+		"patch": {"bg_color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}},
+	})
+	assert_is_error(non_flat, ErrorCodes.WRONG_TYPE)
+	assert_contains(non_flat.error.message, "StyleBoxFlat")
+	label.get_parent().remove_child(label)
+	label.queue_free()
+
+
+func test_stylebox_override_rejects_unknown_patch_key() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var panel := Panel.new()
+	panel.name = "OverrideBadPatch"
+	scene_root.add_child(panel)
+	panel.owner = scene_root
+	var result := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverrideBadPatch",
+		"slot": "panel",
+		"patch": {"shadow": {"wobble": 1}},
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "wobble")
+	assert_false(panel.has_theme_stylebox_override("panel"),
+		"a refused patch must not leave an override")
+	panel.get_parent().remove_child(panel)
+	panel.queue_free()

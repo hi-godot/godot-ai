@@ -39,6 +39,19 @@ async def ui_set_text(
     )
 
 
+async def ui_set_richtext(
+    runtime: DirectRuntime,
+    path: str,
+    text: str,
+    bbcode: bool = True,
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "set_richtext",
+        {"path": path, "text": text, "bbcode": bbcode},
+    )
+
+
 async def ui_build_layout(
     runtime: DirectRuntime,
     tree: dict[str, Any],
