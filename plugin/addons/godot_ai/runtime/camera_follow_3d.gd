@@ -50,6 +50,10 @@ func _ready() -> void:
 	_ensure_target_excluded(_resolve_target())
 
 
+func _process(delta: float) -> void:
+	apply_step(delta)
+
+
 ## One follow step. Public so tests can drive it with a fixed delta instead of
 ## waiting on frames.
 func apply_step(delta: float) -> void:

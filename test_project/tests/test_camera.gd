@@ -846,6 +846,8 @@ func test_follow_3d_builds_damped_rig() -> void:
 	assert_eq(rig.get_parent(), target)
 	assert_eq(rig.get_script(), CameraFollow3D)
 	assert_eq(rig.top_level, true, "damping needs a top-level rig")
+	assert_true(rig.has_method("_process"), "the helper must expose the per-frame step")
+	assert_true(rig.is_processing(), "a damped rig must process every frame")
 	assert_true(abs(rig.spring_length - 4.0) < 0.001)
 	assert_eq(rig.collision_mask, 1)
 	_created_paths = [McpScenePath.from_node(cam, scene_root)]
@@ -873,6 +875,7 @@ func test_follow_3d_rigid_rig_has_no_helper() -> void:
 	var rig := cam.get_parent() as SpringArm3D
 	assert_true(rig != null, "camera should be parented to a SpringArm3D")
 	assert_eq(rig.get_script(), null, "rigid follow attaches no helper script")
+	assert_false(rig.is_processing(), "a plain rigid rig must not process every frame")
 	assert_eq(rig.top_level, false)
 	assert_true(rig.position.is_equal_approx(Vector3(0, 2, 0)), "pivot offset is applied")
 	assert_true(abs(rig.rotation.x - deg_to_rad(-20.0)) < 0.001, "pitch is applied")
@@ -1188,6 +1191,7 @@ func test_follow_3d_excludes_collision_target() -> void:
 	assert_eq(rig.get_parent(), body)
 	assert_eq(rig.get_script(), CameraFollow3D)
 	assert_eq(rig.get_meta(CameraFollow3D.META_EXCLUDE), true)
+	assert_true(rig.is_processing(), "an exclusion-only rig must keep processing")
 	_created_paths = [McpScenePath.from_node(cam, scene_root)]
 
 
