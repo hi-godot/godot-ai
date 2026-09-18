@@ -940,6 +940,8 @@ func follow_3d(params: Dictionary) -> Dictionary:
 		)
 	var exclude_target := bool(params.get("exclude_target", true))
 	var zero_transform := bool(params.get("zero_transform", true))
+	var target_body := target as CollisionObject3D
+	var exclude_applies := exclude_target and target_body != null
 
 	var existing_rig := node.get_parent() as SpringArm3D
 	if existing_rig != null and (
@@ -959,6 +961,7 @@ func follow_3d(params: Dictionary) -> Dictionary:
 
 	var pitch := deg_to_rad(pitch_degrees)
 	var damped := smoothing_speed > 0.0
+	var want_helper := damped or exclude_applies
 	var rig: SpringArm3D = existing_rig
 	var rig_created := rig == null
 	if rig_created:
@@ -966,6 +969,14 @@ func follow_3d(params: Dictionary) -> Dictionary:
 		rig.name = "CameraRig"
 	var old_script: Variant = null if rig_created else rig.get_script()
 	var script_replaced: bool = old_script != null and old_script != CameraFollow3D
+	var old_process := false
+	var had_exclusion_intent := false
+	if not rig_created:
+		old_process = (
+			old_script == CameraFollow3D
+			and float(rig.get_meta(CameraFollow3D.META_SPEED, 0.0)) > 0.0
+		)
+		had_exclusion_intent = bool(rig.get_meta(CameraFollow3D.META_EXCLUDE, false))
 
 	_undo_redo.create_action(
 		"MCP: Camera follow %s" % target.name, UndoRedo.MERGE_DISABLE, scene_root
@@ -980,6 +991,11 @@ func follow_3d(params: Dictionary) -> Dictionary:
 	_add_rig_property_to_action(rig, "margin", margin, rig_created)
 	_add_rig_property_to_action(rig, "collision_mask", collision_mask, rig_created)
 	_add_rig_property_to_action(rig, "top_level", damped, rig_created)
+	if damped and not rig_created:
+		## The helper drives the rig's local transform while damping, including
+		## after an undo back to a rigid configuration; restore the pose the rig
+		## had before this action.
+		_undo_redo.add_undo_method(rig, "set_transform", rig.transform)
 	if damped and rig_created:
 		## Start at the rigid-follow pose; the helper damps from there instead
 		## of flying in from the rig's unset origin.
@@ -997,23 +1013,31 @@ func follow_3d(params: Dictionary) -> Dictionary:
 	_add_rig_meta_to_action(rig, CameraFollow3D.META_OFFSET, offset, rig_created)
 	_add_rig_meta_to_action(rig, CameraFollow3D.META_SPEED, smoothing_speed, rig_created)
 	_add_rig_meta_to_action(rig, CameraFollow3D.META_PITCH, pitch, rig_created)
+	_add_rig_meta_to_action(rig, CameraFollow3D.META_EXCLUDE, exclude_applies, rig_created)
 
-	if damped:
+	if want_helper:
 		_undo_redo.add_do_method(rig, "set_script", CameraFollow3D)
 		## Assigning a script to a node that is already in the tree does not
 		## re-run _ready, so the engine never enables the script's _process.
-		_undo_redo.add_do_method(rig, "set_process", true)
+		_undo_redo.add_do_method(rig, "set_process", damped)
 		if not rig_created:
 			_undo_redo.add_undo_method(rig, "set_script", old_script)
-			_undo_redo.add_undo_method(rig, "set_process", false)
+			_undo_redo.add_undo_method(rig, "set_process", old_process)
 	elif old_script != null:
 		_undo_redo.add_do_method(rig, "set_script", null)
 		_undo_redo.add_do_method(rig, "set_process", false)
 		_undo_redo.add_undo_method(rig, "set_script", old_script)
-		_undo_redo.add_undo_method(rig, "set_process", true)
+		_undo_redo.add_undo_method(rig, "set_process", old_process)
 
-	if exclude_target and target is CollisionObject3D:
-		_undo_redo.add_do_method(rig, "add_excluded_object", (target as CollisionObject3D).get_rid())
+	if exclude_applies:
+		var rid: RID = target_body.get_rid()
+		_undo_redo.add_do_method(rig, "add_excluded_object", rid)
+		if not had_exclusion_intent:
+			_undo_redo.add_undo_method(rig, "remove_excluded_object", rid)
+	elif had_exclusion_intent and target_body != null:
+		var rid: RID = target_body.get_rid()
+		_undo_redo.add_do_method(rig, "remove_excluded_object", rid)
+		_undo_redo.add_undo_method(rig, "add_excluded_object", rid)
 
 	var old_parent := node.get_parent()
 	var old_idx: int = node.get_index() if old_parent != null else 0
@@ -1037,13 +1061,14 @@ func follow_3d(params: Dictionary) -> Dictionary:
 			"rig_path": McpScenePath.from_node(rig, scene_root),
 			"rig_created": rig_created,
 			"script_replaced": script_replaced,
+			"helper_attached": want_helper,
 			"distance": distance,
 			"margin": margin,
 			"collision_mask": collision_mask,
 			"pitch_degrees": pitch_degrees,
 			"smoothing_speed": smoothing_speed,
 			"damped": damped,
-			"excluded_target": exclude_target and target is CollisionObject3D,
+			"excluded_target": exclude_applies,
 			"zero_transform": zero_transform,
 			"undoable": true,
 		}

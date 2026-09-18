@@ -839,6 +839,7 @@ func test_follow_3d_builds_damped_rig() -> void:
 	assert_has_key(result, "data")
 	assert_eq(result.data.rig_created, true)
 	assert_eq(result.data.damped, true)
+	assert_eq(result.data.helper_attached, true)
 	assert_true(result.data.smoothing_speed > 0.0)
 	var rig := cam.get_parent() as SpringArm3D
 	assert_true(rig != null, "camera should be parented to a SpringArm3D")
@@ -868,6 +869,7 @@ func test_follow_3d_rigid_rig_has_no_helper() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_eq(result.data.damped, false)
+	assert_eq(result.data.helper_attached, false, "a plain Node3D target needs no runtime helper")
 	var rig := cam.get_parent() as SpringArm3D
 	assert_true(rig != null, "camera should be parented to a SpringArm3D")
 	assert_eq(rig.get_script(), null, "rigid follow attaches no helper script")
@@ -1179,9 +1181,107 @@ func test_follow_3d_excludes_collision_target() -> void:
 	})
 	assert_has_key(result, "data")
 	assert_eq(result.data.excluded_target, true)
+	assert_eq(result.data.damped, false)
+	assert_eq(result.data.helper_attached, true, "the exclusion needs the helper to survive reload")
 	var rig := cam.get_parent() as SpringArm3D
 	assert_true(rig != null, "camera should be parented to a SpringArm3D")
 	assert_eq(rig.get_parent(), body)
+	assert_eq(rig.get_script(), CameraFollow3D)
+	assert_eq(rig.get_meta(CameraFollow3D.META_EXCLUDE), true)
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
+
+
+func test_follow_3d_exclusion_reapplies_and_undoes() -> void:
+	var r := _create("Follow3DExcl", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var body := StaticBody3D.new()
+	body.name = "Body3DExcl"
+	scene_root.add_child(body, true)
+	body.owner = scene_root
+	_track_node(body)
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+	var body_path := McpScenePath.from_node(body, scene_root)
+	var result := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": body_path,
+		"smoothing_speed": 0,
+	})
+	assert_has_key(result, "data")
+	var rig := cam.get_parent() as SpringArm3D
+	assert_true(rig != null, "camera should be parented to a SpringArm3D")
+
+	## A reloaded or instantiated scene loses the RID-only exclusion; the
+	## helper reapplies it from the persisted intent.
+	rig.clear_excluded_objects()
+	assert_false(rig.excluded_target_rid().is_valid(), "the test cleared the exclusion")
+	rig.apply_step(0.0)
+	assert_eq(rig.excluded_target_rid(), body.get_rid(), "the helper reapplies the exclusion")
+
+	## Turning the exclusion off and back on is undoable.
+	var cam_path := McpScenePath.from_node(cam, scene_root)
+	var off := _handler.follow_3d({
+		"camera_path": cam_path,
+		"target_path": body_path,
+		"smoothing_speed": 0,
+		"exclude_target": false,
+	})
+	assert_has_key(off, "data")
+	assert_eq(off.data.excluded_target, false)
+	assert_eq(rig.get_meta(CameraFollow3D.META_EXCLUDE), false)
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+	assert_eq(rig.get_meta(CameraFollow3D.META_EXCLUDE), true, "undo restores the exclusion intent")
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
+
+
+func test_follow_3d_damped_reconfig_undo_restores_rig_pose() -> void:
+	var r := _create("Follow3DPose", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var target := _create_node3d_target("Player3DPose")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	target.global_position = Vector3.ZERO
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+	var target_path := McpScenePath.from_node(target, scene_root)
+	var first := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": target_path,
+		"smoothing_speed": 6.0,
+		"offset": [0, 1.5, 0],
+	})
+	assert_has_key(first, "data")
+	var rig := cam.get_parent() as SpringArm3D
+	assert_true(rig != null, "camera should be parented to a SpringArm3D")
+
+	## Let the helper move the rig, then reconfigure while damped: the action
+	## must capture the pose the rig had before it, so undo can restore it.
+	target.global_position = Vector3(20, 0, 0)
+	rig.apply_step(1.0)
+	var pre_action := rig.transform
+	assert_true(
+		pre_action.origin.distance_to(Vector3(20, 1.5, 0)) < 1.0,
+		"sanity: the helper moved the rig toward the target"
+	)
+	var second := _handler.follow_3d({
+		"camera_path": McpScenePath.from_node(cam, scene_root),
+		"target_path": target_path,
+		"smoothing_speed": 8.0,
+	})
+	assert_has_key(second, "data")
+	target.global_position = Vector3(40, 0, 0)
+	rig.apply_step(1.0)
+	assert_true(
+		rig.transform.origin.distance_to(pre_action.origin) > 1.0,
+		"sanity: the helper moved the rig again"
+	)
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+	assert_true(
+		rig.transform.is_equal_approx(pre_action),
+		"undo restores the rig pose captured before the reconfiguration"
+	)
 	_created_paths = [McpScenePath.from_node(cam, scene_root)]
 
 

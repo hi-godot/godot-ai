@@ -44,9 +44,10 @@ Ops:
         Build a SpringArm3D rig under the target and move the camera into it.
         The arm shortens on collision (collision_mask, margin) and excludes the
         target's own body when it is a CollisionObject3D. smoothing_speed > 0
-        attaches a runtime helper that damps position (Camera3D has no native
-        smoothing); 0 leaves a rigid rig with no script. Re-running against the
-        same camera and target updates the existing rig in place.
+        damps position via a runtime helper (Camera3D has no native smoothing);
+        0 leaves a rigid rig. The helper is also attached when the target body
+        is excluded, so the exclusion survives a scene reload. Re-running
+        against the same camera and target updates the existing rig in place.
   • get(camera_path="")
         Inspect a camera (class, current flag, all properties). Empty path
         resolves to the currently-active camera, falling back to the first.
