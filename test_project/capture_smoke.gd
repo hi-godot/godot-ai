@@ -14,7 +14,10 @@ var _previous_hdr := false
 		var gray: ColorRect = get_node("Gray")
 		var sample := _editor_viewport.global_canvas_transform * gray.get_global_transform_with_canvas() * (gray.size / 2.0)
 		if not Rect2(Vector2.ZERO, image.get_size()).has_point(sample):
-			return {"error": "Gray patch is outside editor viewport", "sample": str(sample)}
+			return {
+				"error": "Gray patch is outside editor viewport", "sample": str(sample),
+				"image_size": str(image.get_size()), "viewport_size": str(_editor_viewport.size),
+			}
 		return {
 			"hdr": _editor_viewport.use_hdr_2d,
 			"renderer": RenderingServer.get_current_rendering_method(),
@@ -31,7 +34,8 @@ func _ready() -> void:
 		_editor_viewport = EditorInterface.get_editor_viewport_2d()
 		_previous_hdr = _editor_viewport.use_hdr_2d
 		_editor_viewport.use_hdr_2d = OS.get_environment("CAPTURE_HDR_2D") == "1"
-		EditorInterface.set_main_screen_editor("2D")
+		# Select after scene activation, which can overwrite a selection made in _ready.
+		EditorInterface.set_main_screen_editor.call_deferred("2D")
 	else:
 		get_viewport().use_hdr_2d = OS.get_environment("CAPTURE_HDR_2D") == "1"
 
