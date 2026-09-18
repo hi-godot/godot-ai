@@ -31,11 +31,11 @@ def test_build_and_promotion_tooling_is_exactly_pinned() -> None:
 
     assert configuration["build-system"]["requires"] == ["setuptools==84.0.0"]
     assert configuration["project"]["optional-dependencies"]["build"] == [
-        "build==1.6.0",
-        "pyinstaller==6.22.2",
+        "build==1.6.1",
+        "pyinstaller==6.22.3",
     ]
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert 'python -m pip install "build==1.6.0"' in workflow
+    assert 'python -m pip install "build==1.6.1"' in workflow
     assert "pip install --upgrade pip build" not in workflow
 
 

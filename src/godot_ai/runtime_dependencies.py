@@ -6,7 +6,7 @@ from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 
 RUNTIME_DEPENDENCIES = {
-    "anyio": "4.14.2",
+    "anyio": "4.15.1",
     "fastmcp": "3.4.7",
     "h11": "0.16.0",
     "httpx": "0.28.1",
