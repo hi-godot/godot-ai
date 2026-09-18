@@ -473,6 +473,18 @@ def main() -> int:
     last_png: bytes | None = None
     try:
         _check_editor_capture(session_id, attempt_log)
+        encoding_tests = _tool_call(session_id, "test_run", {"suite": "screenshot_encode"}, 23)
+        attempt_log.append(f"Screenshot encoder suite: {encoding_tests}")
+        print(attempt_log[-1])
+        for failure in encoding_tests.get("failures", []):
+            print(f"{failure['suite']}.{failure['test']}: {failure['message']}")
+        if (
+            encoding_tests.get("failures")
+            or encoding_tests.get("failed", 0)
+            or encoding_tests.get("skipped", 0)
+            or encoding_tests.get("passed", 0) == 0
+        ):
+            raise RuntimeError(f"Screenshot encoder suite did not pass: {encoding_tests}")
         print("Running project (current scene)")
         ## 60s, not 20 (#673): the reply waits on the editor spawning a
         ## whole game process under a software rasterizer, and a busy

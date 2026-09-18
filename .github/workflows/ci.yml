@@ -581,7 +581,7 @@ jobs:
         shell: bash
         run: |
           xvfb-run -a --server-args="-screen 0 1280x720x24" \
-            godot --rendering-driver opengl3 --path test_project --editor \
+            godot --rendering-method gl_compatibility --rendering-driver opengl3 --path test_project --editor \
             > godot-editor.log 2>&1 &
 
       - name: Start Godot editor (windowed)
