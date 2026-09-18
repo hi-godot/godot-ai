@@ -116,6 +116,12 @@ class ControlledOwner:
 	extends "res://addons/godot_ai/utils/client_job_owner.gd"
 	var release := Semaphore.new()
 	var outcome := {"status": "ok"}
+	var started: Array[String] = []
+	func _begin_action(client_id: String, action: String, request_id: String) -> Dictionary:
+		var result := super._begin_action(client_id, action, request_id)
+		if result.ok:
+			started.append(client_id)
+		return result
 	func _run_action(client_id: String, action: String, _url: String, _context: Dictionary, _prewarm: bool) -> Dictionary:
 		release.wait()
 		return {"client_id": client_id, "action": action, "result": outcome.duplicate(true), "prewarm": {}}
@@ -165,6 +171,54 @@ func test_ui_actions_queue_and_mcp_busy_never_joins_the_queue() -> void:
 		assert_eq(results[1].result.status, "ok")
 
 
+func test_cancel_queued_configure_preserves_other_actions() -> void:
+	_assert_queued_cancellation("configure")
+
+
+func test_cancel_queued_remove_preserves_other_actions() -> void:
+	_assert_queued_cancellation("remove")
+
+
+func _assert_queued_cancellation(action: String) -> void:
+	if McpClientMutationLock.is_locked():
+		skip("a real client mutation safety claim already exists")
+		return
+	var owner := ControlledOwner.new()
+	var results: Array = []
+	owner.action_completed.connect(func(id: String, completed_action: String, result: Dictionary, _prewarm: Dictionary) -> void:
+		results.append({"id": id, "action": completed_action, "result": result})
+	)
+	(Engine.get_main_loop() as SceneTree).root.add_child(owner)
+	owner.activate()
+	assert_true(owner.request_mcp_action("running-mcp", "codex", "configure").ok)
+	assert_true(owner.request_action("cursor", action))
+	assert_true(owner.request_action("grok", "configure"))
+	assert_false(owner.cancel_pending_action("codex"), "running MCP worker cannot be cancelled as pending")
+	assert_true(owner.cancel_pending_action("cursor"))
+	assert_false(owner.cancel_pending_action("cursor"), "stale cancel is a no-op")
+	assert_false(owner.cancel_pending_action("unknown-client"))
+	assert_false(owner.request_mcp_action("cancel-through-mcp", "grok", "cancel").ok)
+	assert_eq(owner.snapshot().action_phases.get("grok"), "queued")
+	assert_eq(results.size(), 1)
+	if results.size() == 1:
+		assert_eq(results[0].id, "cursor")
+		assert_eq(results[0].action, action)
+		assert_eq(results[0].result.status, "cancelled")
+	owner.release.post()
+	_wait_for_completions(owner, results, 2)
+	owner.release.post()
+	_wait_for_completions(owner, results, 3)
+	assert_eq(owner.started, ["codex", "grok"], "cancelled entry never starts; survivor order is preserved")
+	assert_eq(results.size(), 3)
+	if results.size() == 3:
+		assert_eq(results[1].id, "codex")
+		assert_eq(results[2].id, "grok")
+	owner.release.post()
+	owner.release.post()
+	assert_true(owner.quiesce().ok)
+	owner.free()
+
+
 func test_quiesce_discards_queued_actions_without_running_them_after_resume() -> void:
 	if McpClientMutationLock.is_locked():
 		skip("a real client mutation safety claim already exists")
@@ -187,11 +241,7 @@ func test_quiesce_discards_queued_actions_without_running_them_after_resume() ->
 	assert_eq(owner.snapshot().busy_actions, [])
 	owner.quiesce()
 	owner.free()
-	assert_eq(results.size(), 1)
-	if results.size() == 1:
-		assert_eq(results[0].id, "cursor")
-		assert_eq(results[0].result.status, "error")
-		assert_contains(str(results[0].result.message), "cancelled before it started")
+	assert_eq(results.size(), 0, "quiesce suppresses pending and running completion callbacks")
 
 
 func test_unproven_worker_blocks_queued_and_other_client_mutations() -> void:

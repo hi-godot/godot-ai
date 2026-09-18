@@ -17,6 +17,7 @@ pytestmark = pytest.mark.editor
 
 DRIVER = '''@tool
 extends Node
+const Plugin = preload("res://addons/godot_ai/plugin.gd")
 const Owner = preload("res://addons/godot_ai/utils/client_job_owner.gd")
 const Dock = preload("res://addons/godot_ai/mcp_dock.gd")
 const Config = preload("res://addons/godot_ai/client_configurator.gd")
@@ -27,6 +28,7 @@ const Lock = preload("res://addons/godot_ai/utils/client_mutation_lock.gd")
 var failures: Array[String] = []
 var results: Array[Dictionary] = []
 var mcp_results: Array[Dictionary] = []
+var cancellations: Array[Dictionary] = []
 var checks := 0
 
 func _ready() -> void:
@@ -39,13 +41,22 @@ func check(value: bool, message: String) -> void:
         failures.append(message)
 
 func completed(id: String, action: String, result: Dictionary, _prewarm: Dictionary) -> void:
-    results.append({"id": id, "action": action, "result": result})
+    var entry := {"id": id, "action": action, "result": result}
+    if result.get("status") == "cancelled":
+        cancellations.append(entry)
+    else:
+        results.append(entry)
 
 func read_config(id: String) -> Dictionary:
     return JSON.parse_string(FileAccess.get_file_as_string("res://" + id + ".json"))
 
 func run() -> void:
-    if OS.get_config_dir() != OS.get_environment("APPDATA") or Lock.is_locked():
+    var expected_config := OS.get_environment("APPDATA")
+    if OS.get_name() == "macOS":
+        expected_config = OS.get_environment("HOME").path_join("Library/Application Support")
+    elif OS.get_name() != "Windows":
+        expected_config = OS.get_environment("XDG_CONFIG_HOME")
+    if OS.get_config_dir().simplify_path() != expected_config.simplify_path() or Lock.is_locked():
         push_error("fixture config environment is not isolated or has an existing claim")
         get_tree().quit(2)
         return
@@ -56,7 +67,8 @@ func run() -> void:
         client.id = id
         client.display_name = id
         client.config_type = "json"
-        client.path_template = {"windows": ProjectSettings.globalize_path("res://" + id + ".json")}
+        var path := ProjectSettings.globalize_path("res://" + id + ".json")
+        client.path_template = {"windows": path, "unix": path}
         client.server_key_path = PackedStringArray(["mcpServers"])
         Registry._instances.append(client)
         Registry._by_id[id] = client
@@ -73,20 +85,58 @@ func run() -> void:
     )
     var dock = Dock.new()
     add_child(dock)
-    dock.client_action_requested.connect(owner.request_action)
-    owner.snapshot_changed.connect(dock.present_client_work_snapshot)
-    owner.action_completed.connect(dock.present_client_action_result)
+    var plugin := Plugin.new()
+    plugin._client_jobs = owner
+    plugin._dock = dock
+    dock.client_action_requested.connect(plugin._on_dock_client_action_requested)
+    dock.client_action_cancel_requested.connect(plugin._on_dock_client_action_cancel_requested)
+    owner.snapshot_changed.connect(plugin._on_client_work_snapshot_changed)
+    owner.action_completed.connect(plugin._on_client_action_completed)
     owner.activate()
     dock.present_client_work_snapshot(owner.snapshot())
     dock._on_configure_all_clients()
     check(owner._action_threads.size() == 1, "Configure all starts exactly one worker")
     check(owner.snapshot().action_phases.get("fixture_b") == "queued", "second row is queued")
-    check(dock._client_rows.fixture_b.configure_btn.text == "Queued…",
-        "Dock shows the queued phase")
+    var queued_button: Button = dock._client_rows.fixture_b.configure_btn
+    check(queued_button.text == "Cancel queued" and not queued_button.disabled,
+        "queued operation exposes an enabled Cancel button")
+    check(dock._client_rows.fixture_b.remove_btn.disabled, "opposite queued action stays disabled")
+    dock._on_configure_all_clients()
+    check(owner.snapshot().action_phases.get("fixture_b") == "queued",
+        "Configure all again does not interpret queued entries as Cancel clicks")
+    queued_button.pressed.emit()
+    check(cancellations.size() == 1, "real queued button emits one cancellation")
+    if cancellations.size() == 1:
+        check(cancellations[0].id == "fixture_b" and cancellations[0].action == "configure",
+            "cancelled result identifies the original pending action")
+    check(not owner.snapshot().busy_actions.has("fixture_b"), "cancel removes queued entry")
+    check(dock._client_rows.fixture_b.status == Client.Status.NOT_CONFIGURED,
+        "cancellation preserves cached client status")
+    check(not dock._client_rows.fixture_b.manual_panel.visible,
+        "user cancellation does not show manual repair instructions")
+    check(queued_button.text == "Configure" and not queued_button.disabled,
+        "cancellation restores the action button")
+    var stale := owner.snapshot()
+    stale.action_phases["fixture_a"] = "queued"
+    dock.present_client_work_snapshot(stale)
+    dock._client_rows.fixture_a.configure_btn.pressed.emit()
+    check(owner._action_threads.has("fixture_a"), "stale queued click leaves running worker owned")
+    check(dock._client_work_snapshot.action_phases.get("fixture_a") != "queued"
+        and dock._client_rows.fixture_a.configure_btn.disabled,
+        "plugin cancel callback reconciles stale Dock state from the owner")
     var busy := owner.request_mcp_action("must-not-run", "fixture_a", "remove")
     check(not busy.ok and not busy.has("deferred_timeout_ms"),
         "competing MCP request is not deferred")
     var deadline := Time.get_ticks_msec() + 15000
+    while results.is_empty() and Time.get_ticks_msec() < deadline:
+        await get_tree().process_frame
+    for frame in range(5):
+        await get_tree().process_frame
+    check(results.size() == 1, "only the running action completes before intentional requeue")
+    check(read_config("fixture_b") == {"unrelated": "preserve-fixture_b"},
+        "cancelled client file remains byte-semantically untouched before requeue")
+    queued_button.pressed.emit()
+    deadline = Time.get_ticks_msec() + 15000
     while results.size() < 2 and Time.get_ticks_msec() < deadline:
         await get_tree().process_frame
     check(results.size() == 2, "both Configure all actions completed")
@@ -129,16 +179,23 @@ func run() -> void:
     check(Lock.release(claim), "only the exact test-owned claim is released")
     var drained := owner.quiesce()
     check(drained.ok and not Lock.is_locked(), "owner drains without stranded authority")
+    plugin._client_jobs = null
+    plugin._dock = null
+    plugin._lifecycle = null
+    plugin.free()
     dock.queue_free()
     owner.queue_free()
     var file := FileAccess.open("res://result.json", FileAccess.WRITE)
-    file.store_string(JSON.stringify({"checks": checks, "failures": failures, "results": results}))
+    file.store_string(JSON.stringify({"checks": checks, "failures": failures,
+        "results": results, "cancellations": cancellations}))
     file.close()
     get_tree().quit(0 if failures.is_empty() else 1)
 '''
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="isolated Windows client configuration")
+@pytest.mark.skipif(
+    sys.platform not in {"win32", "linux", "darwin"}, reason="desktop client configuration"
+)
 def test_configure_all_queues_real_client_mutations(tmp_path: Path) -> None:
     godot = godot_bin_or_skip()
     project = tmp_path / "project"
@@ -161,6 +218,7 @@ def test_configure_all_queues_real_client_mutations(tmp_path: Path) -> None:
     result = json.loads((project / "result.json").read_text(encoding="utf-8"))
     assert result["checks"] >= 20, result
     assert result["failures"] == [], result
+    assert len(result["cancellations"]) == 1, result
     second = json.loads((project / "fixture_b.json").read_text(encoding="utf-8"))
     assert second == {
         "unrelated": "preserve-fixture_b",

@@ -175,7 +175,7 @@ func _process(_delta: float) -> void:
 func quiesce(deadline_msec: int = 0) -> Dictionary:
 	_accepting_work = false
 	_refresh_state = RefreshState.SHUTTING_DOWN
-	_discard_pending_actions("Client action cancelled before it started.")
+	_pending_actions.clear()
 	_publish_snapshot()
 	for client_id in _action_threads:
 		_set_action_cancelled(String(client_id), true)
@@ -510,6 +510,20 @@ func _start_next_action() -> void:
 			"status": "error", "message": str(started.error),
 		}, {})
 		_publish_snapshot()
+
+
+func cancel_pending_action(client_id: String) -> bool:
+	for index in range(_pending_actions.size()):
+		var entry := _pending_actions[index]
+		if str(entry.client_id) != client_id:
+			continue
+		_pending_actions.remove_at(index)
+		action_completed.emit(client_id, str(entry.action), {
+			"status": "cancelled", "message": "Client action cancelled before it started.",
+		}, {})
+		_publish_snapshot()
+		return true
+	return false
 
 
 func _discard_pending_actions(message: String) -> void:
