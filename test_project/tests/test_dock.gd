@@ -2681,3 +2681,20 @@ func test_client_transport_tag_tracks_descriptor_shape() -> void:
 	assert_eq(McpDockScript._client_transport_tag("codex"), "attach",
 		"TOML COMMAND_ARRAY clients tag attach too")
 	assert_eq(McpDockScript._client_transport_tag("__missing_client__"), "")
+
+
+func test_unknown_port_discovery_keeps_picker_values_and_explains_failure() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows occupancy query failure")
+		return
+	var panel := PortPickerPanelScript.new()
+	panel.setup()
+	panel.port_in_use_probe = func(_port: int) -> bool: return true
+	var http := McpClientConfigurator.http_port()
+	var ws := McpClientConfigurator.ws_port()
+	panel.seed_suggested_ports(http, {"known": false, "ports": []})
+	assert_eq(int(panel._spinbox.value), http)
+	assert_eq(int(panel._ws_spinbox.value), ws)
+	assert_contains(panel._spinbox.tooltip_text, "unavailable")
+	assert_contains(panel._ws_spinbox.tooltip_text, "unavailable")
+	panel.free()

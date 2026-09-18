@@ -80,17 +80,40 @@ static func _port_spinbox(value: int, tooltip: String) -> SpinBox:
 ## carry it keep working. Note that this OVERWRITES unsaved user input — fine
 ## in practice because the dock only calls this on `server_status`
 ## transitions (`if server_status == _last_server_status: return`).
-func seed_suggested_ports(conflict_port := 0) -> void:
+func seed_suggested_ports(conflict_port := 0, occupancy: Dictionary = {}) -> void:
 	if _spinbox == null:
 		return
+	if OS.get_name() == "Windows" and occupancy.is_empty():
+		occupancy = PortResolver.windows_listener_snapshot()
 	var http := ClientConfigurator.http_port()
 	var ws := ClientConfigurator.ws_port()
-	if conflict_port == http or bool(port_in_use_probe.call(http)):
-		http = ClientConfigurator.suggest_free_port(http + 1)
-	if conflict_port == ws or ws == http or bool(port_in_use_probe.call(ws)):
-		ws = ClientConfigurator.suggest_free_port(ws + 1)
-		if ws == http:
-			ws = ClientConfigurator.suggest_free_port(ws + 1)
+	var use_snapshot := OS.get_name() == "Windows" and port_in_use_probe == Callable(PortResolver, "is_port_in_use")
+	var http_occupied: bool
+	var ws_occupied: bool
+	if use_snapshot:
+		http_occupied = PortResolver.windows_port_occupancy(http, occupancy) != PortResolver.PortOccupancy.FREE
+		ws_occupied = PortResolver.windows_port_occupancy(ws, occupancy) != PortResolver.PortOccupancy.FREE
+	else:
+		http_occupied = bool(port_in_use_probe.call(http))
+		ws_occupied = bool(port_in_use_probe.call(ws))
+	var unavailable := false
+	if conflict_port == http or http_occupied:
+		var suggested := ClientConfigurator.suggest_free_port(http + 1, 2048, occupancy)
+		if suggested > 0:
+			http = suggested
+		else:
+			unavailable = true
+	if conflict_port == ws or ws == http or ws_occupied:
+		var suggested := ClientConfigurator.suggest_free_port(ws + 1, 2048, occupancy)
+		if suggested == http:
+			suggested = ClientConfigurator.suggest_free_port(suggested + 1, 2048, occupancy)
+		if suggested > 0:
+			ws = suggested
+		else:
+			unavailable = true
+	var detail := "Automatic port selection is unavailable. Choose ports manually or retry." if unavailable else ""
+	_spinbox.tooltip_text = detail if unavailable else "Effective HTTP port"
+	_ws_spinbox.tooltip_text = detail if unavailable else "Effective WebSocket port"
 	_spinbox.value = http
 	_ws_spinbox.value = ws
 

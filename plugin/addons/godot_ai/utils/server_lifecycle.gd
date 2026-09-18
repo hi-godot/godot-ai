@@ -719,7 +719,16 @@ func _effect_probe(payload: Dictionary) -> Dictionary:
 				"transport": _transport_from(port, ws_port, live, capability),
 			}
 		return _blocked_probe_result("incompatible", port, live, true)
-	if PortResolver.is_port_in_use(port):
+	var occupied: bool
+	if OS.get_name() == "Windows":
+		var occupancy := PortResolver.windows_port_occupancy(port)
+		if occupancy == PortResolver.PortOccupancy.UNKNOWN:
+			return _blocked_probe_result("port_occupancy_unknown", port, live, false,
+				"Windows could not query listening ports; retry when port discovery is available")
+		occupied = occupancy == PortResolver.PortOccupancy.OCCUPIED
+	else:
+		occupied = PortResolver.is_port_in_use(port)
+	if occupied:
 		var detail := _record_probe_failure_detail(capability, live)
 		var blocked := _blocked_probe_result("occupied", port, live, false, detail)
 		var pre_v4 := _untrusted_pre_v4_occupant_version(port, int(payload.timeout_ms))
@@ -1292,7 +1301,10 @@ static func _probe_with_capability(port: int, capability: Dictionary, timeout_ms
 	## Windows can otherwise spend the whole connect deadline on an unbound
 	## loopback port. This is only an unreachable probe; callers still check
 	## occupancy and prove any later listener before using it.
-	if OS.get_name() == "Windows" and PortResolver.can_bind_local_port(port):
+	if (
+		OS.get_name() == "Windows" and PortResolver.can_bind_local_port(port)
+		and PortResolver.windows_port_occupancy(port) == PortResolver.PortOccupancy.FREE
+	):
 		result.error = "port_unbound"
 		return result
 	var client := HTTPClient.new()

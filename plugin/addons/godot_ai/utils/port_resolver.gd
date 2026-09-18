@@ -16,6 +16,8 @@ const SERVER_STARTUP_REPORT := "user://godot_ai_server_startup.json"
 const WindowsPortReservation := preload("res://addons/godot_ai/utils/windows_port_reservation.gd")
 static var _process_spawn_mutex := Mutex.new()
 
+enum PortOccupancy { UNKNOWN, FREE, OCCUPIED }
+
 
 ## Serialize plugin-owned subprocess creation across the brief process-global
 ## environment override used for server capabilities. Callers must keep this
@@ -51,18 +53,11 @@ static func can_bind_local_port(port: int) -> bool:
 	return false
 
 
-## True when `port` is bound on 127.0.0.1. Probes via TCPServer first,
-## falls back to OS scraping. Callers that want per-scraper trace
-## counters should call `is_port_in_use_via_scrape` with a trace hook
-## after their own `can_bind_local_port` probe.
+## Windows permits a loopback bind beside a wildcard listener. Use the OS
+## listener table, and treat failed queries as unavailable rather than free.
 static func is_port_in_use(port: int) -> bool:
-	if can_bind_local_port(port):
-		## On POSIX, an IPv6 wildcard listener can coexist with a
-		## successful 127.0.0.1 bind probe. Confirm with lsof so startup
-		## sees the same listener set that shutdown/recovery would see.
-		if OS.get_name() != "Windows":
-			return is_port_in_use_via_scrape(port)
-		return false
+	if OS.get_name() == "Windows":
+		return windows_port_occupancy(port) != PortOccupancy.FREE
 	return is_port_in_use_via_scrape(port)
 
 
@@ -73,21 +68,7 @@ static func is_port_in_use(port: int) -> bool:
 static func is_port_in_use_via_scrape(port: int, trace: Callable = Callable()) -> bool:
 	var output: Array = []
 	if OS.get_name() == "Windows":
-		_trace(trace, "netstat")
-		var exit_code := OS.execute("netstat", ["-ano"], output, true)
-		if exit_code == 0 and output.size() > 0:
-			var stdout := str(output[0])
-			if parse_windows_netstat_listening(stdout, port):
-				return true
-			## A healthy dump with no listener row IS the answer — don't
-			## pay the ~1.2s powershell.exe spawn to confirm "not in use"
-			## (see find_all_pids_on_port for the cost rationale).
-			if windows_netstat_dump_parseable(stdout):
-				return false
-		## Fallback: netstat can be absent or unparseable on
-		## stripped/locale-odd Windows installs.
-		_trace(trace, "powershell")
-		return not find_listener_pids_windows(port).is_empty()
+		return windows_port_occupancy(port, windows_listener_snapshot(trace)) != PortOccupancy.FREE
 	_trace(trace, "lsof")
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	if exit_code == 0 and output.size() > 0 and not output[0].strip_edges().is_empty():
@@ -100,6 +81,76 @@ static func is_port_in_use_via_scrape(port: int, trace: Callable = Callable()) -
 		OS.execute("ss", ["-H", "-ltnp"], output, true) == 0
 		and not parse_linux_ss_pids(str(output[0]) if not output.is_empty() else "", port).is_empty()
 	)
+
+
+## One snapshot per selection operation avoids a subprocess for every candidate.
+## Unknown observations never prove a port free. This is not ownership evidence.
+static func windows_listener_snapshot(trace: Callable = Callable()) -> Dictionary:
+	var output: Array = []
+	_trace(trace, "netstat")
+	var code := OS.execute("netstat", ["-ano"], output, true)
+	var snapshot := windows_snapshot_from_netstat(code, output)
+	if snapshot.known:
+		return snapshot
+	_trace(trace, "powershell")
+	output.clear()
+	var script := "$ErrorActionPreference='Stop'; try { $ports = @(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.State -eq 'Listen' } | Select-Object -ExpandProperty LocalPort); ConvertTo-Json -Compress -InputObject @{ ports = $ports }; exit 0 } catch { exit 1 }"
+	code = execute_windows_powershell(script, output)
+	return windows_snapshot_from_powershell(code, output)
+
+
+static func windows_port_occupancy(port: int, snapshot: Dictionary = {}) -> PortOccupancy:
+	if snapshot.is_empty():
+		snapshot = windows_listener_snapshot()
+	if not snapshot.known:
+		return PortOccupancy.UNKNOWN
+	return PortOccupancy.OCCUPIED if snapshot.ports.has(port) else PortOccupancy.FREE
+
+
+static func windows_snapshot_from_netstat(exit_code: int, output: Array) -> Dictionary:
+	var unknown := {"known": false, "ports": []}
+	if exit_code != 0 or output.is_empty():
+		return unknown
+	var stdout := str(output[0])
+	if not windows_netstat_dump_parseable(stdout):
+		return unknown
+	var ports: Array[int] = []
+	for line in stdout.split("\n"):
+		var fields := split_on_whitespace(line.strip_edges())
+		if fields.is_empty() or fields[0].to_upper() != "TCP":
+			continue
+		if fields.size() < 5 or not fields[1].contains(":") or not fields[2].contains(":"):
+			return unknown
+		var port_text := fields[1].get_slice(":", fields[1].get_slice_count(":") - 1)
+		var remote_port_text := fields[2].get_slice(":", fields[2].get_slice_count(":") - 1)
+		var pid_text := fields[fields.size() - 1]
+		if not port_text.is_valid_int() or not remote_port_text.is_valid_int() or not pid_text.is_valid_int():
+			return unknown
+		var port := int(port_text)
+		if port < 1 or port > 65535 or int(pid_text) < 0 or int(remote_port_text) < 0 or int(remote_port_text) > 65535:
+			return unknown
+		if fields[2].ends_with(":0"):
+			if int(pid_text) == 0:
+				return unknown
+			if not ports.has(port):
+				ports.append(port)
+	return {"known": true, "ports": ports}
+
+
+static func windows_snapshot_from_powershell(exit_code: int, output: Array) -> Dictionary:
+	var unknown := {"known": false, "ports": []}
+	if exit_code != 0 or output.is_empty():
+		return unknown
+	var parsed: Variant = JSON.parse_string(str(output[0]))
+	if not (parsed is Dictionary) or not (parsed.get("ports") is Array):
+		return unknown
+	var ports: Array[int] = []
+	for value in parsed.ports:
+		if not (value is int or value is float) or not is_finite(float(value)) or float(value) != floor(float(value)) or value < 1 or value > 65535:
+			return unknown
+		if not ports.has(int(value)):
+			ports.append(int(value))
+	return {"known": true, "ports": ports}
 
 
 ## Return the PID currently listening on the given TCP port, or 0 if

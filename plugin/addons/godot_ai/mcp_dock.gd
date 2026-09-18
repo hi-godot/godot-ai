@@ -24,6 +24,7 @@ extends VBoxContainer
 const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
 const ClientRefreshStateScript := preload("res://addons/godot_ai/utils/mcp_client_refresh_state.gd")
 const Client := preload("res://addons/godot_ai/clients/_base.gd")
+const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 const ClientRegistry := preload("res://addons/godot_ai/clients/_registry.gd")
 const ToolCatalog := preload("res://addons/godot_ai/tool_catalog.gd")
@@ -1056,8 +1057,11 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 ## the client's attach command, so clients must be reconfigured afterwards.
 ## The per-client reconfigure steps live behind the crash panel's docs link.
 static func _free_port_hint(port: int) -> String:
-	var free_http := ClientConfigurator.suggest_free_port(port + 1)
-	var free_ws := ClientConfigurator.suggest_free_port(ClientConfigurator.ws_port() + 1)
+	var occupancy := PortResolver.windows_listener_snapshot() if OS.get_name() == "Windows" else {}
+	var free_http := ClientConfigurator.suggest_free_port(port + 1, 2048, occupancy)
+	var free_ws := ClientConfigurator.suggest_free_port(ClientConfigurator.ws_port() + 1, 2048, occupancy)
+	if free_http == 0 or free_ws == 0:
+		return "Automatic port selection is unavailable. Choose HTTP and WS ports manually below, or retry."
 	return "Suggested ports: %d (HTTP) and %d (WS). Choose both ports below, click Apply + Reload, then Configure your AI clients to use the new pair." % [free_http, free_ws]
 
 
