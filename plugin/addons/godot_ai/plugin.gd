@@ -1744,7 +1744,16 @@ func restart_or_start_managed_server() -> bool:
 		_lifecycle.force_restart_server()
 		return true
 	var port := ClientConfigurator.http_port()
-	if PortResolver.is_port_in_use(port):
+	var occupied: bool
+	if OS.get_name() == "Windows":
+		var occupancy := PortResolver.windows_port_occupancy(port)
+		if occupancy == PortResolver.PortOccupancy.UNKNOWN:
+			_lifecycle.start_server()
+			return true
+		occupied = occupancy == PortResolver.PortOccupancy.OCCUPIED
+	else:
+		occupied = PortResolver.is_port_in_use(port)
+	if occupied:
 		push_warning(
 			"MCP | refusing to restart the unowned server on port %d; stop it from its launcher"
 			% port

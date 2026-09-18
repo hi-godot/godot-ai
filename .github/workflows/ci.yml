@@ -266,7 +266,10 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: bash
         timeout-minutes: 6
-        run: GODOT_BIN=godot pytest -v -s tests/integration/test_client_owner_restarts.py
+        run: |
+          GODOT_BIN=godot pytest -v -s \
+            tests/integration/test_client_owner_restarts.py \
+            tests/integration/test_windows_port_occupancy.py
 
       - name: Real-editor updater scenarios
         # Linux only on pull requests and pushes: the lean updater's real-editor
