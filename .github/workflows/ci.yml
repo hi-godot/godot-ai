@@ -454,23 +454,36 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       GODOT_AI_MODE: dev
+      CAPTURE_HDR_2D: ${{ matrix.hdr_2d }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             label: Linux
+            hdr_2d: "0"
             godot-version: "4.7.0"
           - os: macos-latest
             label: macOS
+            hdr_2d: "0"
             godot-version: "4.7.0"
           - os: windows-latest
             label: Windows
+            hdr_2d: "0"
             ## Godot 4.7's Windows game subprocess requires a working
             ## Vulkan ICD that the headless GitHub runner's GPU-less
             ## graphics stack does not provide (VK_KHR_surface missing).
             ## The "Install software Vulkan driver" step below installs
             ## Mesa lavapipe so 4.7 can run — see #586.
+            godot-version: "4.7.0"
+
+          - os: macos-latest
+            label: macOS (HDR 2D)
+            hdr_2d: "1"
+            godot-version: "4.7.0"
+          - os: windows-latest
+            label: Windows (HDR 2D)
+            hdr_2d: "1"
             godot-version: "4.7.0"
 
     steps:
@@ -568,7 +581,7 @@ jobs:
         shell: bash
         run: |
           xvfb-run -a --server-args="-screen 0 1280x720x24" \
-            godot --rendering-driver opengl3 --path test_project --editor \
+            godot --rendering-method gl_compatibility --rendering-driver opengl3 --path test_project --editor \
             > godot-editor.log 2>&1 &
 
       - name: Start Godot editor (windowed)
