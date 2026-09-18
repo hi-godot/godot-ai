@@ -457,7 +457,7 @@ func _build_ui() -> void:
 
 	_crash_docs_btn = Button.new()
 	_crash_docs_btn.text = "How to change the port"
-	_crash_docs_btn.tooltip_text = "Open the guide: change godot_ai/http_port and reconfigure your MCP clients"
+	_crash_docs_btn.tooltip_text = "Open the guide: change ports in Godot AI settings and reconfigure your MCP clients"
 	_crash_docs_btn.visible = false
 	_crash_docs_btn.pressed.connect(func(): OS.shell_open(_port_conflict_docs_url()))
 	_crash_panel.add_child(_crash_docs_btn)
@@ -1805,7 +1805,10 @@ func present_client_work_snapshot(snapshot: Dictionary) -> void:
 		var id := String(client_id)
 		if busy.has(id):
 			_set_row_action_in_flight(id, String(names.get(id, "configure")))
-			if String(phases.get(id, "")) == "prewarm":
+			if String(phases.get(id, "")) == "queued":
+				var button := "remove_btn" if String(names.get(id, "configure")) == "remove" else "configure_btn"
+				(_client_rows[id][button] as Button).text = "Queued…"
+			elif String(phases.get(id, "")) == "prewarm":
 				(_client_rows[id]["configure_btn"] as Button).text = "Installing…"
 		else:
 			_finalize_action_buttons(id)

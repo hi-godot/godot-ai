@@ -6,8 +6,8 @@ extends Node
 ## The Dock is replaceable UI. Threads cannot share that lifetime: a timed-out
 ## probe or package pre-warm can outlive the panel that requested it, and
 ## destroying a live Godot Thread corrupts the GDScript VM. This node therefore
-## owns both worker pools, their cancellation, phases, and one action slot per
-## client until its Thread has been joined. It publishes copied value snapshots
+## owns both worker pools, their cancellation, phases, and one mutation slot
+## until its Thread has been joined. It publishes copied value snapshots
 ## and outcomes; it never retains the Dock, plugin, lifecycle, or update manager.
 
 const Client := preload("res://addons/godot_ai/clients/_base.gd")
@@ -57,6 +57,7 @@ var _refresh_generation := 0
 var _mcp_status_waiters: Dictionary = {}
 
 var _action_threads: Dictionary = {}
+var _pending_actions: Array[Dictionary] = []
 var _action_started_msec: Dictionary = {}
 var _action_names: Dictionary = {}
 var _action_request_ids: Dictionary = {}
@@ -106,7 +107,7 @@ func _ready() -> void:
 
 
 func _has_work_in_flight() -> bool:
-	return _post_update_thread != null or _refresh_thread != null or not _action_threads.is_empty()
+	return _post_update_thread != null or _refresh_thread != null or not _action_threads.is_empty() or not _pending_actions.is_empty()
 
 
 ## Construction is inert. The composition root calls activate only after its
@@ -128,8 +129,15 @@ func set_client_health_blocked(blocked: bool) -> void:
 
 func snapshot() -> Dictionary:
 	var busy: Array[String] = []
+	var names := _action_names.duplicate(true)
+	var phases := _read_action_phases()
 	for client_id in _action_threads:
 		busy.append(String(client_id))
+	for pending in _pending_actions:
+		var client_id := str(pending.client_id)
+		busy.append(client_id)
+		names[client_id] = pending.action
+		phases[client_id] = "queued"
 	busy.sort()
 	return {
 		"accepting_work": _accepting_work,
@@ -137,8 +145,8 @@ func snapshot() -> Dictionary:
 		"refresh_completed": _refresh_completed_msec > 0,
 		"post_update_repin_running": _post_update_thread != null,
 		"busy_actions": busy,
-		"action_names": _action_names.duplicate(true),
-		"action_phases": _read_action_phases(),
+		"action_names": names,
+		"action_phases": phases,
 	}
 
 
@@ -154,6 +162,7 @@ func _process(_delta: float) -> void:
 	_poll_post_update_repin()
 	_poll_refresh()
 	_poll_actions()
+	_start_next_action()
 	_check_refresh_timeout()
 	_check_action_timeouts()
 	_retry_deferred_refresh()
@@ -166,6 +175,7 @@ func _process(_delta: float) -> void:
 func quiesce(deadline_msec: int = 0) -> Dictionary:
 	_accepting_work = false
 	_refresh_state = RefreshState.SHUTTING_DOWN
+	_discard_pending_actions("Client action cancelled before it started.")
 	_publish_snapshot()
 	for client_id in _action_threads:
 		_set_action_cancelled(String(client_id), true)
@@ -464,7 +474,7 @@ func _start_action(client_id: String, action: String, request_id: String) -> Dic
 		return {"ok": false, "error": "Client worker is unavailable."}
 	if action not in ["configure", "remove"]:
 		return {"ok": false, "error": "Unknown client action: %s" % action}
-	if _mutation_termination_unproven.has(client_id):
+	if _post_update_termination_unproven or not _mutation_termination_unproven.is_empty():
 		return {
 			"ok": false,
 			"error": MutationLock.recovery_message(),
@@ -472,8 +482,47 @@ func _start_action(client_id: String, action: String, request_id: String) -> Dic
 		}
 	if _action_threads.has(client_id):
 		return {"ok": false, "error": "A client action is already running for %s." % client_id}
+	for pending in _pending_actions:
+		if pending.client_id == client_id:
+			return {"ok": false, "error": "A client action is already queued for %s." % client_id}
 	if not ClientConfigurator.has_client(client_id):
 		return {"ok": false, "error": "Unknown client: %s" % client_id}
+	if request_id.is_empty():
+		_pending_actions.append({"client_id": client_id, "action": action})
+		_start_next_action()
+		_publish_snapshot()
+		return {"ok": true}
+	if not _action_threads.is_empty() or not _pending_actions.is_empty():
+		return {"ok": false, "error": "Another client action is running or queued. Retry when it finishes."}
+	return _begin_action(client_id, action, request_id)
+
+
+func _start_next_action() -> void:
+	if not _accepting_work or not _action_threads.is_empty() or _pending_actions.is_empty():
+		return
+	if _post_update_termination_unproven or not _mutation_termination_unproven.is_empty() or MutationLock.is_locked():
+		_discard_pending_actions(MutationLock.recovery_message())
+		return
+	var pending: Dictionary = _pending_actions.pop_front()
+	var started := _begin_action(str(pending.client_id), str(pending.action), "")
+	if not bool(started.get("ok", false)):
+		action_completed.emit(str(pending.client_id), str(pending.action), {
+			"status": "error", "message": str(started.error),
+		}, {})
+		_publish_snapshot()
+
+
+func _discard_pending_actions(message: String) -> void:
+	var pending := _pending_actions.duplicate(true)
+	_pending_actions.clear()
+	for entry in pending:
+		action_completed.emit(str(entry.client_id), str(entry.action), {
+			"status": "error", "message": message,
+		}, {})
+	_publish_snapshot()
+
+
+func _begin_action(client_id: String, action: String, request_id: String) -> Dictionary:
 	ClientConfigurator.warm_env_snapshot()
 	_set_action_cancelled(client_id, false)
 	_clear_action_phase(client_id)
@@ -631,6 +680,7 @@ func _record_unproven_action_result(
 		return
 	if (
 		bool(result.get("termination_failed", false))
+		or bool(result.get("mutation_lock_release_failed", false))
 		or bool(prewarm.get("termination_failed", false))
 	):
 		_mark_mutation_termination_unproven(client_id, action)

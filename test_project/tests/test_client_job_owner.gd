@@ -110,3 +110,126 @@ func test_activate_is_inert_after_shutdown() -> void:
 	)
 	assert_false(owner.snapshot().get("accepting_work", true))
 	owner.free()
+
+
+class ControlledOwner:
+	extends "res://addons/godot_ai/utils/client_job_owner.gd"
+	var release := Semaphore.new()
+	var outcome := {"status": "ok"}
+	func _run_action(client_id: String, action: String, _url: String, _context: Dictionary, _prewarm: bool) -> Dictionary:
+		release.wait()
+		return {"client_id": client_id, "action": action, "result": outcome.duplicate(true), "prewarm": {}}
+
+
+func _wait_for_completions(owner: Node, results: Array, count: int) -> void:
+	var deadline := Time.get_ticks_msec() + 2000
+	while results.size() < count and Time.get_ticks_msec() < deadline:
+		owner._process(0.0)
+		OS.delay_usec(100)
+
+
+func test_ui_actions_queue_and_mcp_busy_never_joins_the_queue() -> void:
+	if McpClientMutationLock.is_locked():
+		skip("a real client mutation safety claim already exists")
+		return
+	var owner := ControlledOwner.new()
+	var results: Array = []
+	owner.action_completed.connect(func(id: String, action: String, result: Dictionary, _prewarm: Dictionary) -> void:
+		results.append({"id": id, "action": action, "result": result})
+	)
+	(Engine.get_main_loop() as SceneTree).root.add_child(owner)
+	owner.activate()
+	assert_true(owner.request_action("codex", "configure"), "first action must be admitted: " + str(owner.snapshot()))
+	assert_true(owner.request_action("cursor", "remove"), "second action must be queued: " + str(owner.snapshot()))
+	assert_false(owner.request_action("cursor", "configure"), "duplicate queued client is refused")
+	assert_eq(owner._action_threads.size(), 1)
+	assert_eq(owner.snapshot().action_phases.get("cursor"), "queued")
+	var busy := owner.request_mcp_action("not-admitted", "grok", "configure")
+	assert_false(busy.ok)
+	assert_contains(str(busy.error), "Retry")
+	assert_false(busy.has("deferred_timeout_ms"))
+	owner._report_action_timeout("codex", 75000)
+	assert_eq(owner._action_threads.size(), 1, "timeout cannot release an unjoined worker")
+	assert_eq(owner.snapshot().action_phases.get("cursor"), "queued")
+	owner.release.post()
+	_wait_for_completions(owner, results, 1)
+	owner.release.post()
+	_wait_for_completions(owner, results, 2)
+	owner.quiesce()
+	owner.free()
+	assert_eq(results.size(), 2)
+	if results.size() == 2:
+		assert_eq(results[0].id, "codex")
+		assert_eq(results[1].id, "cursor")
+		assert_eq(results[1].action, "remove")
+		assert_eq(results[1].result.status, "ok")
+
+
+func test_quiesce_discards_queued_actions_without_running_them_after_resume() -> void:
+	if McpClientMutationLock.is_locked():
+		skip("a real client mutation safety claim already exists")
+		return
+	var owner := ControlledOwner.new()
+	var results: Array = []
+	owner.action_completed.connect(func(id: String, _action: String, result: Dictionary, _prewarm: Dictionary) -> void:
+		results.append({"id": id, "result": result})
+	)
+	(Engine.get_main_loop() as SceneTree).root.add_child(owner)
+	owner.activate()
+	assert_true(owner.request_action("codex", "configure"), "first action must be admitted: " + str(owner.snapshot()))
+	assert_true(owner.request_action("cursor", "remove"), "second action must be queued: " + str(owner.snapshot()))
+	owner.release.post()
+	var drained := owner.quiesce()
+	assert_true(drained.ok, "controlled worker must drain safely: " + str(drained))
+	assert_eq(owner.snapshot().busy_actions, [])
+	owner.resume_after_quiesce()
+	owner._process(0.0)
+	assert_eq(owner.snapshot().busy_actions, [])
+	owner.quiesce()
+	owner.free()
+	assert_eq(results.size(), 1)
+	if results.size() == 1:
+		assert_eq(results[0].id, "cursor")
+		assert_eq(results[0].result.status, "error")
+		assert_contains(str(results[0].result.message), "cancelled before it started")
+
+
+func test_unproven_worker_blocks_queued_and_other_client_mutations() -> void:
+	_assert_unsafe_result_blocks_queue("termination_failed")
+
+
+func test_failed_lock_release_blocks_queued_and_other_client_mutations() -> void:
+	_assert_unsafe_result_blocks_queue("mutation_lock_release_failed")
+
+
+func _assert_unsafe_result_blocks_queue(unsafe_flag: String) -> void:
+	if McpClientMutationLock.is_locked():
+		skip("a real client mutation safety claim already exists")
+		return
+	var previous: Variant = Engine.get_meta(ClientJobOwner.MUTATION_UNPROVEN_META, {})
+	var owner := ControlledOwner.new()
+	var results: Array = []
+	owner.outcome = {"status": "error", unsafe_flag: true, "message": "unsafe worker"}
+	owner.action_completed.connect(func(id: String, _action: String, result: Dictionary, _prewarm: Dictionary) -> void:
+		results.append({"id": id, "result": result})
+	)
+	(Engine.get_main_loop() as SceneTree).root.add_child(owner)
+	owner.activate()
+	assert_true(owner.request_action("codex", "configure"), "first action must be admitted: " + str(owner.snapshot()))
+	assert_true(owner.request_action("cursor", "remove"), "second action must be queued: " + str(owner.snapshot()))
+	owner.release.post()
+	_wait_for_completions(owner, results, 2)
+	var blocked := owner.request_mcp_action("also-blocked", "grok", "configure")
+	owner.release.post()
+	var drained := owner.quiesce()
+	owner.free()
+	Engine.set_meta(ClientJobOwner.MUTATION_UNPROVEN_META, previous)
+	assert_false(blocked.ok)
+	assert_true(bool(blocked.get("termination_failed", false)))
+	assert_false(drained.ok)
+	assert_eq(results.size(), 2)
+	if results.size() == 2:
+		assert_eq(results[0].id, "codex")
+		assert_eq(results[1].id, "cursor")
+		assert_eq(results[1].result.status, "error")
+		assert_contains(str(results[1].result.message), "safety-locked")

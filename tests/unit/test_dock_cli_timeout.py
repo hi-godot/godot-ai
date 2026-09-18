@@ -212,7 +212,7 @@ def test_client_owner_persists_unproven_mutation_and_blocks_update_quiescence() 
 
     assert "Engine.get_meta(MUTATION_UNPROVEN_META" in init
     assert "Engine.set_meta(" in mark
-    assert "_mutation_termination_unproven.has(client_id)" in request
+    assert "not _mutation_termination_unproven.is_empty()" in request
     assert "MutationLock.recovery_message()" in request
     assert finalize.index("_record_unproven_action_result(") < finalize.index(
         "_action_threads.erase("
