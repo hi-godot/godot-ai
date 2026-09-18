@@ -259,7 +259,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
     (
         "camera",
         "  camera_manage    create, configure, set_limits_2d, set_damping_2d,\n"
-        "                   follow_2d, get, list, apply_preset\n",
+        "                   follow_2d, follow_3d, get, list, apply_preset\n",
     ),
     ("signal", "  signal_manage    list, connect, disconnect\n"),
     (

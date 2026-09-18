@@ -4,6 +4,10 @@ extends McpTestSuite
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const CameraHandler := preload("res://addons/godot_ai/handlers/camera_handler.gd")
+const CameraFollow3D := preload("res://addons/godot_ai/runtime/camera_follow_3d.gd")
+## A Node-based script that is not the follow helper, used to exercise the
+## "rig already has a script" replacement path.
+const ForeignRigScript := preload("res://addons/godot_ai/runtime/game_helper.gd")
 
 ## Tests for CameraHandler — Camera2D/Camera3D authoring, configure,
 ## limits, damping, follow, presets.
@@ -800,6 +804,385 @@ func test_follow_2d_target_not_node2d() -> void:
 		"target_path": McpScenePath.from_node(plain, scene_root),
 	})
 	assert_is_error(result)
+
+
+# ============================================================================
+# camera_follow_3d
+# ============================================================================
+
+func _create_node3d_target(target_name: String) -> Node3D:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return null
+	var target := Node3D.new()
+	target.name = target_name
+	target.position = Vector3(100, 0, 50)
+	scene_root.add_child(target, true)
+	target.owner = scene_root
+	_track_node(target)
+	return target
+
+
+func test_follow_3d_builds_damped_rig() -> void:
+	var r := _create("Follow3D", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var target := _create_node3d_target("Player3D")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+
+	var result := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": McpScenePath.from_node(target, scene_root),
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.rig_created, true)
+	assert_eq(result.data.damped, true)
+	assert_true(result.data.smoothing_speed > 0.0)
+	var rig := cam.get_parent() as SpringArm3D
+	assert_true(rig != null, "camera should be parented to a SpringArm3D")
+	assert_eq(rig.get_parent(), target)
+	assert_eq(rig.get_script(), CameraFollow3D)
+	assert_eq(rig.top_level, true, "damping needs a top-level rig")
+	assert_true(abs(rig.spring_length - 4.0) < 0.001)
+	assert_eq(rig.collision_mask, 1)
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
+
+
+func test_follow_3d_rigid_rig_has_no_helper() -> void:
+	var r := _create("Follow3DRigid", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var target := _create_node3d_target("Player3DRigid")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+
+	var result := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": McpScenePath.from_node(target, scene_root),
+		"smoothing_speed": 0,
+		"offset": [0, 2, 0],
+		"pitch_degrees": -20.0,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.damped, false)
+	var rig := cam.get_parent() as SpringArm3D
+	assert_true(rig != null, "camera should be parented to a SpringArm3D")
+	assert_eq(rig.get_script(), null, "rigid follow attaches no helper script")
+	assert_eq(rig.top_level, false)
+	assert_true(rig.position.is_equal_approx(Vector3(0, 2, 0)), "pivot offset is applied")
+	assert_true(abs(rig.rotation.x - deg_to_rad(-20.0)) < 0.001, "pitch is applied")
+	assert_eq(rig.get_meta(CameraFollow3D.META_OFFSET), Vector3(0, 2, 0))
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
+
+
+func test_follow_3d_undo_restores_placement_and_removes_rig() -> void:
+	var r := _create("Follow3DUndo", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var target := _create_node3d_target("Player3DUndo")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+	cam.position = Vector3(7, 3, 2)
+	cam.rotation = Vector3(0.1, 0.2, 0.3)
+	var original_parent := cam.get_parent()
+	var original_idx := cam.get_index()
+	var original_position := cam.position
+	var original_rotation := cam.rotation
+
+	var _result := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": McpScenePath.from_node(target, scene_root),
+	})
+	var rig := cam.get_parent() as SpringArm3D
+	assert_true(rig != null, "camera should be parented to a SpringArm3D")
+	assert_eq(rig.get_parent(), target)
+
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+	assert_eq(cam.get_parent(), original_parent, "undo restores the original parent")
+	assert_eq(cam.get_index(), original_idx, "undo restores the original sibling index")
+	assert_true(cam.position.is_equal_approx(original_position), "undo restores the transform")
+	assert_true(cam.rotation.is_equal_approx(original_rotation), "undo restores the rotation")
+	assert_eq(rig.get_parent(), null, "undo removes the rig from the target")
+
+	assert_true(editor_redo(_undo_redo), "redo should succeed")
+	assert_eq(cam.get_parent(), rig, "redo reparents the camera back under the rig")
+	assert_eq(rig.get_parent(), target, "redo re-adds the same rig")
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
+
+
+func test_follow_3d_damping_steps_toward_target() -> void:
+	var r := _create("Follow3DStep", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var target := _create_node3d_target("Player3DStep")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	target.global_position = Vector3.ZERO
+	target.global_rotation = Vector3.ZERO
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+
+	var result := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": McpScenePath.from_node(target, scene_root),
+		"offset": [0, 2, 0],
+		"pitch_degrees": -15.0,
+		"smoothing_speed": 10.0,
+	})
+	assert_has_key(result, "data")
+	var rig := cam.get_parent() as SpringArm3D
+	assert_true(rig != null, "camera should be parented to a SpringArm3D")
+	var start := rig.global_position
+
+	target.global_position = Vector3(10, 0, 0)
+	var offset := Vector3(0, 2, 0)
+	var pitch := deg_to_rad(-15.0)
+	var desired := CameraFollow3D.desired_transform(target, offset, pitch)
+	var weight := 1.0 - exp(-10.0 * 0.1)
+	var expected := start.lerp(desired.origin, weight)
+	rig.apply_step(0.1)
+	assert_true(
+		rig.global_position.distance_to(expected) < 0.001,
+		"position must lerp by the frame-rate independent weight"
+	)
+	assert_true(
+		rig.global_transform.basis.is_equal_approx(desired.basis),
+		"rotation must follow the target rigidly"
+	)
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
+
+
+func test_follow_3d_rerun_updates_existing_rig() -> void:
+	var r := _create("Follow3DReuse", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var target := _create_node3d_target("Player3DReuse")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+	var target_path := McpScenePath.from_node(target, scene_root)
+
+	var first := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": target_path,
+		"smoothing_speed": 0,
+		"distance": 3.0,
+	})
+	assert_has_key(first, "data")
+	var rig := cam.get_parent() as SpringArm3D
+	assert_true(rig != null, "camera should be parented to a SpringArm3D")
+	assert_eq(rig.get_script(), null)
+
+	var second := _handler.follow_3d({
+		"camera_path": McpScenePath.from_node(cam, scene_root),
+		"target_path": target_path,
+		"smoothing_speed": 8.0,
+		"distance": 5.0,
+	})
+	assert_has_key(second, "data")
+	assert_eq(second.data.rig_created, false, "re-running updates instead of nesting")
+	assert_eq(second.data.damped, true)
+	assert_eq(cam.get_parent(), rig, "re-running keeps the same rig")
+	assert_true(abs(rig.spring_length - 5.0) < 0.001, "distance is updated in place")
+	assert_eq(rig.get_script(), CameraFollow3D, "the helper is attached in place")
+	assert_eq(rig.top_level, true, "damping toggles top_level in place")
+	var rig_count := 0
+	for child in target.get_children():
+		if child is SpringArm3D:
+			rig_count += 1
+	assert_eq(rig_count, 1, "re-running must not nest rigs")
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
+
+
+func test_follow_3d_rejects_2d_camera() -> void:
+	var r := _create("Follow3D2DCam", "2d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var target := _create_node3d_target("Player3D2DCam")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var result := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": McpScenePath.from_node(target, scene_root),
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+
+
+func test_follow_3d_rejects_non_node3d_target() -> void:
+	var r := _create("Follow3DNonN3D", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var plain := Node.new()
+	plain.name = "PlainTarget3D"
+	scene_root.add_child(plain, true)
+	plain.owner = scene_root
+	_track_node(plain)
+	var result := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": McpScenePath.from_node(plain, scene_root),
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+
+
+func test_follow_3d_rejects_self_and_descendant() -> void:
+	var r := _create("Follow3DSelf", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+	var self_follow := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": r.data.path,
+	})
+	assert_is_error(self_follow, ErrorCodes.INVALID_PARAMS)
+	var child := Node3D.new()
+	child.name = "CamChild"
+	cam.add_child(child, true)
+	child.owner = scene_root
+	_track_node(child)
+	var descendant := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": McpScenePath.from_node(child, scene_root),
+	})
+	assert_is_error(descendant, ErrorCodes.INVALID_PARAMS)
+
+
+func test_follow_3d_rejects_conflicting_rig() -> void:
+	var r := _create("Follow3DConflict", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var target := _create_node3d_target("Player3DConflict")
+	var other := _create_node3d_target("Player3DOther")
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+	var target_path := McpScenePath.from_node(target, scene_root)
+	var first := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": target_path,
+	})
+	assert_has_key(first, "data")
+	var cam_path := McpScenePath.from_node(cam, scene_root)
+
+	## Re-running against a different target must not nest a second rig.
+	var other_target := _handler.follow_3d({
+		"camera_path": cam_path,
+		"target_path": McpScenePath.from_node(other, scene_root),
+	})
+	assert_is_error(other_target, ErrorCodes.INVALID_PARAMS)
+
+	## A SpringArm3D this tool did not create is refused, not adopted.
+	var foreign_rig := SpringArm3D.new()
+	foreign_rig.name = "UserRig"
+	target.add_child(foreign_rig, true)
+	foreign_rig.owner = scene_root
+	_track_node(foreign_rig)
+	var foreign_cam := Camera3D.new()
+	foreign_cam.name = "UserCam"
+	foreign_rig.add_child(foreign_cam, true)
+	foreign_cam.owner = scene_root
+	_track_node(foreign_cam)
+	var foreign := _handler.follow_3d({
+		"camera_path": McpScenePath.from_node(foreign_cam, scene_root),
+		"target_path": target_path,
+	})
+	assert_is_error(foreign, ErrorCodes.INVALID_PARAMS)
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
+
+
+func test_follow_3d_rejects_bad_params() -> void:
+	var r := _create("Follow3DBad", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var target := _create_node3d_target("Player3DBad")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var target_path := McpScenePath.from_node(target, scene_root)
+	var cam_path: String = r.data.path
+
+	var bad_distance := _handler.follow_3d({
+		"camera_path": cam_path, "target_path": target_path, "distance": 0.0,
+	})
+	assert_is_error(bad_distance, ErrorCodes.VALUE_OUT_OF_RANGE)
+	var bad_pitch := _handler.follow_3d({
+		"camera_path": cam_path, "target_path": target_path, "pitch_degrees": 120.0,
+	})
+	assert_is_error(bad_pitch, ErrorCodes.VALUE_OUT_OF_RANGE)
+	var bad_margin := _handler.follow_3d({
+		"camera_path": cam_path, "target_path": target_path, "margin": 10.0,
+	})
+	assert_is_error(bad_margin, ErrorCodes.VALUE_OUT_OF_RANGE)
+	var bad_speed := _handler.follow_3d({
+		"camera_path": cam_path, "target_path": target_path, "smoothing_speed": -1.0,
+	})
+	assert_is_error(bad_speed, ErrorCodes.VALUE_OUT_OF_RANGE)
+	var bad_offset := _handler.follow_3d({
+		"camera_path": cam_path, "target_path": target_path, "offset": [1, 2],
+	})
+	assert_is_error(bad_offset, ErrorCodes.WRONG_TYPE)
+
+
+func test_follow_3d_replaces_foreign_rig_script() -> void:
+	var r := _create("Follow3DForeign", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var target := _create_node3d_target("Player3DForeign")
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+	var target_path := McpScenePath.from_node(target, scene_root)
+	var first := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": target_path,
+		"smoothing_speed": 0,
+	})
+	assert_has_key(first, "data")
+	var rig := cam.get_parent() as SpringArm3D
+	assert_true(rig != null, "camera should be parented to a SpringArm3D")
+	rig.set_script(ForeignRigScript)
+
+	var second := _handler.follow_3d({
+		"camera_path": McpScenePath.from_node(cam, scene_root),
+		"target_path": target_path,
+		"smoothing_speed": 6.0,
+	})
+	assert_has_key(second, "data")
+	assert_eq(second.data.script_replaced, true)
+	assert_eq(rig.get_script(), CameraFollow3D, "the helper replaces a foreign rig script")
+	assert_true(editor_undo(_undo_redo), "undo should succeed")
+	assert_eq(rig.get_script(), ForeignRigScript, "undo restores the replaced script")
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
+
+
+func test_follow_3d_excludes_collision_target() -> void:
+	var r := _create("Follow3DBody", "3d")
+	if r.is_empty():
+		assert_true(false, "No scene open")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var body := StaticBody3D.new()
+	body.name = "Body3DTarget"
+	scene_root.add_child(body, true)
+	body.owner = scene_root
+	_track_node(body)
+	var cam := McpScenePath.resolve(r.data.path, scene_root) as Camera3D
+	var result := _handler.follow_3d({
+		"camera_path": r.data.path,
+		"target_path": McpScenePath.from_node(body, scene_root),
+		"smoothing_speed": 0,
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.excluded_target, true)
+	var rig := cam.get_parent() as SpringArm3D
+	assert_true(rig != null, "camera should be parented to a SpringArm3D")
+	assert_eq(rig.get_parent(), body)
+	_created_paths = [McpScenePath.from_node(cam, scene_root)]
 
 
 # ============================================================================

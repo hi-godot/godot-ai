@@ -496,6 +496,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("camera_set_limits_2d", "camera", &"set_limits_2d")
 	_dispatcher.register_lazy("camera_set_damping_2d", "camera", &"set_damping_2d")
 	_dispatcher.register_lazy("camera_follow_2d", "camera", &"follow_2d")
+	_dispatcher.register_lazy("camera_follow_3d", "camera", &"follow_3d")
 	_dispatcher.register_lazy("camera_get", "camera", &"get_camera")
 	_dispatcher.register_lazy("camera_list", "camera", &"list_cameras")
 	_dispatcher.register_lazy("camera_apply_preset", "camera", &"apply_preset")

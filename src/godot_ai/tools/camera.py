@@ -38,6 +38,15 @@ Ops:
         deadzone). drag_margins: {left,top,right,bottom} fractions [0,1].
   • follow_2d(camera_path, target_path, smoothing_speed=5.0, zero_transform=True)
         Reparent camera under target with smoothing — Godot-native follow.
+  • follow_3d(camera_path, target_path, offset=[0,1.5,0], distance=4.0,
+              margin=0.2, collision_mask=1, pitch_degrees=-15.0,
+              smoothing_speed=5.0, exclude_target=True, zero_transform=True)
+        Build a SpringArm3D rig under the target and move the camera into it.
+        The arm shortens on collision (collision_mask, margin) and excludes the
+        target's own body when it is a CollisionObject3D. smoothing_speed > 0
+        attaches a runtime helper that damps position (Camera3D has no native
+        smoothing); 0 leaves a rigid rig with no script. Re-running against the
+        same camera and target updates the existing rig in place.
   • get(camera_path="")
         Inspect a camera (class, current flag, all properties). Empty path
         resolves to the currently-active camera, falling back to the first.
@@ -61,6 +70,7 @@ def register_camera_tools(mcp: FastMCP) -> None:
             "set_limits_2d": camera_handlers.camera_set_limits_2d,
             "set_damping_2d": camera_handlers.camera_set_damping_2d,
             "follow_2d": camera_handlers.camera_follow_2d,
+            "follow_3d": camera_handlers.camera_follow_3d,
             "get": camera_handlers.camera_get,
             "list": camera_handlers.camera_list,
             "apply_preset": camera_handlers.camera_apply_preset,

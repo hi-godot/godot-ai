@@ -61,7 +61,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "  particle_manage  create, set_main, set_process, set_draw_pass, restart,\n"
     "                   get, apply_preset\n"
     "  camera_manage    create, configure, set_limits_2d, set_damping_2d,\n"
-    "                   follow_2d, get, list, apply_preset\n"
+    "                   follow_2d, follow_3d, get, list, apply_preset\n"
     "  signal_manage    list, connect, disconnect\n"
     "  input_map_manage list, add_action, ensure_action, remove_action,\n"
     "                   bind_event, ensure_binding\n"

@@ -106,6 +106,36 @@ async def camera_follow_2d(
     )
 
 
+async def camera_follow_3d(
+    runtime: DirectRuntime,
+    camera_path: str,
+    target_path: str,
+    offset: dict[str, float] | list[float] | None = None,
+    distance: float = 4.0,
+    margin: float = 0.2,
+    collision_mask: int = 1,
+    pitch_degrees: float = -15.0,
+    smoothing_speed: float = 5.0,
+    exclude_target: bool = True,
+    zero_transform: bool = True,
+) -> dict:
+    await require_writable_async(runtime)
+    params: dict[str, Any] = {
+        "camera_path": camera_path,
+        "target_path": target_path,
+        "distance": distance,
+        "margin": margin,
+        "collision_mask": collision_mask,
+        "pitch_degrees": pitch_degrees,
+        "smoothing_speed": smoothing_speed,
+        "exclude_target": exclude_target,
+        "zero_transform": zero_transform,
+    }
+    if offset is not None:
+        params["offset"] = offset
+    return await runtime.send_command("camera_follow_3d", params)
+
+
 async def camera_get(runtime: DirectRuntime, camera_path: str = "") -> dict:
     return await runtime.send_command("camera_get", {"camera_path": camera_path})
 

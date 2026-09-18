@@ -12,6 +12,11 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const CameraValues := preload("res://addons/godot_ai/handlers/camera_values.gd")
 const CameraPresets := preload("res://addons/godot_ai/handlers/camera_presets.gd")
+const CameraFollow3D := preload("res://addons/godot_ai/runtime/camera_follow_3d.gd")
+
+const _FOLLOW_3D_MAX_DISTANCE := 10000.0
+const _FOLLOW_3D_MAX_PITCH_DEGREES := 90.0
+const _FOLLOW_3D_DEFAULT_OFFSET := Vector3(0, 1.5, 0)
 
 const _VALID_TYPES := {
 	"2d": "Camera2D",
@@ -845,6 +850,260 @@ func follow_2d(params: Dictionary) -> Dictionary:
 			"undoable": true,
 		}
 	}
+
+
+# ============================================================================
+# camera_follow_3d
+# ============================================================================
+
+## Build a SpringArm3D rig under the target and move the camera into it. The
+## arm handles collision pushback; damping needs the runtime helper because
+## Camera3D has no native smoothing (see runtime/camera_follow_3d.gd).
+##
+## Re-running against the same camera + target updates the existing rig in
+## place (single undo) instead of nesting rigs. A rig is recognized by its
+## `_camera_follow_target` metadata, so a rigid rig (no helper script) can be
+## upgraded to damped later without tearing it down first.
+func follow_3d(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_camera(params)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var node_path: String = resolved.path
+	var type_str: String = resolved.type
+	var scene_root: Node = resolved.scene_root
+
+	if type_str != "3d":
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"camera_follow_3d requires a Camera3D (got %s)" % node.get_class()
+		)
+
+	var target_path: String = params.get("target_path", "")
+	if target_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: target_path")
+	var target := McpScenePath.resolve(target_path, scene_root)
+	if target == null:
+		return ErrorCodes.make(
+			ErrorCodes.NODE_NOT_FOUND,
+			"target_path: %s" % McpScenePath.format_node_error(target_path, scene_root)
+		)
+	if not (target is Node3D):
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Follow target must be a Node3D (got %s)" % target.get_class()
+		)
+	if target == node or node.is_ancestor_of(target):
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			(
+				"Camera cannot follow itself"
+				if target == node
+				else "Cannot follow a descendant of the camera"
+			)
+		)
+
+	var offset_result := _follow_3d_offset(params)
+	if offset_result.has("error"):
+		return offset_result
+	var offset: Vector3 = offset_result.offset
+
+	var distance := float(params.get("distance", 4.0))
+	if distance <= 0.0 or distance > _FOLLOW_3D_MAX_DISTANCE:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"distance must be in (0, %.0f] (got %s)" % [_FOLLOW_3D_MAX_DISTANCE, distance]
+		)
+	var margin := float(params.get("margin", 0.2))
+	if margin < 0.0 or margin > distance:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"margin must be in [0, distance] (got %s)" % margin
+		)
+	var collision_mask := int(params.get("collision_mask", 1))
+	if collision_mask < 0:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"collision_mask must be >= 0 (got %d)" % collision_mask
+		)
+	var pitch_degrees := float(params.get("pitch_degrees", -15.0))
+	if absf(pitch_degrees) > _FOLLOW_3D_MAX_PITCH_DEGREES:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"pitch_degrees must be in [-90, 90] (got %s)" % pitch_degrees
+		)
+	var smoothing_speed := float(params.get("smoothing_speed", 5.0))
+	if smoothing_speed < 0.0:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"smoothing_speed must be >= 0 (got %s)" % smoothing_speed
+		)
+	var exclude_target := bool(params.get("exclude_target", true))
+	var zero_transform := bool(params.get("zero_transform", true))
+
+	var existing_rig := node.get_parent() as SpringArm3D
+	if existing_rig != null and (
+		not existing_rig.has_meta(CameraFollow3D.META_TARGET)
+		or existing_rig.get_parent() != target
+	):
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			(
+				"Camera is already parented to SpringArm3D %s. Undo that follow or remove "
+				+ "the rig before following %s."
+			) % [
+				McpScenePath.from_node(existing_rig, scene_root),
+				McpScenePath.from_node(target, scene_root),
+			]
+		)
+
+	var pitch := deg_to_rad(pitch_degrees)
+	var damped := smoothing_speed > 0.0
+	var rig: SpringArm3D = existing_rig
+	var rig_created := rig == null
+	if rig_created:
+		rig = SpringArm3D.new()
+		rig.name = "CameraRig"
+	var old_script: Variant = null if rig_created else rig.get_script()
+	var script_replaced: bool = old_script != null and old_script != CameraFollow3D
+
+	_undo_redo.create_action(
+		"MCP: Camera follow %s" % target.name, UndoRedo.MERGE_DISABLE, scene_root
+	)
+	if rig_created:
+		_undo_redo.add_do_method(target, "add_child", rig, true)
+		_undo_redo.add_do_method(rig, "set_owner", scene_root)
+		_undo_redo.add_do_reference(rig)
+		_undo_redo.add_undo_method(target, "remove_child", rig)
+
+	_add_rig_property_to_action(rig, "spring_length", distance, rig_created)
+	_add_rig_property_to_action(rig, "margin", margin, rig_created)
+	_add_rig_property_to_action(rig, "collision_mask", collision_mask, rig_created)
+	_add_rig_property_to_action(rig, "top_level", damped, rig_created)
+	if damped and rig_created:
+		## Start at the rigid-follow pose; the helper damps from there instead
+		## of flying in from the rig's unset origin.
+		_undo_redo.add_do_method(
+			rig, "set_global_transform", CameraFollow3D.desired_transform(target, offset, pitch)
+		)
+	elif not damped:
+		_add_rig_property_to_action(rig, "position", offset, rig_created)
+		_add_rig_property_to_action(rig, "rotation", Vector3(pitch, 0, 0), rig_created)
+
+	var target_node_path := NodePath("..")
+	if not rig_created:
+		target_node_path = rig.get_path_to(target)
+	_add_rig_meta_to_action(rig, CameraFollow3D.META_TARGET, target_node_path, rig_created)
+	_add_rig_meta_to_action(rig, CameraFollow3D.META_OFFSET, offset, rig_created)
+	_add_rig_meta_to_action(rig, CameraFollow3D.META_SPEED, smoothing_speed, rig_created)
+	_add_rig_meta_to_action(rig, CameraFollow3D.META_PITCH, pitch, rig_created)
+
+	if damped:
+		_undo_redo.add_do_method(rig, "set_script", CameraFollow3D)
+		## Assigning a script to a node that is already in the tree does not
+		## re-run _ready, so the engine never enables the script's _process.
+		_undo_redo.add_do_method(rig, "set_process", true)
+		if not rig_created:
+			_undo_redo.add_undo_method(rig, "set_script", old_script)
+			_undo_redo.add_undo_method(rig, "set_process", false)
+	elif old_script != null:
+		_undo_redo.add_do_method(rig, "set_script", null)
+		_undo_redo.add_do_method(rig, "set_process", false)
+		_undo_redo.add_undo_method(rig, "set_script", old_script)
+		_undo_redo.add_undo_method(rig, "set_process", true)
+
+	if exclude_target and target is CollisionObject3D:
+		_undo_redo.add_do_method(rig, "add_excluded_object", (target as CollisionObject3D).get_rid())
+
+	var old_parent := node.get_parent()
+	var old_idx: int = node.get_index() if old_parent != null else 0
+	var old_position: Variant = node.get("position")
+	var old_rotation: Variant = node.get("rotation")
+	_undo_redo.add_do_method(self, "_place_camera_under", node, rig, scene_root)
+	_undo_redo.add_do_reference(node)
+	if zero_transform:
+		_undo_redo.add_do_property(node, "position", Vector3.ZERO)
+		_undo_redo.add_do_property(node, "rotation", Vector3.ZERO)
+		_undo_redo.add_undo_property(node, "position", old_position)
+		_undo_redo.add_undo_property(node, "rotation", old_rotation)
+	_undo_redo.add_undo_method(self, "_restore_camera_placement", node, old_parent, old_idx, scene_root)
+	_undo_redo.add_undo_reference(node)
+	_undo_redo.commit_action()
+
+	return {
+		"data": {
+			"path": node_path,
+			"target_path": McpScenePath.from_node(target, scene_root),
+			"rig_path": McpScenePath.from_node(rig, scene_root),
+			"rig_created": rig_created,
+			"script_replaced": script_replaced,
+			"distance": distance,
+			"margin": margin,
+			"collision_mask": collision_mask,
+			"pitch_degrees": pitch_degrees,
+			"smoothing_speed": smoothing_speed,
+			"damped": damped,
+			"excluded_target": exclude_target and target is CollisionObject3D,
+			"zero_transform": zero_transform,
+			"undoable": true,
+		}
+	}
+
+
+## Parse the target-local pivot offset. Accepts {x,y,z} / [x,y,z] like every
+## other vector parameter.
+static func _follow_3d_offset(params: Dictionary) -> Dictionary:
+	if not params.has("offset"):
+		return {"offset": _FOLLOW_3D_DEFAULT_OFFSET}
+	var parsed: Variant = McpJsonValues.parse_vector3(params.offset)
+	if parsed == null:
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"offset must be {x,y,z} or [x,y,z] (got %s)" % type_string(typeof(params.offset))
+		)
+	return {"offset": parsed}
+
+
+## Add a rig property write. A freshly created rig needs no undo value — the
+## whole node is removed by the action's undo.
+func _add_rig_property_to_action(rig: SpringArm3D, property: String, value: Variant, is_new: bool) -> void:
+	_undo_redo.add_do_property(rig, property, value)
+	if not is_new:
+		_undo_redo.add_undo_property(rig, property, rig.get(property))
+
+
+## Add a rig metadata write. Existing values (or their absence) are captured
+## now, before the action commits.
+func _add_rig_meta_to_action(rig: SpringArm3D, key: String, value: Variant, is_new: bool) -> void:
+	_undo_redo.add_do_method(rig, "set_meta", key, value)
+	if is_new:
+		return
+	if rig.has_meta(key):
+		_undo_redo.add_undo_method(rig, "set_meta", key, rig.get_meta(key))
+	else:
+		_undo_redo.add_undo_method(rig, "remove_meta", key)
+
+
+## Move the camera under the rig. One method instead of separate
+## remove_child/add_child/move_child operations so the action does not depend
+## on UndoRedo's operation ordering.
+func _place_camera_under(camera: Node, new_parent: Node, scene_root: Node) -> void:
+	var current := camera.get_parent()
+	if current != null:
+		current.remove_child(camera)
+	new_parent.add_child(camera, true)
+	camera.set_owner(scene_root)
+
+
+## Undo counterpart of _place_camera_under: restore the original parent, index
+## and owner.
+func _restore_camera_placement(camera: Node, old_parent: Node, old_idx: int, scene_root: Node) -> void:
+	var current := camera.get_parent()
+	if current != null:
+		current.remove_child(camera)
+	old_parent.add_child(camera, true)
+	old_parent.move_child(camera, old_idx)
+	camera.set_owner(scene_root)
 
 
 # ============================================================================

@@ -6625,6 +6625,64 @@ class TestCameraFollow2DTool:
         assert result.data["reparented"] is True
 
 
+class TestCameraFollow3DTool:
+    async def test_forwards_rig_options(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_follow_3d"
+            assert cmd["params"] == {
+                "camera_path": "/Main/Cam",
+                "target_path": "/Main/Player",
+                "offset": [0, 2, 0],
+                "distance": 5.0,
+                "margin": 0.2,
+                "collision_mask": 1,
+                "pitch_degrees": -20.0,
+                "smoothing_speed": 0.0,
+                "exclude_target": True,
+                "zero_transform": True,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/Player/CameraRig/Cam",
+                    "target_path": "/Main/Player",
+                    "rig_path": "/Main/Player/CameraRig",
+                    "rig_created": True,
+                    "distance": 5.0,
+                    "margin": 0.2,
+                    "collision_mask": 1,
+                    "pitch_degrees": -20.0,
+                    "smoothing_speed": 0.0,
+                    "damped": False,
+                    "excluded_target": True,
+                    "zero_transform": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "camera_manage",
+            {
+                "op": "follow_3d",
+                "params": {
+                    "camera_path": "/Main/Cam",
+                    "target_path": "/Main/Player",
+                    "offset": [0, 2, 0],
+                    "distance": 5.0,
+                    "pitch_degrees": -20.0,
+                    "smoothing_speed": 0.0,
+                },
+            },
+        )
+        await task
+        assert result.data["rig_created"] is True
+        assert result.data["damped"] is False
+
+
 class TestCameraGetTool:
     async def test_get_current_via_empty_path(self, mcp_stack):
         client, plugin = mcp_stack
