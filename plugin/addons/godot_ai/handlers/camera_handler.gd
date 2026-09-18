@@ -972,10 +972,7 @@ func follow_3d(params: Dictionary) -> Dictionary:
 	var old_process := false
 	var had_exclusion_intent := false
 	if not rig_created:
-		old_process = (
-			old_script == CameraFollow3D
-			and float(rig.get_meta(CameraFollow3D.META_SPEED, 0.0)) > 0.0
-		)
+		old_process = rig.is_processing()
 		had_exclusion_intent = bool(rig.get_meta(CameraFollow3D.META_EXCLUDE, false))
 
 	_undo_redo.create_action(
@@ -1019,7 +1016,9 @@ func follow_3d(params: Dictionary) -> Dictionary:
 		_undo_redo.add_do_method(rig, "set_script", CameraFollow3D)
 		## Assigning a script to a node that is already in the tree does not
 		## re-run _ready, so the engine never enables the script's _process.
-		_undo_redo.add_do_method(rig, "set_process", damped)
+		## An exclusion-only helper still needs frames to keep the runtime RID
+		## exclusion alive.
+		_undo_redo.add_do_method(rig, "set_process", true)
 		if not rig_created:
 			_undo_redo.add_undo_method(rig, "set_script", old_script)
 			_undo_redo.add_undo_method(rig, "set_process", old_process)

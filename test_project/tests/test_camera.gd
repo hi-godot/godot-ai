@@ -1214,11 +1214,19 @@ func test_follow_3d_exclusion_reapplies_and_undoes() -> void:
 	assert_true(rig != null, "camera should be parented to a SpringArm3D")
 
 	## A reloaded or instantiated scene loses the RID-only exclusion; the
-	## helper reapplies it from the persisted intent.
-	rig.clear_excluded_objects()
-	assert_false(rig.excluded_target_rid().is_valid(), "the test cleared the exclusion")
+	## helper reapplies it from the persisted intent, and clearing the set
+	## cannot make it stop reapplying.
 	rig.apply_step(0.0)
-	assert_eq(rig.excluded_target_rid(), body.get_rid(), "the helper reapplies the exclusion")
+	assert_true(
+		rig.remove_excluded_object(body.get_rid()),
+		"sanity: the helper put the target RID in the excluded set"
+	)
+	rig.clear_excluded_objects()
+	rig.apply_step(0.0)
+	assert_true(
+		rig.remove_excluded_object(body.get_rid()),
+		"the helper reapplies the exclusion after it was cleared"
+	)
 
 	## Turning the exclusion off and back on is undoable.
 	var cam_path := McpScenePath.from_node(cam, scene_root)

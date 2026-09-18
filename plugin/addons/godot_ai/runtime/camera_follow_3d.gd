@@ -13,8 +13,9 @@ extends SpringArm3D
 ## - Target exclusion. add_excluded_object() takes a runtime RID that does not
 ##   survive scene serialization, so a reloaded or instantiated scene would let
 ##   the arm collide with the target's own body. The helper reapplies the
-##   exclusion from the persisted metadata on _ready and whenever the target's
-##   RID changes.
+##   exclusion from the persisted metadata on _ready and on every processed
+##   step, so a clear_excluded_objects() call or a target that re-entered the
+##   tree self-heals.
 ##
 ## Config lives in node metadata so the handler can set it inside the same undo
 ## action that creates the rig:
@@ -30,8 +31,6 @@ const META_SPEED := "_camera_follow_speed"
 const META_PITCH := "_camera_follow_pitch"
 const META_EXCLUDE := "_camera_follow_exclude_target"
 
-var _excluded_rid: RID
-
 
 ## The rig transform a rigid follow would have: target transform with the pivot
 ## offset and pitch applied in the target's local space. Shared with the handler
@@ -42,7 +41,12 @@ static func desired_transform(target: Node3D, offset: Vector3, pitch: float) -> 
 
 
 func _ready() -> void:
-	set_process(float(get_meta(META_SPEED, 0.0)) > 0.0)
+	## Process when damping needs per-frame steps, and also for an
+	## exclusion-only rig: the exclusion is a runtime RID that must be kept in
+	## place (see _ensure_target_excluded).
+	set_process(
+		float(get_meta(META_SPEED, 0.0)) > 0.0 or bool(get_meta(META_EXCLUDE, false))
+	)
 	_ensure_target_excluded(_resolve_target())
 
 
@@ -64,15 +68,10 @@ func apply_step(delta: float) -> void:
 	global_transform = Transform3D(desired.basis, global_position.lerp(desired.origin, weight))
 
 
-## The RID the helper currently keeps out of the arm's cast, or an invalid RID
-## when no exclusion was requested. Public so callers and tests can verify the
-## runtime exclusion.
-func excluded_target_rid() -> RID:
-	return _excluded_rid
-
-
-## Re-add the target's body RID to the excluded set when the exclusion was
-## requested. add_excluded_object() is set-backed, so re-adding is idempotent.
+## Keep the target's body RID in the excluded set when the exclusion was
+## requested. The set is HashSet-backed, so re-adding is idempotent; re-adding
+## unconditionally means no cached RID can go stale after
+## clear_excluded_objects() or a target re-entering the tree.
 func _ensure_target_excluded(target: Node3D) -> void:
 	if not bool(get_meta(META_EXCLUDE, false)):
 		return
@@ -80,10 +79,8 @@ func _ensure_target_excluded(target: Node3D) -> void:
 	if body == null:
 		return
 	var rid := body.get_rid()
-	if not rid.is_valid() or rid == _excluded_rid:
-		return
-	add_excluded_object(rid)
-	_excluded_rid = rid
+	if rid.is_valid():
+		add_excluded_object(rid)
 
 
 func _resolve_target() -> Node3D:
