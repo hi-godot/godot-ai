@@ -36,12 +36,12 @@ var observed := 0
 func _process(_delta: float) -> void:
     if FileAccess.file_exists("res://_test_pre_instance_id.txt"):
         observed += 1
-    if observed >= 120:
+    if observed >= 120 and FileAccess.file_exists("res://%s"):
         var result := FileAccess.open("res://observed.txt", FileAccess.WRITE)
         result.store_string(str(observed))
         result.close()
         get_tree().quit()
-''', encoding="utf-8")
+''' % fixture.POST_UPDATE_TOOL_PROBE_FILE, encoding="utf-8")
     (project / "project.godot").write_text('''config_version=5
 [autoload]
 Driver="*res://_test_runner_driver.gd"
