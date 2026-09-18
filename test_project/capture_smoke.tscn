@@ -2,7 +2,7 @@
 
 ; CI game-capture smoke-test scene.
 ;
-; Four quadrants and a midgray patch fill the HDR 2D game window so script/ci-game-capture-smoke
+; Four quadrants and a midgray patch fill the game window so script/ci-game-capture-smoke
 ; can sample the centre of each quadrant and assert that editor_screenshot
 ; (source="game") actually returned the game's framebuffer and not the editor
 ; UI. Midgray also detects missing linear-to-sRGB conversion.

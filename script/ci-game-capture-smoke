@@ -7,7 +7,7 @@ rendering driver, typically under xvfb-run on Linux) through the MCP
 streamable-HTTP transport:
 
   1. wait for the plugin's WebSocket session to register
-  2. open res://capture_smoke.tscn (HDR 2D quadrants and a midgray patch)
+  2. open res://capture_smoke.tscn (color quadrants and a midgray patch)
   3. run the project in that scene
   4. poll editor_state until is_playing=true AND game_capture_ready=true
   5. capture-and-check loop until CAPTURE_BUDGET_SEC elapses:
@@ -68,19 +68,15 @@ HEADERS = {
 
 SCENE_PATH = "res://capture_smoke.tscn"
 ## The gray patch detects linear HDR pixels encoded directly as sRGB (#1058).
-## (label, sample fraction x, sample fraction y, expected RGB)
+## Broad primary-color tolerance catches wrong-source images; midgray tests gamma.
+## (label, sample fraction x, sample fraction y, expected RGB, tolerance)
 QUADRANTS = [
-    ("red", 0.25, 0.25, (255, 0, 0)),
-    ("green", 0.75, 0.25, (0, 255, 0)),
-    ("blue", 0.25, 0.75, (0, 0, 255)),
-    ("white", 0.75, 0.75, (255, 255, 255)),
-    ("gray", 0.5, 0.5, (127, 127, 127)),
+    ("red", 0.25, 0.25, (255, 0, 0), 40),
+    ("green", 0.75, 0.25, (0, 255, 0), 40),
+    ("blue", 0.25, 0.75, (0, 0, 255), 40),
+    ("white", 0.75, 0.75, (255, 255, 255), 40),
+    ("gray", 0.5, 0.5, (127, 127, 127), 1),
 ]
-## Generous tolerance: default Godot 2D rendering is gamma-correct and the
-## "pure red/green/blue" ColorRects come back as slightly darkened sRGB after
-## the framebuffer's linear → sRGB conversion. 40/255 easily covers that
-## while still catching "returned editor UI instead of game pixels".
-COLOR_TOLERANCE = 40
 ## Total wall-clock budget for the capture-and-check retry loop, and the
 ## pause between attempts. Sized against the macOS runner evidence: first
 ## presents have been observed lagging tens of seconds behind the helper's
@@ -269,8 +265,10 @@ def _wait_for_game_capture_ready(
     )
 
 
-def _within_tolerance(a: tuple[int, int, int], b: tuple[int, int, int]) -> bool:
-    return all(abs(x - y) <= COLOR_TOLERANCE for x, y in zip(a, b))
+def _within_tolerance(
+    actual: tuple[int, int, int], expected: tuple[int, int, int], tolerance: int,
+) -> bool:
+    return all(abs(channel - target) <= tolerance for channel, target in zip(actual, expected))
 
 
 def _dump_diagnostics(session_id: str) -> None:
@@ -313,7 +311,9 @@ def _dump_diagnostics(session_id: str) -> None:
         print(f"[diag] logs_read failed: {exc}")
 
 
-def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes | None]:
+def _capture_attempt(
+    session_id: str, request_id: int, max_resolution: int = 0,
+) -> tuple[list[str], bytes | None]:
     """One capture-and-check pass. Returns (failures, png_bytes).
 
     An empty failures list means the frame passed every color check.
@@ -330,7 +330,7 @@ def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes
     meta = _tool_call(
         session_id,
         "editor_screenshot",
-        {"source": "game", "include_image": False, "max_resolution": 0},
+        {"source": "game", "include_image": False, "max_resolution": max_resolution},
         request_id,
         timeout=40,
     )
@@ -348,7 +348,9 @@ def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes
         "method": "tools/call",
         "params": {
             "name": "editor_screenshot",
-            "arguments": {"source": "game", "include_image": True, "max_resolution": 0},
+            "arguments": {
+                "source": "game", "include_image": True, "max_resolution": max_resolution,
+            },
         },
     }
     resp = _post(session_id, body, timeout=40)
@@ -371,21 +373,17 @@ def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes
     img = Image.open(io.BytesIO(png)).convert("RGB")
     print(f"Got PNG {img.width}x{img.height} ({len(png)} bytes)")
 
-    if img.width < 64 or img.height < 64:
+    if max(img.size) < 64 or (max_resolution and max(img.size) != max_resolution):
         return ([f"image too small to sample: {img.width}x{img.height}"], png)
 
     failures: list[str] = []
     samples: list[tuple[int, int, int]] = []
-    for label, fx, fy, expected in QUADRANTS:
+    for label, fx, fy, expected, tolerance in QUADRANTS:
         x = int(img.width * fx)
         y = int(img.height * fy)
         actual = img.getpixel((x, y))
         samples.append(actual)
-        match = (
-            all(abs(x - y) <= 1 for x, y in zip(actual, expected))
-            if label == "gray"
-            else _within_tolerance(actual, expected)
-        )
+        match = _within_tolerance(actual, expected, tolerance)
         symbol = "OK" if match else "FAIL"
         print(f"  [{symbol}] {label:>6} @ ({x}, {y}): got {actual}, expected ~{expected}")
         if not match:
@@ -414,6 +412,49 @@ def _write_diag_artifacts(attempt_log: list[str], last_png: bytes | None) -> Non
         print(f"(diag) failed to write artifacts: {exc}", file=sys.stderr)
 
 
+def _check_editor_capture(session_id: str, history: list[str]) -> None:
+    properties = _tool_call(session_id, "node_get_properties", {
+        "path": "/Root", "fields": ["capture_metadata"],
+    }, 20)
+    metadata = next((p["value"] for p in properties.get("properties", [])
+                     if p["name"] == "capture_metadata"), {})
+    history.append(f"Editor rendering: {metadata}")
+    print(history[-1])
+    expected_hdr = os.environ.get("CAPTURE_HDR_2D") == "1"
+    if metadata.get("error") or metadata.get("hdr") is not expected_hdr:
+        raise RuntimeError(f"Editor HDR fixture mismatch: {metadata}")
+    linear = metadata.get("renderer") in {"forward_plus", "mobile"}
+    if expected_hdr and not linear:
+        raise RuntimeError(f"Editor HDR coverage requires a linear renderer: {metadata}")
+    expected_raw = 0.214 if expected_hdr and linear else 0.5
+    if abs(metadata.get("raw_gray", -1) - expected_raw) > 0.015:
+        raise RuntimeError(f"Editor gray patch did not render correctly: {metadata}")
+    for limit in (0, 64):
+        response = _post(session_id, {
+            "jsonrpc": "2.0", "id": 21 + limit, "method": "tools/call",
+            "params": {"name": "editor_screenshot", "arguments": {
+                "source": "viewport_2d", "max_resolution": limit,
+            }},
+        }, timeout=40)
+        blocks = response.get("result", {}).get("content", [])
+        image_block = next((b for b in blocks if b.get("type") == "image"), None)
+        if image_block is None:
+            raise RuntimeError(f"Editor screenshot has no image: {response}")
+        png = base64.b64decode(image_block["data"])
+        img = Image.open(io.BytesIO(png)).convert("RGB")
+        if limit and max(img.size) != limit:
+            raise RuntimeError(f"Editor screenshot size {img.size} exceeds cap {limit}")
+        sample = (int(metadata["sample_x"] * img.width), int(metadata["sample_y"] * img.height))
+        pixel = img.getpixel(sample)
+        history.append(f"Editor capture limit={limit}: size={img.size}, gray={pixel}")
+        print(history[-1])
+        os.makedirs(DIAG_DIR, exist_ok=True)
+        with open(os.path.join(DIAG_DIR, f"editor-{limit}.png"), "wb") as artifact:
+            artifact.write(png)
+        if not _within_tolerance(pixel, (127, 127, 127), 1):
+            raise RuntimeError(f"Editor screenshot lost display gray: {pixel}")
+
+
 def main() -> int:
     print(f"Connecting to MCP server at {SERVER_URL}")
     session_id = _initialize_session()
@@ -431,6 +472,7 @@ def main() -> int:
     attempt_log: list[str] = []
     last_png: bytes | None = None
     try:
+        _check_editor_capture(session_id, attempt_log)
         print("Running project (current scene)")
         ## 60s, not 20 (#673): the reply waits on the editor spawning a
         ## whole game process under a software rasterizer, and a busy
@@ -438,9 +480,24 @@ def main() -> int:
         ## exits the moment the game is up, so the higher ceiling costs
         ## nothing on healthy runs. Inside the try so a timeout here
         ## still dumps diagnostics and writes the diag artifacts.
-        _tool_call(session_id, "project_run", {"mode": "current"}, 11, timeout=60)
+        _tool_call(session_id, "project_run",
+                   {"mode": "current", "autosave": False}, 11, timeout=60)
 
         _wait_for_game_capture_ready(session_id, history=attempt_log)
+
+        rendering = _tool_call(session_id, "editor_manage", {
+            "op": "game_eval", "params": {"code": (
+                'return {"hdr": get_tree().root.use_hdr_2d, '
+                '"renderer": RenderingServer.get_current_rendering_method()}'
+            )},
+        }, 12).get("result", {})
+        attempt_log.append(f"Game rendering: {rendering}")
+        print(attempt_log[-1])
+        expected_hdr = os.environ.get("CAPTURE_HDR_2D") == "1"
+        if rendering.get("hdr") is not expected_hdr:
+            raise RuntimeError(f"Expected HDR 2D={expected_hdr}, observed {rendering}")
+        if expected_hdr and rendering.get("renderer") not in {"forward_plus", "mobile"}:
+            raise RuntimeError(f"HDR coverage requires a linear renderer: {rendering}")
 
         deadline = time.monotonic() + CAPTURE_BUDGET_SEC
         attempt = 0
@@ -450,6 +507,8 @@ def main() -> int:
             print(f"Capturing source='game' (attempt {attempt})")
             try:
                 failures, png = _capture_attempt(session_id, 100 + attempt * 10)
+                if not failures:
+                    failures, png = _capture_attempt(session_id, 102 + attempt * 10, 64)
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 failures, png = ([f"transport error: {exc}"], None)
             if not failures:
