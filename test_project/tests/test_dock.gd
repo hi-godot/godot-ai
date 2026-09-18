@@ -2681,3 +2681,33 @@ func test_client_transport_tag_tracks_descriptor_shape() -> void:
 	assert_eq(McpDockScript._client_transport_tag("codex"), "attach",
 		"TOML COMMAND_ARRAY clients tag attach too")
 	assert_eq(McpDockScript._client_transport_tag("__missing_client__"), "")
+
+
+func test_windows_ipv6_only_allow_hosts_cannot_apply() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows-only bind restriction")
+		return
+	_dock._build_ui()
+	var spy := _SettingsApplySpy.new()
+	_dock.settings_apply_requested.connect(spy.on_apply)
+	_dock._allow_hosts_edit.text = "fd00::/8"
+	_dock._refresh_allow_hosts_ui_state()
+	assert_true(_dock._allow_hosts_apply_btn.disabled)
+	assert_true(_dock._allow_hosts_hint.visible)
+	assert_true(_dock._allow_hosts_hint.text.contains("IPv6-only"))
+	_dock._on_allow_hosts_apply()
+	assert_true(spy.captured.is_empty(), "unsupported remote access must not save or restart")
+
+
+func test_unsupported_remote_access_heading_does_not_claim_server_exited() -> void:
+	var dock := McpDockScript.new()
+	dock._build_ui()
+	var manager := McpServerLifecycleManager.new()
+	manager.configure({"automatic_effects": false})
+	manager._block_without_effect("unsupported_remote_access", "Use an IPv4 allowlist or disable remote access.")
+	dock.present_lifecycle_snapshot(manager.get_status_dict())
+	dock.present_transport_snapshot({"connected": false, "status": {"phase": "blocked"}})
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Unsupported remote access configuration")
+	assert_eq(dock._status_icon.color, Color.RED)
+	dock.free()

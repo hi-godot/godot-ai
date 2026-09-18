@@ -663,8 +663,8 @@ def test_bind_host_for_networks_ipv4_only() -> None:
     assert bind_host_for_networks(parse_allow_hosts(["192.168.1.0/24"])) == "0.0.0.0"
 
 
-def test_bind_host_for_networks_ipv6_only() -> None:
-    # An IPv6-only allowlist binds "::" (no IPv4 range to serve).
+def test_bind_host_for_networks_ipv6_only(monkeypatch) -> None:
+    monkeypatch.setattr("godot_ai.transport.origin_guard.sys.platform", "linux")
     assert bind_host_for_networks(parse_allow_hosts(["fd00::/8"])) == "::"
 
 
@@ -738,3 +738,22 @@ def test_peer_ip_allowed_unwraps_ipv4_mapped_ipv6() -> None:
     assert peer_ip_allowed("::ffff:127.0.0.1", nets) is True  # mapped loopback
     assert peer_ip_allowed("::ffff:192.168.1.50", nets) is True  # mapped in-network
     assert peer_ip_allowed("::ffff:10.0.0.5", nets) is False  # mapped out-of-network
+
+
+@pytest.mark.parametrize(
+    "values", [["fd00::/8"], [" ::1, fd00::/8 ", "2001:db8::/32"], ["::ffff:127.0.0.1"]],
+)
+def test_windows_rejects_ipv6_only_bind(monkeypatch, values):
+    monkeypatch.setattr("godot_ai.transport.origin_guard.sys.platform", "win32")
+    with pytest.raises(ValueError, match="IPv6-only.*unsupported on Windows"):
+        bind_host_for_networks(parse_allow_hosts(values))
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+@pytest.mark.parametrize("values, expected", [
+    ([], None), ([" , "], None), (["192.168.1.0/24"], "0.0.0.0"),
+    (["fd00::/8, 192.168.1.0/24", "::1"], "0.0.0.0"),
+])
+def test_supported_bind_families_are_unchanged(monkeypatch, platform, values, expected):
+    monkeypatch.setattr("godot_ai.transport.origin_guard.sys.platform", platform)
+    assert bind_host_for_networks(parse_allow_hosts(values)) == expected

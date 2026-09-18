@@ -486,3 +486,22 @@ def test_run_with_reload_rejects_non_http_transport():
             ws_port=9500,
             capabilities=TEST_TRANSPORT_CAPABILITIES,
         )
+
+
+@pytest.mark.parametrize("transport", ["sse", "streamable-http"])
+@pytest.mark.parametrize("reload", [False, True])
+def test_windows_ipv6_rejection_reaches_startup_report(monkeypatch, transport, reload):
+    from godot_ai import runtime_info
+
+    reported = []
+    monkeypatch.setattr("godot_ai.transport.origin_guard.sys.platform", "win32")
+    monkeypatch.setattr(runtime_info, "install_startup_report", lambda _path: None)
+    monkeypatch.setattr(runtime_info, "report_startup_failure", reported.append)
+    args = ["--transport", transport, "--allow-host", "fd00::/8"]
+    if reload:
+        args.append("--reload")
+    with pytest.raises(ValueError, match="Use an IPv4 allowlist or disable remote access"):
+        godot_ai.main(args)
+    assert len(reported) == 1
+    assert isinstance(reported[0], ValueError)
+    assert "#1072" in str(reported[0])

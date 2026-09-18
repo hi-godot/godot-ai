@@ -827,6 +827,9 @@ func _update_status() -> void:
 	elif bool(server_status.get("handoff_retry_pending", false)):
 		status_text = "Recovering after update…"
 		status_color = COLOR_AMBER
+	elif str(server_status.get("episode_reason", "")) == "unsupported_remote_access":
+		status_text = "Unsupported remote access configuration"
+		status_color = Color.RED
 	elif state == ServerStateScript.CRASHED:
 		var exit_ms: int = server_status.get("exit_ms", 0)
 		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)
@@ -2448,25 +2451,17 @@ func _on_allow_hosts_text_changed(_new_text: String) -> void:
 func _refresh_allow_hosts_ui_state() -> void:
 	if _allow_hosts_edit == null or _allow_hosts_apply_btn == null:
 		return
-	var invalid := McpAllowHosts.invalid_tokens(_allow_hosts_edit.text)
-	if invalid.is_empty():
-		_allow_hosts_hint.visible = false
-	else:
-		## Name the accepted syntax in the hint — matches the server's
-		## `parse_allow_hosts` (CIDR / bare IP, comma-separated).
-		_allow_hosts_hint.text = (
-			"Invalid entries (must be a CIDR like 192.168.1.0/24 or a bare IP, comma-separated): %s"
-			% ", ".join(invalid)
-		)
-		_allow_hosts_hint.visible = true
-	_allow_hosts_apply_btn.disabled = not _allow_hosts_is_dirty() or not invalid.is_empty()
+	var error := McpAllowHosts.configuration_error(_allow_hosts_edit.text)
+	_allow_hosts_hint.text = error
+	_allow_hosts_hint.visible = not error.is_empty()
+	_allow_hosts_apply_btn.disabled = not _allow_hosts_is_dirty() or not error.is_empty()
 
 
 func _on_allow_hosts_apply() -> void:
 	if _allow_hosts_edit == null:
 		return
 	var normalized := McpAllowHosts.normalize(_allow_hosts_edit.text)
-	if not McpAllowHosts.invalid_tokens(normalized).is_empty():
+	if not McpAllowHosts.configuration_error(normalized).is_empty():
 		return
 	_allow_hosts_saved = normalized
 	_allow_hosts_edit.text = normalized

@@ -103,6 +103,11 @@ func start_server() -> void:
 
 func _begin_start_episode(existing_id := 0, probe := true) -> void:
 	_cancel_effect()
+	var config_error := McpAllowHosts.configuration_error(str(_plan.get("allow_hosts", "")))
+	if not config_error.is_empty():
+		_block_without_effect("unsupported_remote_access", config_error)
+		startup_finished.emit("blocked:unsupported_remote_access")
+		return
 	_replacement_authorization = null
 	_transport = null
 	if existing_id <= 0:
@@ -1627,6 +1632,7 @@ func get_status_dict() -> Dictionary:
 	return {
 		"episode_id": int(_episode.get("id", 0)),
 		"episode_state": state,
+		"episode_reason": reason,
 		"phase": str(_episode.get("phase", "")),
 		"ready_kind": str(_episode.get("ready_kind", "")),
 		"state": _dock_state(state, reason),

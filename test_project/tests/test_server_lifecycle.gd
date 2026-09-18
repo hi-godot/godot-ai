@@ -938,3 +938,21 @@ func test_launch_reached_port_wait_reads_only_this_launch_s_wait_phase() -> void
 	assert_false(Lifecycle.launch_reached_port_wait(path, "launch-1"))
 	DirAccess.remove_absolute(path)
 	assert_false(Lifecycle.launch_reached_port_wait("", "launch-1"))
+
+
+func test_windows_ipv6_only_plan_blocks_before_effects() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows-only bind restriction")
+		return
+	var manager := _manager({"allow_hosts": "fd00::/8"})
+	var effects: Array = []
+	var finished: Array = []
+	manager.startup_finished.connect(func(path): finished.append(path))
+	manager.effect_requested.connect(func(_id, kind, _payload): effects.append(kind))
+	manager.start_server()
+	var episode := manager.episode_snapshot()
+	assert_eq(episode.state, Lifecycle.BLOCKED)
+	assert_eq(episode.reason, "unsupported_remote_access")
+	assert_true(str(episode.message).contains("clear Allow remote hosts"))
+	assert_true(effects.is_empty(), "unsupported endpoint must not probe or spawn")
+	assert_eq(finished, ["blocked:unsupported_remote_access"])
