@@ -844,7 +844,10 @@ func _update_status() -> void:
 		var conflict_port: int = int(server_status.get("conflict_port", 0))
 		if conflict_port <= 0:
 			conflict_port = ClientConfigurator.http_port()
-		status_text = "Port %d held by another process" % conflict_port
+		status_text = (
+			"Windows port discovery unavailable" if str(server_status.get("episode_reason", "")) == "port_occupancy_unknown"
+			else "Port %d held by another process" % conflict_port
+		)
 		status_color = Color.RED
 	elif state == ServerStateScript.NO_COMMAND:
 		status_text = "No server command found"

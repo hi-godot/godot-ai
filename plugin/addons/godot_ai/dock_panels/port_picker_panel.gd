@@ -87,10 +87,9 @@ func seed_suggested_ports(conflict_port := 0, occupancy: Dictionary = {}) -> voi
 		occupancy = PortResolver.windows_listener_snapshot()
 	var http := ClientConfigurator.http_port()
 	var ws := ClientConfigurator.ws_port()
-	var use_snapshot := OS.get_name() == "Windows" and port_in_use_probe == Callable(PortResolver, "is_port_in_use")
 	var http_occupied: bool
 	var ws_occupied: bool
-	if use_snapshot:
+	if OS.get_name() == "Windows":
 		http_occupied = PortResolver.windows_port_occupancy(http, occupancy) != PortResolver.PortOccupancy.FREE
 		ws_occupied = PortResolver.windows_port_occupancy(ws, occupancy) != PortResolver.PortOccupancy.FREE
 	else:

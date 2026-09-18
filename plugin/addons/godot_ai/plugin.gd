@@ -1748,8 +1748,8 @@ func restart_or_start_managed_server() -> bool:
 	if OS.get_name() == "Windows":
 		var occupancy := PortResolver.windows_port_occupancy(port)
 		if occupancy == PortResolver.PortOccupancy.UNKNOWN:
-			push_warning("MCP | cannot verify listening ports on Windows; retry when port discovery is available")
-			return false
+			_lifecycle.start_server()
+			return true
 		occupied = occupancy == PortResolver.PortOccupancy.OCCUPIED
 	else:
 		occupied = PortResolver.is_port_in_use(port)

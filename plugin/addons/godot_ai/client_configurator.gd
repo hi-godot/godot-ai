@@ -160,6 +160,8 @@ static func prepare_major_upgrade_endpoints(from_version: String, to_version: St
 		return {"ok": false, "error": "No independent HTTP/WebSocket port pair was available for this major upgrade."}
 	if OS.get_name() == "Windows":
 		occupancy = PortResolver.windows_listener_snapshot()
+		if not occupancy.known:
+			return {"ok": false, "error": "Windows could not query listening ports; retry endpoint selection."}
 	for port in selected:
 		var available: bool
 		if OS.get_name() == "Windows":
