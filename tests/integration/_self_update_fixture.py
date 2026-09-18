@@ -626,6 +626,7 @@ class AttachedAgent:
         capability_dir = self.capability_dir
         deadline = time.monotonic() + 120
         last_receipt_error = ""
+        nonce_mismatch_seen = False
         while True:
             pre_receipt = self.project_dir / PRE_INSTANCE_ID_FILE
             capability = read_capabilities(self.http_port, capability_dir)
@@ -636,9 +637,13 @@ class AttachedAgent:
                 last_receipt_error = f"{type(exc).__name__} (errno={exc.errno})"
             if capability is not None and expected_nonce == capability.instance_nonce:
                 break
+            if capability is not None and expected_nonce:
+                nonce_mismatch_seen = True
             if self._stop.is_set() or time.monotonic() > deadline:
                 detail = (f"; last pre-instance receipt read: {last_receipt_error}"
                           if last_receipt_error else "")
+                if nonce_mismatch_seen:
+                    detail += "; capability seen but pre-instance nonce mismatched"
                 raise AssertionError("server A never published matching capabilities" + detail)
             await asyncio.sleep(0.25)
         transport = StdioTransport(
@@ -1068,14 +1073,14 @@ func _process(_delta: float) -> void:
 \t\t\t\treturn
 \t\t\tvar pre_file := FileAccess.open(PRE_ID_PATH, FileAccess.WRITE)
 \t\t\tif pre_file == null:
-\t\t\t\t_fail(17, "pre-instance receipt could not be opened: "
+\t\t\t\t_fail(30, "pre-instance receipt could not be opened: "
 \t\t\t\t\t+ error_string(FileAccess.get_open_error()))
 \t\t\t\treturn
 \t\t\tpre_file.store_string(pre_id)
 \t\t\tvar write_error := pre_file.get_error()
 \t\t\tpre_file.close()
 \t\t\tif write_error != OK:
-\t\t\t\t_fail(17, "pre-instance receipt could not be written: " + error_string(write_error))
+\t\t\t\t_fail(31, "pre-instance receipt could not be written: " + error_string(write_error))
 \t\t\t\treturn
 \t\t\t_pre_instance_id = pre_id
 \t\tif AGENT_GATE and not FileAccess.file_exists(AGENT_GATE_PATH):

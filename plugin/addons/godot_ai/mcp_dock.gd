@@ -827,7 +827,7 @@ func _update_status() -> void:
 	elif bool(server_status.get("handoff_retry_pending", false)):
 		status_text = "Recovering after update…"
 		status_color = COLOR_AMBER
-	elif str(server_status.get("episode_reason", "")) == "unsupported_remote_access":
+	elif state == ServerStateScript.UNSUPPORTED_CONFIG:
 		status_text = "Unsupported remote access configuration"
 		status_color = Color.RED
 	elif state == ServerStateScript.CRASHED:
@@ -983,6 +983,8 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 	## problem; don't repeat it here. This copy answers "what do I do?".
 	var port := ClientConfigurator.http_port()
 	match state:
+		ServerStateScript.UNSUPPORTED_CONFIG:
+			return str(server_status.get("message", "Use an IPv4 allowlist or clear Allow remote hosts, then reload the plugin."))
 		ServerStateScript.PORT_EXCLUDED:
 			return "Windows (Hyper-V / WSL2 / Docker) reserved port %d. Pick a free port or try `net stop winnat; net start winnat` in an admin shell." % port
 		ServerStateScript.INCOMPATIBLE:

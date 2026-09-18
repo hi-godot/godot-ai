@@ -121,7 +121,9 @@ def parse_allow_hosts(values: Iterable[str]) -> list[IPNetwork]:
     return networks
 
 
-def bind_host_for_networks(networks: Sequence[IPNetwork] | None) -> str | None:
+def bind_host_for_networks(
+    networks: Sequence[IPNetwork] | None, *, platform: str = sys.platform,
+) -> str | None:
     """HTTP bind address that exposes the transport to ``networks`` (issue #421).
 
     Returns ``None`` when no networks are named so the caller keeps its
@@ -145,7 +147,7 @@ def bind_host_for_networks(networks: Sequence[IPNetwork] | None) -> str | None:
         return None
     if any(isinstance(net, ipaddress.IPv4Network) for net in networks):
         return "0.0.0.0"  # noqa: S104 — opt-in; the guard still gates every request
-    if sys.platform == "win32":
+    if platform == "win32":
         raise ValueError(
             "IPv6-only --allow-host is unsupported on Windows: the editor and attach "
             "bridge require IPv4 loopback. Use an IPv4 allowlist or disable remote "

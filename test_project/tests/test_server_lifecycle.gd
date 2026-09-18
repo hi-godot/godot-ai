@@ -956,3 +956,25 @@ func test_windows_ipv6_only_plan_blocks_before_effects() -> void:
 	assert_true(str(episode.message).contains("clear Allow remote hosts"))
 	assert_true(effects.is_empty(), "unsupported endpoint must not probe or spawn")
 	assert_eq(finished, ["blocked:unsupported_remote_access"])
+
+
+func test_unsupported_restart_clears_prior_authority_before_refusal() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows-only bind restriction")
+		return
+	var manager := _manager()
+	_complete_adoption(manager)
+	manager._replacement_authorization = Authority.ReplacementAuthorization.new(
+		INSTANCE, VERSION, 8000, Time.get_ticks_msec() + 60000)
+	assert_false(manager.authority_snapshot().transport.is_empty())
+	assert_true(manager.authority_snapshot().replacement_available)
+	manager._plan["allow_hosts"] = "fd00::/8"
+	var effects: Array = []
+	manager.effect_requested.connect(func(_id, kind, _payload): effects.append(kind))
+	manager.start_server()
+	assert_eq(manager.authority_snapshot().transport, {})
+	assert_false(manager.authority_snapshot().replacement_available)
+	assert_eq(manager._probe_current_transport(), {})
+	assert_true(manager.is_connection_blocked())
+	assert_eq(manager.get_status_dict().state, McpServerState.UNSUPPORTED_CONFIG)
+	assert_true(effects.is_empty(), "unsupported restart must not probe or spawn")

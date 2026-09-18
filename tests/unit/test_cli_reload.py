@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 import fastmcp
@@ -492,9 +493,13 @@ def test_run_with_reload_rejects_non_http_transport():
 @pytest.mark.parametrize("reload", [False, True])
 def test_windows_ipv6_rejection_reaches_startup_report(monkeypatch, transport, reload):
     from godot_ai import runtime_info
+    from godot_ai.transport import origin_guard
 
     reported = []
-    monkeypatch.setattr("godot_ai.transport.origin_guard.sys.platform", "win32")
+    monkeypatch.setattr(
+        origin_guard, "bind_host_for_networks",
+        partial(origin_guard.bind_host_for_networks, platform="win32"),
+    )
     monkeypatch.setattr(runtime_info, "install_startup_report", lambda _path: None)
     monkeypatch.setattr(runtime_info, "report_startup_failure", reported.append)
     args = ["--transport", transport, "--allow-host", "fd00::/8"]

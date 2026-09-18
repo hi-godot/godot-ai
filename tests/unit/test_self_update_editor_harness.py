@@ -271,22 +271,23 @@ async def test_other_receipt_io_failure_is_not_retried(monkeypatch, receipt_agen
 async def test_native_receipt_sharing_violation_retries_until_handle_released(
     monkeypatch, receipt_agent,
 ):
-    import win32con
-    import win32file
+    import _winapi
 
     agent, nonce, entered = receipt_agent
     receipt = agent.project_dir / fixture.PRE_INSTANCE_ID_FILE
     receipt.write_text(nonce, encoding="utf-8")
-    handle = win32file.CreateFile(
-        str(receipt), win32con.GENERIC_READ | win32con.GENERIC_WRITE,
-        0, None, win32con.OPEN_EXISTING, 0, None,
+    handle = _winapi.CreateFile(
+        str(receipt), _winapi.GENERIC_READ | _winapi.GENERIC_WRITE,
+        0, 0, _winapi.OPEN_EXISTING, 0, 0,
     )
     sleeps = []
 
     async def sleep(seconds):
         assert entered == []
+        nonlocal handle
         sleeps.append(seconds)
-        handle.Close()
+        _winapi.CloseHandle(handle)
+        handle = None
 
     monkeypatch.setattr(fixture.asyncio, "sleep", sleep)
     try:
@@ -294,6 +295,34 @@ async def test_native_receipt_sharing_violation_retries_until_handle_released(
             receipt.read_text(encoding="utf-8")
         await agent._poll()
     finally:
-        handle.Close()
+        if handle is not None:
+            _winapi.CloseHandle(handle)
     assert sleeps == [0.25]
     assert entered == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("record_present", [True, False])
+async def test_receipt_timeout_reports_nonce_mismatch_without_secrets(
+    monkeypatch, receipt_agent, record_present,
+):
+    agent, nonce, entered = receipt_agent
+    now = [0.0]
+    stale_nonce = "private-stale-nonce"
+    (agent.project_dir / fixture.PRE_INSTANCE_ID_FILE).write_text(stale_nonce, encoding="utf-8")
+    if not record_present:
+        monkeypatch.setattr(fixture, "read_capabilities", lambda *_args: None)
+
+    async def sleep(_seconds):
+        now[0] += 61
+
+    monkeypatch.setattr(fixture.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fixture.asyncio, "sleep", sleep)
+    with pytest.raises(AssertionError, match="never published matching capabilities") as failure:
+        await agent._poll()
+    message = str(failure.value)
+    assert ("capability seen but pre-instance nonce mismatched" in message) is record_present
+    assert stale_nonce not in message
+    assert nonce not in message
+    assert now[0] == 122
+    assert entered == []
