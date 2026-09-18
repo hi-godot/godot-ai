@@ -343,6 +343,11 @@ func _capture_and_reply(
 		_reply_error(request_id, "Captured an empty image from game viewport")
 		return
 
+	# Compatibility renders HDR 2D in sRGB; its float image needs no transfer conversion.
+	if viewport.use_hdr_2d and RenderingServer.get_current_rendering_method() != "gl_compatibility":
+		image.convert(Image.FORMAT_RGBA8)
+		image.linear_to_srgb()
+
 	var encoded: Dictionary = ScreenshotEncode.downscale_and_encode(image, max_resolution)
 	var frames_drawn := Engine.get_frames_drawn()
 	var stale := frames_drawn <= frames_at_request

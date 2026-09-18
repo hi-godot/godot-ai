@@ -7,13 +7,13 @@ rendering driver, typically under xvfb-run on Linux) through the MCP
 streamable-HTTP transport:
 
   1. wait for the plugin's WebSocket session to register
-  2. open res://capture_smoke.tscn (four colored quadrants)
+  2. open res://capture_smoke.tscn (HDR 2D quadrants and a midgray patch)
   3. run the project in that scene
   4. poll editor_state until is_playing=true AND game_capture_ready=true
   5. capture-and-check loop until CAPTURE_BUDGET_SEC elapses:
      call editor_screenshot(source="game"), decode the returned PNG,
      sample the centre of each quadrant, and pass when every sample
-     matches red / green / blue / white within tolerance
+     matches its expected sRGB color within tolerance
   6. stop the project
 
 The retry loop (not a fixed settle sleep) is deliberate: on GitHub's
@@ -67,12 +67,14 @@ HEADERS = {
 }
 
 SCENE_PATH = "res://capture_smoke.tscn"
+## The gray patch detects linear HDR pixels encoded directly as sRGB (#1058).
 ## (label, sample fraction x, sample fraction y, expected RGB)
 QUADRANTS = [
     ("red", 0.25, 0.25, (255, 0, 0)),
     ("green", 0.75, 0.25, (0, 255, 0)),
     ("blue", 0.25, 0.75, (0, 0, 255)),
     ("white", 0.75, 0.75, (255, 255, 255)),
+    ("gray", 0.5, 0.5, (127, 127, 127)),
 ]
 ## Generous tolerance: default Godot 2D rendering is gamma-correct and the
 ## "pure red/green/blue" ColorRects come back as slightly darkened sRGB after
@@ -314,7 +316,7 @@ def _dump_diagnostics(session_id: str) -> None:
 def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes | None]:
     """One capture-and-check pass. Returns (failures, png_bytes).
 
-    An empty failures list means the frame passed every quadrant check.
+    An empty failures list means the frame passed every color check.
     Bridge errors (screenshot timeouts, not-live replies) come back as
     failure strings rather than raising so the caller's retry loop treats
     them the same as a blank frame — on slow runners they are the same
@@ -379,14 +381,18 @@ def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes
         y = int(img.height * fy)
         actual = img.getpixel((x, y))
         samples.append(actual)
-        match = _within_tolerance(actual, expected)
+        match = (
+            all(abs(x - y) <= 1 for x, y in zip(actual, expected))
+            if label == "gray"
+            else _within_tolerance(actual, expected)
+        )
         symbol = "OK" if match else "FAIL"
         print(f"  [{symbol}] {label:>6} @ ({x}, {y}): got {actual}, expected ~{expected}")
         if not match:
             failures.append(f"{label} at ({x}, {y}): got {actual}, expected {expected}")
 
     if failures and len(set(samples)) == 1:
-        ## All four quadrants identical: the game presented a frame but the
+        ## All color samples identical: the game presented a frame but the
         ## scene hasn't drawn yet (Godot's clear color) — the signature
         ## pre-first-present blank, worth naming in the log.
         failures.append(
