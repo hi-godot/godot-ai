@@ -175,3 +175,125 @@ async def test_attached_agent_uses_python_and_the_editors_isolated_environment(
         assert captured["env"][name] == value
     assert captured["env"]["GODOT_AI_DISABLE_TELEMETRY"] == "true"
     assert captured["env"]["ATTACHED_AGENT_INHERITED_SENTINEL"] == "preserved"
+
+
+@pytest.fixture
+def receipt_agent(monkeypatch, tmp_path):
+    import fastmcp
+    from fastmcp.client import transports
+
+    agent = fixture.AttachedAgent(tmp_path, 18969, 19969, capability_dir=tmp_path, environment={})
+    capability = CapabilityRecord("h" * 64, "a" * 64, "b" * 32)
+    monkeypatch.setattr(fixture, "read_capabilities", lambda *_args: capability)
+    entered = []
+
+    class Client:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            entered.append(True)
+            agent._stop.set()
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+    monkeypatch.setattr(fastmcp, "Client", Client)
+    monkeypatch.setattr(transports, "StdioTransport", lambda **_kwargs: object())
+    return agent, capability.instance_nonce, entered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [FileNotFoundError(2, "absent"), PermissionError(13, "sharing")])
+async def test_receipt_retry_requires_matching_nonce(monkeypatch, receipt_agent, error):
+    agent, nonce, entered = receipt_agent
+    attempts = iter([error, "", "stale", nonce[:8], nonce])
+    sleeps = []
+
+    def read(_path, **_kwargs):
+        result = next(attempts)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    async def sleep(seconds):
+        assert entered == []
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(fixture.asyncio, "sleep", sleep)
+    await agent._poll()
+    assert entered == [True]
+    assert sleeps == [0.25] * 4
+
+
+@pytest.mark.asyncio
+async def test_persistent_receipt_denial_fails_at_original_deadline(monkeypatch, receipt_agent):
+    agent, _nonce, entered = receipt_agent
+    now = [0.0]
+    attempts = []
+
+    def read(_path, **_kwargs):
+        attempts.append(now[0])
+        raise PermissionError(13, "private path and content must not leak")
+
+    async def sleep(_seconds):
+        now[0] += 61
+
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(fixture.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fixture.asyncio, "sleep", sleep)
+    expected = (r"matching capabilities; last pre-instance receipt read: "
+                r"PermissionError \(errno=13\)")
+    with pytest.raises(AssertionError, match=expected) as failure:
+        await agent._poll()
+    assert "private" not in str(failure.value)
+    assert attempts == [0, 61, 122]
+    assert entered == []
+
+
+@pytest.mark.asyncio
+async def test_other_receipt_io_failure_is_not_retried(monkeypatch, receipt_agent):
+    agent, _nonce, entered = receipt_agent
+
+    def read(_path, **_kwargs):
+        raise OSError(5, "device error")
+
+    monkeypatch.setattr(Path, "read_text", read)
+    with pytest.raises(OSError, match="device error"):
+        await agent._poll()
+    assert entered == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(fixture.sys.platform != "win32", reason="Windows sharing semantics")
+async def test_native_receipt_sharing_violation_retries_until_handle_released(
+    monkeypatch, receipt_agent,
+):
+    import win32con
+    import win32file
+
+    agent, nonce, entered = receipt_agent
+    receipt = agent.project_dir / fixture.PRE_INSTANCE_ID_FILE
+    receipt.write_text(nonce, encoding="utf-8")
+    handle = win32file.CreateFile(
+        str(receipt), win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+        0, None, win32con.OPEN_EXISTING, 0, None,
+    )
+    sleeps = []
+
+    async def sleep(seconds):
+        assert entered == []
+        sleeps.append(seconds)
+        handle.Close()
+
+    monkeypatch.setattr(fixture.asyncio, "sleep", sleep)
+    try:
+        with pytest.raises(PermissionError):
+            receipt.read_text(encoding="utf-8")
+        await agent._poll()
+    finally:
+        handle.Close()
+    assert sleeps == [0.25]
+    assert entered == [True]
