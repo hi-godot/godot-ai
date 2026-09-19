@@ -5898,22 +5898,12 @@ async def test_navigation_configure_handlers_forward_flat_properties():
         "cell_size": 0.5,
         "path": "/Main/Region",
     }
-    await navigation_handlers.navigation_agent_configure(
-        runtime, path="/Main/Agent", radius=0.8, avoidance_enabled=True
+    await navigation_handlers.navigation_mesh_configure(
+        runtime, path="/Main/Region", cell_size=0.25, scene_file="res://main.tscn"
     )
-    assert client.calls[-1]["command"] == "navigation_agent_configure"
     assert client.calls[-1]["params"] == {
-        "path": "/Main/Agent",
-        "radius": 0.8,
-        "avoidance_enabled": True,
-    }
-    await navigation_handlers.navigation_obstacle_configure(
-        runtime, path="/Main/Obstacle", radius=1.2, scene_file="res://main.tscn"
-    )
-    assert client.calls[-1]["command"] == "navigation_obstacle_configure"
-    assert client.calls[-1]["params"] == {
-        "radius": 1.2,
-        "path": "/Main/Obstacle",
+        "cell_size": 0.25,
+        "path": "/Main/Region",
         "scene_file": "res://main.tscn",
     }
 
@@ -5923,7 +5913,22 @@ async def test_navigation_bake_and_path_get_handlers():
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await navigation_handlers.navigation_bake(runtime, path="/Main/Region")
     assert client.calls[-1]["command"] == "navigation_bake"
-    assert client.calls[-1]["params"] == {"path": "/Main/Region"}
+    assert client.calls[-1]["params"] == {"path": "/Main/Region", "force_sync": True}
+    ## The bake is deferred; the transport timeout must cover the plugin's
+    ## deferred budget plus a margin.
+    assert client.calls[-1]["timeout"] == navigation_handlers.NAVIGATION_BAKE_TIMEOUT_SEC
+    assert (
+        navigation_handlers.NAVIGATION_BAKE_TIMEOUT_SEC
+        > navigation_handlers.NAVIGATION_BAKE_PLUGIN_TIMEOUT_MS / 1000.0
+    )
+    await navigation_handlers.navigation_bake(
+        runtime, path="/Main/Region", scene_file="res://main.tscn", force_sync=False
+    )
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Region",
+        "force_sync": False,
+        "scene_file": "res://main.tscn",
+    }
     await navigation_handlers.navigation_path_get(
         runtime,
         from_point={"x": -8.0, "y": 0.5, "z": -8.0},
@@ -5939,6 +5944,24 @@ async def test_navigation_bake_and_path_get_handlers():
         "dimension": "3d",
         "optimize": False,
         "navigation_layers": 2,
+        "force_sync": False,
+    }
+    await navigation_handlers.navigation_path_get(
+        runtime,
+        from_point=[-8.0, -8.0],
+        to_point=[8.0, 8.0],
+        dimension="2d",
+        region_path="/Main/NavRegion2D",
+        force_sync=True,
+    )
+    assert client.calls[-1]["params"] == {
+        "from_point": [-8.0, -8.0],
+        "to_point": [8.0, 8.0],
+        "dimension": "2d",
+        "optimize": True,
+        "navigation_layers": 1,
+        "force_sync": True,
+        "region_path": "/Main/NavRegion2D",
     }
 
 

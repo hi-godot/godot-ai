@@ -219,7 +219,7 @@ Calls take the form:
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
 | `tileset_manage` | `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
 | `gridmap_manage` | `gridmap_set_item`, `gridmap_fill`, `gridmap_clear`, `gridmap_get_used_cells`, `gridmap_list_library_items` |
-| `navigation_manage` | `region_create`, `mesh_configure`, `bake`, `agent_create`, `agent_configure`, `obstacle_create`, `obstacle_configure`, `path_get` |
+| `navigation_manage` | `region_create`, `mesh_configure`, `bake`, `path_get` |
 | `csg_manage` | `csg_create`, `csg_set_operation` |
 | `custom_manage` | `list`, `invoke` |
 
