@@ -2741,6 +2741,7 @@ class TestNavigationManageTool:
         assert result.data["undoable"] is True
 
     async def test_bake_dispatches_deferred_command(self, mcp_stack):
+        """bake forwards the region path and force_sync and reports the settled shape."""
         client, plugin = mcp_stack
 
         async def respond():
@@ -2771,6 +2772,7 @@ class TestNavigationManageTool:
         assert result.data["undoable"] is True
 
     async def test_path_get_dispatches(self, mcp_stack):
+        """path_get forwards the explicit region/map and force_sync params."""
         client, plugin = mcp_stack
 
         async def respond():

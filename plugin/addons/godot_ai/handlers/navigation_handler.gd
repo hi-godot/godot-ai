@@ -233,7 +233,10 @@ func bake(params: Dictionary) -> Dictionary:
 		region, dimension, resolved.scene_root, prepared.before, prepared.working,
 		_undo_redo, _connection, request_id, force_sync
 	)
-	_bake_step(job)
+	## No step here: the dispatcher registers the deferred request only after
+	## this handler returns the sentinel, and `_bake_step`'s first pending
+	## check would otherwise see the request as expired and abandon the job.
+	## `_drive_bake_job` performs the first step after its registration yield.
 	_drive_bake_job(job)
 
 	return {

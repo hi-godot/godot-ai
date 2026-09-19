@@ -5909,6 +5909,7 @@ async def test_navigation_configure_handlers_forward_flat_properties():
 
 
 async def test_navigation_bake_and_path_get_handlers():
+    """Bake claims the deferred budget; path_get forwards the explicit map params."""
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     await navigation_handlers.navigation_bake(runtime, path="/Main/Region")

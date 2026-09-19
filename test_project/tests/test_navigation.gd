@@ -245,6 +245,35 @@ func test_bake_job_start_phase_starts_a_threaded_bake() -> void:
 	_remove_node(region)
 
 
+func test_bake_does_not_step_before_the_dispatcher_registers() -> void:
+	## The dispatcher registers the deferred request only after `bake` returns
+	## the sentinel. Stepping the job synchronously would run the pending check
+	## against an unregistered request and abandon the bake (the op then times
+	## out with no response), so `bake` must leave the first step to
+	## `_drive_bake_job` after its registration yield.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var created := _handler.region_create({
+		"parent_path": "/" + scene_root.name,
+		"name": "NavBakeOrdering",
+	})
+	assert_has_key(created, "data")
+	var region := McpScenePath.resolve(created.data.path, scene_root) as NavigationRegion3D
+	_add_child_node(region, _make_box_mesh(Vector3(20, 1, 20)), "Floor")
+	var connection := _RecordingConnection.new()
+	var handler := NavigationHandler.new(_undo_redo, connection)
+	var deferred := handler.bake({"path": created.data.path, "_request_id": "rid-ordering"})
+	assert_has_key(deferred, "_deferred")
+	assert_eq(int(deferred.get("_deferred_timeout_ms", 0)), 30000)
+	assert_eq(
+		connection.pending_checks, 0,
+		"bake must not run a pending check before the dispatcher registers the request"
+	)
+	_remove_node(region)
+
+
 func test_bake_3d_produces_polygons_and_undoes() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -645,3 +674,38 @@ class _GoneConnection:
 
 	func _init() -> void:
 		dispatcher = _GoneDispatcher.new()
+
+
+class _RecordingDispatcher:
+	extends RefCounted
+
+	var owner = null
+
+
+	func _init(p_owner) -> void:
+		owner = p_owner
+
+
+	func has_pending_deferred_response(_request_id: String) -> bool:
+		owner.pending_checks += 1
+		return true
+
+
+class _RecordingConnection:
+	extends RefCounted
+
+	var dispatcher = null
+	var pending_checks := 0
+
+
+	func _init() -> void:
+		dispatcher = _RecordingDispatcher.new(self)
+
+
+	func get_tree() -> SceneTree:
+		## Null so `_drive_bake_job` returns before registering its ScriptWork
+		## entry: a synchronous suite run cannot yield the frame that would
+		## release it, and dispatcher quiescence tests would then fail on a
+		## leaked "navigation_bake" entry. The ordering contract under test is
+		## the synchronous part of `bake`, before the driver yields.
+		return null
