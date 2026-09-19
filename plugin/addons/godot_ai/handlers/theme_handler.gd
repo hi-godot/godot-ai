@@ -209,7 +209,10 @@ func _clear_scalar(theme_path: String, clearer: Callable, name: String, class_na
 ##   anti_aliasing  (bool)
 ##
 ## Unknown keys inside any nested dict are rejected with INVALID_PARAMS so
-## typos fail loudly instead of silently being ignored.
+## typos fail loudly instead of silently being ignored. Numeric values must be
+## finite numbers and flags real booleans; invalid input is refused with a
+## structured error before anything is applied, so a refused call leaves the
+## theme slot and undo history untouched.
 func set_stylebox_flat(params: Dictionary) -> Dictionary:
 	var load_result := _load_theme_from_params(params)
 	if load_result.has("error"):
@@ -281,30 +284,30 @@ func _apply_flat_props(sb: StyleBoxFlat, params: Dictionary) -> Dictionary:
 
 	# border: {all, top, bottom, left, right} — int widths
 	if params.has("border"):
-		var err := _apply_sides(sb, params.border, "border",
+		var border_result := _apply_sides(sb, params.border, "border",
 			["top", "bottom", "left", "right"],
 			"border_width_",
 			TYPE_INT)
-		if err != "":
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, err)
+		if border_result.has("error"):
+			return border_result
 
 	# corners: {all, top_left, top_right, bottom_left, bottom_right} — int radii
 	if params.has("corners"):
-		var err2 := _apply_sides(sb, params.corners, "corners",
+		var corners_result := _apply_sides(sb, params.corners, "corners",
 			["top_left", "top_right", "bottom_left", "bottom_right"],
 			"corner_radius_",
 			TYPE_INT)
-		if err2 != "":
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, err2)
+		if corners_result.has("error"):
+			return corners_result
 
 	# margins: {all, top, bottom, left, right} — float padding
 	if params.has("margins"):
-		var err3 := _apply_sides(sb, params.margins, "margins",
+		var margins_result := _apply_sides(sb, params.margins, "margins",
 			["top", "bottom", "left", "right"],
 			"content_margin_",
 			TYPE_FLOAT)
-		if err3 != "":
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, err3)
+		if margins_result.has("error"):
+			return margins_result
 
 	# shadow: {color, size, offset_x, offset_y}
 	if params.has("shadow"):
@@ -323,15 +326,30 @@ func _apply_flat_props(sb: StyleBoxFlat, params: Dictionary) -> Dictionary:
 					"Invalid shadow.color: %s (%s)" % [str(shadow.color), _COLOR_HINT])
 			sb.shadow_color = sc
 		if shadow.has("size"):
-			sb.shadow_size = int(shadow.size)
+			var size_result := _parse_number_field("shadow", "size", shadow.size, TYPE_INT)
+			if size_result.has("error"):
+				return size_result
+			sb.shadow_size = size_result.value
 		if shadow.has("offset_x") or shadow.has("offset_y"):
-			sb.shadow_offset = Vector2(
-				float(shadow.get("offset_x", 0)),
-				float(shadow.get("offset_y", 0)),
-			)
+			var offset_x := 0.0
+			var offset_y := 0.0
+			if shadow.has("offset_x"):
+				var offset_x_result := _parse_number_field("shadow", "offset_x", shadow.offset_x, TYPE_FLOAT)
+				if offset_x_result.has("error"):
+					return offset_x_result
+				offset_x = offset_x_result.value
+			if shadow.has("offset_y"):
+				var offset_y_result := _parse_number_field("shadow", "offset_y", shadow.offset_y, TYPE_FLOAT)
+				if offset_y_result.has("error"):
+					return offset_y_result
+				offset_y = offset_y_result.value
+			sb.shadow_offset = Vector2(offset_x, offset_y)
 
 	if params.has("anti_aliasing"):
-		sb.anti_aliasing = bool(params.anti_aliasing)
+		var anti_aliasing_result := _parse_bool_field("anti_aliasing", params.anti_aliasing)
+		if anti_aliasing_result.has("error"):
+			return anti_aliasing_result
+		sb.anti_aliasing = anti_aliasing_result.value
 	return {"ok": true}
 
 
@@ -364,6 +382,9 @@ func _commit_stylebox(
 ##   axis_stretch_vertical    "stretch" | "tile" | "tile_fit"
 ##   modulate_color           Color
 ##   draw_center              bool
+##
+## Numeric values must be finite numbers and flags real booleans; invalid input
+## is refused with a structured error before anything is applied.
 func set_stylebox_texture(params: Dictionary) -> Dictionary:
 	var load_result := _load_theme_from_params(params)
 	if load_result.has("error"):
@@ -400,9 +421,9 @@ func set_stylebox_texture(params: Dictionary) -> Dictionary:
 				"Invalid region: %s (expected {position, size} or [x,y,w,h])" % str(params.region))
 		sb.region_rect = region
 	if params.has("margins"):
-		var margin_err := _apply_texture_margins(sb, params.margins)
-		if margin_err != "":
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, margin_err)
+		var margin_result := _apply_texture_margins(sb, params.margins)
+		if margin_result.has("error"):
+			return margin_result
 	if params.has("modulate_color"):
 		var mc := _parse_color(params.modulate_color)
 		if mc == null:
@@ -410,7 +431,10 @@ func set_stylebox_texture(params: Dictionary) -> Dictionary:
 				"Invalid modulate_color: %s (%s)" % [str(params.modulate_color), _COLOR_HINT])
 		sb.modulate_color = mc
 	if params.has("draw_center"):
-		sb.draw_center = bool(params.draw_center)
+		var draw_center_result := _parse_bool_field("draw_center", params.draw_center)
+		if draw_center_result.has("error"):
+			return draw_center_result
+		sb.draw_center = draw_center_result.value
 	if params.has("axis_stretch_horizontal"):
 		var ash := _parse_axis_stretch(str(params.axis_stretch_horizontal))
 		if ash == null:
@@ -531,7 +555,8 @@ static func _is_instance_of_class(resource: Resource, expected_class: String) ->
 ## Duplicate the stylebox a Control resolves for `slot`, apply a StyleBoxFlat
 ## patch (same keys as set_stylebox_flat), and attach it as a per-node
 ## override. Undo restores the previous override, or removes the override when
-## the node had none.
+## the node had none. Patch values are validated the same way as
+## set_stylebox_flat; a refused patch leaves the node's override untouched.
 func stylebox_override(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
@@ -593,32 +618,69 @@ func _remove_node_stylebox(control: Control, slot: String) -> void:
 	control.remove_theme_stylebox_override(slot)
 
 
-## Parse a {all, <side1>, <side2>, ...} dict and apply it to StyleBoxFlat via
-## its set_<prop_prefix><side> properties. Returns "" on success, an error
-## message on failure. Validates that only known keys are present.
-func _apply_sides(sb: StyleBoxFlat, sides_dict: Variant, dict_name: String,
-		side_names: Array, prop_prefix: String, value_type: int) -> String:
+## Strict finite-number parser for stylebox numeric fields. Accepts int/float
+## and numeric strings (the McpJsonValues.parse_float vocabulary) and returns
+## `{"value": <int|float>}`; non-numeric input and non-finite results return a
+## structured error instead, so a bad value can neither raise an engine
+## conversion error nor be silently stored as 0.
+static func _parse_number_field(dict_name: String, key: String, raw: Variant, value_type: int) -> Dictionary:
+	var parsed: Variant = McpJsonValues.parse_float(raw)
+	if parsed == null:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"'%s.%s' must be a number, got %s" % [dict_name, key, type_string(typeof(raw))])
+	var number := float(parsed)
+	if not is_finite(number):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"'%s.%s' must be finite, got %s" % [dict_name, key, str(number)])
+	return {"value": int(number) if value_type == TYPE_INT else number}
+
+
+## Strict bool parser for stylebox flags. `bool("false")` is true in GDScript,
+## so a stringified flag would silently invert the caller's intent.
+static func _parse_bool_field(name: String, raw: Variant) -> Dictionary:
+	if raw is bool:
+		return {"value": raw}
+	return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+		"'%s' must be a boolean, got %s" % [name, type_string(typeof(raw))])
+
+
+## Parse a {all, <side1>, <side2>, ...} dict into StyleBox numeric properties.
+## Every value is parsed and validated before anything is assigned, so an
+## invalid value can neither raise an engine conversion error nor leave a
+## partially applied stylebox. `sb` is a StyleBoxFlat or StyleBoxTexture (both
+## expose `set`). Returns {"ok": true} or the error dict to surface.
+static func _apply_sides(sb: Object, sides_dict: Variant, dict_name: String,
+		side_names: Array, prop_prefix: String, value_type: int) -> Dictionary:
 	if typeof(sides_dict) != TYPE_DICTIONARY:
-		return "'%s' must be a dict with 'all' and/or side-specific keys" % dict_name
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"'%s' must be a dict with 'all' and/or side-specific keys" % dict_name)
 	var valid_keys := {"all": true}
 	for s in side_names:
 		valid_keys[s] = true
 	for k in sides_dict.keys():
 		if not valid_keys.has(k):
-			return "Unknown key in '%s': %s (valid: all, %s)" % [
-				dict_name, k, ", ".join(side_names)
-			]
-	# Apply `all` first, then override with side-specific keys.
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+				"Unknown key in '%s': %s (valid: all, %s)" % [dict_name, k, ", ".join(side_names)])
+	var parsed_values := {}
 	if sides_dict.has("all"):
-		var all_val: Variant = sides_dict.all
-		for s in side_names:
-			var v: Variant = int(all_val) if value_type == TYPE_INT else float(all_val)
-			sb.set(prop_prefix + s, v)
+		var all_result := _parse_number_field(dict_name, "all", sides_dict.all, value_type)
+		if all_result.has("error"):
+			return all_result
+		parsed_values["all"] = all_result.value
 	for s in side_names:
 		if sides_dict.has(s):
-			var v2: Variant = int(sides_dict[s]) if value_type == TYPE_INT else float(sides_dict[s])
-			sb.set(prop_prefix + s, v2)
-	return ""
+			var side_result := _parse_number_field(dict_name, s, sides_dict[s], value_type)
+			if side_result.has("error"):
+				return side_result
+			parsed_values[s] = side_result.value
+	# Every value parsed: apply `all` first, then the side-specific overrides.
+	if parsed_values.has("all"):
+		for s in side_names:
+			sb.set(prop_prefix + s, parsed_values["all"])
+	for s in side_names:
+		if parsed_values.has(s):
+			sb.set(prop_prefix + s, parsed_values[s])
+	return {"ok": true}
 
 
 func _apply_stylebox(theme_path: String, name: String, class_name_param: String, sb: StyleBox) -> void:
@@ -807,22 +869,8 @@ static func _parse_axis_stretch(value: String) -> Variant:
 
 
 ## Apply {all, left, top, right, bottom} texture margins to a StyleBoxTexture.
-## Returns "" on success, an error message on failure.
-func _apply_texture_margins(sb: StyleBoxTexture, margins: Variant) -> String:
-	if typeof(margins) != TYPE_DICTIONARY:
-		return "'margins' must be a dict with 'all' and/or side-specific keys"
-	var side_names := ["left", "top", "right", "bottom"]
-	var valid_keys := {"all": true}
-	for s in side_names:
-		valid_keys[s] = true
-	for k in margins.keys():
-		if not valid_keys.has(k):
-			return "Unknown key in 'margins': %s (valid: all, %s)" % [k, ", ".join(side_names)]
-	if margins.has("all"):
-		var all_val := float(margins.all)
-		for s in side_names:
-			sb.set("texture_margin_" + s, all_val)
-	for s in side_names:
-		if margins.has(s):
-			sb.set("texture_margin_" + s, float(margins[s]))
-	return ""
+## Shares the flat side parser's validate-then-apply contract: every value is
+## parsed before any margin is assigned. Returns {"ok": true} or the error dict.
+static func _apply_texture_margins(sb: StyleBoxTexture, margins: Variant) -> Dictionary:
+	return _apply_sides(sb, margins, "margins", ["left", "top", "right", "bottom"],
+		"texture_margin_", TYPE_FLOAT)

@@ -515,6 +515,90 @@ func test_set_stylebox_flat_per_side_content_margin() -> void:
 	assert_eq(sb.content_margin_right, 8.0)
 
 
+func test_set_stylebox_flat_rejects_invalid_numbers() -> void:
+	## dsarno's native probe: a valid value plus a non-numeric one must refuse
+	## with a structured error, leave the stored slot untouched, and commit no
+	## undo action. The runner's script-error capture also fails this test if
+	## the handler raises an engine conversion error instead of refusing.
+	_make_theme()
+	var seeded := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "guarded",
+		"bg_color": "#112233",
+		"border": {"all": 1},
+	})
+	assert_has_key(seeded, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	var before: StyleBoxFlat = theme.get_stylebox("guarded", "Panel")
+	var before_color := before.bg_color
+	_undo_redo.clear_history()
+
+	var bad_border := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "guarded",
+		"bg_color": "#ff0000",
+		"border": {"all": {"bad": true}},
+	})
+	assert_is_error(bad_border, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_border.error.message, "border.all")
+	var stored: StyleBoxFlat = theme.get_stylebox("guarded", "Panel")
+	assert_true(
+		stored.bg_color.is_equal_approx(before_color),
+		"a refused patch must not change the stored slot"
+	)
+	assert_eq(stored.border_width_top, 1)
+	assert_false(editor_undo(_undo_redo), "a refused patch must not commit an undo action")
+
+	var bad_margin := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "guarded",
+		"margins": {"all": INF},
+	})
+	assert_is_error(bad_margin, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(bad_margin.error.message, "margins.all")
+	assert_contains(bad_margin.error.message, "finite")
+
+	var bad_corner := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "guarded",
+		"corners": {"top_left": []},
+	})
+	assert_is_error(bad_corner, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_corner.error.message, "corners.top_left")
+
+	var bad_shadow_size := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "guarded",
+		"shadow": {"size": {"bad": true}},
+	})
+	assert_is_error(bad_shadow_size, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_shadow_size.error.message, "shadow.size")
+
+	var bad_shadow_offset := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "guarded",
+		"shadow": {"offset_x": NAN},
+	})
+	assert_is_error(bad_shadow_offset, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(bad_shadow_offset.error.message, "shadow.offset_x")
+
+	## Strict flags: a stringified bool must not invert the caller's intent.
+	var bad_flag := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "guarded",
+		"anti_aliasing": "false",
+	})
+	assert_is_error(bad_flag, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_flag.error.message, "anti_aliasing")
+
+
 # ----- stylebox_texture / font / icon fixtures -----
 
 const TEST_THEME_TEXTURE_PATH := "user://test_theme_texture.tres"
@@ -635,6 +719,77 @@ func test_set_stylebox_texture_rejects_bad_inputs() -> void:
 	})
 	assert_is_error(bad_resource, ErrorCodes.WRONG_TYPE)
 	assert_contains(bad_resource.error.message, "Texture2D")
+
+
+func test_set_stylebox_texture_rejects_invalid_margins() -> void:
+	## dsarno's native probe: left=2 plus a non-numeric right must refuse the
+	## whole call — no slot stored, no undo action, no engine conversion error.
+	var texture_path := _texture_fixture
+	if texture_path.is_empty():
+		skip("Texture fixture could not be created")
+		return
+	_make_theme()
+	_undo_redo.clear_history()
+	var bad_margin := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "guarded",
+		"texture_path": texture_path,
+		"margins": {"left": 2, "right": {"bad": true}},
+	})
+	assert_is_error(bad_margin, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_margin.error.message, "margins.right")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	assert_false(theme.has_stylebox("guarded", "Button"),
+		"a refused texture stylebox must not be stored")
+	assert_false(editor_undo(_undo_redo), "a refused call must not commit an undo action")
+
+	var nonfinite := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "guarded",
+		"texture_path": texture_path,
+		"margins": {"all": INF},
+	})
+	assert_is_error(nonfinite, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(nonfinite.error.message, "margins.all")
+	assert_contains(nonfinite.error.message, "finite")
+	assert_false(theme.has_stylebox("guarded", "Button"))
+
+	## Strict flag parity with the flat stylebox.
+	var bad_flag := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "guarded",
+		"texture_path": texture_path,
+		"draw_center": "false",
+	})
+	assert_is_error(bad_flag, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_flag.error.message, "draw_center")
+
+
+func test_side_helpers_refuse_non_numeric_values_without_mutation() -> void:
+	## Direct helper probes mirroring dsarno's evidence: the helpers must
+	## return a structured error and apply nothing at all.
+	var texture_sb := StyleBoxTexture.new()
+	var texture_result := ThemeHandler._apply_texture_margins(texture_sb, {"left": 2, "right": {"bad": true}})
+	assert_is_error(texture_result, ErrorCodes.WRONG_TYPE)
+	assert_contains(texture_result.error.message, "margins.right")
+	assert_eq(texture_sb.texture_margin_left, 0.0,
+		"no side may be applied when a later key is invalid")
+
+	var flat_sb := StyleBoxFlat.new()
+	var flat_result := ThemeHandler._apply_sides(flat_sb, {"all": {"bad": true}}, "border",
+		["top", "bottom", "left", "right"], "border_width_", TYPE_INT)
+	assert_is_error(flat_result, ErrorCodes.WRONG_TYPE)
+	assert_contains(flat_result.error.message, "border.all")
+	assert_eq(flat_sb.border_width_top, 0)
+
+	var ok_result := ThemeHandler._apply_sides(flat_sb, {"all": 2, "top": 4}, "border",
+		["top", "bottom", "left", "right"], "border_width_", TYPE_INT)
+	assert_has_key(ok_result, "ok")
+	assert_eq(flat_sb.border_width_top, 4)
+	assert_eq(flat_sb.border_width_left, 2)
 
 
 # ----- set_font / set_icon -----
@@ -813,5 +968,52 @@ func test_stylebox_override_rejects_unknown_patch_key() -> void:
 	assert_contains(result.error.message, "wobble")
 	assert_false(panel.has_theme_stylebox_override("panel"),
 		"a refused patch must not leave an override")
+	panel.get_parent().remove_child(panel)
+	panel.queue_free()
+
+
+func test_stylebox_override_rejects_invalid_patch_numbers() -> void:
+	## dsarno's repro on the override path: a valid bg_color plus a non-numeric
+	## border must refuse without attaching an override or committing an action.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var panel := Panel.new()
+	panel.name = "OverrideInvalidPatch"
+	scene_root.add_child(panel)
+	panel.owner = scene_root
+	_undo_redo.clear_history()
+	var result := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverrideInvalidPatch",
+		"slot": "panel",
+		"patch": {
+			"bg_color": {"r": 0.9, "g": 0.0, "b": 0.0, "a": 1.0},
+			"border": {"all": {"bad": true}},
+		},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "border.all")
+	assert_false(panel.has_theme_stylebox_override("panel"),
+		"a refused patch must not leave an override")
+	assert_false(editor_undo(_undo_redo), "a refused patch must not commit an undo action")
+
+	## A pre-existing override must survive a refused patch untouched.
+	var existing := StyleBoxFlat.new()
+	existing.bg_color = Color(0.0, 0.5, 0.0, 1.0)
+	panel.add_theme_stylebox_override("panel", existing)
+	var refused := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverrideInvalidPatch",
+		"slot": "panel",
+		"patch": {"shadow": {"size": {"bad": true}}},
+	})
+	assert_is_error(refused, ErrorCodes.WRONG_TYPE)
+	assert_contains(refused.error.message, "shadow.size")
+	assert_true(panel.has_theme_stylebox_override("panel"))
+	var resolved: StyleBoxFlat = panel.get_theme_stylebox("panel")
+	assert_true(
+		resolved.bg_color.is_equal_approx(Color(0.0, 0.5, 0.0, 1.0)),
+		"a refused patch must not modify the existing override"
+	)
 	panel.get_parent().remove_child(panel)
 	panel.queue_free()

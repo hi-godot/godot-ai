@@ -20,6 +20,12 @@ _DESCRIPTION = """\
 Theme authoring (Godot's stylesheet-like resource for Controls). Cascades
 down a Control subtree when assigned via theme_apply.
 
+Stylebox numeric fields (border widths, corner radii, margins, shadow) must be
+finite numbers and stylebox flags (anti_aliasing, draw_center) must be real
+booleans; a non-numeric or non-finite value is refused with a structured error
+before anything is applied, so a refused call leaves the theme and undo history
+untouched.
+
 Ops (pass via op="..." plus a params dict):
   • create(path, overwrite=False)
         Create a new empty Theme .tres at a res:// path.
