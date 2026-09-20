@@ -230,6 +230,11 @@ schema (capped; overflow stays behind `custom_manage`). The dock's Tools tab
 lists registered custom tools with per-tool enable/disable that applies
 immediately.
 
+Composed motion effects that are not built-in presets — bounce, orbit, sweep,
+drift — are documented as keyframe recipes in
+[animation-recipes.md](animation-recipes.md), including a custom-tool addon
+example for wrapping project-specific recipes.
+
 `filesystem_manage.reimport` is intended for imported assets such as textures,
 models, and audio. Godot scripts (`.gd`) are not imported resources: a successful
 `.gd` entry only refreshes its editor filesystem cache entry and does not prove the

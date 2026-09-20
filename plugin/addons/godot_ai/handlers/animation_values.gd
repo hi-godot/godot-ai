@@ -390,12 +390,19 @@ static func coerce_for_type(value: Variant, prop_type: int, prop_name: String) -
 			var v3i = McpJsonValues.parse_vector3i(value)
 			if v3i != null:
 				return {"ok": v3i}
-			return {"error": "Cannot coerce value to Vector3i for property '%s' (expected {x,y,z}, [x,y,z], or Vector3i)" % prop_name}
+			return {"error": "Cannot coerce value to Vector3i for property '%s' (expected {x,y,z}, [x,y,z], or Vector3i; components must be finite and within int32 range)" % prop_name}
 		TYPE_QUATERNION:
 			var quat = McpJsonValues.parse_quaternion(value)
-			if quat != null:
-				return {"ok": quat}
-			return {"error": "Cannot coerce value to Quaternion for property '%s' (expected {x,y,z,w}, [x,y,z,w], or Quaternion)" % prop_name}
+			if quat == null:
+				return {"error": "Cannot coerce value to Quaternion for property '%s' (expected {x,y,z,w}, [x,y,z,w], or Quaternion; components must be finite)" % prop_name}
+			## Rotation contract at the animation boundary: AnimationPlayer
+			## slerps quaternions, and a non-unit one makes
+			## value_track_interpolate emit a normalization error and return
+			## identity. Normalize valid nonzero rotations so stored tracks are
+			## usable; a zero-length quaternion is not a rotation and is refused.
+			if quat.length_squared() < 1e-12:
+				return {"error": "Cannot coerce value to Quaternion for property '%s': zero-length quaternion is not a rotation" % prop_name}
+			return {"ok": quat.normalized()}
 		TYPE_BASIS:
 			var basis = McpJsonValues.parse_basis(value)
 			if basis != null:
