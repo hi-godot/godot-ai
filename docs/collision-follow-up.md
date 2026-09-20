@@ -6,4 +6,6 @@ The remaining defect was in the deferred driver. It was not registered with the 
 
 The driver now registers before its first frame yield and releases the registration on every normal or early exit. If the request is abandoned or its connection disappears before the undo action is committed, it removes and frees every partially created body. Once the action is committed, connection loss only drops the unavailable reply; the completed scene change and its undo history remain intact.
 
-Regression coverage exercises the real driver through partial creation and synchronous connection exit, dispatcher abandonment, script-quiescence refusal and release, successful single-action undo/redo, and invalid or detached reply targets after a completed commit.
+The driver also re-checks the scene root and each planned mesh and parent for validity before touching them. A node freed between frames therefore fails the request immediately with an error reply and a rollback, instead of raising a freed-instance error out of the coroutine and holding the work lease until the dispatcher timeout.
+
+Regression coverage exercises the real driver through partial creation and synchronous connection exit, dispatcher abandonment, script-quiescence refusal and release, successful single-action undo/redo, invalid or detached reply targets after a completed commit, and a planned mesh, its parent or the scene root freed while the job is in flight.

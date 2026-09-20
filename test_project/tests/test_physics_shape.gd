@@ -1124,6 +1124,71 @@ func test_generate_job_revalidates_each_mesh_when_it_is_applied() -> void:
 	connection.free()
 
 
+func test_generate_job_frees_a_planned_mesh_without_script_errors() -> void:
+	## A mesh freed (not merely removed) between planning and applying must be
+	## reported through the stale check. Assigning it to a typed local first
+	## raises "invalid previously freed instance" and never reaches the check.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var kept := _add_generate_mesh("GenerateFreedMeshKept", Vector3.ONE)
+	var doomed := _add_generate_mesh("GenerateFreedMeshDoomed", Vector3.ONE)
+	var connection := _CapturingConnection.new()
+	var job := _generate_job_for([
+		McpScenePath.from_node(kept, scene_root), McpScenePath.from_node(doomed, scene_root),
+	], connection)
+	PhysicsShapeHandler._generate_step(job, 0)
+	PhysicsShapeHandler._generate_step(job, 0)
+	assert_eq(str(job.phase), "apply")
+	scene_root.remove_child(doomed)
+	doomed.free()
+	assert_false(PhysicsShapeHandler._generate_step(job, 0), "apply the untouched mesh")
+	assert_true(_find_named_child(scene_root, "GenerateFreedMeshKeptCollider") != null)
+	assert_true(PhysicsShapeHandler._generate_step(job, 0), "the freed mesh fails the request")
+	assert_is_error(job.result, ErrorCodes.NODE_NOT_FOUND)
+	assert_contains(job.result.error.message, "was removed")
+	assert_true(_find_named_child(scene_root, "GenerateFreedMeshKeptCollider") == null, "rolled back")
+	_remove_node(kept)
+	connection.free()
+
+
+func test_generate_job_frees_a_planned_parent_without_script_errors() -> void:
+	## The captured parent can be freed while the mesh survives because it was
+	## reparented away. The stale check must report the reparent, not raise on
+	## the typed parent local.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var wrapper := Node3D.new()
+	wrapper.name = "GenerateFreedParent"
+	scene_root.add_child(wrapper)
+	wrapper.set_owner(scene_root)
+	var mesh := MeshInstance3D.new()
+	mesh.name = "GenerateFreedParentMesh"
+	var box := BoxMesh.new()
+	box.size = Vector3.ONE
+	mesh.mesh = box
+	wrapper.add_child(mesh)
+	mesh.set_owner(scene_root)
+	var connection := _CapturingConnection.new()
+	var job := _generate_job_for([McpScenePath.from_node(mesh, scene_root)], connection)
+	PhysicsShapeHandler._generate_step(job, 0)
+	assert_eq(str(job.phase), "apply")
+	wrapper.remove_child(mesh)
+	scene_root.add_child(mesh)
+	mesh.set_owner(scene_root)
+	scene_root.remove_child(wrapper)
+	wrapper.free()
+	assert_true(PhysicsShapeHandler._generate_step(job, 0), "the freed parent fails the request")
+	assert_is_error(job.result, ErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_contains(job.result.error.message, "reparented")
+	assert_true(_find_named_child(scene_root, "GenerateFreedParentMeshCollider") == null)
+	_remove_node(mesh)
+	connection.free()
+
+
 func test_generate_job_abandoned_by_the_dispatcher_leaves_nothing_behind() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -1328,3 +1393,35 @@ func test_generate_driver_early_exit_preserves_committed_results() -> void:
 	_remove_node(detached_mesh)
 	_remove_node(freed_mesh)
 	detached_connection.free()
+
+
+func test_generate_driver_frees_the_scene_root_and_releases_the_lease() -> void:
+	## A scene root freed while the job is in flight must fail and answer on
+	## the next driven frame. Before the validity check, the typed assignment
+	## errored every frame and the lease was held until the dispatcher timeout.
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var mesh := _add_generate_mesh("DriverFreedSceneRoot", Vector3.ONE)
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	var validated := PhysicsShapeHandler._validate_generate_request({
+		"paths": [McpScenePath.from_node(mesh, root)],
+	})
+	assert_has_key(validated, "data")
+	var doomed_root := Node3D.new()
+	doomed_root.name = "DriverFreedSceneRootStandin"
+	doomed_root.free()
+	validated["scene_root"] = doomed_root
+	var job := PhysicsShapeHandler._generate_job(validated, _undo_redo, connection, "rid-generate")
+	PhysicsShapeHandler._drive_generate_job(job, connection, generate_driver_frame)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 1, "worker is tracked before the first yield")
+	generate_driver_frame.emit()
+	assert_eq(str(job.phase), "done")
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0, "a freed scene root must release the lease")
+	assert_is_error(job.result, ErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_eq(connection.captured.size(), 1, "the stale scene must be answered, not left to the timeout")
+	_remove_node(mesh)
+	connection.free()

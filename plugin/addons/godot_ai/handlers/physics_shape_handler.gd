@@ -245,15 +245,21 @@ static func _plan_generate_mesh(
 ## request can never apply plan-time state to a mesh that moved, was
 ## reparented, lost its mesh, gained a collider, or went away meanwhile.
 static func _plan_stale_reason(plan: Dictionary) -> String:
-	var mesh: MeshInstance3D = plan.mesh
+	## Keep the captured references untyped until validity is known: assigning
+	## a freed Object to a typed local raises before is_instance_valid() can
+	## inspect it, and a mesh, its parent, or the scene root can be freed
+	## between the frame that planned it and the frame that applies it.
+	var mesh_ref = plan.mesh
 	## A node taken out of the tree and queued to free is still a valid
 	## instance for the rest of the frame; not being in the tree is what
 	## "removed" means here.
-	if not is_instance_valid(mesh) or not mesh.is_inside_tree():
+	if not is_instance_valid(mesh_ref) or not mesh_ref.is_inside_tree():
 		return "was removed"
-	var parent: Node = plan.parent
-	if not is_instance_valid(parent) or mesh.get_parent() != parent:
+	var mesh: MeshInstance3D = mesh_ref
+	var parent_ref = plan.parent
+	if not is_instance_valid(parent_ref) or mesh.get_parent() != parent_ref:
 		return "was reparented"
+	var parent: Node = parent_ref
 	if mesh.top_level != bool(plan.top_level):
 		return "changed its top_level setting"
 	var source_transform := mesh.global_transform if mesh.top_level else mesh.transform
@@ -369,12 +375,16 @@ static func _generate_step(job: Dictionary, budget_usec: int) -> bool:
 				ErrorCodes.DEFERRED_TIMEOUT,
 				"physics_shape_generate exceeded its %d ms budget" % _GENERATE_DEFERRED_TIMEOUT_MS,
 			))
-	var scene_root: Node = validated.scene_root
-	if not is_instance_valid(scene_root) or EditorInterface.get_edited_scene_root() != scene_root:
+	## Same freed-instance rule as the plan check: a scene root freed while the
+	## job was in flight must fail this step, not error on a typed assignment
+	## and leave the job retrying until the dispatcher timeout.
+	var scene_root_ref = validated.scene_root
+	if not is_instance_valid(scene_root_ref) or EditorInterface.get_edited_scene_root() != scene_root_ref:
 		return _generate_fail(job, ErrorCodes.make(
 			ErrorCodes.EDITED_SCENE_MISMATCH,
 			"The edited scene changed while physics shapes were generated",
 		))
+	var scene_root: Node = scene_root_ref
 	## The budget is checked before each item after the first, so every step
 	## makes progress and a phase that just finished its last item moves on.
 	var frame_start := Time.get_ticks_usec()
