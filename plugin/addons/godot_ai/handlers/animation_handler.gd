@@ -642,22 +642,6 @@ func preset_pulse(params: Dictionary) -> Dictionary:
 	return _presets.preset_pulse(params)
 
 
-func preset_bounce(params: Dictionary) -> Dictionary:
-	return _presets.preset_bounce(params)
-
-
-func preset_orbit(params: Dictionary) -> Dictionary:
-	return _presets.preset_orbit(params)
-
-
-func preset_sweep(params: Dictionary) -> Dictionary:
-	return _presets.preset_sweep(params)
-
-
-func preset_drift(params: Dictionary) -> Dictionary:
-	return _presets.preset_drift(params)
-
-
 func list_animations(params: Dictionary) -> Dictionary:
 	return _values.list_animations(params)
 
@@ -689,7 +673,6 @@ func _commit_animation_add(
 	old_anim: Animation,  ## null when not overwriting
 	created_player: bool = false,
 	player_parent: Node = null,
-	extra_props: Array = [],  ## [{object, property, value, old}] bundled into the action
 ) -> void:
 	_undo_redo.create_action(action_label)
 	if created_player:
@@ -712,9 +695,6 @@ func _commit_animation_add(
 		_undo_redo.add_do_reference(old_anim)
 	else:
 		_undo_redo.add_undo_method(library, "remove_animation", anim_name)
-	for entry in extra_props:
-		_undo_redo.add_do_property(entry.object, entry.property, entry.value)
-		_undo_redo.add_undo_property(entry.object, entry.property, entry.old)
 	_undo_redo.add_do_reference(anim)
 	_undo_redo.commit_action()
 

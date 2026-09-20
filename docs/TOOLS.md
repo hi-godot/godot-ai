@@ -201,7 +201,7 @@ Calls take the form:
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
-| `animation_manage` | `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse`, `preset_bounce`, `preset_orbit`, `preset_sweep`, `preset_drift` |
+| `animation_manage` | `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset` |
 | `audio_manage` | `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |

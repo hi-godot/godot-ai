@@ -264,13 +264,9 @@ async def animation_preset_pulse(
     runtime: DirectRuntime,
     player_path: str,
     target_path: str,
-    property: str = "scale",
     from_scale: float = 1.0,
     to_scale: float = 1.1,
-    from_value: Any | None = None,
-    to_value: Any | None = None,
     duration: float = 0.4,
-    loop_mode: str = "none",
     animation_name: str = "",
     overwrite: bool = False,
 ) -> dict:
@@ -278,124 +274,12 @@ async def animation_preset_pulse(
     params: dict[str, Any] = {
         "player_path": player_path,
         "target_path": target_path,
-        "property": property,
         "from_scale": from_scale,
         "to_scale": to_scale,
         "duration": duration,
-        "loop_mode": loop_mode,
     }
-    if from_value is not None:
-        params["from_value"] = from_value
-    if to_value is not None:
-        params["to_value"] = to_value
     if animation_name:
         params["animation_name"] = animation_name
     if overwrite:
         params["overwrite"] = True
     return await runtime.send_command("animation_preset_pulse", params)
-
-
-async def animation_preset_bounce(
-    runtime: DirectRuntime,
-    player_path: str,
-    target_path: str,
-    intensity: float = 0.15,
-    duration: float = 0.4,
-    animation_name: str = "",
-    overwrite: bool = False,
-) -> dict:
-    await require_writable_async(runtime)
-    params: dict[str, Any] = {
-        "player_path": player_path,
-        "target_path": target_path,
-        "intensity": intensity,
-        "duration": duration,
-    }
-    if animation_name:
-        params["animation_name"] = animation_name
-    if overwrite:
-        params["overwrite"] = True
-    return await runtime.send_command("animation_preset_bounce", params)
-
-
-async def animation_preset_orbit(
-    runtime: DirectRuntime,
-    player_path: str,
-    target_path: str,
-    radius: float | None = None,
-    clockwise: bool = True,
-    duration: float = 2.0,
-    loop_mode: str = "none",
-    animation_name: str = "",
-    overwrite: bool = False,
-) -> dict:
-    await require_writable_async(runtime)
-    params: dict[str, Any] = {
-        "player_path": player_path,
-        "target_path": target_path,
-        "clockwise": clockwise,
-        "duration": duration,
-        "loop_mode": loop_mode,
-    }
-    if radius is not None:
-        params["radius"] = radius
-    if animation_name:
-        params["animation_name"] = animation_name
-    if overwrite:
-        params["overwrite"] = True
-    return await runtime.send_command("animation_preset_orbit", params)
-
-
-async def animation_preset_sweep(
-    runtime: DirectRuntime,
-    player_path: str,
-    target_path: str,
-    turns: float = 1.0,
-    clockwise: bool = True,
-    duration: float = 1.0,
-    loop_mode: str = "none",
-    animation_name: str = "",
-    overwrite: bool = False,
-) -> dict:
-    await require_writable_async(runtime)
-    params: dict[str, Any] = {
-        "player_path": player_path,
-        "target_path": target_path,
-        "turns": turns,
-        "clockwise": clockwise,
-        "duration": duration,
-        "loop_mode": loop_mode,
-    }
-    if animation_name:
-        params["animation_name"] = animation_name
-    if overwrite:
-        params["overwrite"] = True
-    return await runtime.send_command("animation_preset_sweep", params)
-
-
-async def animation_preset_drift(
-    runtime: DirectRuntime,
-    player_path: str,
-    target_path: str,
-    axis: str = "x",
-    distance: float | None = None,
-    duration: float = 1.0,
-    loop_mode: str = "none",
-    animation_name: str = "",
-    overwrite: bool = False,
-) -> dict:
-    await require_writable_async(runtime)
-    params: dict[str, Any] = {
-        "player_path": player_path,
-        "target_path": target_path,
-        "axis": axis,
-        "duration": duration,
-        "loop_mode": loop_mode,
-    }
-    if distance is not None:
-        params["distance"] = distance
-    if animation_name:
-        params["animation_name"] = animation_name
-    if overwrite:
-        params["overwrite"] = True
-    return await runtime.send_command("animation_preset_drift", params)
