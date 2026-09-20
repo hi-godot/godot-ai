@@ -222,3 +222,13 @@ func bounce(params: Dictionary, _ctx: McpCallContext) -> Dictionary:
 
 `orbit`, `sweep`, and `drift` follow the same shape — generate the keyframe
 array (see the recipes above) and hand it to `add_property_track`.
+
+## Showcase scene
+
+`test_project/animation_showcase.tscn` is a runnable demo of every recipe plus
+the typed-value tracks: a bounce button, an orbiting icon, a sweeping bar, a
+drifting scanline, a fading label, and two 3D cubes driven by a Quaternion
+track (spin) and a Transform3D track (float + scale + turn). Open it in the
+editor and press F6 — each effect has its own autoplaying AnimationPlayer, and
+the clips loop so the motion runs continuously.
+
