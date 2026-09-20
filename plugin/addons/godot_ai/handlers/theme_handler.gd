@@ -331,8 +331,11 @@ func _apply_flat_props(sb: StyleBoxFlat, params: Dictionary) -> Dictionary:
 				return size_result
 			sb.shadow_size = size_result.value
 		if shadow.has("offset_x") or shadow.has("offset_y"):
-			var offset_x := 0.0
-			var offset_y := 0.0
+			## Missing components keep the stylebox's current offset: on the
+			## stylebox_override path `sb` is a duplicate of the resolved
+			## stylebox, and a patch must not silently reset the other axis.
+			var offset_x := sb.shadow_offset.x
+			var offset_y := sb.shadow_offset.y
 			if shadow.has("offset_x"):
 				var offset_x_result := _parse_number_field("shadow", "offset_x", shadow.offset_x, TYPE_FLOAT)
 				if offset_x_result.has("error"):
@@ -833,9 +836,11 @@ func _clear_slot(theme_path: String, kind: String, name: String, class_name_para
 
 
 ## Parse a 9-slice region from {position: {x,y}, size: {x,y}} or [x,y,w,h].
+## Non-finite components are rejected (null), so a NaN/INF region can never be
+## committed to a stylebox slot.
 static func _parse_rect2(value: Variant) -> Variant:
 	if value is Rect2:
-		return value
+		return value if _is_finite_rect2(value) else null
 	if value is Dictionary:
 		var d: Dictionary = value
 		if not (d.has("position") and d.has("size")):
@@ -844,7 +849,8 @@ static func _parse_rect2(value: Variant) -> Variant:
 		var size := McpJsonValues.parse_vector2(d.size)
 		if pos == null or size == null:
 			return null
-		return Rect2(pos, size)
+		var rect := Rect2(pos, size)
+		return rect if _is_finite_rect2(rect) else null
 	if value is Array:
 		var arr: Array = value
 		if arr.size() != 4:
@@ -852,8 +858,18 @@ static func _parse_rect2(value: Variant) -> Variant:
 		for item in arr:
 			if not (item is int or item is float):
 				return null
-		return Rect2(float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3]))
+		var rect := Rect2(float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3]))
+		return rect if _is_finite_rect2(rect) else null
 	return null
+
+
+static func _is_finite_rect2(rect: Rect2) -> bool:
+	return (
+		is_finite(rect.position.x)
+		and is_finite(rect.position.y)
+		and is_finite(rect.size.x)
+		and is_finite(rect.size.y)
+	)
 
 
 ## StyleBoxTexture axis stretch mode by name. Returns null on an unknown name.

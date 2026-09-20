@@ -768,6 +768,40 @@ func test_set_stylebox_texture_rejects_invalid_margins() -> void:
 	assert_contains(bad_flag.error.message, "draw_center")
 
 
+func test_set_stylebox_texture_rejects_non_finite_region() -> void:
+	## A NaN/INF region component must refuse the call: region_rect accepts
+	## non-finite values without normalization, so committing one would persist
+	## an invalid slot plus an undo action.
+	var texture_path := _texture_fixture
+	if texture_path.is_empty():
+		skip("Texture fixture could not be created")
+		return
+	_make_theme()
+	_undo_redo.clear_history()
+	var bad_array := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "guarded",
+		"texture_path": texture_path,
+		"region": [NAN, 0.0, 4.0, 4.0],
+	})
+	assert_is_error(bad_array, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(bad_array.error.message, "region")
+	var bad_dict := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "guarded",
+		"texture_path": texture_path,
+		"region": {"position": {"x": INF, "y": 0.0}, "size": {"x": 4.0, "y": 4.0}},
+	})
+	assert_is_error(bad_dict, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(bad_dict.error.message, "region")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	assert_false(theme.has_stylebox("guarded", "Button"),
+		"a refused region must not store a stylebox")
+	assert_false(editor_undo(_undo_redo), "a refused region must not commit an undo action")
+
+
 func test_side_helpers_refuse_non_numeric_values_without_mutation() -> void:
 	## Direct helper probes mirroring dsarno's evidence: the helpers must
 	## return a structured error and apply nothing at all.
@@ -790,6 +824,15 @@ func test_side_helpers_refuse_non_numeric_values_without_mutation() -> void:
 	assert_has_key(ok_result, "ok")
 	assert_eq(flat_sb.border_width_top, 4)
 	assert_eq(flat_sb.border_width_left, 2)
+
+	assert_true(ThemeHandler._parse_rect2([NAN, 0.0, 4.0, 4.0]) == null,
+		"a NaN region component must be refused")
+	assert_true(ThemeHandler._parse_rect2(Rect2(NAN, 0.0, 4.0, 4.0)) == null,
+		"a NaN Rect2 must be refused")
+	assert_true(
+		ThemeHandler._parse_rect2({"position": {"x": INF, "y": 0.0}, "size": {"x": 4.0, "y": 4.0}}) == null,
+		"an INF region component must be refused"
+	)
 
 
 # ----- set_font / set_icon -----
@@ -912,6 +955,38 @@ func test_stylebox_override_restores_previous_override() -> void:
 	assert_true(
 		(restored as StyleBoxFlat).bg_color.is_equal_approx(Color(0.0, 0.5, 0.0, 1.0)),
 		"undo must restore the previous override, got %s" % str((restored as StyleBoxFlat).bg_color)
+	)
+	panel.get_parent().remove_child(panel)
+	panel.queue_free()
+
+
+func test_stylebox_override_preserves_unpatched_shadow_offset() -> void:
+	## A patch that sets only one shadow-offset axis must keep the other axis
+	## from the resolved stylebox instead of silently resetting it to 0.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var panel := Panel.new()
+	panel.name = "OverrideShadowAxis"
+	var existing := StyleBoxFlat.new()
+	existing.shadow_offset = Vector2(3.0, 5.0)
+	existing.shadow_size = 4
+	panel.add_theme_stylebox_override("panel", existing)
+	scene_root.add_child(panel)
+	panel.owner = scene_root
+	_undo_redo.clear_history()
+	var result := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverrideShadowAxis",
+		"slot": "panel",
+		"patch": {"shadow": {"offset_x": 7.0}},
+	})
+	assert_has_key(result, "data")
+	var resolved: StyleBoxFlat = panel.get_theme_stylebox("panel")
+	assert_true(absf(resolved.shadow_offset.x - 7.0) < 0.001, "the patched axis must apply")
+	assert_true(
+		absf(resolved.shadow_offset.y - 5.0) < 0.001,
+		"the unpatched axis must keep the resolved stylebox's value, got %s" % str(resolved.shadow_offset)
 	)
 	panel.get_parent().remove_child(panel)
 	panel.queue_free()
