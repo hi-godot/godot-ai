@@ -1092,3 +1092,264 @@ func test_stylebox_override_rejects_invalid_patch_numbers() -> void:
 	)
 	panel.get_parent().remove_child(panel)
 	panel.queue_free()
+
+
+# ----- native destination ranges (finite-large values) -----
+
+func test_set_stylebox_flat_rejects_out_of_range_native_values() -> void:
+	## StyleBoxFlat border/corner ints are backed by real_t storage: 2147483647
+	## rounds up to 2^31 and reads back as -2147483648, and 4294967296 wraps to
+	## 0; margins are float32 so 1e40 narrows to INF. All must be refused
+	## before commit, leaving the stored slot and undo history untouched.
+	_make_theme()
+	var seeded := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "ranged",
+		"border": {"all": 1},
+		"margins": {"all": 2.0},
+	})
+	assert_has_key(seeded, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	var before: StyleBoxFlat = theme.get_stylebox("ranged", "Panel")
+	_undo_redo.clear_history()
+
+	var big_border := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "ranged",
+		"border": {"all": 4294967296},
+	})
+	assert_is_error(big_border, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(big_border.error.message, "border.all")
+	assert_contains(big_border.error.message, "float-backed")
+
+	## 2147483647 is a valid int32 but not float32-representable: it used to
+	## read back as -2147483648.
+	var wrapped_border := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "ranged",
+		"border": {"all": 2147483647},
+	})
+	assert_is_error(wrapped_border, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(wrapped_border.error.message, "border.all")
+
+	var big_corner := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "ranged",
+		"corners": {"all": 4294967296},
+	})
+	assert_is_error(big_corner, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(big_corner.error.message, "corners.all")
+
+	var big_margin := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "ranged",
+		"margins": {"all": 1e40},
+	})
+	assert_is_error(big_margin, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(big_margin.error.message, "margins.all")
+	assert_contains(big_margin.error.message, "32-bit float")
+
+	var big_shadow := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "ranged",
+		"shadow": {"size": 4294967296},
+	})
+	assert_is_error(big_shadow, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(big_shadow.error.message, "shadow.size")
+	assert_contains(big_shadow.error.message, "32-bit integer")
+
+	var after: StyleBoxFlat = theme.get_stylebox("ranged", "Panel")
+	assert_eq(after.border_width_top, before.border_width_top,
+		"a refused value must not change the stored slot")
+	assert_eq(after.content_margin_top, before.content_margin_top)
+	assert_false(editor_undo(_undo_redo), "a refused value must not commit an undo action")
+
+	## Valid controls at the representable bounds still store: 2^24 is the
+	## largest exactly-representable float32 integer, 3e38 is a finite
+	## float32, and shadow_size is a genuine int32.
+	var bounds := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Panel",
+		"name": "ranged",
+		"border": {"all": 16777216},
+		"margins": {"all": 3e38},
+		"shadow": {"size": 2147483647},
+	})
+	assert_has_key(bounds, "data")
+	var stored: StyleBoxFlat = theme.get_stylebox("ranged", "Panel")
+	assert_eq(stored.border_width_top, 16777216)
+	assert_eq(stored.shadow_size, 2147483647, "shadow_size is a real int32 slot")
+	assert_eq(stored.content_margin_top, PackedFloat32Array([3e38])[0],
+		"the stored value must be the validated 32-bit narrowing")
+
+
+func test_set_stylebox_texture_rejects_out_of_range_margins() -> void:
+	var texture_path := _texture_fixture
+	if texture_path.is_empty():
+		skip("Texture fixture could not be created")
+		return
+	_make_theme()
+	_undo_redo.clear_history()
+	var big := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "ranged",
+		"texture_path": texture_path,
+		"margins": {"left": 1e40},
+	})
+	assert_is_error(big, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(big.error.message, "margins.left")
+	assert_contains(big.error.message, "32-bit float")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	assert_false(theme.has_stylebox("ranged", "Button"))
+	assert_false(editor_undo(_undo_redo), "a refused margin must not commit an undo action")
+
+	var bounds := _handler.set_stylebox_texture({
+		"theme_path": TEST_THEME_PATH,
+		"class_name": "Button",
+		"name": "ranged",
+		"texture_path": texture_path,
+		"margins": {"left": 1e30},
+	})
+	assert_has_key(bounds, "data")
+	var stored: StyleBoxTexture = theme.get_stylebox("ranged", "Button")
+	assert_eq(stored.texture_margin_left, PackedFloat32Array([1e30])[0])
+
+
+func test_stylebox_override_rejects_out_of_range_patch() -> void:
+	## dsarno's repro: shadow.offset_x=1e40 used to install an override with
+	## offset (inf, 5). It must refuse and leave the existing override intact.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var panel := Panel.new()
+	panel.name = "OverrideRange"
+	scene_root.add_child(panel)
+	panel.owner = scene_root
+	var existing := StyleBoxFlat.new()
+	existing.shadow_offset = Vector2(0.0, 5.0)
+	panel.add_theme_stylebox_override("panel", existing)
+	_undo_redo.clear_history()
+	var result := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverrideRange",
+		"slot": "panel",
+		"patch": {"shadow": {"offset_x": 1e40}},
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "shadow.offset_x")
+	assert_contains(result.error.message, "32-bit float")
+	var resolved: StyleBoxFlat = panel.get_theme_stylebox("panel")
+	assert_true(resolved.shadow_offset.is_equal_approx(Vector2(0.0, 5.0)),
+		"a refused patch must not change the existing override")
+	assert_false(editor_undo(_undo_redo), "a refused patch must not commit an undo action")
+	panel.get_parent().remove_child(panel)
+	panel.queue_free()
+
+
+func test_scalar_slots_reject_out_of_range_values() -> void:
+	## Theme constants/font sizes are 32-bit ints: 4294967296 used to store 0.
+	_make_theme()
+	var seeded := _handler.set_constant({
+		"theme_path": TEST_THEME_PATH, "class_name": "Button", "name": "sep", "value": 4,
+	})
+	assert_has_key(seeded, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	_undo_redo.clear_history()
+
+	var big_constant := _handler.set_constant({
+		"theme_path": TEST_THEME_PATH, "class_name": "Button", "name": "sep", "value": 4294967296,
+	})
+	assert_is_error(big_constant, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_eq(theme.get_constant("sep", "Button"), 4, "a refused constant must not change the slot")
+
+	var big_font_size := _handler.set_font_size({
+		"theme_path": TEST_THEME_PATH, "class_name": "Button", "name": "font_size", "value": 1e40,
+	})
+	assert_is_error(big_font_size, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_false(theme.has_font_size("font_size", "Button"))
+	assert_false(editor_undo(_undo_redo), "refused scalars must not commit undo actions")
+
+	var bounds := _handler.set_constant({
+		"theme_path": TEST_THEME_PATH, "class_name": "Button", "name": "sep", "value": 2147483647,
+	})
+	assert_has_key(bounds, "data")
+	assert_eq(theme.get_constant("sep", "Button"), 2147483647)
+
+
+func test_colors_reject_out_of_range_components() -> void:
+	## Color components are 32-bit; {r: 1e40} narrows to INF at construction.
+	_make_theme()
+	var seeded := _handler.set_color({
+		"theme_path": TEST_THEME_PATH, "class_name": "Button", "name": "font_color",
+		"value": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+	})
+	assert_has_key(seeded, "data")
+	var theme: Theme = ResourceLoader.load(TEST_THEME_PATH)
+	_undo_redo.clear_history()
+
+	var big_color := _handler.set_color({
+		"theme_path": TEST_THEME_PATH, "class_name": "Button", "name": "font_color",
+		"value": {"r": 1e40, "g": 0.0, "b": 0.0, "a": 1.0},
+	})
+	assert_is_error(big_color, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_true(theme.get_color("font_color", "Button").is_equal_approx(Color(1, 1, 1, 1)),
+		"a refused color must not change the slot")
+
+	var big_bg := _handler.set_stylebox_flat({
+		"theme_path": TEST_THEME_PATH, "class_name": "Panel", "name": "colored",
+		"bg_color": {"r": 1e40, "g": 0.0, "b": 0.0, "a": 1.0},
+	})
+	assert_is_error(big_bg, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_false(theme.has_stylebox("colored", "Panel"))
+	assert_false(editor_undo(_undo_redo), "refused colors must not commit undo actions")
+
+
+func test_number_parsers_reject_out_of_range_native_values() -> void:
+	## Direct probes mirroring the native handler evidence, one per storage kind.
+	var big_int := ThemeHandler._parse_number_field(
+		"shadow", "size", 4294967296, ThemeHandler._NATIVE_INT32)
+	assert_is_error(big_int, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(big_int.error.message, "32-bit integer")
+
+	var big_float := ThemeHandler._parse_number_field(
+		"margins", "left", 1e40, ThemeHandler._NATIVE_FLOAT32)
+	assert_is_error(big_float, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(big_float.error.message, "32-bit float")
+
+	var wrapped := ThemeHandler._parse_number_field(
+		"border", "all", 2147483647, ThemeHandler._NATIVE_INT32_FLOAT32)
+	assert_is_error(wrapped, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(wrapped.error.message, "float-backed")
+
+	var rounded := ThemeHandler._parse_number_field(
+		"border", "all", 16777217, ThemeHandler._NATIVE_INT32_FLOAT32)
+	assert_is_error(rounded, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(rounded.error.message, "float-backed")
+
+	var border_bounds := ThemeHandler._parse_number_field(
+		"border", "all", 16777216, ThemeHandler._NATIVE_INT32_FLOAT32)
+	assert_has_key(border_bounds, "value")
+	assert_eq(border_bounds.value, 16777216)
+
+	var float_bounds := ThemeHandler._parse_number_field(
+		"margins", "left", 3e38, ThemeHandler._NATIVE_FLOAT32)
+	assert_has_key(float_bounds, "value")
+	assert_eq(float_bounds.value, PackedFloat32Array([3e38])[0])
+
+	var shadow_bounds := ThemeHandler._parse_number_field(
+		"shadow", "size", 2147483647, ThemeHandler._NATIVE_INT32)
+	assert_has_key(shadow_bounds, "value")
+	assert_eq(shadow_bounds.value, 2147483647)
+
+	assert_true(ThemeHandler._parse_int32_value(4294967296) == null,
+		"a wrapped int32 must be refused")
+	assert_true(ThemeHandler._parse_int32_value("4294967296") == null,
+		"string ints are range-checked too")
+	assert_eq(ThemeHandler._parse_int32_value(2147483647), 2147483647)

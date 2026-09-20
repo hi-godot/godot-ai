@@ -13,6 +13,24 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const _COLOR_HINT := "expected hex #rrggbb, named color, or {r,g,b,a} dict"
 
+## Theme constants/font sizes and StyleBoxFlat int properties are 32-bit in the
+## engine; GDScript ints are 64-bit, so an unvalidated 4294967296 narrows to 0
+## (and 2147483648 to -2147483648) at the property assignment.
+const _INT32_MIN := -2147483648
+const _INT32_MAX := 2147483647
+
+## Native storage kinds for numeric theme destinations, so validation models
+## what the engine actually keeps:
+##   _NATIVE_INT32          C++ int32 (Theme constants/font sizes, shadow_size)
+##   _NATIVE_FLOAT32        C++ real_t (margins, shadow offsets, Color components)
+##   _NATIVE_INT32_FLOAT32  int accessors backed by real_t storage: StyleBoxFlat
+##                          border widths and corner radii take ints but store
+##                          real_t, so 16777217 rounds to 16777216 and
+##                          2147483647 reads back as -2147483648
+const _NATIVE_INT32 := 0
+const _NATIVE_FLOAT32 := 1
+const _NATIVE_INT32_FLOAT32 := 2
+
 var _undo_redo: EditorUndoRedoManager
 var _connection: McpConnection
 
@@ -98,7 +116,7 @@ func set_constant(params: Dictionary) -> Dictionary:
 		func(theme, name, cls, val): theme.set_constant(name, cls, int(val)),
 		func(theme, name, cls): theme.clear_constant(name, cls),
 		func(theme, name, cls): return theme.has_constant(name, cls),
-		func(v): return int(v) if (v is int or v is float or (v is String and v.is_valid_int())) else null)
+		func(v): return _parse_int32_value(v))
 
 
 func set_font_size(params: Dictionary) -> Dictionary:
@@ -106,7 +124,24 @@ func set_font_size(params: Dictionary) -> Dictionary:
 		func(theme, name, cls, val): theme.set_font_size(name, cls, int(val)),
 		func(theme, name, cls): theme.clear_font_size(name, cls),
 		func(theme, name, cls): return theme.has_font_size(name, cls),
-		func(v): return int(v) if (v is int or v is float or (v is String and v.is_valid_int())) else null)
+		func(v): return _parse_int32_value(v))
+
+
+## Theme constant/font_size slots are 32-bit ints. Accepts int/float and
+## valid-int strings, but rejects non-finite or out-of-int32 values before the
+## engine narrowing can wrap them (4294967296 -> 0, 2147483648 -> -2147483648).
+## In-range fractional values keep the existing truncation policy.
+static func _parse_int32_value(v: Variant) -> Variant:
+	var number: float
+	if v is int or v is float:
+		number = float(v)
+	elif v is String and v.is_valid_int():
+		number = float(v.to_int())
+	else:
+		return null
+	if not is_finite(number) or number < float(_INT32_MIN) or number > float(_INT32_MAX):
+		return null
+	return int(number)
 
 
 # Shared implementation for scalar Theme slots (color, constant, font_size).
@@ -147,7 +182,7 @@ func _set_scalar(
 	var parsed = parser.call(raw_value)
 	if parsed == null:
 		## color slots want a color hint; constant/font_size are integer slots.
-		var hint := _COLOR_HINT if kind == "color" else "expected an integer"
+		var hint := _COLOR_HINT if kind == "color" else "expected a 32-bit integer"
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid %s value: %s (%s)" % [kind, raw_value, hint])
 
@@ -210,9 +245,11 @@ func _clear_scalar(theme_path: String, clearer: Callable, name: String, class_na
 ##
 ## Unknown keys inside any nested dict are rejected with INVALID_PARAMS so
 ## typos fail loudly instead of silently being ignored. Numeric values must be
-## finite numbers and flags real booleans; invalid input is refused with a
-## structured error before anything is applied, so a refused call leaves the
-## theme slot and undo history untouched.
+## finite and within the native storage's range (32-bit ints, 32-bit floats,
+## and the float32-backed ints behind border widths/corner radii) and flags
+## real booleans; invalid input is refused with a structured error before
+## anything is applied, so a refused call leaves the theme slot and undo
+## history untouched.
 func set_stylebox_flat(params: Dictionary) -> Dictionary:
 	var load_result := _load_theme_from_params(params)
 	if load_result.has("error"):
@@ -282,21 +319,21 @@ func _apply_flat_props(sb: StyleBoxFlat, params: Dictionary) -> Dictionary:
 			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid border_color: %s (%s)" % [str(params.border_color), _COLOR_HINT])
 		sb.border_color = bc
 
-	# border: {all, top, bottom, left, right} — int widths
+	# border: {all, top, bottom, left, right} — int widths (real_t storage)
 	if params.has("border"):
 		var border_result := _apply_sides(sb, params.border, "border",
 			["top", "bottom", "left", "right"],
 			"border_width_",
-			TYPE_INT)
+			_NATIVE_INT32_FLOAT32)
 		if border_result.has("error"):
 			return border_result
 
-	# corners: {all, top_left, top_right, bottom_left, bottom_right} — int radii
+	# corners: {all, top_left, top_right, bottom_left, bottom_right} — int radii (real_t storage)
 	if params.has("corners"):
 		var corners_result := _apply_sides(sb, params.corners, "corners",
 			["top_left", "top_right", "bottom_left", "bottom_right"],
 			"corner_radius_",
-			TYPE_INT)
+			_NATIVE_INT32_FLOAT32)
 		if corners_result.has("error"):
 			return corners_result
 
@@ -305,7 +342,7 @@ func _apply_flat_props(sb: StyleBoxFlat, params: Dictionary) -> Dictionary:
 		var margins_result := _apply_sides(sb, params.margins, "margins",
 			["top", "bottom", "left", "right"],
 			"content_margin_",
-			TYPE_FLOAT)
+			_NATIVE_FLOAT32)
 		if margins_result.has("error"):
 			return margins_result
 
@@ -326,7 +363,7 @@ func _apply_flat_props(sb: StyleBoxFlat, params: Dictionary) -> Dictionary:
 					"Invalid shadow.color: %s (%s)" % [str(shadow.color), _COLOR_HINT])
 			sb.shadow_color = sc
 		if shadow.has("size"):
-			var size_result := _parse_number_field("shadow", "size", shadow.size, TYPE_INT)
+			var size_result := _parse_number_field("shadow", "size", shadow.size, _NATIVE_INT32)
 			if size_result.has("error"):
 				return size_result
 			sb.shadow_size = size_result.value
@@ -337,12 +374,12 @@ func _apply_flat_props(sb: StyleBoxFlat, params: Dictionary) -> Dictionary:
 			var offset_x := sb.shadow_offset.x
 			var offset_y := sb.shadow_offset.y
 			if shadow.has("offset_x"):
-				var offset_x_result := _parse_number_field("shadow", "offset_x", shadow.offset_x, TYPE_FLOAT)
+				var offset_x_result := _parse_number_field("shadow", "offset_x", shadow.offset_x, _NATIVE_FLOAT32)
 				if offset_x_result.has("error"):
 					return offset_x_result
 				offset_x = offset_x_result.value
 			if shadow.has("offset_y"):
-				var offset_y_result := _parse_number_field("shadow", "offset_y", shadow.offset_y, TYPE_FLOAT)
+				var offset_y_result := _parse_number_field("shadow", "offset_y", shadow.offset_y, _NATIVE_FLOAT32)
 				if offset_y_result.has("error"):
 					return offset_y_result
 				offset_y = offset_y_result.value
@@ -386,8 +423,9 @@ func _commit_stylebox(
 ##   modulate_color           Color
 ##   draw_center              bool
 ##
-## Numeric values must be finite numbers and flags real booleans; invalid input
-## is refused with a structured error before anything is applied.
+## Numeric values must be finite and within the native storage's range, and
+## flags real booleans; invalid input is refused with a structured error before
+## anything is applied.
 func set_stylebox_texture(params: Dictionary) -> Dictionary:
 	var load_result := _load_theme_from_params(params)
 	if load_result.has("error"):
@@ -626,7 +664,11 @@ func _remove_node_stylebox(control: Control, slot: String) -> void:
 ## `{"value": <int|float>}`; non-numeric input and non-finite results return a
 ## structured error instead, so a bad value can neither raise an engine
 ## conversion error nor be silently stored as 0.
-static func _parse_number_field(dict_name: String, key: String, raw: Variant, value_type: int) -> Dictionary:
+##
+## The value is validated against the *native destination* before narrowing
+## (see the _NATIVE_* kinds), and the returned value is the narrowed one, so
+## what was validated is what gets stored.
+static func _parse_number_field(dict_name: String, key: String, raw: Variant, storage: int) -> Dictionary:
 	var parsed: Variant = McpJsonValues.parse_float(raw)
 	if parsed == null:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
@@ -635,7 +677,28 @@ static func _parse_number_field(dict_name: String, key: String, raw: Variant, va
 	if not is_finite(number):
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"'%s.%s' must be finite, got %s" % [dict_name, key, str(number)])
-	return {"value": int(number) if value_type == TYPE_INT else number}
+	match storage:
+		_NATIVE_INT32:
+			if number < float(_INT32_MIN) or number > float(_INT32_MAX):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+					"'%s.%s' is out of range for a 32-bit integer (got %s)" % [dict_name, key, str(number)])
+			return {"value": int(number)}
+		_NATIVE_FLOAT32:
+			var narrowed: float = PackedFloat32Array([number])[0]
+			if not is_finite(narrowed):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+					"'%s.%s' is out of range for a 32-bit float (got %s)" % [dict_name, key, str(number)])
+			return {"value": narrowed}
+		_NATIVE_INT32_FLOAT32:
+			## Must survive the float32 round-trip and stay in int32, or the
+			## int getter reads back a rounded or wrapped value.
+			var narrowed: float = PackedFloat32Array([number])[0]
+			if not is_finite(narrowed) or narrowed < float(_INT32_MIN) or narrowed > float(_INT32_MAX) \
+					or int(narrowed) != int(number):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+					"'%s.%s' is out of range for the float-backed 32-bit int storage (got %s)" % [dict_name, key, str(number)])
+			return {"value": int(narrowed)}
+	return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Unknown numeric storage kind: %d" % storage)
 
 
 ## Strict bool parser for stylebox flags. `bool("false")` is true in GDScript,
@@ -651,9 +714,10 @@ static func _parse_bool_field(name: String, raw: Variant) -> Dictionary:
 ## Every value is parsed and validated before anything is assigned, so an
 ## invalid value can neither raise an engine conversion error nor leave a
 ## partially applied stylebox. `sb` is a StyleBoxFlat or StyleBoxTexture (both
-## expose `set`). Returns {"ok": true} or the error dict to surface.
+## expose `set`); `storage` is one of the _NATIVE_* kinds. Returns
+## {"ok": true} or the error dict to surface.
 static func _apply_sides(sb: Object, sides_dict: Variant, dict_name: String,
-		side_names: Array, prop_prefix: String, value_type: int) -> Dictionary:
+		side_names: Array, prop_prefix: String, storage: int) -> Dictionary:
 	if typeof(sides_dict) != TYPE_DICTIONARY:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
 			"'%s' must be a dict with 'all' and/or side-specific keys" % dict_name)
@@ -666,13 +730,13 @@ static func _apply_sides(sb: Object, sides_dict: Variant, dict_name: String,
 				"Unknown key in '%s': %s (valid: all, %s)" % [dict_name, k, ", ".join(side_names)])
 	var parsed_values := {}
 	if sides_dict.has("all"):
-		var all_result := _parse_number_field(dict_name, "all", sides_dict.all, value_type)
+		var all_result := _parse_number_field(dict_name, "all", sides_dict.all, storage)
 		if all_result.has("error"):
 			return all_result
 		parsed_values["all"] = all_result.value
 	for s in side_names:
 		if sides_dict.has(s):
-			var side_result := _parse_number_field(dict_name, s, sides_dict[s], value_type)
+			var side_result := _parse_number_field(dict_name, s, sides_dict[s], storage)
 			if side_result.has("error"):
 				return side_result
 			parsed_values[s] = side_result.value
@@ -787,9 +851,17 @@ static func _validate_res_path(path: String, required_suffix: String, param_name
 ## Returns null if the input cannot be parsed.
 ## Delegates to the canonical parser (#714) — gains [r,g,b(,a)] array
 ## support and strict key/component checking, same shapes as every other
-## color-accepting handler.
+## color-accepting handler. Color components are 32-bit floats, so a finite
+## double like 1e40 narrows to INF at construction; the parsed value is
+## re-checked for finiteness and refused instead of storing an infinite color.
 static func _parse_color(value: Variant) -> Variant:
-	return McpJsonValues.parse_color(value)
+	var parsed: Variant = McpJsonValues.parse_color(value)
+	if parsed == null:
+		return null
+	var color := parsed as Color
+	if not (is_finite(color.r) and is_finite(color.g) and is_finite(color.b) and is_finite(color.a)):
+		return null
+	return color
 
 
 static func _serialize_value(value: Variant) -> Variant:
@@ -889,4 +961,4 @@ static func _parse_axis_stretch(value: String) -> Variant:
 ## parsed before any margin is assigned. Returns {"ok": true} or the error dict.
 static func _apply_texture_margins(sb: StyleBoxTexture, margins: Variant) -> Dictionary:
 	return _apply_sides(sb, margins, "margins", ["left", "top", "right", "bottom"],
-		"texture_margin_", TYPE_FLOAT)
+		"texture_margin_", _NATIVE_FLOAT32)
