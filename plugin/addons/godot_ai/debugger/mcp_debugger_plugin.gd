@@ -440,18 +440,9 @@ func _connect_script_debugger_breaked() -> void:
 
 
 static func _collect_nodes_of_class(node: Node, klass: String, out: Array[Node]) -> void:
-	## The editor rebuilds its UI while a plugin reload runs, so a child can be
-	## freed or null between `get_children()` and the recursive call. Skip it
-	## rather than erroring out of the debugger session setup. A node queued for
-	## deletion is still valid until the end of the frame, but connecting to it,
-	## reading its rows, or emitting its signals is already wrong, so skip it too.
-	if not is_instance_valid(node) or node.is_queued_for_deletion():
-		return
 	if node.get_class() == klass:
 		out.append(node)
 	for child in node.get_children():
-		if not is_instance_valid(child) or child.is_queued_for_deletion():
-			continue
 		_collect_nodes_of_class(child, klass, out)
 
 

@@ -627,7 +627,7 @@ func _add_generate_mesh(
 
 func _find_named_child(parent: Node, child_name: String) -> Node:
 	for child in parent.get_children():
-		if is_instance_valid(child) and child.name == child_name:
+		if child.name == child_name:
 			return child
 	return null
 
@@ -1004,7 +1004,7 @@ func test_generate_rejects_duplicate_paths_and_existing_colliders() -> void:
 	assert_contains(again.error.message, "already has a collider sibling")
 	var colliders := 0
 	for child in scene_root.get_children():
-		if is_instance_valid(child) and str(child.name).begins_with("GenerateOnceCollider"):
+		if str(child.name).begins_with("GenerateOnceCollider"):
 			colliders += 1
 	assert_eq(colliders, 1, "the retry must leave exactly one collider")
 	_remove_node(_find_named_child(scene_root, "GenerateOnceCollider"))
