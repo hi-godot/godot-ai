@@ -111,6 +111,56 @@ func test_overwrite_and_late_validation_preserve_existing_bytes() -> void:
 	assert_eq(FileAccess.get_file_as_bytes(request.resource_path), before)
 
 
+func _parameter_request(suffix: String, parameter_name: String) -> Dictionary:
+	## A connected parameter node is what makes the generated shader declare
+	## `uniform float <parameter_name>;` — the shape dsarno's probe used.
+	var request := _request(suffix)
+	request.stages[0].nodes = [{
+		"id": "tint",
+		"type": "VisualShaderNodeFloatParameter",
+		"params": {"parameter_name": parameter_name},
+	}]
+	request.stages[0].connections = [
+		{"from_node": "tint", "from_port": 0, "to_node": "output", "to_port": 1},
+	]
+	return request
+
+
+func test_rejects_uncompilable_parameter_names_and_preserves_bytes() -> void:
+	## `float` is a valid GDScript identifier but a reserved shader keyword, so
+	## the generated `uniform float float;` is rejected by Godot's own compiler.
+	## A graph the compiler rejects must not create the destination, and must
+	## not replace existing bytes under overwrite=true.
+	var rejected := _handler.create_graph(_parameter_request("reserved_parameter", "float"))
+	assert_has_key(rejected, "error")
+	assert_contains(rejected.error.message, "compile")
+	assert_false(FileAccess.file_exists("res://_test_visual_shader_reserved_parameter.tres"),
+		"a rejected graph must not create the destination")
+
+	var valid := _parameter_request("reserved_parameter", "tint_amount")
+	var created := _handler.create_graph(valid)
+	assert_has_key(created, "data", str(created.get("error", {})))
+	var before := FileAccess.get_file_as_bytes(valid.resource_path)
+	valid.overwrite = true
+	valid.stages[0].nodes[0].params.parameter_name = "float"
+	var refused := _handler.create_graph(valid)
+	assert_has_key(refused, "error")
+	assert_eq(FileAccess.get_file_as_bytes(valid.resource_path), before,
+		"a rejected overwrite must preserve the existing bytes")
+
+
+func test_accepts_legal_parameter_names_and_round_trips() -> void:
+	var request := _parameter_request("legal_parameter", "tint_amount")
+	var result := _handler.create_graph(request)
+	assert_has_key(result, "data", str(result.get("error", {})))
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_true(shader != null)
+	assert_eq(shader.get_node_list(VisualShader.TYPE_FRAGMENT).size(), 2,
+		"only the requested node and the built-in output are saved")
+	var node := shader.get_node(VisualShader.TYPE_FRAGMENT, 2)
+	assert_eq(str(node.get("parameter_name")), "tint_amount")
+
+
 func test_rejects_invalid_request_shapes_and_paths() -> void:
 	for changes in [
 		{"resource_path": ""}, {"resource_path": "res://../escape.tres"},

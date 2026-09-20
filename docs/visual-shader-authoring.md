@@ -57,6 +57,13 @@ directory. All stages are built and validated in memory before a temporary
 file is saved beside the destination and atomically renamed into place.
 Validation, save, or replacement failure preserves the existing file.
 
+The graph's generated shader is compiled by the engine before the destination
+is touched: the operation forces code generation and parses the result through
+Godot's shader compiler. A graph whose generated code does not compile — for
+example a parameter named after a shader keyword such as `float`, which
+GDScript's `is_valid_identifier()` accepts — is rejected, and the destination
+is neither created nor replaced.
+
 To use the shader, make two separate `material_manage` calls:
 
 1. `create` with `path="res://orange_material.tres"`, `type="shader"`, and

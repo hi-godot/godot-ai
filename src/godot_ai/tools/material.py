@@ -25,6 +25,8 @@ Ops:
         IDs are stage-local integers >=2 or nonempty strings; output is "output"/0.
         Limits: 256 nodes, 1024 connections total. Existing destination directory
         required. Returns id_map by stage as [{id, node_id}] in request order.
+        The generated graph is compiled before saving; an uncompilable graph
+        (for example a parameter named after a shader keyword) is not written.
         Use create(type="shader", shader_path=<saved .tres>) then assign separately.
   • create(path, type="standard", shader_path="", overwrite=False)
         Create + save a material .tres at a res:// path. type:

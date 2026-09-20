@@ -314,9 +314,39 @@ static func _integral_number(value: Variant) -> Variant:
 	return null
 
 
+## Godot's shader compiler is the authority on whether a graph's generated code
+## is legal: a parameter named after a shader keyword passes GDScript's
+## `is_valid_identifier()` but generates `uniform float float;`, which the
+## compiler rejects. Force a copy of the graph to generate its source, then
+## parse that source through the engine on a throwaway Shader. The appended
+## sentinel uniform only appears in the uniform list when the whole generated
+## source parses, so a missing sentinel means the graph would fail to compile.
+static func _validate_generated_graph(shader: VisualShader) -> Dictionary:
+	var probe := shader.duplicate(true) as VisualShader
+	if probe == null:
+		return _invalid("Cannot copy the VisualShader for compile validation")
+	probe._update_shader()
+	var generated := probe.get_code()
+	var sentinel := "_mcp_validate_%d" % Time.get_ticks_usec()
+	var compiler_probe := Shader.new()
+	compiler_probe.code = generated + "\nuniform float %s;\n" % sentinel
+	for uniform in compiler_probe.get_shader_uniform_list():
+		if str(uniform.get("name", "")) == sentinel:
+			return {}
+	return _invalid(
+		"The graph's generated shader does not compile; check parameter and varying "
+		+ "identifiers and declarations (reserved shader keywords are not legal names)"
+	)
+
+
 ## Stage in the destination directory, then use the OS rename/replace primitive.
 ## A failed save or rename never removes/truncates the existing destination.
+## The generated shader is compile-checked first, so an uncompilable graph is
+## rejected before the destination is created or replaced.
 func _save_atomic(shader: VisualShader, path: String, overwrite: bool) -> Dictionary:
+	var compiled := _validate_generated_graph(shader)
+	if compiled.has("error"):
+		return compiled
 	var directory := path.get_base_dir()
 	if not DirAccess.dir_exists_absolute(directory):
 		return _invalid("Destination directory does not exist: %s" % directory)
