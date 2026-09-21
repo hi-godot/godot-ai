@@ -40,6 +40,7 @@ forgiving on xvfb).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -49,9 +50,9 @@ import sys
 import time
 import traceback
 import urllib.error
-import urllib.request
 from pathlib import Path
 
+import httpx
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -138,6 +139,31 @@ def _remaining_timeout(cap: float, deadline: float | None) -> float:
     return min(cap, remaining)
 
 
+async def _request_body(headers: dict, body: bytes, timeout: float, deadline: float | None):
+    network_deadline = time.monotonic() + _remaining_timeout(timeout, deadline)
+    try:
+        async with asyncio.timeout(_remaining_timeout(timeout, network_deadline)):
+            async with httpx.AsyncClient(follow_redirects=False) as client:
+                response = await client.post(
+                    SERVER_URL, headers=headers, content=body,
+                    timeout=_remaining_timeout(timeout, network_deadline),
+                )
+                response.raise_for_status()
+                return response.content, response.headers.get("mcp-session-id")
+    except TimeoutError as exc:
+        raise TimeoutError("Smoke HTTP network deadline expired") from exc
+    except httpx.HTTPStatusError as exc:
+        response = exc.response
+        raise urllib.error.HTTPError(
+            str(response.url), response.status_code, response.reason_phrase,
+            response.headers, io.BytesIO(response.content),
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise TimeoutError(str(exc)) from exc
+    except httpx.RequestError as exc:
+        raise urllib.error.URLError(str(exc)) from exc
+
+
 def _post(
     session_id: str | None, body: dict, timeout: float = 10.0, *, deadline: float | None = None
 ) -> dict:
@@ -145,17 +171,12 @@ def _post(
     headers["Authorization"] = authorization_header(SERVER_URL)
     if session_id:
         headers["Mcp-Session-Id"] = session_id
-    req = urllib.request.Request(
-        SERVER_URL,
-        data=json.dumps(body).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-    # urllib bounds socket operations, not a continuously arriving response;
-    # the phase deadline also rejects results that arrive late.
-    with urllib.request.urlopen(req, timeout=_remaining_timeout(timeout, deadline)) as resp:
-        raw = resp.read().decode("utf-8")
-        new_session = resp.headers.get("mcp-session-id")
+    # Async cancellation bounds network waits, including continuously arriving SSE
+    # pings; synchronous setup/parsing still relies on the late-result check.
+    payload, new_session = asyncio.run(_request_body(
+        headers, json.dumps(body).encode("utf-8"), timeout, deadline,
+    ))
+    raw = payload.decode("utf-8")
     result = {"_session_id": new_session, "_raw": raw}
     for line in raw.splitlines():
         if line.startswith("data: "):

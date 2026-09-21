@@ -341,26 +341,21 @@ def test_post_uses_remaining_socket_allowance_and_rejects_late_body(smoke, monke
     module, clock, _ = smoke
     observed = []
 
-    class Response:
-        headers = {}
-
-        def __enter__(self):
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs == {"follow_redirects": False}
+        async def __aenter__(self):
             return self
-
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return False
-
-        def read(self):
+        async def post(self, url, *, timeout, **kwargs):
+            observed.append(timeout)
             clock.now += 1.1 if late else 0.2
-            return b'{"jsonrpc":"2.0","result":{}}'
+            return module.httpx.Response(200, content=b'{"jsonrpc":"2.0","result":{}}',
+                                         request=module.httpx.Request("POST", url))
 
     monkeypatch.setattr(module, "authorization_header", lambda url: "fixture")
-
-    def open_request(request, timeout):
-        observed.append(timeout)
-        return Response()
-
-    monkeypatch.setattr(module.urllib.request, "urlopen", open_request)
+    monkeypatch.setattr(module.httpx, "AsyncClient", Client)
     if late:
         with pytest.raises(TimeoutError, match="deadline"):
             module._post("sid", {}, timeout=40, deadline=1001)
@@ -397,23 +392,21 @@ def test_diagnostics_have_one_shared_budget(smoke, monkeypatch):
     module, clock, _ = smoke
     timeouts = []
 
-    class Response:
-        headers = {}
-        def __enter__(self):
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
             return self
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return False
-        def read(self):
+        async def post(self, url, *, timeout, **kwargs):
+            timeouts.append(timeout)
             clock.now += module.DIAGNOSTICS_BUDGET_SEC
-            return b'{}'
+            return module.httpx.Response(200, content=b'{}',
+                                         request=module.httpx.Request("POST", url))
 
     monkeypatch.setattr(module, "authorization_header", lambda url: "fixture")
-
-    def open_request(request, timeout):
-        timeouts.append(timeout)
-        return Response()
-
-    monkeypatch.setattr(module.urllib.request, "urlopen", open_request)
+    monkeypatch.setattr(module.httpx, "AsyncClient", Client)
     module._dump_diagnostics("sid")
     assert timeouts == [module.DIAGNOSTICS_BUDGET_SEC]
 
@@ -522,3 +515,176 @@ def test_existing_structured_error_code_stays_at_the_same_path(smoke, monkeypatc
         result["content"] = [{"type": "text", "text": json.dumps(payload)}]
     monkeypatch.setattr(module, "_post", lambda *a, **k: {"result": result})
     assert module._tool_call("sid", "editor_manage", {}, 12) == payload
+
+
+@pytest.fixture
+def real_http_smoke(monkeypatch):
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    module = _load_smoke()
+    requests = []
+    disconnected = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            requests.append((self.path, dict(self.headers), self.rfile.read(
+                int(self.headers.get("Content-Length", 0)))))
+            if self.path.startswith("/redirect"):
+                self.send_response(int(self.path[-3:]))
+                self.send_header("Location", "/json")
+                self.end_headers()
+                return
+            status = 403 if self.path == "/error" else 202 if self.path == "/empty" else 200
+            self.send_response(status)
+            self.send_header("Mcp-Session-Id", "response-session")
+            content_type = (
+                "text/event-stream" if self.path in ("/sse", "/drip") else "application/json"
+            )
+            self.send_header("Content-Type", content_type)
+            self.end_headers()
+            try:
+                if self.path == "/drip":
+                    for _ in range(25):
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                        time.sleep(.1)
+                payload = {
+                    "/json": b'{"result":{"ok":true}}',
+                    "/sse": b': ping\n\ndata: {"result":{"ok":true}}\n\n',
+                    "/empty": b"", "/error": b"denied", "/utf8": b"bad \xff",
+                }.get(self.path, b'data: {"result":{"ok":true}}\n\n')
+                self.wfile.write(payload)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                disconnected.set()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    monkeypatch.setattr(module, "SERVER_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setattr(module, "authorization_header", lambda url: "Bearer owned-fixture")
+    try:
+        yield module, requests, disconnected
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+        assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("path", ["/json", "/sse", "/empty"])
+def test_post_real_response_controls(real_http_smoke, path):
+    import time
+    module, requests, _ = real_http_smoke
+    module.SERVER_URL += path
+    result = module._post("request-session", {"id": 7}, deadline=time.monotonic() + 3)
+    assert result["_session_id"] == "response-session"
+    if path == "/empty":
+        assert result["_raw"] == ""
+    else:
+        assert result["result"] == {"ok": True}
+    assert requests[0][1]["Authorization"] == "Bearer owned-fixture"
+    assert requests[0][1]["Mcp-Session-Id"] == "request-session"
+    assert requests[0][2] == b'{"id": 7}'
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("limited_by", ["phase", "call"])
+def test_post_cancels_real_dripping_response(real_http_smoke, limited_by):
+    import time
+    module, requests, disconnected = real_http_smoke
+    module.SERVER_URL += "/drip"
+    start = time.monotonic()
+    with pytest.raises(TimeoutError):
+        module._post(None, {}, timeout=1 if limited_by == "call" else 10,
+                     deadline=start + (10 if limited_by == "call" else 1))
+    assert time.monotonic() - start < 2, "must cancel before the 2.5s response completes"
+    assert disconnected.wait(2), "server must observe the cancelled connection close"
+    assert len(requests) == 1
+
+
+def test_post_preserves_http_error_metadata(real_http_smoke):
+    import time
+    module, requests, _ = real_http_smoke
+    module.SERVER_URL += "/error"
+    with pytest.raises(module.urllib.error.HTTPError) as caught:
+        module._post(None, {}, deadline=time.monotonic() + 3)
+    assert caught.value.code == 403
+    assert caught.value.url == module.SERVER_URL
+    assert caught.value.headers["mcp-session-id"] == "response-session"
+    assert caught.value.read() == b"denied"
+    assert len(requests) == 1
+
+
+def test_post_transport_error_stays_retryable(smoke, monkeypatch):
+    module, _, _ = smoke
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def post(self, *args, **kwargs):
+            raise module.httpx.ConnectError("owned connection refused")
+    monkeypatch.setattr(module.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(module, "authorization_header", lambda url: "fixture")
+    with pytest.raises(module.urllib.error.URLError, match="owned connection refused"):
+        module._post(None, {}, deadline=1001)
+
+
+def test_cancelled_response_keeps_artifacts_and_single_stop(real_http_smoke, monkeypatch, tmp_path):
+    module, requests, disconnected = real_http_smoke
+    module.SERVER_URL += "/drip"
+    calls = []
+    monkeypatch.setattr(module, "DIAG_DIR", str(tmp_path / "diag"))
+    monkeypatch.setattr(module, "EDITOR_LOG", str(tmp_path / "editor.log"))
+    monkeypatch.setattr(module, "CAPTURE_BUDGET_SEC", 1)
+    monkeypatch.setattr(module, "_initialize_session", lambda: "session")
+    monkeypatch.setattr(module, "_wait_for_godot_session", lambda *a, **k: None)
+    monkeypatch.setattr(module, "_wait_for_game_capture_ready", lambda *a, **k: None)
+    monkeypatch.setattr(module, "_dump_diagnostics", lambda *a, **k: None)
+    def tool_call(sid, name, args, *a, **k):
+        calls.append(name)
+        if name == "project_manage":
+            assert args == {"op": "stop"}
+        return {}
+    monkeypatch.setattr(module, "_tool_call", tool_call)
+    def capture(*args, deadline):
+        module._post("session", {}, deadline=deadline)
+        raise AssertionError("dripping response must expire")
+    monkeypatch.setattr(module, "_capture_attempt", capture)
+    assert module.main() == 1
+    assert calls.count("project_run") == 1
+    assert calls.count("scene_open") == 1
+    assert calls.count("project_manage") == 1
+    assert len(requests) == 1
+    assert disconnected.wait(2)
+    artifact = (tmp_path / "diag" / "attempts.log").read_text(encoding="utf-8")
+    assert "network deadline expired" in artifact
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_post_does_not_redispatch_on_redirect(real_http_smoke, status):
+    import time
+    module, requests, _ = real_http_smoke
+    module.SERVER_URL += f"/redirect{status}"
+    with pytest.raises(module.urllib.error.HTTPError) as caught:
+        module._post(None, {"method": "tools/call"}, deadline=time.monotonic() + 3)
+    assert caught.value.code == status
+    assert caught.value.headers["Location"] == "/json"
+    assert len(requests) == 1
+
+
+def test_post_preserves_strict_utf8(real_http_smoke):
+    import time
+    module, requests, _ = real_http_smoke
+    module.SERVER_URL += "/utf8"
+    with pytest.raises(UnicodeDecodeError):
+        module._post(None, {}, deadline=time.monotonic() + 3)
+    assert len(requests) == 1
