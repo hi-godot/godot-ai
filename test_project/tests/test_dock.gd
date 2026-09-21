@@ -2681,3 +2681,50 @@ func test_client_transport_tag_tracks_descriptor_shape() -> void:
 	assert_eq(McpDockScript._client_transport_tag("codex"), "attach",
 		"TOML COMMAND_ARRAY clients tag attach too")
 	assert_eq(McpDockScript._client_transport_tag("__missing_client__"), "")
+
+
+func test_endpoint_loss_status_distinguishes_pending_exhausted_and_connected() -> void:
+	var dock := McpDockScript.new()
+	dock._build_ui()
+	dock._startup_grace_until_msec = 0
+	dock._post_update_server_pending = false
+	var manager := McpServerLifecycleManager.new()
+	manager.configure({"automatic_effects": false})
+	manager.start_server()
+	manager._episode["state"] = McpServerLifecycleManager.READY
+	manager._endpoint_recovery_attempts = McpServerLifecycleManager.ENDPOINT_RECOVERY_DELAYS_SECONDS.size() - 1
+	manager.snapshot_changed.connect(dock.present_lifecycle_snapshot)
+	dock.present_transport_snapshot({"connected": false, "status": {"phase": "blocked"}})
+	manager.transport_lost("Only the editor socket closed.")
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Connection lost; reconnecting...")
+	assert_eq(dock._status_icon.color, McpDockScript.COLOR_AMBER)
+	assert_contains(dock._crash_output.get_parsed_text(), "Only the editor socket closed.")
+	assert_true(manager.recover_lost_endpoint(int(manager.get_status_dict().episode_id)))
+	manager._episode["state"] = McpServerLifecycleManager.READY
+	manager.transport_lost("Only the editor socket closed again.")
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Connection lost")
+	assert_eq(dock._status_icon.color, Color.RED)
+	assert_contains(dock._crash_output.get_parsed_text(), "gave up after 5 attempts")
+	dock.present_lifecycle_snapshot({"state": McpServerState.READY})
+	dock.present_transport_snapshot({"connected": true, "status": {"phase": "connected"}})
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Server connected")
+	assert_eq(dock._status_icon.color, Color.GREEN)
+	assert_false(dock._crash_panel.visible)
+	dock.free()
+
+
+func test_observed_process_exit_retains_elapsed_diagnostic() -> void:
+	var dock := McpDockScript.new()
+	dock._build_ui()
+	dock.present_lifecycle_snapshot({
+		"state": McpServerState.CRASHED, "reason": "launch_gone", "exit_ms": 1234,
+		"message": "The server process exited.",
+	})
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Server exited after 1.2s")
+	assert_eq(dock._status_icon.color, Color.RED)
+	assert_eq(dock._crash_output.get_parsed_text(), "The server process exited.")
+	dock.free()

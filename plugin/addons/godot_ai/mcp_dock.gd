@@ -827,6 +827,10 @@ func _update_status() -> void:
 	elif bool(server_status.get("handoff_retry_pending", false)):
 		status_text = "Recovering after update…"
 		status_color = COLOR_AMBER
+	elif state == ServerStateScript.CRASHED and str(server_status.get("reason", "")) == "endpoint_lost":
+		var recovery_pending := bool(server_status.get("recovery_pending", false))
+		status_text = "Connection lost; reconnecting..." if recovery_pending else "Connection lost"
+		status_color = COLOR_AMBER if recovery_pending else Color.RED
 	elif state == ServerStateScript.CRASHED:
 		var exit_ms: int = server_status.get("exit_ms", 0)
 		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)

@@ -313,6 +313,7 @@ func transport_lost(reason := "Authenticated server endpoint was lost.") -> void
 	_ready_since_msec = 0
 	var limit := ENDPOINT_RECOVERY_DELAYS_SECONDS.size()
 	if _endpoint_recovery_attempts >= limit:
+		_endpoint_recovery_pending_episode = 0
 		_block(
 			"endpoint_lost",
 			"%s Automatic re-probing gave up after %d attempts; click Restart." % [reason, limit],
@@ -320,6 +321,7 @@ func transport_lost(reason := "Authenticated server endpoint was lost.") -> void
 		return
 	_endpoint_recovery_attempts += 1
 	var delay := float(ENDPOINT_RECOVERY_DELAYS_SECONDS[_endpoint_recovery_attempts - 1])
+	_endpoint_recovery_pending_episode = int(_episode.get("id", 0))
 	_block(
 		"endpoint_lost",
 		"%s Re-probing in %ds (attempt %d of %d)." % [
@@ -330,7 +332,6 @@ func transport_lost(reason := "Authenticated server endpoint was lost.") -> void
 		"MCP | server endpoint lost (%s); re-probing in %ds (attempt %d of %d)"
 		% [reason, int(delay), _endpoint_recovery_attempts, limit]
 	)
-	_endpoint_recovery_pending_episode = int(_episode.get("id", 0))
 	if bool(_plan.get("automatic_effects", true)):
 		_recover_lost_endpoint_after(delay, _endpoint_recovery_pending_episode)
 
@@ -1627,6 +1628,12 @@ func get_status_dict() -> Dictionary:
 	return {
 		"episode_id": int(_episode.get("id", 0)),
 		"episode_state": state,
+		"reason": reason,
+		"recovery_pending": (
+			state == BLOCKED and reason == "endpoint_lost"
+			and _endpoint_recovery_pending_episode > 0
+			and _endpoint_recovery_pending_episode == int(_episode.get("id", 0))
+		),
 		"phase": str(_episode.get("phase", "")),
 		"ready_kind": str(_episode.get("ready_kind", "")),
 		"state": _dock_state(state, reason),
