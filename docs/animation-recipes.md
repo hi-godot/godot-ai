@@ -47,7 +47,9 @@ instead of `1.0`.
 
 A closed circle sampled densely enough that linear interpolation reads as round
 (16 segments ≈ 2% chord error). 3D orbits the XZ plane; 2D/Control orbit in
-screen space. Generate the keys (radius defaults: `1.0` for 3D, `100.0` for 2D):
+screen space. Generate the keys (radius defaults: `1.0` for 3D, `100.0` for 2D).
+
+For a Node3D target the property is a `Vector3` — three components:
 
 ```gdscript
 const SEGMENTS := 16
@@ -56,9 +58,16 @@ for i in SEGMENTS + 1:                      # +1 closes the loop
     var angle := TAU * float(i) / float(SEGMENTS)
     keys.append({
         "time": 2.0 * float(i) / float(SEGMENTS),
-        "value": [cos(angle) * radius, 0.0, sin(angle) * radius],   # [x, y] in 2D
+        "value": [cos(angle) * radius, 0.0, sin(angle) * radius],   # [x, 0, z]
         "transition": "linear",
     })
+```
+
+For a Control/Node2D target the property is a `Vector2` — two components, or
+typed keyframe coercion rejects the value:
+
+```gdscript
+        "value": [cos(angle) * radius, sin(angle) * radius],        # [x, y]
 ```
 
 ```json

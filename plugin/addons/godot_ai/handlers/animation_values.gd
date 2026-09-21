@@ -352,6 +352,15 @@ static func coerce_with_context(value: Variant, ctx: Dictionary) -> Dictionary:
 	return coerce_for_type(value, ctx.prop_type, ctx.prop_name)
 
 
+## A rotation slerp can consume: all components finite and unit length within
+## float32 precision. Guards the normalization path against a scaled result
+## that is zero, infinite, or NaN.
+static func _is_usable_rotation(quat: Quaternion) -> bool:
+	if not is_finite(quat.x) or not is_finite(quat.y) or not is_finite(quat.z) or not is_finite(quat.w):
+		return false
+	return absf(quat.length() - 1.0) <= 0.001
+
+
 ## Coerce a single value to the given Godot variant type. Returns
 ## {"ok": coerced} or {"error": msg}. Unknown types pass through.
 static func coerce_for_type(value: Variant, prop_type: int, prop_name: String) -> Dictionary:
@@ -399,10 +408,22 @@ static func coerce_for_type(value: Variant, prop_type: int, prop_name: String) -
 			## slerps quaternions, and a non-unit one makes
 			## value_track_interpolate emit a normalization error and return
 			## identity. Normalize valid nonzero rotations so stored tracks are
-			## usable; a zero-length quaternion is not a rotation and is refused.
-			if quat.length_squared() < 1e-12:
+			## usable; only an exactly zero-length quaternion is refused.
+			## Scale by the largest component before measuring: components are
+			## float32, so squaring one near the type's maximum overflows to
+			## INF (normalized() then returns (0,0,0,0)), while squaring a tiny
+			## nonzero one underflows to zero and misreads as zero-length.
+			var largest := maxf(maxf(absf(quat.x), absf(quat.y)), maxf(absf(quat.z), absf(quat.w)))
+			if largest == 0.0:
 				return {"error": "Cannot coerce value to Quaternion for property '%s': zero-length quaternion is not a rotation" % prop_name}
-			return {"ok": quat.normalized()}
+			var normalized := Quaternion(
+				quat.x / largest, quat.y / largest, quat.z / largest, quat.w / largest
+			).normalized()
+			## Validate the result instead of trusting the arithmetic: an
+			## unusable rotation must fail here, not reach slerp as zero.
+			if not _is_usable_rotation(normalized):
+				return {"error": "Cannot coerce value to Quaternion for property '%s': components cannot be normalized to a usable rotation" % prop_name}
+			return {"ok": normalized}
 		TYPE_BASIS:
 			var basis = McpJsonValues.parse_basis(value)
 			if basis != null:

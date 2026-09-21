@@ -2460,6 +2460,26 @@ func test_coerce_quaternion_rotation_contract() -> void:
 	assert_false(scaled.has("error"), "a nonzero quaternion must normalize: %s" % str(scaled))
 	assert_true((scaled.ok as Quaternion).is_equal_approx(Quaternion.IDENTITY),
 		"(0,0,0,2) must normalize to identity, got %s" % str(scaled.ok))
+	## Large finite components: their float32 squared length overflows to INF,
+	## so a length_squared() threshold let (0,0,0,0) through to slerp. The
+	## scaled normalization must still return a usable unit rotation.
+	var huge := AnimationValues.coerce_for_type([0.0, 0.0, 1e20, 1e20], TYPE_QUATERNION, "quaternion")
+	assert_false(huge.has("error"), "1e20 components must normalize: %s" % str(huge))
+	var huge_quat: Quaternion = huge.ok
+	assert_true(absf(huge_quat.length() - 1.0) < 0.001,
+		"1e20 components must normalize to unit length, got %s" % str(huge_quat))
+	assert_true(huge_quat.is_equal_approx(Quaternion(0.0, 0.0, sqrt(0.5), sqrt(0.5))),
+		"1e20 components must keep their rotation, got %s" % str(huge_quat))
+	var huger := AnimationValues.coerce_for_type([0.0, 0.0, 1e30, 1e30], TYPE_QUATERNION, "quaternion")
+	assert_false(huger.has("error"), "1e30 components must normalize: %s" % str(huger))
+	assert_true(absf((huger.ok as Quaternion).length() - 1.0) < 0.001,
+		"1e30 components must normalize to unit length, got %s" % str(huger.ok))
+	## Tiny nonzero components are a valid rotation too: their squared length
+	## underflows below any epsilon, but only exact zero is zero-length.
+	var tiny := AnimationValues.coerce_for_type([0.0, 0.0, 1e-7, 1e-7], TYPE_QUATERNION, "quaternion")
+	assert_false(tiny.has("error"), "a tiny nonzero quaternion must normalize: %s" % str(tiny))
+	assert_true(absf((tiny.ok as Quaternion).length() - 1.0) < 0.001,
+		"tiny components must normalize to unit length, got %s" % str(tiny.ok))
 
 
 func test_coerce_rejects_nonfinite_components() -> void:
@@ -2570,6 +2590,31 @@ func test_quaternion_track_normalizes_and_interpolates() -> void:
 	assert_true(mid is Quaternion, "slerp must return a Quaternion, got %s" % str(mid))
 	assert_true(absf((mid as Quaternion).length() - 1.0) < 0.001,
 		"an interpolated quaternion must stay unit length, got %s" % str(mid))
+	## Large finite components through the actual interpolation path: the
+	## engine errors and returns identity when a stored keyframe is not a
+	## usable rotation, so the interpolated value itself is the regression.
+	_handler.create_animation({"player_path": player_path, "name": "quat_large_anim", "length": 1.0})
+	var large_result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "quat_large_anim",
+		"track_path": "TypedQuatTarget:quat",
+		"keyframes": [
+			{"time": 0.0, "value": [0.0, 0.0, 1e20, 1e20]},
+			{"time": 1.0, "value": [0.0, 0.0, 1e30, 1e30]},
+		],
+	})
+	assert_has_key(large_result, "data")
+	var large_anim := _fetch_anim(player_path, "quat_large_anim")
+	assert_eq(large_anim.get_track_count(), 1)
+	var expected_large := Quaternion(0.0, 0.0, sqrt(0.5), sqrt(0.5))
+	var large_start: Variant = large_anim.value_track_interpolate(0, 0.0)
+	assert_true(large_start is Quaternion, "interpolation must return a Quaternion, got %s" % str(large_start))
+	assert_true((large_start as Quaternion).is_equal_approx(expected_large),
+		"1e20 components must interpolate as their rotation, got %s" % str(large_start))
+	var large_mid: Variant = large_anim.value_track_interpolate(0, 0.5)
+	assert_true(large_mid is Quaternion, "slerp must return a Quaternion, got %s" % str(large_mid))
+	assert_true(absf((large_mid as Quaternion).length() - 1.0) < 0.001,
+		"a large-component slerp must stay unit length, got %s" % str(large_mid))
 	var zero := _handler.add_property_track({
 		"player_path": player_path,
 		"animation_name": "quat_anim",
