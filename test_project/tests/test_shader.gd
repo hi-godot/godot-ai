@@ -373,9 +373,12 @@ void fragment() {
 		"replace_all": true,
 	})
 	assert_has_key(patched, "data", str(patched.get("error", {})))
+	## The new name only exists in the patched include, so seeing it through the
+	## retained shader proves the dependency refresh recompiled it. (The
+	## headless/dummy renderer accumulates parameter entries across recompiles,
+	## so the old name is not asserted absent.)
 	assert_true(_has_uniform(held, "shared_power"),
 		"the retained shader must recompile against the patched include")
-	assert_false(_has_uniform(held, "shared_strength"))
 
 
 func test_patch_rejects_invalid_result_and_preserves_file() -> void:
