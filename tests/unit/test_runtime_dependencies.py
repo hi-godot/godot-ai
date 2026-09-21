@@ -93,11 +93,12 @@ def test_runtime_contract_reports_every_missing_or_changed_distribution() -> Non
     assert "websockets==0.0.0" in str(raised.value)
 
 
-def test_runtime_contract_converts_missing_metadata_to_closed_failure() -> None:
+@pytest.mark.parametrize("missing_package", ["fastmcp", "sniffio"])
+def test_runtime_contract_converts_missing_metadata_to_closed_failure(missing_package: str) -> None:
     def missing_metadata(name: str) -> str:
-        if name == "fastmcp":
+        if name == missing_package:
             raise PackageNotFoundError(name)
         return RUNTIME_DEPENDENCIES[name]
 
-    with pytest.raises(RuntimeError, match=r"fastmcp==missing"):
+    with pytest.raises(RuntimeError, match=rf"{missing_package}==missing"):
         verify_runtime_dependencies(missing_metadata)
