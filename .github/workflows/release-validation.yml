@@ -62,7 +62,7 @@ jobs:
           from script.release_support import canonical
           Path("qualification-run.json").write_bytes(canonical(check_run_provenance(os.environ["QUALIFICATION_RUN_ID"])))
           PY
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.qualification_run_id }}
@@ -78,7 +78,7 @@ jobs:
           record = support.verify_candidate(Path("candidate"), "a")
           support.validate_run(support.read_json(Path("qualification-run.json")), record["workflow_sha"], record["run_id"], record["run_attempt"])
           PY
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: inputs.mode == 'predecessor'
         with:
           github-token: ${{ github.token }}
@@ -86,7 +86,7 @@ jobs:
           repository: hi-godot/godot-ai
           name: v4-row-python-${{ matrix.os }}-${{ matrix.python }}
           path: python-row
-      - uses: chickensoft-games/setup-godot@f166999204a4f2722c6fe042fbaa3b3ea0d9c789 # v2
+      - uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2
         if: inputs.mode == 'predecessor'
         with:
           version: "4.7.0"
@@ -138,7 +138,7 @@ jobs:
           from script.release_support import canonical
           Path("qualification-run.json").write_bytes(canonical(check_run_provenance(os.environ["QUALIFICATION_RUN_ID"])))
           PY
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.qualification_run_id }}
@@ -153,7 +153,7 @@ jobs:
           record = support.verify_candidate(Path("candidate"), "a")
           support.validate_run(support.read_json(Path("qualification-run.json")), record["workflow_sha"], record["run_id"], record["run_attempt"])
           PY
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: validation-${{ inputs.mode }}-*
           path: rows
@@ -168,7 +168,7 @@ jobs:
           from script.release_validation import check_publication_run
           check_publication_run(os.environ["PUBLICATION_RUN_ID"], Path("candidate"))
           PY
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: inputs.mode == 'public'
         with:
           github-token: ${{ github.token }}

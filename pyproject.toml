@@ -36,17 +36,20 @@ dependencies = [
     # boundaries float underneath it, so every behavior-defining distribution
     # is exact and checked again at process startup. Dependency upgrades are a
     # reviewed release change, not a resolver-time event.
-    "fastmcp==3.4.7",
+    "fastmcp==4.0.5",
+    "fastmcp-slim==4.0.5",
     # attach/proxy.py uses AnyIO's stream exceptions directly. Keep that
     # contract explicit instead of inheriting FastMCP's transitive choice.
-    "anyio==4.14.2",
-    "mcp==1.29.1",
+    "anyio==4.15.1",
+    "mcp==2.2.0",
+    "mcp-types==2.2.0",
     "websockets==17.1",
     "pydantic==2.13.5",
-    # The attach bridge uses AsyncClient, transport errors, and granular
-    # connect/read/write/pool timeouts directly. Do not rely on FastMCP's
-    # transitive installation for this public runtime dependency.
+    # Status and startup probes still use HTTPX; the MCP attach boundary uses HTTPX2.
     "httpx==0.28.1",
+    "sniffio==1.3.1",
+    "httpx2==2.13.0",
+    "httpcore2==2.13.0",
     # asgi.py imports these directly; declare them instead of relying on
     # them arriving transitively through fastmcp (audit backlog).
     "uvicorn==0.52.4",
@@ -87,8 +90,8 @@ dev = [
     "cryptography>=42",
 ]
 build = [
-    "build==1.6.0",
-    "pyinstaller==6.22.2",
+    "build==1.6.1",
+    "pyinstaller==6.22.3",
 ]
 
 [project.scripts]

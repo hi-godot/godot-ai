@@ -31,11 +31,11 @@ def test_build_and_promotion_tooling_is_exactly_pinned() -> None:
 
     assert configuration["build-system"]["requires"] == ["setuptools==84.0.0"]
     assert configuration["project"]["optional-dependencies"]["build"] == [
-        "build==1.6.0",
-        "pyinstaller==6.22.2",
+        "build==1.6.1",
+        "pyinstaller==6.22.3",
     ]
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert 'python -m pip install "build==1.6.0"' in workflow
+    assert 'python -m pip install "build==1.6.1"' in workflow
     assert "pip install --upgrade pip build" not in workflow
 
 
@@ -93,11 +93,12 @@ def test_runtime_contract_reports_every_missing_or_changed_distribution() -> Non
     assert "websockets==0.0.0" in str(raised.value)
 
 
-def test_runtime_contract_converts_missing_metadata_to_closed_failure() -> None:
+@pytest.mark.parametrize("missing_package", ["fastmcp", "sniffio"])
+def test_runtime_contract_converts_missing_metadata_to_closed_failure(missing_package: str) -> None:
     def missing_metadata(name: str) -> str:
-        if name == "fastmcp":
+        if name == missing_package:
             raise PackageNotFoundError(name)
         return RUNTIME_DEPENDENCIES[name]
 
-    with pytest.raises(RuntimeError, match=r"fastmcp==missing"):
+    with pytest.raises(RuntimeError, match=rf"{missing_package}==missing"):
         verify_runtime_dependencies(missing_metadata)
