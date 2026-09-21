@@ -9,6 +9,10 @@ const MODES := {
 	"spatial": Shader.MODE_SPATIAL, "canvas_item": Shader.MODE_CANVAS_ITEM,
 	"particles": Shader.MODE_PARTICLES, "sky": Shader.MODE_SKY, "fog": Shader.MODE_FOG,
 }
+const MODE_NAMES := {
+	Shader.MODE_SPATIAL: "spatial", Shader.MODE_CANVAS_ITEM: "canvas_item",
+	Shader.MODE_PARTICLES: "particles", Shader.MODE_SKY: "sky", Shader.MODE_FOG: "fog",
+}
 const STAGES := {
 	"vertex": VisualShader.TYPE_VERTEX, "fragment": VisualShader.TYPE_FRAGMENT,
 	"light": VisualShader.TYPE_LIGHT, "start": VisualShader.TYPE_START,
@@ -314,13 +318,44 @@ static func _integral_number(value: Variant) -> Variant:
 	return null
 
 
-## Godot's shader compiler is the authority on whether a graph's generated code
-## is legal: a parameter named after a shader keyword passes GDScript's
+## Parse `code` through the engine's shader compiler and report whether the
+## appended sentinel uniform is reflected back. Uniform reflection proves the
+## source parsed for the current renderer; it is not a final GPU pipeline
+## compile and says nothing about other renderers.
+static func _source_parses(code: String, sentinel: String) -> bool:
+	var probe := Shader.new()
+	probe.code = code + "\nuniform float %s;\n" % sentinel
+	for uniform in probe.get_shader_uniform_list():
+		if str(uniform.get("name", "")) == sentinel:
+			return true
+	return false
+
+
+## The `uniform` and `varying` lines the engine emitted for the graph. Used
+## when the current renderer cannot compile the shader type: declarations are
+## mode-independent, so they still parse under a type the renderer accepts.
+static func _generated_declarations(generated: String) -> String:
+	var declarations := PackedStringArray()
+	for line in generated.split("\n"):
+		var stripped := line.strip_edges()
+		if stripped.begins_with("uniform ") or stripped.begins_with("varying "):
+			declarations.append(stripped)
+	return "\n".join(declarations)
+
+
+## Godot's shader compiler is the authority on declaration legality: a
+## parameter named after a shader keyword passes GDScript's
 ## `is_valid_identifier()` but generates `uniform float float;`, which the
 ## compiler rejects. Force a copy of the graph to generate its source, then
-## parse that source through the engine on a throwaway Shader. The appended
-## sentinel uniform only appears in the uniform list when the whole generated
-## source parses, so a missing sentinel means the graph would fail to compile.
+## parse that source through the engine. The appended sentinel uniform only
+## appears in the uniform list when the parsed source is accepted, so a missing
+## sentinel means the graph would fail to compile.
+##
+## Renderers differ in which shader types they compile — the Compatibility
+## renderer rejects `shader_type fog` before the graph's content matters — so
+## the type is probed first. When the current renderer cannot compile the type,
+## the generated declarations are parsed under a supported type instead: the
+## advertised modes stay accepted and identifier validation still applies.
 static func _validate_generated_graph(shader: VisualShader) -> Dictionary:
 	var probe := shader.duplicate(true) as VisualShader
 	if probe == null:
@@ -328,11 +363,14 @@ static func _validate_generated_graph(shader: VisualShader) -> Dictionary:
 	probe._update_shader()
 	var generated := probe.get_code()
 	var sentinel := "_mcp_validate_%d" % Time.get_ticks_usec()
-	var compiler_probe := Shader.new()
-	compiler_probe.code = generated + "\nuniform float %s;\n" % sentinel
-	for uniform in compiler_probe.get_shader_uniform_list():
-		if str(uniform.get("name", "")) == sentinel:
-			return {}
+	var mode_name := str(MODE_NAMES.get(probe.get_mode(), ""))
+	if mode_name.is_empty():
+		return _invalid("Cannot resolve the VisualShader mode for compile validation")
+	var source := generated
+	if not _source_parses("shader_type %s;" % mode_name, sentinel):
+		source = "shader_type spatial;\n" + _generated_declarations(generated)
+	if _source_parses(source, sentinel):
+		return {}
 	return _invalid(
 		"The graph's generated shader does not compile; check parameter and varying "
 		+ "identifiers and declarations (reserved shader keywords are not legal names)"

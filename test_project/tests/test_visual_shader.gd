@@ -97,6 +97,39 @@ func test_modes_and_explicit_stages() -> void:
 				assert_eq(shader.get_node(Handler.STAGES[stage], 2).get("constant"), 0.25)
 
 
+func test_fog_mode_survives_renderer_type_limits() -> void:
+	## The Compatibility renderer cannot compile `shader_type fog` at all, so the
+	## generated source parse fails there for a reason that has nothing to do
+	## with the graph. The advertised mode must stay accepted while an illegal
+	## parameter name is still rejected.
+	var legal := _request("fog_mode")
+	legal.shader_type = "fog"
+	legal.stages = [{
+		"stage": "fog",
+		"nodes": [{
+			"id": "tint", "type": "VisualShaderNodeFloatParameter",
+			"params": {"parameter_name": "tint_amount"},
+		}],
+		"connections": [{"from_node": "tint", "from_port": 0, "to_node": "output", "to_port": 0}],
+	}]
+	var result := _handler.create_graph(legal)
+	assert_has_key(result, "data", str(result.get("error", {})))
+
+	var illegal := _request("fog_mode_illegal")
+	illegal.shader_type = "fog"
+	illegal.stages = [{
+		"stage": "fog",
+		"nodes": [{
+			"id": "tint", "type": "VisualShaderNodeFloatParameter",
+			"params": {"parameter_name": "float"},
+		}],
+		"connections": [{"from_node": "tint", "from_port": 0, "to_node": "output", "to_port": 0}],
+	}]
+	var rejected := _handler.create_graph(illegal)
+	assert_has_key(rejected, "error")
+	assert_false(FileAccess.file_exists(illegal.resource_path))
+
+
 func test_overwrite_and_late_validation_preserve_existing_bytes() -> void:
 	var request := _request()
 	assert_has_key(_handler.create_graph(request), "data")

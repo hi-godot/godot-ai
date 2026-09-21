@@ -57,12 +57,17 @@ directory. All stages are built and validated in memory before a temporary
 file is saved beside the destination and atomically renamed into place.
 Validation, save, or replacement failure preserves the existing file.
 
-The graph's generated shader is compiled by the engine before the destination
-is touched: the operation forces code generation and parses the result through
-Godot's shader compiler. A graph whose generated code does not compile — for
-example a parameter named after a shader keyword such as `float`, which
-GDScript's `is_valid_identifier()` accepts — is rejected, and the destination
-is neither created nor replaced.
+The graph's generated source is parsed through the engine's shader compiler
+before the destination is touched, using the same appended-sentinel uniform
+reflection the raw shader authoring path uses. That catches declarations the
+compiler rejects — a parameter named after a shader keyword such as `float`
+passes `is_valid_identifier()` but generates `uniform float float;`. Uniform
+reflection proves the source parsed for the current renderer, not that every
+GPU pipeline compiles or that the resource is portable across renderers.
+Renderers that cannot compile a shader type at all (the Compatibility renderer
+rejects `fog`) fall back to parsing the generated declarations under a
+supported type, so the advertised modes stay accepted and identifier
+validation still applies.
 
 To use the shader, make two separate `material_manage` calls:
 
