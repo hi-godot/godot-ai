@@ -17,6 +17,30 @@ until that post-restart tree verification and the pin-only client repin have
 finished. Stop remains available so shutdown cannot be trapped behind the
 release gate.
 
+## Diagnosing slow plugin startup
+
+Enable **Godot AI > Log Startup Timing** in Editor Settings, or set
+`GODOT_AI_STARTUP_TRACE=1` before launching the editor. Existing `phase=`
+records report the time since the preceding phase. A long `server_start`
+phase therefore includes endpoint selection and launch-plan discovery; it
+is not evidence that server launch itself took that long.
+
+Paired `call=<name> begin` / `call=<name> end elapsed_ms=...` records separate
+synchronous endpoint selection, environment warming, worktree and command
+discovery, port reservation checks, lifecycle configuration, and startup
+release. These records use a monotonic clock and leave the coarse phase
+clock unchanged. They contain fixed operation names and timings, not
+command arguments, environment values, or capability paths. The timings
+measure the synchronous calls only; asynchronous startup is still reported
+by lifecycle progress and the final `done path=...` record.
+
+If startup stops after a call's `begin`, retain that line and the surrounding
+log: the matching call has not completed. This identifies where to investigate,
+not the underlying cause. An `end` indicates return, not successful startup;
+consult the adjacent lifecycle error if the endpoint was refused. Disable the
+setting after collecting a trace. Tracing does not change startup timeouts,
+authentication, or retries.
+
 ## Upgrading from a pre-v4 installation
 
 A verified pre-v4 to v4 update selects two free loopback ports before starting

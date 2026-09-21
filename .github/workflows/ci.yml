@@ -272,6 +272,11 @@ jobs:
         timeout-minutes: 3
         run: GODOT_BIN=godot pytest -v -s tests/integration/test_filesystem_mutations.py
 
+      - name: Startup call timing regression
+        shell: bash
+        timeout-minutes: 3
+        run: GODOT_BIN=godot pytest -v -s tests/integration/test_startup_call_timing.py
+
       - name: Windows ordinary-start client regression
         if: matrix.os == 'windows-latest'
         shell: bash

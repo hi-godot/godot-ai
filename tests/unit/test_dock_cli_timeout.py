@@ -362,7 +362,8 @@ def test_composition_and_post_update_barriers_precede_every_normal_start_effect(
         "_resolve_ws_port(",
         '_set_endpoint_policy(resolved_policy)',
         "ClientConfigurator.warm_env_snapshot(_endpoint_policy)",
-        "_lifecycle.configure(_capture_lifecycle_plan())",
+        "var plan := _capture_lifecycle_plan()",
+        "_lifecycle.configure(plan)",
         "_begin_startup_release()",
     )
     positions = [activation.index(step) for step in ordered_activation]

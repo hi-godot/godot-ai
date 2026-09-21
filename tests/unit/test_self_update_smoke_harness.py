@@ -151,7 +151,8 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     base_cfg = (project / "addons" / "godot_ai" / "plugin.cfg").read_text(encoding="utf-8")
     assert 'version="4.0.0"' in base_cfg
     base_plugin = (project / "addons" / "godot_ai" / "plugin.gd").read_text(encoding="utf-8")
-    assert '"expected_version": "4.0.0"' in base_plugin
+    assert 'var expected_version := "4.0.0"' in base_plugin
+    assert '"expected_version": expected_version' in base_plugin
 
     # The smoke patches land on the manager file; the dock keeps only
     # the visible banner UI.
@@ -294,7 +295,8 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
         vnext_child_uid = zf.read("addons/godot_ai/utils/self_update_smoke_child.gd.uid").decode()
 
     assert 'version="4.0.1"' in vnext_cfg
-    assert '"expected_version": "4.0.1"' in vnext_plugin
+    assert 'var expected_version := "4.0.1"' in vnext_plugin
+    assert '"expected_version": expected_version' in vnext_plugin
     # The smoke download URL is no longer in the dock (it lives on the
     # manager); the dock should not contain it either.
     assert "smoke://local-prestaged" not in vnext_dock
@@ -1269,3 +1271,32 @@ async def test_attached_agent_poll_errors_identify_mismatch(
     assert len(agent.errors) == 1
     assert expected in agent.errors[0]
     assert agent.post_update == {}
+
+
+@pytest.mark.parametrize("old,new", [
+    ('"expected_version": ClientConfigurator.get_plugin_version(),',
+     '"expected_version": "9.8.7",'),
+    ('var expected_version := ClientConfigurator.get_plugin_version()',
+     'var expected_version := "9.8.7"'),
+])
+def test_expected_version_patch_supports_released_and_traced_plans(tmp_path, old, new):
+    smoke = load_smoke_script()
+    path = tmp_path / "plugin.gd"
+    path.write_text(f"before\n\t{old}\nafter\n", encoding="utf-8")
+    smoke.patch_expected_server_version(path, "9.8.7")
+    assert path.read_text(encoding="utf-8") == f"before\n\t{new}\nafter\n"
+
+
+@pytest.mark.parametrize("source", [
+    "unknown plan shape",
+    "var expected_version := ClientConfigurator.get_plugin_version()\n" * 2,
+    '"expected_version": ClientConfigurator.get_plugin_version(),\n'
+    'var expected_version := ClientConfigurator.get_plugin_version()',
+])
+def test_expected_version_patch_refuses_unknown_or_ambiguous_plan(tmp_path, source):
+    smoke = load_smoke_script()
+    path = tmp_path / "plugin.gd"
+    path.write_text(source, encoding="utf-8")
+    with pytest.raises(smoke.HarnessError, match="uniquely patch"):
+        smoke.patch_expected_server_version(path, "9.8.7")
+    assert path.read_text(encoding="utf-8") == source

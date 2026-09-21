@@ -853,13 +853,16 @@ def patch_server_command(path: Path, command: list[str]) -> None:
 
 def patch_expected_server_version(path: Path, server_version: str) -> None:
     text = path.read_text(encoding="utf-8")
-    text = replace_once(
-        path,
-        text,
-        '"expected_version": ClientConfigurator.get_plugin_version(),',
-        f'"expected_version": "{server_version}",',
-        "smoke lifecycle expected version",
-    )
+    forms = {
+        '"expected_version": ClientConfigurator.get_plugin_version(),':
+            f'"expected_version": "{server_version}",',
+        'var expected_version := ClientConfigurator.get_plugin_version()':
+            f'var expected_version := "{server_version}"',
+    }
+    matches = [old for old in forms if old in text]
+    if len(matches) != 1 or text.count(matches[0]) != 1:
+        raise HarnessError(f"Could not uniquely patch smoke lifecycle expected version in {path}")
+    text = text.replace(matches[0], forms[matches[0]], 1)
     path.write_text(text, encoding="utf-8")
 
 

@@ -104,8 +104,8 @@ def test_lifecycle_worker_uses_the_main_thread_capability_path_snapshot() -> Non
         "_set_endpoint_policy(resolved_policy)"
     )
     assert activation.index("_set_endpoint_policy(resolved_policy)") < activation.index(
-        "_lifecycle.configure(_capture_lifecycle_plan())"
-    )
+        "var plan := _capture_lifecycle_plan()"
+    ) < activation.index("_lifecycle.configure(plan)")
     assert 'str(_endpoint_policy.get("capability_path", ""))' in plugin
     assert 'str(_plan.get("capability_path", ""))' in read
     assert lifecycle.count("var capability := _read_capability(port)") == 4
@@ -216,8 +216,10 @@ def test_root_starts_only_after_lifecycle_configuration() -> None:
     activation = get_func_block(plugin, "func _activate_startup_endpoints() -> void:")
     assert compose.index("add_control_to_dock(") < compose.index("_activate_startup_endpoints()")
     assert activation.index("_set_endpoint_policy(resolved_policy)") < activation.index(
-        "_lifecycle.configure(_capture_lifecycle_plan())"
-    ) < activation.index("_begin_startup_release()")
+        "var plan := _capture_lifecycle_plan()"
+    ) < activation.index("_lifecycle.configure(plan)") < activation.index(
+        "_begin_startup_release()"
+    )
     assert "_begin_startup_release()" not in compose
     assert "_start_server()" not in compose
     assert "_start_server()" not in activation
