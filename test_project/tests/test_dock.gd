@@ -141,6 +141,33 @@ func test_clients_header_and_actions_use_narrow_layout() -> void:
 	assert_eq(tabs.get_tab_title(0), "Clients")
 	assert_eq(tabs.get_tab_title(1), "Tools")
 
+func test_settings_tab_scrolls_instead_of_clipping() -> void:
+	## The Settings tab stacks Vision Routing plus the Remote access
+	## disclosure — content that can outgrow the window's minimum height.
+	## It must scroll like the Clients and Tools tabs, never force a taller
+	## window (#1090).
+	_dock._build_ui()
+	var tabs := _dock._clients_window.get_child(0) as TabContainer
+	assert_true(tabs != null, "precondition: Clients & Tools window has tabs")
+	var settings_margin := tabs.get_node_or_null("Settings") as MarginContainer
+	assert_true(settings_margin != null, "precondition: Settings tab exists")
+	var settings_scroll := settings_margin.get_child(0) as ScrollContainer
+	assert_true(settings_scroll != null,
+		"Settings content should scroll instead of forcing the window taller")
+	assert_eq(settings_scroll.horizontal_scroll_mode, ScrollContainer.SCROLL_MODE_DISABLED,
+		"Settings labels wrap, so the tab should never scroll sideways")
+	assert_eq(settings_scroll.size_flags_vertical, Control.SIZE_EXPAND_FILL,
+		"Scroll area should fill the tab so the scrollbar spans the content")
+	var settings_body := settings_scroll.get_child(0) as VBoxContainer
+	assert_true(settings_body != null,
+		"Settings controls should stay in one vertical stack inside the scroll")
+	var fold_count := 0
+	for section in settings_body.get_children():
+		if section is FoldableContainer:
+			fold_count += 1
+	assert_eq(fold_count, 1,
+		"Remote access disclosure should remain part of the scrollable stack")
+
 
 func test_connected_status_stays_compact_across_client_readiness() -> void:
 	_dock._build_ui()
