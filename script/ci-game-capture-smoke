@@ -38,17 +38,19 @@ forgiving on xvfb).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
 import os
+import subprocess
 import sys
 import time
 import traceback
 import urllib.error
-import urllib.request
 from pathlib import Path
 
+import httpx
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -94,20 +96,197 @@ DIAG_DIR = os.environ.get("CAPTURE_DIAG_DIR", "capture-smoke-diag")
 SESSION_LOSS_GRACE_SEC = 45.0
 
 
-def _post(session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
+SESSION_WAIT_SEC = float(os.environ.get("SESSION_WAIT_SEC", "240"))
+SESSION_POLL_DELAY_SEC = 2.0
+## Cadence of the "[session-wait +Ns]" progress line. New editor-log lines
+## are streamed on every poll regardless, so the plugin's boot markers
+## ("MCP startup trace | phase=...", "MCP | plugin loaded", "MCP | connected
+## to server") land here with an elapsed stamp the moment they print.
+SESSION_WAIT_PROGRESS_SEC = 15.0
+## The editor's redirected stdout/stderr — the workflow starts it with
+## `godot ... > godot-editor.log 2>&1 &`. Streamed during the session wait
+## and tailed on timeout. Missing locally is fine: the wait then only
+## reports elapsed time.
+EDITOR_LOG = os.environ.get("GODOT_EDITOR_LOG", "godot-editor.log")
+EDITOR_LOG_TAIL_LINES = 40
+GAME_READY_WAIT_SEC = 180.0
+DIAGNOSTICS_BUDGET_SEC = 30.0
+
+
+def _remaining_timeout(cap: float, deadline: float | None) -> float:
+    if deadline is None:
+        return cap
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Smoke phase deadline expired")
+    return min(cap, remaining)
+
+
+class _EditorLogTail:
+    MAX_LINES_PER_FLUSH = 40
+    MAX_READ_BYTES = 16 * 1024
+    MAX_LINE_BYTES = 4096
+
+    def __init__(self, path: str, sink) -> None:
+        self._path = path
+        self.sink = sink
+        self._offset = 0
+        self._partial = b""
+        self._partial_truncated = False
+        self._identity = None
+        self.lines_seen = 0
+
+    def _line(self, raw: bytes, truncated: bool = False) -> str:
+        text = raw.decode("utf-8", "replace").rstrip("\r")
+        encoded = text.encode("utf-8")
+        if len(encoded) > self.MAX_LINE_BYTES:
+            truncated = True
+        text = encoded[:self.MAX_LINE_BYTES].decode("utf-8", "ignore")
+        return text + (" [line truncated]" if truncated else "")
+
+    def flush(self) -> None:
+        try:
+            with open(self._path, "rb") as fh:
+                stat = os.fstat(fh.fileno())
+                identity = (stat.st_dev, stat.st_ino)
+                if identity != self._identity or stat.st_size < self._offset:
+                    self._offset = 0
+                    self._partial = b""
+                    self._partial_truncated = False
+                self._identity = identity
+                fh.seek(self._offset)
+                chunk = fh.read(self.MAX_READ_BYTES)
+        except OSError:
+            return
+        if not chunk:
+            return
+        self._offset += len(chunk)
+        pieces = (self._partial + chunk).split(b"\n")
+        partial = pieces.pop()
+        old_truncated = self._partial_truncated
+        self._partial_truncated = (
+            len(partial) > self.MAX_LINE_BYTES or (not pieces and old_truncated)
+        )
+        self._partial = partial[:self.MAX_LINE_BYTES]
+        emitted = 0
+        shown = 0
+        for index, piece in enumerate(pieces):
+            line = self._line(piece, index == 0 and old_truncated)
+            if not line.strip():
+                continue
+            self.lines_seen += 1
+            output = f"[editor-log] {line}"
+            size = len(output.encode("utf-8"))
+            if shown < self.MAX_LINES_PER_FLUSH and emitted + size <= self.MAX_READ_BYTES:
+                self.sink(output)
+                emitted += size
+                shown += 1
+        hidden = sum(bool(piece.strip()) for piece in pieces) - shown
+        if hidden > 0:
+            self.sink(f"[editor-log] (+{hidden} more lines; output truncated)")
+
+    def tail(self, count: int = EDITOR_LOG_TAIL_LINES) -> list[str]:
+        try:
+            with open(self._path, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                start = max(0, fh.tell() - self.MAX_READ_BYTES)
+                fh.seek(start)
+                data = fh.read(self.MAX_READ_BYTES)
+        except OSError as exc:
+            return [f"({self._path} unreadable: {exc})"]
+        lines = [self._line(line) for line in data.split(b"\n") if line.strip()]
+        if not lines:
+            return [f"({self._path} is empty)"]
+        selected = []
+        used = 0
+        for line in reversed(lines[-count:]):
+            size = len(line.encode("utf-8"))
+            if used + size > self.MAX_READ_BYTES:
+                break
+            selected.append(line)
+            used += size
+        selected.reverse()
+        if start or len(selected) < min(count, len(lines)):
+            selected.insert(0, "(editor-log tail truncated)")
+        return selected
+
+
+def _godot_process_snapshot() -> list[str]:
+    """Best-effort `ps`/`tasklist` rows for Godot processes.
+
+    On a session-wait timeout this is what separates "the editor is still
+    booting" (alive, burning CPU, silent log) from "the editor died" (no
+    row, no crash banner) from "the plugin is up but cannot connect"
+    (alive, MCP lines in the log).
+    """
+    if sys.platform == "win32":
+        cmd = ["tasklist", "/FI", "IMAGENAME eq godot*"]
+    else:
+        cmd = ["ps", "-eo", "pid,etime,pcpu,rss,command"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [f"(process snapshot unavailable: {exc})"]
+    rows = [line.rstrip() for line in proc.stdout.splitlines() if "godot" in line.lower()]
+    return rows or ["(no godot process found)"]
+
+
+def _session_outcome(reply: object) -> dict[str, str]:
+    detail = json.dumps(reply, default=str)[:300]
+    if not isinstance(reply, dict):
+        return {"kind": "malformed", "detail": f"unexpected reply {detail}"}
+    if "error" in reply:
+        return {"kind": "tool_error", "detail": f"tool error {detail}"}
+    count, sessions = reply.get("count"), reply.get("sessions")
+    if type(count) is not int or not isinstance(sessions, list) or count != len(sessions):
+        return {"kind": "malformed", "detail": f"unexpected reply {detail}"}
+    if count:
+        return {"kind": "ready", "detail": detail}
+    return {
+        "kind": "empty",
+        "detail": "latest reply contained no sessions (count=0); the server answered",
+    }
+
+
+
+async def _request_body(headers: dict, body: bytes, timeout: float, deadline: float | None):
+    network_deadline = time.monotonic() + _remaining_timeout(timeout, deadline)
+    try:
+        async with asyncio.timeout(_remaining_timeout(timeout, network_deadline)):
+            async with httpx.AsyncClient(follow_redirects=False) as client:
+                response = await client.post(
+                    SERVER_URL, headers=headers, content=body,
+                    timeout=_remaining_timeout(timeout, network_deadline),
+                )
+                response.raise_for_status()
+                return response.content, response.headers.get("mcp-session-id")
+    except TimeoutError as exc:
+        raise TimeoutError("Smoke HTTP network deadline expired") from exc
+    except httpx.HTTPStatusError as exc:
+        response = exc.response
+        raise urllib.error.HTTPError(
+            str(response.url), response.status_code, response.reason_phrase,
+            response.headers, io.BytesIO(response.content),
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise TimeoutError(str(exc)) from exc
+    except httpx.RequestError as exc:
+        raise urllib.error.URLError(str(exc)) from exc
+
+
+def _post(
+    session_id: str | None, body: dict, timeout: float = 10.0, *, deadline: float | None = None
+) -> dict:
     headers = dict(HEADERS)
     headers["Authorization"] = authorization_header(SERVER_URL)
     if session_id:
         headers["Mcp-Session-Id"] = session_id
-    req = urllib.request.Request(
-        SERVER_URL,
-        data=json.dumps(body).encode("utf-8"),
-        headers=headers,
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8")
-        new_session = resp.headers.get("mcp-session-id")
+    # Async cancellation bounds network waits, including continuously arriving SSE
+    # pings; synchronous setup/parsing still relies on the late-result check.
+    payload, new_session = asyncio.run(_request_body(
+        headers, json.dumps(body).encode("utf-8"), timeout, deadline,
+    ))
+    raw = payload.decode("utf-8")
     result = {"_session_id": new_session, "_raw": raw}
     for line in raw.splitlines():
         if line.startswith("data: "):
@@ -118,6 +297,7 @@ def _post(session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
             result.update(json.loads(raw))
         except json.JSONDecodeError:
             pass
+    _remaining_timeout(timeout, deadline)
     return result
 
 
@@ -127,6 +307,8 @@ def _tool_call(
     args: dict,
     request_id: int,
     timeout: float = 30.0,
+    *,
+    deadline: float | None = None,
 ) -> dict:
     body = {
         "jsonrpc": "2.0",
@@ -134,24 +316,32 @@ def _tool_call(
         "method": "tools/call",
         "params": {"name": name, "arguments": args},
     }
-    resp = _post(session_id, body, timeout=timeout)
+    resp = _post(session_id, body, timeout=timeout, deadline=deadline)
+    if "error" in resp:
+        return {"error": resp["error"]}
     ## Prefer structuredContent; fall back to the text block the transport
     ## wraps around dict/list results.
     result = resp.get("result", {})
-    sc = result.get("structuredContent")
-    if sc:
-        return sc
-    content = result.get("content") or []
-    for block in content:
-        if block.get("type") == "text":
-            try:
-                return json.loads(block["text"])
-            except json.JSONDecodeError:
-                return {"_text": block["text"]}
-    return {"_raw": resp.get("_raw", "")}
+    if not isinstance(result, dict):
+        return {"unexpected_result": result}
+    value = result.get("structuredContent")
+    if not value:
+        value = {"_raw": resp.get("_raw", "")}
+        for block in result.get("content") or []:
+            if block.get("type") == "text":
+                try:
+                    value = json.loads(block["text"])
+                except json.JSONDecodeError:
+                    value = {"_text": block["text"]}
+                break
+    if result.get("isError") and not (isinstance(value, dict) and "error" in value):
+        return {"error": value}
+    return value
+
 
 
 def _initialize_session() -> str:
+    deadline = time.monotonic() + 20
     body = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -162,28 +352,83 @@ def _initialize_session() -> str:
             "clientInfo": {"name": "ci-game-capture-smoke", "version": "1.0"},
         },
     }
-    resp = _post(None, body)
+    resp = _post(None, body, deadline=deadline)
     session_id = resp.get("_session_id")
     if not session_id:
         raw = resp.get("_raw", "")[:300]
         raise RuntimeError(f"No Mcp-Session-Id in initialize response: {raw}")
-    _post(session_id, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+    _post(session_id, {"jsonrpc": "2.0", "method": "notifications/initialized"}, deadline=deadline)
     return session_id
 
 
-def _wait_for_godot_session(session_id: str, timeout: float = 120.0) -> None:
-    deadline = time.monotonic() + timeout
-    last_err: Exception | None = None
+def _wait_for_godot_session(
+    session_id: str,
+    timeout: float = SESSION_WAIT_SEC,
+    editor_log: _EditorLogTail | None = None,
+    history: list[str] | None = None,
+) -> float:
+    start = time.monotonic()
+    deadline = start + timeout
+
+    def record(line: str) -> None:
+        print(line)
+        if history is not None:
+            history.append(line)
+
+    def note(line: str) -> None:
+        record(f"[session-wait +{time.monotonic() - start:.1f}s] {line}")
+
+    def stamp_editor(line: str) -> None:
+        record(f"[+{time.monotonic() - start:.1f}s] {line}")
+
+    if editor_log is None:
+        editor_log = _EditorLogTail(EDITOR_LOG, stamp_editor)
+    else:
+        editor_log.sink = stamp_editor
+    outcome = {"kind": "none", "detail": "no reply yet"}
+    polls = 0
+    next_progress = start + SESSION_WAIT_PROGRESS_SEC
+    print(
+        f"Waiting up to {timeout:.0f}s for the editor's session to register "
+        f"(streaming {EDITOR_LOG})"
+    )
     while time.monotonic() < deadline:
+        polls += 1
         try:
-            result = _tool_call(session_id, "session_manage", {"op": "list"}, 2)
-            if result.get("count", 0) > 0:
-                print(f"Godot session connected: {result.get('active_session_id') or result}")
-                return
-        except (urllib.error.URLError, RuntimeError) as exc:
-            last_err = exc
-        time.sleep(2)
-    raise RuntimeError(f"Godot session never registered; last err: {last_err}")
+            result = _tool_call(
+                session_id, "session_manage", {"op": "list"}, 2,
+                timeout=_remaining_timeout(30, deadline), deadline=deadline,
+            )
+            _remaining_timeout(30, deadline)
+        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+            outcome = {"kind": "transport_error", "detail": f"last transport error: {exc!r}"[:500]}
+        else:
+            outcome = _session_outcome(result)
+            if outcome["kind"] == "ready":
+                elapsed = time.monotonic() - start
+                editor_log.flush()
+                print(
+                    f"Godot session connected after {elapsed:.1f}s "
+                    f"({polls} polls): {outcome['detail']}"
+                )
+                return elapsed
+        editor_log.flush()
+        now = time.monotonic()
+        if now >= next_progress:
+            note(f"no editor session yet ({polls} polls; {outcome['detail']})")
+            next_progress = now + SESSION_WAIT_PROGRESS_SEC
+        if now < deadline:
+            time.sleep(min(SESSION_POLL_DELAY_SEC, deadline - now))
+
+    note(f"giving up after {polls} polls; last {EDITOR_LOG_TAIL_LINES} editor-log lines:")
+    for line in editor_log.tail():
+        note(f"    {line}")
+    note("godot processes:")
+    for row in _godot_process_snapshot():
+        note(f"    {row}")
+    raise RuntimeError(
+        f"Godot session never registered within {timeout:.0f}s ({polls} polls); {outcome['detail']}"
+    )
 
 
 ## 180s, not 60: run 28326896176 (macOS) showed the game subprocess taking
@@ -191,7 +436,7 @@ def _wait_for_godot_session(session_id: str, timeout: float = 120.0) -> None:
 ## paravirtualized runner. The poll exits the moment it's ready, so the
 ## ceiling only costs time when something is genuinely wrong.
 def _wait_for_game_capture_ready(
-    session_id: str, timeout: float = 180.0, history: list[str] | None = None
+    session_id: str, timeout: float = GAME_READY_WAIT_SEC, history: list[str] | None = None
 ) -> None:
     ## is_playing flips when the editor *spawns* the game subprocess; it does
     ## NOT imply the game's _mcp_game_helper autoload has reached _ready() and
@@ -231,7 +476,11 @@ def _wait_for_game_capture_ready(
 
     while time.monotonic() < deadline:
         try:
-            state = _tool_call(session_id, "editor_state", {}, 100)
+            state = _tool_call(
+                session_id, "editor_state", {}, 100,
+                timeout=_remaining_timeout(30, deadline), deadline=deadline,
+            )
+            _remaining_timeout(30, deadline)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             state = {"error": {"code": "TRANSPORT_ERROR", "message": str(exc)}}
         err = state.get("error")
@@ -258,7 +507,9 @@ def _wait_for_game_capture_ready(
                 f"game_capture_ready={state.get('game_capture_ready')} "
                 f"readiness={state.get('readiness')}"
             )
-        time.sleep(0.5)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.5, remaining))
     raise RuntimeError(
         "Game subprocess never registered its mcp capture within "
         f"{timeout:.0f}s (last observed: {last_note or 'nothing'})"
@@ -272,9 +523,11 @@ def _within_tolerance(
 
 
 def _dump_diagnostics(session_id: str) -> None:
-    """On failure, print everything that could explain what happened."""
+    deadline = time.monotonic() + DIAGNOSTICS_BUDGET_SEC
     try:
-        autoloads = _tool_call(session_id, "autoload_manage", {"op": "list"}, 900)
+        autoloads = _tool_call(
+            session_id, "autoload_manage", {"op": "list"}, 900, deadline=deadline
+        )
         print("\n[diag] autoloads:", json.dumps(autoloads, indent=2))
     except Exception as exc:
         print(f"[diag] autoload_list failed: {exc}")
@@ -285,7 +538,7 @@ def _dump_diagnostics(session_id: str) -> None:
             session_id,
             "filesystem_manage",
             {"op": "read_text", "params": {"path": "res://project.godot"}},
-            901,
+            901, deadline=deadline,
         )
         text = proj.get("content", "")
         in_autoload = False
@@ -303,7 +556,7 @@ def _dump_diagnostics(session_id: str) -> None:
     except Exception as exc:
         print(f"[diag] filesystem_read_file failed: {exc}")
     try:
-        logs = _tool_call(session_id, "logs_read", {"count": 50}, 902)
+        logs = _tool_call(session_id, "logs_read", {"count": 50}, 902, deadline=deadline)
         print("[diag] recent plugin logs:")
         for line in logs.get("lines", []):
             print(f"    {line}")
@@ -313,6 +566,7 @@ def _dump_diagnostics(session_id: str) -> None:
 
 def _capture_attempt(
     session_id: str, request_id: int, max_resolution: int = 0,
+    *, deadline: float | None = None,
 ) -> tuple[list[str], bytes | None]:
     """One capture-and-check pass. Returns (failures, png_bytes).
 
@@ -332,7 +586,7 @@ def _capture_attempt(
         "editor_screenshot",
         {"source": "game", "include_image": False, "max_resolution": max_resolution},
         request_id,
-        timeout=40,
+        timeout=_remaining_timeout(40, deadline), deadline=deadline,
     )
     if "source" in meta and meta["source"] != "game":
         return ([f"metadata source mismatch: {meta}"], None)
@@ -353,7 +607,7 @@ def _capture_attempt(
             },
         },
     }
-    resp = _post(session_id, body, timeout=40)
+    resp = _post(session_id, body, timeout=_remaining_timeout(40, deadline), deadline=deadline)
     raw = resp.get("_raw", "")
     image_b64: str | None = None
     for line in raw.splitlines():
@@ -396,6 +650,7 @@ def _capture_attempt(
         failures.append(
             f"frame is uniform {samples[0]} — likely captured before the scene's first draw"
         )
+    _remaining_timeout(40, deadline)
     return (failures, png)
 
 
@@ -426,7 +681,7 @@ def _check_game_rendering(session_id: str, history: list[str], deadline: float) 
                 'return {"hdr": get_tree().root.use_hdr_2d, '
                 '"renderer": RenderingServer.get_current_rendering_method()}'
             )},
-        }, 12)
+        }, 12, timeout=_remaining_timeout(30, deadline), deadline=deadline)
         history.append(f"Game rendering response: {response}")
         print(history[-1])
         if time.monotonic() >= deadline:
@@ -448,10 +703,14 @@ def _check_game_rendering(session_id: str, history: list[str], deadline: float) 
         return
 
 
-def _check_editor_capture(session_id: str, history: list[str]) -> None:
+def _check_editor_capture(
+    session_id: str, history: list[str], deadline: float | None = None
+) -> None:
+    if deadline is None:
+        deadline = time.monotonic() + 110
     properties = _tool_call(session_id, "node_get_properties", {
         "path": "/Root", "fields": ["capture_metadata"],
-    }, 20)
+    }, 20, timeout=_remaining_timeout(30, deadline), deadline=deadline)
     metadata = next((p["value"] for p in properties.get("properties", [])
                      if p["name"] == "capture_metadata"), {})
     history.append(f"Editor rendering: {metadata}")
@@ -471,7 +730,7 @@ def _check_editor_capture(session_id: str, history: list[str]) -> None:
             "params": {"name": "editor_screenshot", "arguments": {
                 "source": "viewport_2d", "max_resolution": limit,
             }},
-        }, timeout=40)
+        }, timeout=_remaining_timeout(40, deadline), deadline=deadline)
         blocks = response.get("result", {}).get("content", [])
         image_block = next((b for b in blocks if b.get("type") == "image"), None)
         if image_block is None:
@@ -490,26 +749,27 @@ def _check_editor_capture(session_id: str, history: list[str]) -> None:
         if not _within_tolerance(pixel, (127, 127, 127), 1):
             raise RuntimeError(f"Editor screenshot lost display gray: {pixel}")
 
+    _remaining_timeout(40, deadline)
+
 
 def main() -> int:
     print(f"Connecting to MCP server at {SERVER_URL}")
-    session_id = _initialize_session()
-    _wait_for_godot_session(session_id)
-
-    ## Dump autoload state BEFORE we touch the game — tells us whether the
-    ## plugin's _enter_tree actually persisted _mcp_game_helper, which is the
-    ## hinge for the whole capture path.
-    _dump_diagnostics(session_id)
-
-    print(f"Opening {SCENE_PATH}")
-    _tool_call(session_id, "scene_open", {"path": SCENE_PATH}, 10)
-    time.sleep(1)
-
+    session_id: str | None = None
+    run_attempted = False
     attempt_log: list[str] = []
     last_png: bytes | None = None
+    editor_log = _EditorLogTail(EDITOR_LOG, print)
     try:
-        _check_editor_capture(session_id, attempt_log)
-        encoding_tests = _tool_call(session_id, "test_run", {"suite": "screenshot_encode"}, 23)
+        session_id = _initialize_session()
+        _wait_for_godot_session(session_id, editor_log=editor_log, history=attempt_log)
+        _dump_diagnostics(session_id)
+        print(f"Opening {SCENE_PATH}")
+        _tool_call(session_id, "scene_open", {"path": SCENE_PATH}, 10,
+                   deadline=time.monotonic() + 30)
+        time.sleep(1)
+        _check_editor_capture(session_id, attempt_log, time.monotonic() + 110)
+        encoding_tests = _tool_call(session_id, "test_run", {"suite": "screenshot_encode"}, 23,
+                                    deadline=time.monotonic() + 30)
         attempt_log.append(f"Screenshot encoder suite: {encoding_tests}")
         print(attempt_log[-1])
         for failure in encoding_tests.get("failures", []):
@@ -523,28 +783,25 @@ def main() -> int:
         ):
             raise RuntimeError(f"Screenshot encoder suite did not pass: {encoding_tests}")
         print("Running project (current scene)")
-        ## 60s, not 20 (#673): the reply waits on the editor spawning a
-        ## whole game process under a software rasterizer, and a busy
-        ## runner has blown a 20s socket margin. The ready-poll below
-        ## exits the moment the game is up, so the higher ceiling costs
-        ## nothing on healthy runs. Inside the try so a timeout here
-        ## still dumps diagnostics and writes the diag artifacts.
-        _tool_call(session_id, "project_run",
-                   {"mode": "current", "autosave": False}, 11, timeout=60)
-
+        run_attempted = True
+        _tool_call(session_id, "project_run", {"mode": "current", "autosave": False}, 11,
+                   timeout=60, deadline=time.monotonic() + 60)
         _wait_for_game_capture_ready(session_id, history=attempt_log)
 
         deadline = time.monotonic() + CAPTURE_BUDGET_SEC
         _check_game_rendering(session_id, attempt_log, deadline)
         attempt = 0
-        last_failures: list[str] = []
-        while True:
+        last_failures: list[str] = ["capture budget expired before an attempt"]
+        while time.monotonic() < deadline:
             attempt += 1
             print(f"Capturing source='game' (attempt {attempt})")
             try:
-                failures, png = _capture_attempt(session_id, 100 + attempt * 10)
+                failures, png = _capture_attempt(session_id, 100 + attempt * 10, deadline=deadline)
                 if not failures:
-                    failures, png = _capture_attempt(session_id, 102 + attempt * 10, 64)
+                    failures, png = _capture_attempt(
+                        session_id, 102 + attempt * 10, 64, deadline=deadline
+                    )
+                _remaining_timeout(40, deadline)
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 failures, png = ([f"transport error: {exc}"], None)
             if not failures:
@@ -556,41 +813,36 @@ def main() -> int:
             summary = "; ".join(failures)
             attempt_log.append(f"attempt {attempt}: {summary}")
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            print(
-                f"Attempt {attempt} not clean ({summary}); "
-                f"{remaining:.0f}s of budget left, retrying"
-            )
-            time.sleep(min(CAPTURE_RETRY_DELAY_SEC, max(0.0, remaining)))
+            if remaining > 0:
+                print(f"Attempt {attempt} not clean ({summary}); {remaining:.0f}s left, retrying")
+                time.sleep(min(CAPTURE_RETRY_DELAY_SEC, remaining))
 
         print(
             f"\nCapture smoke test FAILED after {attempt} attempts "
             f"over {CAPTURE_BUDGET_SEC:.0f}s:"
         )
-        for f in last_failures:
-            print(f"  - {f}")
+        for failure in last_failures:
+            print(f"  - {failure}")
         _dump_diagnostics(session_id)
+        editor_log.flush()
         _write_diag_artifacts(attempt_log, last_png)
         return 1
     except Exception:
         print("\nCapture smoke test raised — dumping diagnostics:", file=sys.stderr)
-        _dump_diagnostics(session_id)
-        ## This path used to exit without touching DIAG_DIR, so a
-        ## ready-wait failure uploaded no artifacts at all (#675). Write
-        ## whatever timeline exists plus the traceback.
-        attempt_log.append("")
+        if session_id is not None:
+            _dump_diagnostics(session_id)
+        editor_log.flush()
         attempt_log.append(traceback.format_exc().rstrip())
         _write_diag_artifacts(attempt_log, last_png)
         raise
     finally:
-        try:
-            ## "stop" has no named tool — it lives only under the project_manage
-            ## rollup, so calling "project_stop" returns an unknown-tool error
-            ## and the game subprocess is never stopped.
-            _tool_call(session_id, "project_manage", {"op": "stop"}, 999, timeout=10)
-        except Exception as exc:
-            print(f"(cleanup) project stop failed: {exc}", file=sys.stderr)
+        editor_log.flush()
+        if session_id is not None and run_attempted:
+            try:
+                _tool_call(session_id, "project_manage", {"op": "stop"}, 999,
+                           timeout=10, deadline=time.monotonic() + 10)
+            except Exception as exc:
+                print(f"(cleanup) project stop failed: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

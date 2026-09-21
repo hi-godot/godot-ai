@@ -24,6 +24,7 @@ extends VBoxContainer
 const ServerStateScript := preload("res://addons/godot_ai/utils/mcp_server_state.gd")
 const ClientRefreshStateScript := preload("res://addons/godot_ai/utils/mcp_client_refresh_state.gd")
 const Client := preload("res://addons/godot_ai/clients/_base.gd")
+const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
 const ClientRegistry := preload("res://addons/godot_ai/clients/_registry.gd")
 const ToolCatalog := preload("res://addons/godot_ai/tool_catalog.gd")
@@ -54,6 +55,7 @@ static var COLOR_AMBER := Color(1.0, 0.75, 0.25)
 
 signal update_requested
 signal client_action_requested(client_id: String, action: String)
+signal client_action_cancel_requested(client_id: String)
 signal client_status_refresh_requested(client_ids: Array[String], force: bool)
 signal status_snapshot_requested
 signal live_server_probe_requested(port: int)
@@ -457,7 +459,7 @@ func _build_ui() -> void:
 
 	_crash_docs_btn = Button.new()
 	_crash_docs_btn.text = "How to change the port"
-	_crash_docs_btn.tooltip_text = "Open the guide: change godot_ai/http_port and reconfigure your MCP clients"
+	_crash_docs_btn.tooltip_text = "Open the guide: change ports in Godot AI settings and reconfigure your MCP clients"
 	_crash_docs_btn.visible = false
 	_crash_docs_btn.pressed.connect(func(): OS.shell_open(_port_conflict_docs_url()))
 	_crash_panel.add_child(_crash_docs_btn)
@@ -720,13 +722,13 @@ func _build_client_row(client_id: String) -> void:
 
 	var configure_btn := Button.new()
 	configure_btn.text = "Configure"
-	configure_btn.pressed.connect(_on_configure_client.bind(client_id))
+	configure_btn.pressed.connect(_on_client_action_button_pressed.bind(client_id, "configure"))
 	row.add_child(configure_btn)
 
 	var remove_btn := Button.new()
 	remove_btn.text = "Remove"
 	remove_btn.visible = false
-	remove_btn.pressed.connect(_on_remove_client.bind(client_id))
+	remove_btn.pressed.connect(_on_client_action_button_pressed.bind(client_id, "remove"))
 	row.add_child(remove_btn)
 
 	# F-3-4: use the authoritative facade so Open/Reveal land on the same
@@ -843,7 +845,10 @@ func _update_status() -> void:
 		var conflict_port: int = int(server_status.get("conflict_port", 0))
 		if conflict_port <= 0:
 			conflict_port = ClientConfigurator.http_port()
-		status_text = "Port %d held by another process" % conflict_port
+		status_text = (
+			"Windows port discovery unavailable" if str(server_status.get("episode_reason", "")) == "port_occupancy_unknown"
+			else "Port %d held by another process" % conflict_port
+		)
 		status_color = Color.RED
 	elif state == ServerStateScript.NO_COMMAND:
 		status_text = "No server command found"
@@ -1056,8 +1061,11 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 ## the client's attach command, so clients must be reconfigured afterwards.
 ## The per-client reconfigure steps live behind the crash panel's docs link.
 static func _free_port_hint(port: int) -> String:
-	var free_http := ClientConfigurator.suggest_free_port(port + 1)
-	var free_ws := ClientConfigurator.suggest_free_port(ClientConfigurator.ws_port() + 1)
+	var occupancy := PortResolver.windows_listener_snapshot() if OS.get_name() == "Windows" else {}
+	var free_http := ClientConfigurator.suggest_free_port(port + 1, 2048, occupancy)
+	var free_ws := ClientConfigurator.suggest_free_port(ClientConfigurator.ws_port() + 1, 2048, occupancy)
+	if free_http == 0 or free_ws == 0:
+		return "Automatic port selection is unavailable. Choose HTTP and WS ports manually below, or retry."
 	return "Suggested ports: %d (HTTP) and %d (WS). Choose both ports below, click Apply + Reload, then Configure your AI clients to use the new pair." % [free_http, free_ws]
 
 
@@ -1745,8 +1753,13 @@ func _on_configure_client(client_id: String) -> void:
 	_dispatch_client_action(client_id, "configure")
 
 
-func _on_remove_client(client_id: String) -> void:
-	_dispatch_client_action(client_id, "remove")
+func _on_client_action_button_pressed(client_id: String, action: String) -> void:
+	if _is_self_update_in_progress():
+		return
+	if _client_work_snapshot.get("action_phases", {}).get(client_id, "") == "queued":
+		client_action_cancel_requested.emit(client_id)
+		return
+	_dispatch_client_action(client_id, action)
 
 
 ## Emit a value intent; plugin.gd routes it to the plugin-lifetime job owner.
@@ -1771,6 +1784,12 @@ func present_client_action_result(
 ) -> void:
 	_report_prewarm_outcome(client_id, prewarm)
 	_finalize_action_buttons(client_id)
+	if result.get("status") == "cancelled":
+		var row: Dictionary = _client_rows.get(client_id, {})
+		if not row.is_empty():
+			_apply_row_status(client_id, row.get("status", Client.Status.NOT_CONFIGURED))
+		_refresh_clients_summary()
+		return
 	var success_status := Client.Status.NOT_CONFIGURED if action == "remove" else Client.Status.CONFIGURED
 	if result.get("status") == "ok":
 		## #877: Remove targets only the selected scope, so a configure is the
@@ -1805,7 +1824,11 @@ func present_client_work_snapshot(snapshot: Dictionary) -> void:
 		var id := String(client_id)
 		if busy.has(id):
 			_set_row_action_in_flight(id, String(names.get(id, "configure")))
-			if String(phases.get(id, "")) == "prewarm":
+			if String(phases.get(id, "")) == "queued":
+				var button := "remove_btn" if String(names.get(id, "configure")) == "remove" else "configure_btn"
+				(_client_rows[id][button] as Button).text = "Cancel queued"
+				(_client_rows[id][button] as Button).disabled = false
+			elif String(phases.get(id, "")) == "prewarm":
 				(_client_rows[id]["configure_btn"] as Button).text = "Installing…"
 		else:
 			_finalize_action_buttons(id)

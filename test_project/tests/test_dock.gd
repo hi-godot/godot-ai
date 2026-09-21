@@ -2032,12 +2032,12 @@ func test_port_picker_seeds_only_the_contested_port() -> void:
 	var http := McpClientConfigurator.http_port()
 	var ws := McpClientConfigurator.ws_port()
 	panel.port_in_use_probe = func(port: int) -> bool: return port == ws
-	panel.seed_suggested_ports(0)
+	panel.seed_suggested_ports(0, {"known": true, "listeners": {ws: [42]}})
 	assert_eq(int(panel._spinbox.value), http, "a free HTTP port keeps its value")
 	assert_true(int(panel._ws_spinbox.value) != ws, "a held WebSocket port gets a suggestion")
 	assert_true(int(panel._ws_spinbox.value) != int(panel._spinbox.value))
 	panel.port_in_use_probe = func(_port: int) -> bool: return false
-	panel.seed_suggested_ports(http)
+	panel.seed_suggested_ports(http, {"known": true, "listeners": {}})
 	assert_true(int(panel._spinbox.value) != http, "the diagnosed conflict port moves")
 	assert_eq(int(panel._ws_spinbox.value), ws, "a free WebSocket port keeps its value")
 	panel.free()
@@ -2681,3 +2681,36 @@ func test_client_transport_tag_tracks_descriptor_shape() -> void:
 	assert_eq(McpDockScript._client_transport_tag("codex"), "attach",
 		"TOML COMMAND_ARRAY clients tag attach too")
 	assert_eq(McpDockScript._client_transport_tag("__missing_client__"), "")
+
+
+func test_unknown_port_discovery_keeps_picker_values_and_explains_failure() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows occupancy query failure")
+		return
+	var panel := PortPickerPanelScript.new()
+	panel.setup()
+	panel.port_in_use_probe = func(_port: int) -> bool: return true
+	var http := McpClientConfigurator.http_port()
+	var ws := McpClientConfigurator.ws_port()
+	panel.seed_suggested_ports(http, {"known": false, "listeners": {}})
+	assert_eq(int(panel._spinbox.value), http)
+	assert_eq(int(panel._ws_spinbox.value), ws)
+	assert_contains(panel._spinbox.tooltip_text, "unavailable")
+	assert_contains(panel._ws_spinbox.tooltip_text, "unavailable")
+	panel.free()
+
+
+func test_unknown_port_discovery_names_the_failure_in_status_and_panel() -> void:
+	var dock := McpDockScript.new()
+	dock._build_ui()
+	dock.present_lifecycle_snapshot({
+		"state": McpServerState.FOREIGN_PORT,
+		"episode_reason": "port_occupancy_unknown",
+		"message": "Windows could not query listening ports; retry when port discovery is available.",
+	})
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Windows port discovery unavailable")
+	assert_true(dock._port_picker_panel.visible)
+	assert_contains(dock._crash_output.get_parsed_text(), "Windows could not query listening ports")
+	assert_false(dock._crash_output.get_parsed_text().contains("occupied by another process"))
+	dock.free()

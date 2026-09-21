@@ -538,3 +538,72 @@ func test_windows_capture_distinguishes_get_process_not_found_and_permission_err
 	var diagnostics: Array = []
 	assert_eq(McpPortResolver.capture_process_kill_grant(2147483000, false, diagnostics), {})
 	assert_eq(diagnostics, ["not_alive"], "a successfully observed absent PID is distinct from query failure")
+
+
+func test_windows_listener_snapshot_distinguishes_wildcard_and_free_ports() -> void:
+	var snapshot := McpPortResolver.windows_snapshot_from_netstat(0, [
+		"  TCP  0.0.0.0:18954  0.0.0.0:0  LISTENING  4242\n"
+		+ "  TCP  [::]:19954  [::]:0  ABHÖREN  4242\n"
+		+ "  TCP  127.0.0.1:18955  127.0.0.1:10  ESTABLISHED  4242\n"
+	])
+	assert_true(snapshot.known)
+	assert_eq(snapshot.listeners, {18954: [4242], 19954: [4242]})
+	assert_eq(McpPortResolver.windows_port_occupancy(18954, snapshot), McpPortResolver.PortOccupancy.OCCUPIED)
+	assert_eq(McpPortResolver.windows_port_occupancy(18955, snapshot), McpPortResolver.PortOccupancy.FREE)
+
+
+func test_windows_listener_query_failures_never_prove_a_free_port() -> void:
+	for result in [[1, ["ignored"]], [0, []], [0, ["not a TCP table"]]]:
+		var snapshot := McpPortResolver.windows_snapshot_from_netstat(result[0], result[1])
+		assert_false(snapshot.known)
+		assert_eq(McpPortResolver.windows_port_occupancy(18954, snapshot), McpPortResolver.PortOccupancy.UNKNOWN)
+	for text in ["", "{}", "{\"listeners\":[true]}", '{"listeners":[{"LocalPort":1.5,"OwningProcess":42}]}', '{"listeners":[{"LocalPort":65536,"OwningProcess":42}]}']:
+		var snapshot := McpPortResolver.windows_snapshot_from_powershell(0, [text])
+		assert_false(snapshot.known)
+		assert_eq(McpPortResolver.windows_port_occupancy(18954, snapshot), McpPortResolver.PortOccupancy.UNKNOWN)
+	var failed := McpPortResolver.windows_snapshot_from_powershell(1, ["{\"listeners\":[]}"])
+	assert_false(failed.known)
+
+
+func test_windows_powershell_snapshot_accepts_explicit_empty_or_listeners() -> void:
+	var empty := McpPortResolver.windows_snapshot_from_powershell(0, ["{\"listeners\":[]}"])
+	assert_true(empty.known)
+	assert_eq(McpPortResolver.windows_port_occupancy(18954, empty), McpPortResolver.PortOccupancy.FREE)
+	var occupied := McpPortResolver.windows_snapshot_from_powershell(0, ['{"listeners":[{"LocalPort":18954,"OwningProcess":42},{"LocalPort":19954,"OwningProcess":43},{"LocalPort":18954,"OwningProcess":42}]}'])
+	assert_true(occupied.known)
+	assert_eq(occupied.listeners, {18954: [42], 19954: [43]})
+	assert_eq(McpPortResolver.windows_port_occupancy(18954, occupied), McpPortResolver.PortOccupancy.OCCUPIED)
+
+
+func test_unknown_windows_occupancy_refuses_port_suggestion() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows occupancy query failure")
+		return
+	assert_eq(McpClientConfigurator.suggest_free_port(18954, 2048, {"known": false, "listeners": {}}), 0)
+
+
+func test_malformed_tcp_row_cannot_prove_other_ports_free() -> void:
+	var valid := "  TCP  127.0.0.1:135  0.0.0.0:0  LISTENING  4242\n"
+	for malformed in ["TCP truncated", "TCP 0.0.0.0:18954 0.0.0.0:0 LISTENING bad", "TCP 0.0.0.0:99999 0.0.0.0:0 LISTENING 10", "TCP 0.0.0.0:18954 broken LISTENING 4242", "TCP 0.0.0.0:18954 0.0.0.0:bad LISTENING 4242", "TCP 0.0.0.0:18954 0.0.0.0:65536 LISTENING 4242"]:
+		var snapshot := McpPortResolver.windows_snapshot_from_netstat(0, [valid + malformed])
+		assert_false(snapshot.known)
+		assert_eq(McpPortResolver.windows_port_occupancy(18954, snapshot), McpPortResolver.PortOccupancy.UNKNOWN)
+
+
+func test_pid_zero_occupies_only_its_port_without_process_authority() -> void:
+	var raw := "TCP 0.0.0.0:12345 0.0.0.0:0 LISTENING 0\nTCP [::]:12346 [::]:0 ÉCOUTE 42\n"
+	var snapshot := McpPortResolver.windows_snapshot_from_netstat(0, [raw])
+	assert_true(snapshot.known)
+	assert_eq(snapshot.listeners, {12345: [], 12346: [42]})
+	assert_eq(McpPortResolver.windows_port_occupancy(12345, snapshot), McpPortResolver.PortOccupancy.OCCUPIED)
+	assert_eq(McpPortResolver.windows_port_occupancy(12347, snapshot), McpPortResolver.PortOccupancy.FREE)
+	assert_eq(McpPortResolver.parse_windows_netstat_pids(raw, 12345), [])
+	assert_eq(McpPortResolver.parse_windows_netstat_pids(raw, 12346), [42])
+
+
+func test_netstat_pid_and_occupancy_parsers_reject_the_same_malformed_table() -> void:
+	var raw := "TCP 0.0.0.0:12345 0.0.0.0:0 LISTENING 42\nTCP malformed\n"
+	assert_false(McpPortResolver.windows_netstat_dump_parseable(raw))
+	assert_eq(McpPortResolver.parse_windows_netstat_pids(raw, 12345), [])
+	assert_eq(McpPortResolver.windows_port_occupancy(12345,
+		McpPortResolver.windows_snapshot_from_netstat(0, [raw])), McpPortResolver.PortOccupancy.UNKNOWN)
