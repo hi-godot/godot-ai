@@ -6,6 +6,7 @@ from fastmcp import FastMCP
 
 from godot_ai.handlers import material as material_handlers
 from godot_ai.handlers import shader as shader_handlers
+from godot_ai.handlers import visual_shader as visual_shader_handlers
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
@@ -18,6 +19,21 @@ Resource forms: ``godot://materials`` (all materials),
 ``godot://shader/{path}`` (one raw shader's source + parsed metadata).
 
 Ops:
+  • visual_shader_create_graph(resource_path, stages, shader_type="spatial", overwrite=False)
+        Create/save a VisualShader .tres only (not undoable). Each stages entry is
+        {stage, nodes: [{id, type, position?, params?}], connections:
+        [{from_node, from_port, to_node, to_port}]}. Explicit stages must match
+        spatial/canvas_item (vertex/fragment/light), particles
+        (start/process/collide/start_custom/process_custom), sky (sky), or fog (fog).
+        IDs are stage-local integers >=2 or nonempty strings; output is "output"/0.
+        Limits: 256 nodes, 1024 connections total. Existing destination directory
+        required. Returns id_map by stage as [{id, node_id}] in request order.
+        The generated source is parsed through the engine's shader compiler
+        before saving; a graph it rejects (for example a parameter named after
+        a shader keyword) is not written. Renderers that cannot compile a
+        shader type fall back to validating the generated declarations, so the
+        advertised modes stay accepted.
+        Use create(type="shader", shader_path=<saved .tres>) then assign separately.
   • create(path, type="standard", shader_path="", overwrite=False)
         Create + save a material .tres at a res:// path. type:
         "standard" | "orm" | "canvas_item" | "shader". For "shader",
@@ -73,6 +89,7 @@ def register_material_tools(mcp: FastMCP) -> None:
         tool_name="material_manage",
         description=_DESCRIPTION,
         ops={
+            "visual_shader_create_graph": visual_shader_handlers.create_graph,
             "create": material_handlers.material_create,
             "set_param": material_handlers.material_set_param,
             "set_shader_param": material_handlers.material_set_shader_param,

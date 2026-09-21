@@ -6,12 +6,17 @@ from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 
 RUNTIME_DEPENDENCIES = {
-    "anyio": "4.14.2",
-    "fastmcp": "3.4.7",
+    "anyio": "4.15.1",
+    "fastmcp": "4.0.5",
+    "fastmcp-slim": "4.0.5",
     "h11": "0.16.0",
     "httpx": "0.28.1",
-    "mcp": "1.29.1",
+    "httpx2": "2.13.0",
+    "httpcore2": "2.13.0",
+    "mcp": "2.2.0",
+    "mcp-types": "2.2.0",
     "pydantic": "2.13.5",
+    "sniffio": "1.3.1",
     "starlette": "1.6.0",
     "uvicorn": "0.52.4",
     "websockets": "17.1",
