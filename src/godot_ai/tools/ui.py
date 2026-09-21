@@ -27,6 +27,10 @@ Ops:
         apply the preset to that overlay.
   • set_text(path, text)
         Set text on a Label/Button/LineEdit/TextEdit/RichTextLabel.
+  • set_richtext(path, text, bbcode=True)
+        Set a RichTextLabel's text with BBcode parsing on by default —
+        "[color=red]HP[/color]" renders as markup, and bbcode=False writes
+        literal text. Undoable.
   • build_layout(tree, parent_path="")
         Atomically build a UI subtree from a nested spec
         ({type, name?, properties?, anchor_preset?, anchor_margin?, theme?,
@@ -53,6 +57,7 @@ def register_ui_tools(mcp: FastMCP) -> None:
         ops={
             "set_anchor_preset": ui_handlers.ui_set_anchor_preset,
             "set_text": ui_handlers.ui_set_text,
+            "set_richtext": ui_handlers.ui_set_richtext,
             "build_layout": ui_handlers.ui_build_layout,
             "draw_recipe": control_handlers.control_draw_recipe,
         },

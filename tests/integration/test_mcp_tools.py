@@ -4851,6 +4851,41 @@ class TestUiSetTextTool:
         assert "not a Control" in str(result.content)
 
 
+class TestUiSetRichtextTool:
+    async def test_forwards_bbcode_flag(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "set_richtext"
+            assert cmd["params"] == {
+                "path": "/Main/HUD/Log",
+                "text": "[color=red]HP[/color]",
+                "bbcode": True,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/HUD/Log",
+                    "bbcode": True,
+                    "length": 21,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "ui_manage",
+            {
+                "op": "set_richtext",
+                "params": {"path": "/Main/HUD/Log", "text": "[color=red]HP[/color]"},
+            },
+        )
+        await task
+        assert result.data["bbcode"] is True
+        assert result.data["length"] == 21
+
+
 # ---------------------------------------------------------------------------
 # ui_build_layout
 # ---------------------------------------------------------------------------
@@ -5166,6 +5201,95 @@ class TestThemeSetStyleboxFlatTool:
         await task
         assert result.data["border"]["top"] == 4
         assert result.data["margins"]["top"] == 16.0
+
+
+class TestThemeStyleboxTextureTool:
+    async def test_composes_texture_fields(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "theme_set_stylebox_texture"
+            params = cmd["params"]
+            assert params["texture_path"] == "res://ui/panel.png"
+            assert params["region"] == [1, 2, 4, 4]
+            assert params["margins"] == {"all": 2.0}
+            assert params["axis_stretch_horizontal"] == "tile"
+            # Fields not supplied must not be forwarded.
+            assert "draw_center" not in params
+            assert "modulate_color" not in params
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://ui/themes/game.tres",
+                    "class_name": "Button",
+                    "name": "normal",
+                    "stylebox_class": "StyleBoxTexture",
+                    "texture_path": "res://ui/panel.png",
+                    "region": {"position": {"x": 1, "y": 2}, "size": {"x": 4, "y": 4}},
+                    "margins": {"left": 2.0, "top": 2.0, "right": 2.0, "bottom": 2.0},
+                    "draw_center": True,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_manage",
+            {
+                "op": "set_stylebox_texture",
+                "params": {
+                    "theme_path": "res://ui/themes/game.tres",
+                    "class_name": "Button",
+                    "name": "normal",
+                    "texture_path": "res://ui/panel.png",
+                    "region": [1, 2, 4, 4],
+                    "margins": {"all": 2.0},
+                    "axis_stretch_horizontal": "tile",
+                },
+            },
+        )
+        await task
+        assert result.data["stylebox_class"] == "StyleBoxTexture"
+        assert result.data["undoable"] is True
+
+    async def test_stylebox_override_dispatches(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "theme_stylebox_override"
+            assert cmd["params"] == {
+                "path": "/Main/HUD/Frame",
+                "slot": "panel",
+                "patch": {"border": {"all": 0}},
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/HUD/Frame",
+                    "slot": "panel",
+                    "stylebox_class": "StyleBoxFlat",
+                    "overrode_existing": False,
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "theme_manage",
+            {
+                "op": "stylebox_override",
+                "params": {
+                    "path": "/Main/HUD/Frame",
+                    "slot": "panel",
+                    "patch": {"border": {"all": 0}},
+                },
+            },
+        )
+        await task
+        assert result.data["slot"] == "panel"
+        assert result.data["overrode_existing"] is False
 
 
 class TestThemeApplyTool:

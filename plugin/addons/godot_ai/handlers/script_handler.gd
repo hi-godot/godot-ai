@@ -595,6 +595,10 @@ func find_symbols(params: Dictionary) -> Dictionary:
 	if path_err != null:
 		return path_err
 
+	var language := script_language(path)
+	if language.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Cannot outline %s: path must end with .gd or .cs (use filesystem_manage op=\"read_text\" for other text files)" % path)
+
 	if not FileAccess.file_exists(path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "File not found: %s" % path)
 
@@ -605,7 +609,7 @@ func find_symbols(params: Dictionary) -> Dictionary:
 	var content := file.get_as_text()
 	file.close()
 
-	if script_language(path) == LANGUAGE_CSHARP:
+	if language == LANGUAGE_CSHARP:
 		return {"data": _csharp_symbols(path, content)}
 
 	var functions: Array[Dictionary] = []

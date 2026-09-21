@@ -622,3 +622,79 @@ func test_build_layout_theme_override_rejects_non_control() -> void:
 	})
 	assert_is_error(result)
 	assert_contains(result.error.message, "theme_override_")
+
+
+# ----- set_richtext -----
+
+func test_set_richtext_sets_bbcode_text() -> void:
+	var path := _add_control("TestSetRichText", RichTextLabel.new())
+	if path.is_empty():
+		skip("Scene not ready — _add_control returned empty path")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var label := McpScenePath.resolve(path, scene_root) as RichTextLabel
+	var markup := "[color=red]HP[/color]"
+	var result := _handler.set_richtext({"path": path, "text": markup})
+	assert_has_key(result, "data")
+	assert_true(result.data.bbcode)
+	assert_eq(result.data.length, markup.length())
+	assert_true(label.bbcode_enabled, "bbcode_enabled must be on for markup text")
+	assert_eq(label.text, markup)
+	_remove_control(path)
+
+
+func test_set_richtext_plain_text_disables_bbcode() -> void:
+	var path := _add_control("TestSetRichTextPlain", RichTextLabel.new())
+	if path.is_empty():
+		skip("Scene not ready — _add_control returned empty path")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var label := McpScenePath.resolve(path, scene_root) as RichTextLabel
+	var literal := "[b]literal[/b]"
+	var result := _handler.set_richtext({"path": path, "text": literal, "bbcode": false})
+	assert_has_key(result, "data")
+	assert_false(result.data.bbcode)
+	assert_false(label.bbcode_enabled)
+	assert_eq(label.text, literal)
+	## A stringified flag must not coerce: "false" is truthy in GDScript.
+	var bad_bbcode := _handler.set_richtext({"path": path, "text": "x", "bbcode": "false"})
+	assert_is_error(bad_bbcode, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_bbcode.error.message, "bbcode")
+	_remove_control(path)
+
+
+func test_set_richtext_undo_restores_text_and_flag() -> void:
+	var path := _add_control("TestSetRichTextUndo", RichTextLabel.new())
+	if path.is_empty():
+		skip("Scene not ready — _add_control returned empty path")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var label := McpScenePath.resolve(path, scene_root) as RichTextLabel
+	label.text = "before"
+	label.bbcode_enabled = false
+	## Earlier suites leave actions in the scene history; clear so
+	## `editor_undo` can only reach this test's action.
+	_undo_redo.clear_history()
+	var result := _handler.set_richtext({"path": path, "text": "after"})
+	assert_has_key(result, "data")
+	assert_eq(label.text, "after")
+	var did_undo := editor_undo(_undo_redo)
+	assert_true(did_undo, "undo should succeed")
+	assert_eq(label.text, "before", "undo must restore the previous text")
+	assert_false(label.bbcode_enabled, "undo must restore the previous bbcode flag")
+	_remove_control(path)
+
+
+func test_set_richtext_rejects_wrong_node_and_text() -> void:
+	var path := _add_control("TestSetRichTextWrong", Label.new())
+	if path.is_empty():
+		skip("Scene not ready — _add_control returned empty path")
+		return
+	var wrong_node := _handler.set_richtext({"path": path, "text": "x"})
+	assert_is_error(wrong_node, ErrorCodes.WRONG_TYPE)
+	assert_contains(wrong_node.error.message, "RichTextLabel")
+	var missing_text := _handler.set_richtext({"path": path})
+	assert_is_error(missing_text, ErrorCodes.MISSING_REQUIRED_PARAM)
+	var bad_type := _handler.set_richtext({"path": path, "text": 42})
+	assert_is_error(bad_type, ErrorCodes.WRONG_TYPE)
+	_remove_control(path)

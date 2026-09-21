@@ -99,7 +99,7 @@ func test_registry_loads_all_clients() -> void:
 		"Every registered client script must load; got %d of %d" % [ids.size(), McpClientRegistry._CLIENT_SCRIPT_PATHS.size()]
 	)
 	# Each existing client must remain registered for behaviour parity.
-	for required in ["claude_code", "claude_desktop", "codex", "grok", "antigravity", "zoo_code", "hermes", "pi", "deepseek_harness", "codebuddy"]:
+	for required in ["claude_code", "claude_desktop", "codex", "grok", "antigravity", "zoo_code", "hermes", "pi", "deepseek_harness", "codebuddy", "omp"]:
 		assert_true(McpClientRegistry.has_id(required), "Missing client: %s" % required)
 
 
@@ -6670,3 +6670,87 @@ func test_zcode_configure_is_manual_only_and_preserves_the_agents_fallback() -> 
 	)
 	assert_eq(configured_again.get("status"), "error")
 	assert_eq(empty_native_after, empty_native_body, "an existing empty native map must not be seeded")
+
+
+func test_omp_descriptor_and_stdio_entry() -> void:
+	## Oh My Pi reads ~/.omp/agent/mcp.json as typeless FLAT stdio with a
+	## first-definition-wins merge. Pin the shape so a future revert to a
+	## typed or URL entry fails here instead of at Configure time, and pin
+	## the project-tier order that keeps the strategy's last-wins fold on
+	## omp's actual project winner (.omp/mcp.json).
+	var c := McpClientRegistry.get_by_id("omp")
+	assert_true(c != null, "Oh My Pi must be registered")
+	assert_eq(c.display_name, "Oh My Pi")
+	assert_eq(c.config_type, "json")
+	assert_eq(c.path_template.get("unix"), "~/.omp/agent/mcp.json")
+	assert_eq(c.path_template.get("windows"), "$USERPROFILE/.omp/agent/mcp.json")
+	assert_eq(c.server_key_path, PackedStringArray(["mcpServers"]))
+	assert_true(c.detect_paths.has("~/.omp/agent"), "omp install signal is ~/.omp/agent")
+	assert_eq(
+		c.get("config_merge_project_paths"),
+		PackedStringArray([".omp/.mcp.json", ".omp/mcp.json"]),
+		"omp project tiers must fold last-wins onto .omp/mcp.json",
+	)
+	assert_true(
+		c.command_transport_key.is_empty(),
+		"omp stdio entries must remain typeless",
+	)
+	var launch := _test_attach_launch()
+	var fresh := McpJsonStrategy.build_entry(c, "http://unused", {}, launch)
+	assert_eq(fresh.get("command"), launch.get("command"))
+	assert_eq(fresh.get("args"), launch.get("args"))
+	assert_false(fresh.has("type"), "generated stdio entry must omit `type`")
+	assert_eq(fresh.get("enabled"), true, "fresh entry seeds `enabled`")
+	assert_eq(fresh.get("timeout"), 300000, "fresh entry seeds a 300s request timeout")
+	var entry := McpJsonStrategy.build_entry(c, "http://unused", {
+		"type": "http",
+		"url": "http://old",
+		"headers": {"Authorization": "old"},
+		"env": {"USER_SENTINEL": "preserved"},
+		"enabled": false,
+		"timeout": 600000,
+	}, launch)
+	assert_eq(entry.get("command"), launch.get("command"))
+	assert_eq(entry.get("args"), launch.get("args"))
+	assert_eq(entry.get("env", {}).get("USER_SENTINEL"), "preserved")
+	assert_eq(entry.get("enabled"), false, "`enabled` is omp user-state and must survive")
+	assert_eq(entry.get("timeout"), 600000, "`timeout` is omp user-state and must survive")
+	assert_false(entry.has("type"), "a leftover `type` must be scrubbed")
+	assert_false(entry.has("url"))
+	assert_false(entry.has("headers"))
+	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://unused", launch))
+
+
+func test_omp_manual_flow_preserves_primary_compatibility_and_relocated_files() -> void:
+	var client := McpClientRegistry.get_by_id("omp")
+	var saved_paths: Dictionary = client.path_template.duplicate(true)
+	var saved_merge: Dictionary = client.config_merge_path_templates.duplicate(true)
+	var primary := _scratch_dir.path_join("omp_manual/agent/mcp.json")
+	var compatibility := _scratch_dir.path_join("omp_manual/agent/.mcp.json")
+	var relocated := _scratch_dir.path_join("omp_manual/profile/agent/mcp.json")
+	var body := '{"mcpServers":{"godot-ai":{"command":"existing","enabled":false,"timeout":0,"env":{"SENTINEL":"keep"}},"other":{"command":"other"}}}'
+	_write_text(compatibility, body)
+	_write_text(relocated, body)
+	client.path_template = {"unix": primary, "windows": primary}
+	client.config_merge_path_templates = {"unix": PackedStringArray([primary]), "windows": PackedStringArray([primary])}
+	var configured := McpClientConfigurator.configure("omp", "http://127.0.0.1:8000/mcp")
+	var created := FileAccess.file_exists(primary)
+	_write_text(primary, body)
+	var configured_existing := McpClientConfigurator.configure("omp", "http://127.0.0.1:8000/mcp")
+	var removed := McpClientConfigurator.remove("omp", "http://127.0.0.1:8000/mcp")
+	var primary_after := FileAccess.get_file_as_string(primary)
+	var compatibility_after := FileAccess.get_file_as_string(compatibility)
+	var relocated_after := FileAccess.get_file_as_string(relocated)
+	client.path_template = saved_paths
+	client.config_merge_path_templates = saved_merge
+	_remove_if_exists(primary)
+	_remove_if_exists(compatibility)
+	_remove_if_exists(relocated)
+	assert_false(client.automatic_config_edits, "unknown active profile requires manual editing")
+	for result in [configured, configured_existing, removed]:
+		assert_eq(result.get("status"), "error")
+		assert_contains(str(result.get("message", "")), "manual edit")
+	assert_false(created, "Configure must not shadow compatibility state with a new primary entry")
+	assert_eq(primary_after, body, "Configure and Remove preserve existing primary user state")
+	assert_eq(compatibility_after, body, "compatibility config remains byte-identical")
+	assert_eq(relocated_after, body, "profile config remains byte-identical")

@@ -1152,3 +1152,38 @@ func test_script_language_classifies_extensions() -> void:
 	assert_eq(ScriptHandler.script_language("res://a.cs"), "csharp")
 	assert_eq(ScriptHandler.script_language("res://a.txt"), "")
 	assert_eq(ScriptHandler.script_language("res://a.gdshader"), "")
+
+
+func test_find_symbols_rejects_existing_non_script_without_mutation() -> void:
+	var path := "res://tests/_mcp_outline_unsupported.txt"
+	var content := "extends Node\nfunc misleading_symbol():\n\tpass\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		assert_true(false, "could not create the disposable outline fixture")
+		return
+	file.store_string(content)
+	file.close()
+	var result := _handler.find_symbols({"path": path})
+	var after := FileAccess.get_file_as_string(path)
+	DirAccess.remove_absolute(path)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, ".gd or .cs")
+	assert_contains(result.error.message, path)
+	assert_contains(result.error.message, "read_text")
+	assert_eq(after, content, "refused outline must leave source bytes unchanged")
+
+
+func test_find_symbols_csharp_qualified_return_type() -> void:
+	var path := "res://tests/_mcp_qualified_outline.cs"
+	var content := "public partial class QualifiedOutline\n{\n    public System.Threading.Tasks.Task LoadAsync() => null;\n}\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		assert_true(false, "could not create the disposable C# outline fixture")
+		return
+	file.store_string(content)
+	file.close()
+	var result := _handler.find_symbols({"path": path})
+	_remove_reload_helper(path)
+	assert_has_key(result, "data")
+	assert_eq(result.data.language, "csharp")
+	assert_eq(result.data.functions, [{"name": "LoadAsync", "line": 3}])

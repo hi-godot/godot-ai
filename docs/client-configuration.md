@@ -127,8 +127,8 @@ Per-strategy command rendering (`CommandShape` docs in `_base.gd`):
   (Codex, Grok).
 - **YAML** — FLAT with flow-style `args` (Hermes); `url`/`headers` are the
   legacy keys there because Hermes infers transport from key presence.
-- **JSON, typeless** — Antigravity, Pi Agent: FLAT `command`/`args`/`env`
-  with no `type` discriminator; transport is inferred from key presence
+- **JSON, typeless** — Antigravity, Pi Agent, Oh My Pi: FLAT `command`/`args`/
+  `env` with no `type` discriminator; transport is inferred from key presence
   (`command` vs `url`), so `url`, `headers`, and any leftover `type` key
   from a previous http-era entry join `command_legacy_keys` and are
   scrubbed on reconfigure.
@@ -373,3 +373,28 @@ would therefore silently disable every server a user keeps in that fallback, so
 Godot AI never writes the native file. Move those entries into
 `~/.zcode/cli/config.json` first if both are needed, then add the Godot AI entry
 shown by Configure.
+
+### Oh My Pi
+
+Oh My Pi (`omp`) uses a typeless `command`/`args`/`env` entry under
+`mcpServers`. The default-profile destination is `~/.omp/agent/mcp.json`
+(`%USERPROFILE%/.omp/agent/mcp.json` on Windows).
+
+This descriptor is **manual-only**: Configure and Remove return instructions
+without changing files. A new primary entry would shadow a same-named entry
+in `~/.omp/agent/.mcp.json` or root `mcp.json`/`.mcp.json`, potentially losing
+its `enabled`, `timeout`, `env`, or other user settings. Preserve those settings
+when moving an existing entry. Project `.omp/mcp.json` takes precedence over
+`.omp/.mcp.json`, followed by the active profile's user files; duplicate names
+are not merged.
+
+The displayed path and status describe the default profile. `PI_CONFIG_DIR`,
+`PI_CODING_AGENT_DIR`, `OMP_PROFILE`/`PI_PROFILE`, and `omp --profile` can select
+another destination. Confirm the active profile's file before applying the
+manual entry; Godot does not discover the running client's profile.
+
+The suggested fresh entry sets `timeout: 300000` milliseconds because omp's
+30-second default can interrupt long Godot calls. Preserve an existing timeout
+(including `0`, which disables it) and disabled state. `OMP_MCP_TIMEOUT_MS` takes
+precedence over this per-server value. See the [upstream MCP configuration
+guide](https://github.com/can1357/oh-my-pi/blob/main/docs/mcp-config.md).
