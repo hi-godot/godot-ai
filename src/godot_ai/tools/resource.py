@@ -61,8 +61,12 @@ Ops:
         CollisionShape3D for every MeshInstance3D path. Shapes are fitted in
         body-local space; a mesh that already has a collider sibling, a
         duplicate path, or a scene-root mesh is refused before anything is
-        written. shape_type: box | sphere | capsule | cylinder | convex |
-        trimesh (or the class name). convex/trimesh derive the shape from the
+        written. shape_type: auto | box | sphere | capsule | cylinder | convex |
+        trimesh (or the class name for explicit shapes). Opt-in auto selects matching
+        primitives for BoxMesh, SphereMesh, CapsuleMesh and CylinderMesh, with
+        box bounds for every other mesh. The default remains box. Auto uses
+        bounding fits (including tapered cylinders), not exact mesh geometry.
+        convex/trimesh derive the shape from the
         mesh's own triangles, with the mesh scale baked into the shape, and are
         limited to 2048 triangles and 6144 vertices per mesh, with bounded mesh types
         (the hull build runs synchronously

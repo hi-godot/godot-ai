@@ -258,6 +258,12 @@ Calls take the form:
 | `csg_manage` | `csg_create`, `csg_set_operation` |
 | `custom_manage` | `list`, `invoke` |
 
+`resource_manage(op="physics_shape_generate")` keeps `shape_type="box"` as its default.
+Explicit `shape_type="auto"` chooses box, sphere, capsule or cylinder for the corresponding
+BoxMesh, SphereMesh, CapsuleMesh or CylinderMesh; all other meshes use box bounds.
+These are bounding fits, including tapered cylinders. Each created item reports its
+resolved `shape_type`. Existing scale, ownership and undo rules still apply.
+
 Third-party addons register custom tools in-editor (see
 `docs/plugin-architecture.md` → "Custom Tools"). All enabled custom tools are
 reachable via `custom_manage`; specs with `promoted = true` additionally

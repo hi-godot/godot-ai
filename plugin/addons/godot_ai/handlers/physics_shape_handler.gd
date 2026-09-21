@@ -136,11 +136,11 @@ func generate(params: Dictionary) -> Dictionary:
 ## edited scene. Nothing here touches a node.
 static func _validate_generate_request(params: Dictionary) -> Dictionary:
 	var requested_shape := String(params.get("shape_type", "box"))
-	var shape_type := _normalize_shape_type(_GENERATE_SHAPE_3D_CLASSES, requested_shape)
+	var shape_type := "auto" if requested_shape == "auto" else _normalize_shape_type(_GENERATE_SHAPE_3D_CLASSES, requested_shape)
 	if shape_type.is_empty():
 		return ErrorCodes.make(
 			ErrorCodes.VALUE_OUT_OF_RANGE,
-			"Invalid shape_type '%s'. Valid: %s" % [requested_shape, ", ".join(_GENERATE_SHAPE_3D_CLASSES.keys())]
+			"Invalid shape_type '%s'. Valid: auto, %s" % [requested_shape, ", ".join(_GENERATE_SHAPE_3D_CLASSES.keys())]
 		)
 	var body_type := String(params.get("body_type", "static"))
 	if not _GENERATED_BODY_CLASSES.has(body_type):
@@ -241,6 +241,16 @@ static func _validate_hull_workload(mesh: Mesh, mesh_path: String, shape_type: S
 	return {}
 
 
+static func _auto_generate_shape(mesh: Mesh) -> String:
+	if mesh is SphereMesh:
+		return "sphere"
+	if mesh is CapsuleMesh:
+		return "capsule"
+	if mesh is CylinderMesh:
+		return "cylinder"
+	return "box"
+
+
 ## Resolve one mesh and capture everything the apply step must find unchanged.
 static func _plan_generate_mesh(
 	mesh_path: String, scene_file: String, scene_root: Node, shape_type: String, reparent_mesh: bool
@@ -271,6 +281,9 @@ static func _plan_generate_mesh(
 			ErrorCodes.RESOURCE_NOT_FOUND,
 			"MeshInstance3D at %s has no mesh resource — there are no bounds to fit" % mesh_path
 		)
+	var auto_shape := shape_type == "auto"
+	if auto_shape:
+		shape_type = _auto_generate_shape(mesh.mesh)
 	if shape_type == "convex" or shape_type == "trimesh":
 		var error := _validate_hull_workload(mesh.mesh, mesh_path, shape_type)
 		if not error.is_empty():
@@ -325,6 +338,10 @@ static func _plan_generate_mesh(
 	return {"plan": {
 		"mesh": mesh,
 		"mesh_path": mesh_path,
+		"auto_shape": auto_shape,
+		"shape_type": shape_type,
+		"source_mesh": mesh.mesh,
+		"source_bounds": mesh.get_aabb(),
 		"parent": parent,
 		"collider_name": collider_name,
 		"top_level": mesh.top_level,
@@ -362,8 +379,20 @@ static func _plan_stale_reason(plan: Dictionary) -> String:
 		return "moved"
 	if mesh.mesh == null:
 		return "lost its mesh resource"
+	var auto_stale := _auto_source_stale_reason(mesh, plan)
+	if not auto_stale.is_empty():
+		return auto_stale
 	if parent.get_node_or_null(NodePath(str(plan.collider_name))) != null:
 		return "gained a collider sibling"
+	return ""
+
+
+static func _auto_source_stale_reason(mesh: MeshInstance3D, snapshot: Dictionary) -> String:
+	if bool(snapshot.get("auto_shape", false)):
+		if mesh.mesh != snapshot.source_mesh:
+			return "changed its mesh resource"
+		if not mesh.get_aabb().is_equal_approx(snapshot.source_bounds):
+			return "changed its mesh bounds"
 	return ""
 
 
@@ -406,6 +435,10 @@ static func _create_generated_entry(
 	var entry := {
 		"mesh": mesh,
 		"mesh_path": str(plan.mesh_path),
+		"shape_type": shape_type,
+		"auto_shape": bool(plan.get("auto_shape", false)),
+		"source_mesh": plan.get("source_mesh"),
+		"source_bounds": plan.get("source_bounds"),
 		"mesh_local_transform": plan.mesh_to_body,
 		"parent": plan.parent,
 		"body": body,
@@ -476,6 +509,9 @@ static func _applied_stale_reason(created_nodes: Array[Dictionary]) -> String:
 		var mesh = entry.mesh
 		if not is_instance_valid(mesh) or not mesh.is_inside_tree():
 			return "%s was removed" % str(entry.mesh_path)
+		var auto_stale := _auto_source_stale_reason(mesh, entry)
+		if not auto_stale.is_empty():
+			return "%s %s" % [str(entry.mesh_path), auto_stale]
 		var parent = entry.parent
 		if not is_instance_valid(parent):
 			return "%s was reparented" % str(entry.mesh_path)
@@ -531,7 +567,7 @@ static func _commit_generated_action(
 
 ## Build the public response after every body is present in the edited scene.
 static func _generated_response(
-	created_nodes: Array[Dictionary], scene_root: Node, shape_type: String, body_type: String
+	created_nodes: Array[Dictionary], scene_root: Node, body_type: String
 ) -> Dictionary:
 	var created: Array[Dictionary] = []
 	for entry in created_nodes:
@@ -539,7 +575,7 @@ static func _generated_response(
 			"mesh_path": McpScenePath.from_node(entry.mesh, scene_root),
 			"body_path": McpScenePath.from_node(entry.body, scene_root),
 			"shape_path": McpScenePath.from_node(entry.collision, scene_root),
-			"shape_type": shape_type,
+			"shape_type": str(entry.shape_type),
 			"body_type": body_type,
 		})
 	return {"data": {"created": created, "undoable": true}}
@@ -632,7 +668,7 @@ static func _generate_step(job: Dictionary, budget_usec: int) -> bool:
 				% [str(plan.mesh_path), stale],
 			))
 		var entry := _create_generated_entry(
-			plan, str(validated.shape_type), str(validated.body_type), bool(validated.reparent_mesh)
+			plan, str(plan.shape_type), str(validated.body_type), bool(validated.reparent_mesh)
 		)
 		if entry.has("error"):
 			return _generate_fail(job, entry)
@@ -671,7 +707,7 @@ static func _generate_step(job: Dictionary, budget_usec: int) -> bool:
 	_commit_generated_action(created, scene_root, job.undo_redo, false)
 	job.committed = true
 	job.result = _generated_response(
-		created, scene_root, str(validated.shape_type), str(validated.body_type)
+		created, scene_root, str(validated.body_type)
 	)
 	job.phase = "done"
 	return true

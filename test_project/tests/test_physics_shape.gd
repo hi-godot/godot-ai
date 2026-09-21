@@ -2146,3 +2146,159 @@ func test_hull_preflight_rechecks_geometry_grown_after_planning() -> void:
 	assert_false(job.committed)
 	_remove_node(mesh)
 	connection.free()
+
+
+func test_generate_auto_mixed_primitives_and_fallback() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var box := BoxMesh.new()
+	box.size = Vector3(2, 4, 6)
+	var sphere := SphereMesh.new()
+	sphere.radius = 2.0
+	sphere.height = 4.0
+	var capsule := CapsuleMesh.new()
+	capsule.radius = 1.0
+	capsule.height = 4.0
+	var cylinder := CylinderMesh.new()
+	cylinder.top_radius = 1.0
+	cylinder.bottom_radius = 2.0
+	cylinder.height = 5.0
+	var imported := ArrayMesh.new()
+	imported.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, box.surface_get_arrays(0))
+	var resources: Array[Mesh] = [box, sphere, capsule, cylinder, imported, TorusMesh.new()]
+	var expected := ["box", "sphere", "capsule", "cylinder", "box", "box"]
+	var expected_classes := ["BoxShape3D", "SphereShape3D", "CapsuleShape3D", "CylinderShape3D", "BoxShape3D", "BoxShape3D"]
+	var paths: Array[String] = []
+	var meshes: Array[MeshInstance3D] = []
+	for index in resources.size():
+		var mesh := _add_generate_mesh_with_mesh("AutoMixed%d" % index, resources[index])
+		meshes.append(mesh)
+		paths.append(McpScenePath.from_node(mesh, root))
+	var result := _handler.generate({"paths": paths, "shape_type": "auto"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.created.size(), resources.size())
+	var bodies: Array[Node] = []
+	for index in resources.size():
+		var row: Dictionary = result.data.created[index]
+		var collision := McpScenePath.resolve(row.shape_path, root) as CollisionShape3D
+		bodies.append(McpScenePath.resolve(row.body_path, root))
+		assert_eq(row.shape_type, expected[index])
+		assert_eq(collision.shape.get_class(), expected_classes[index])
+		match expected[index]:
+			"box":
+				assert_eq(collision.shape.size, meshes[index].get_aabb().size)
+			"sphere":
+				assert_true(is_equal_approx(collision.shape.radius, 2.0))
+			"capsule":
+				assert_true(is_equal_approx(collision.shape.radius, 1.0))
+				assert_true(is_equal_approx(collision.shape.height, 4.0))
+			"cylinder":
+				assert_true(is_equal_approx(collision.shape.radius, 2.0), "tapered cylinders use bounding radius")
+				assert_true(is_equal_approx(collision.shape.height, 5.0))
+	assert_true(editor_undo(_undo_redo), "the mixed batch is one undo action")
+	for body in bodies:
+		assert_true(body.get_parent() == null)
+	assert_true(editor_redo(_undo_redo), "native redo restores the mixed batch")
+	for index in bodies.size():
+		assert_true(bodies[index].get_parent() == root)
+		assert_eq(bodies[index].get_node("CollisionShape3D").shape.get_class(), expected_classes[index])
+	for body in bodies:
+		_remove_node(body)
+	for mesh in meshes:
+		_remove_node(mesh)
+
+
+func test_generate_auto_does_not_change_default_box() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var sphere := SphereMesh.new()
+	sphere.radius = 2.0
+	sphere.height = 4.0
+	var mesh := _add_generate_mesh_with_mesh("AutoDefaultSphere", sphere)
+	var result := _handler.generate({"paths": [McpScenePath.from_node(mesh, root)]})
+	assert_has_key(result, "data")
+	assert_eq(result.data.created[0].shape_type, "box")
+	var nodes := _generated_nodes(result, root)
+	assert_true(nodes.collision.shape is BoxShape3D)
+	assert_eq(nodes.collision.shape.size, mesh.get_aabb().size)
+	_remove_node(nodes.body)
+	_remove_node(mesh)
+
+
+func test_generate_auto_dynamic_mesh_ownership_and_undo() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	for body_type in ["rigid", "character"]:
+		var mesh := _add_generate_mesh_with_mesh("AutoDynamic%s" % body_type, SphereMesh.new())
+		mesh.position = Vector3(2, 3, 4)
+		var transform := mesh.global_transform
+		var result := _handler.generate({"paths": [McpScenePath.from_node(mesh, root)], "shape_type": "auto", "body_type": body_type})
+		assert_has_key(result, "data")
+		assert_eq(result.data.created[0].shape_type, "sphere")
+		var nodes := _generated_nodes(result, root)
+		assert_true(nodes.collision.shape is SphereShape3D)
+		assert_true(mesh.get_parent() == nodes.body)
+		assert_eq(mesh.global_transform, transform)
+		assert_true(editor_undo(_undo_redo))
+		assert_true(mesh.get_parent() == root)
+		assert_eq(mesh.global_transform, transform)
+		assert_true(editor_redo(_undo_redo))
+		assert_true(mesh.get_parent() == nodes.body)
+		assert_eq(mesh.global_transform, transform)
+		_remove_node(nodes.body)
+
+
+func test_generate_auto_rejects_resource_or_bounds_changes_atomically() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	for change in ["resource", "bounds", "applied_bounds"]:
+		var first := _add_generate_mesh("AutoStaleFirst", Vector3.ONE)
+		var second := _add_generate_mesh("AutoStaleSecond", Vector3.ONE)
+		var connection := _CapturingConnection.new()
+		var job := _generate_job_for([McpScenePath.from_node(first, root), McpScenePath.from_node(second, root)], connection, {"shape_type": "auto"})
+		assert_false(PhysicsShapeHandler._generate_step(job, 0), "plan first")
+		assert_false(PhysicsShapeHandler._generate_step(job, 0), "plan second")
+		assert_false(PhysicsShapeHandler._generate_step(job, 0), "apply first")
+		match change:
+			"resource":
+				second.mesh = SphereMesh.new()
+			"bounds":
+				(second.mesh as BoxMesh).size = Vector3(2, 3, 4)
+			"applied_bounds":
+				(first.mesh as BoxMesh).size = Vector3(2, 3, 4)
+		assert_true(PhysicsShapeHandler._generate_step(job, 0))
+		assert_is_error(job.result, ErrorCodes.EDITED_SCENE_MISMATCH)
+		assert_contains(job.result.error.message, "changed its mesh")
+		assert_true(_find_named_child(root, "AutoStaleFirstCollider") == null)
+		assert_true(_find_named_child(root, "AutoStaleSecondCollider") == null)
+		assert_false(job.committed)
+		_remove_node(first)
+		_remove_node(second)
+		connection.free()
+
+
+func test_generate_auto_resolves_before_parent_scale_validation() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var parent := Node3D.new()
+	parent.name = "AutoScaledParent"
+	parent.scale = Vector3(1, 2, 3)
+	root.add_child(parent)
+	parent.owner = root
+	var mesh := _add_generate_mesh_with_mesh("AutoScaledSphere", SphereMesh.new())
+	mesh.reparent(parent, false)
+	var result := _handler.generate({"paths": [McpScenePath.from_node(mesh, root)], "shape_type": "auto"})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "non-uniformly")
+	assert_true(_find_named_child(parent, "AutoScaledSphereCollider") == null)
+	_remove_node(parent)
