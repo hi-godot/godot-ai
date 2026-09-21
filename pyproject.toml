@@ -47,6 +47,7 @@ dependencies = [
     "pydantic==2.13.5",
     # Status and startup probes still use HTTPX; the MCP attach boundary uses HTTPX2.
     "httpx==0.28.1",
+    "sniffio==1.3.1",
     "httpx2==2.13.0",
     "httpcore2==2.13.0",
     # asgi.py imports these directly; declare them instead of relying on
