@@ -135,14 +135,15 @@ Opt-out creates no telemetry UUID, worker, or files.
 
 ## Documentation and help
 
-### Bazzite / Fedora Atomic Desktop: server exits before publishing capabilities
+<details>
+<summary>Bazzite / Fedora Atomic troubleshooting</summary>
 
 On Bazzite and other Fedora Atomic desktops, `/home` is normally a symbolic
 link to `/var/home` (the ostree layout). Godot AI 4.0.2 and earlier refuse
 every capability-directory path that passes through a link, so on such a
 system the server exits with `Last pending: capability_record`
-([#993](https://github.com/hi-godot/godot-ai/issues/993)). The next release
-follows a link when it is root-owned and sits in a root-owned directory that
+([#993](https://github.com/hi-godot/godot-ai/issues/993)). In Godot AI 4.0.3 and later,
+the server follows a link when it is root-owned and sits in a root-owned directory that
 other accounts cannot write, which is exactly that layout; no configuration is
 needed there.
 
@@ -165,9 +166,12 @@ directory private to your user; do not copy capability tokens into client
 configuration. This workaround is for Linux; `GODOT_AI_CAPABILITY_DIR` is not
 supported on Windows.
 
+</details>
+
 ### Reference and support
 
 - [Tools, operations, and resources](docs/TOOLS.md)
+- [Community addons and custom tools](docs/community-addons.md)
 - [Write and run tests for your game](docs/testing.md)
 - [Client configuration details](docs/client-configuration.md)
 - [Upgrading from v3 and recovering interrupted migrations](docs/v4-migration.md)

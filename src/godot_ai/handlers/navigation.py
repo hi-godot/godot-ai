@@ -20,7 +20,7 @@ async def navigation_bake(
     scene_file: str = "",
     force_sync: bool = True,
 ) -> dict:
-    """Bake a region's navmesh/polygon on a background thread.
+    """Bake bounded 3D mesh geometry asynchronously.
 
     The plugin answers out-of-band (deferred) once the bake settles, so this
     handler claims the plugin's deferred budget plus a transport margin.

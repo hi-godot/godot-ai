@@ -1,8 +1,8 @@
 """MCP tool for navigation authoring — regions, baking, and path queries.
 
 All operations collapse into ``navigation_manage`` — no new named tool. Both
-2D (NavigationRegion2D / NavigationPolygon) and 3D counterparts share the same
-ops, selected by ``dimension`` or inferred from the node class.
+2D/3D path queries select ``dimension`` or infer it from a region. Baking is
+restricted to bounded 3D mesh-only source geometry.
 """
 
 from __future__ import annotations
@@ -13,25 +13,29 @@ from godot_ai.handlers import navigation as navigation_handlers
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
-Navigation authoring for 2D and 3D: baking a region's navmesh/polygon and
+Bounded 3D mesh-only navigation baking and 2D/3D
 path queries on an explicitly selected map.
 
 Ops:
   • bake(path, scene_file="", force_sync=True)
-        Bake the region's navmesh/polygon from its source geometry (children,
-        per the mesh's source settings). The bake runs on the region's own
-        background thread and the reply is deferred until it settles. Godot
-        parses the source geometry synchronously inside the bake call (engine
-        requirement) and cannot be preempted; the measured duration is reported
-        as `parse_ms`, and the request is bounded by a 30 s deadline with
-        per-frame cancellation checks. force_sync=True (default) pushes the
-        baked resource to the server and force-syncs the map (temporarily
-        disabling async map iterations, then restoring them); pass False to
-        let the next physics frame pick it up instead. Undo restores the exact
-        pre-bake resource; redo restores the exact baked resource without
-        re-baking. Only one bake may be in flight per region. Not available
-        inside batch_execute (it cannot await a deferred reply). Resource form:
-        none — per-region write.
+        Bake a 3D region from bounded mesh-only children. Requires NavigationMesh
+        root-children source mode and mesh-instance or both geometry settings.
+        Supports unscripted Node / Node3D containers and MeshInstance3D using plain
+        ArrayMesh, BoxMesh, PlaneMesh, SphereMesh, CylinderMesh or CapsuleMesh. Rejects other source
+        nodes/settings (groups, colliders, CSG, GridMap, obstacles); custom source
+        parser callbacks are never invoked. 2D baking is unsupported.
+        Limits: 256 source nodes, 2048 triangles, 6144 vertices in total,
+        32 surfaces per ArrayMesh, and 1000000 estimated voxel cells. Source
+        collection advances one bounded node per editor frame, then the engine
+        bakes the collected snapshot asynchronously. These input limits are not
+        a hardware-independent per-frame timing guarantee. Replies are deferred
+        with a 30 s deadline; source edits abort the operation. Cancellation
+        restores the old region resource; an already-started engine task may
+        finish into its detached working copy. parse_ms reports collection time.
+        force_sync=True pushes the result and synchronizes the map; False leaves
+        map synchronization to the engine. Undo/redo restore exact retained
+        resources. Only one bake per region; call directly, not in batch_execute.
+        Resource form: none - per-region write.
   • path_get(from_point, to_point, dimension="3d", optimize=True,
               navigation_layers=1, region_path="", force_sync=False)
         Query a path between two world points ({x,y[,z]} or [x,y[,z]]).

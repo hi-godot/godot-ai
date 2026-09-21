@@ -1,0 +1,247 @@
+[gd_scene format=3 uid="uid://c8d7ad3saih0v"]
+
+[ext_resource type="Texture2D" uid="uid://cxhtqhdbl6ig5" path="res://icon.svg" id="1_fx6bw"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_1br4p"]
+size = Vector3(1.4, 1.4, 1.4)
+
+[sub_resource type="BoxMesh" id="BoxMesh_8hddy"]
+
+[sub_resource type="Animation" id="Animation_pmriu"]
+length = 0.8
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("BounceBtn:scale")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.28, 0.52, 0.8),
+"transitions": PackedFloat32Array(1, 0.5, -2, 1),
+"update": 0,
+"values": [Vector2(1, 1), Vector2(1.15, 1.15), Vector2(0.96, 0.96), Vector2(1, 1)]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_xx6x6"]
+_data = {
+&"bounce": SubResource("Animation_pmriu")
+}
+
+[sub_resource type="Animation" id="Animation_rwo4v"]
+length = 3.0
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("OrbitSprite:position")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.1875, 0.375, 0.5625, 0.75, 0.9375, 1.125, 1.3125, 1.5, 1.6875, 1.875, 2.0625, 2.25, 2.4375, 2.625, 2.8125, 3),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1),
+"update": 0,
+"values": [Vector2(960, 150), Vector2(955.43, 172.96), Vector2(942.43, 192.43), Vector2(922.96, 205.43), Vector2(900, 210), Vector2(877.04, 205.43), Vector2(857.57, 192.43), Vector2(844.57, 172.96), Vector2(840, 150), Vector2(844.57, 127.04), Vector2(857.57, 107.57), Vector2(877.04, 94.57), Vector2(900, 90), Vector2(922.96, 94.57), Vector2(942.43, 107.57), Vector2(955.43, 127.04), Vector2(960, 150)]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_ikxqh"]
+_data = {
+&"orbit": SubResource("Animation_rwo4v")
+}
+
+[sub_resource type="Animation" id="Animation_kyc2c"]
+length = 2.0
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("SweepPivot:rotation")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 2),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [0.0, 6.2831855]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_anfeg"]
+_data = {
+&"sweep": SubResource("Animation_kyc2c")
+}
+
+[sub_resource type="Animation" id="Animation_7pdwb"]
+length = 2.0
+loop_mode = 2
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("Scanline:position:x")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 2),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [620.0, 1100.0]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_hhwr8"]
+_data = {
+&"drift": SubResource("Animation_7pdwb")
+}
+
+[sub_resource type="Animation" id="Animation_ytv4u"]
+length = 3.0
+loop_mode = 1
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("World3D/SpinCube:quaternion")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 0.75, 1.5, 2.25, 3),
+"transitions": PackedFloat32Array(1, 1, 1, 1, 1),
+"update": 0,
+"values": [Quaternion(0, 0, 0, 1), Quaternion(0, 0.38268036, 0, 0.9238809), Quaternion(0, 1, 0, 0), Quaternion(0, 0.70710677, 0, -0.70710677), Quaternion(0, 0, 0, -1)]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_24q03"]
+_data = {
+&"spin": SubResource("Animation_ytv4u")
+}
+
+[sub_resource type="Animation" id="Animation_1wbuv"]
+length = 2.4
+loop_mode = 2
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("World3D/FloatCube:transform")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 2.4),
+"transitions": PackedFloat32Array(1, -2),
+"update": 0,
+"values": [Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3.4, 0, 0), Transform3D(-1.25, 0, -1.09278474e-07, 0, 1.25, 0, 1.09278474e-07, 0, -1.25, -3.4, 0.7, 0)]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_hpk8d"]
+_data = {
+&"float_scale": SubResource("Animation_1wbuv")
+}
+
+[sub_resource type="Animation" id="Animation_2kt7f"]
+length = 2.0
+loop_mode = 2
+tracks/0/type = "value"
+tracks/0/imported = false
+tracks/0/enabled = true
+tracks/0/path = NodePath("FadeLabel:modulate")
+tracks/0/interp = 1
+tracks/0/loop_wrap = true
+tracks/0/keys = {
+"times": PackedFloat32Array(0, 2),
+"transitions": PackedFloat32Array(1, 1),
+"update": 0,
+"values": [Color(1, 1, 1, 0.15), Color(1, 1, 1, 1)]
+}
+
+[sub_resource type="AnimationLibrary" id="AnimationLibrary_sd75a"]
+_data = {
+&"fade": SubResource("Animation_2kt7f")
+}
+
+[node name="AnimationShowcase" type="Node2D" unique_id=1833302365]
+
+[node name="World3D" type="Node3D" parent="." unique_id=1867244305]
+
+[node name="Cam" type="Camera3D" parent="World3D" unique_id=2006182898]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 6)
+current = true
+
+[node name="Light" type="DirectionalLight3D" parent="World3D" unique_id=1634428738]
+transform = Transform3D(0.8660254, 0.35355338, -0.35355338, 0, 0.70710677, 0.70710677, 0.5, -0.6123724, 0.6123724, 0, 0, 0)
+
+[node name="SpinCube" type="MeshInstance3D" parent="World3D" unique_id=1845508351]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.2, 0, 0)
+mesh = SubResource("BoxMesh_1br4p")
+
+[node name="FloatCube" type="MeshInstance3D" parent="World3D" unique_id=1926490109]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3.4, 0, 0)
+mesh = SubResource("BoxMesh_8hddy")
+
+[node name="BounceBtn" type="Button" parent="." unique_id=1532539312]
+offset_left = 620.0
+offset_top = 110.0
+offset_right = 840.0
+offset_bottom = 174.0
+pivot_offset = Vector2(110, 32)
+text = "BOUNCE"
+
+[node name="OrbitSprite" type="Sprite2D" parent="." unique_id=1482964763]
+position = Vector2(900, 150)
+scale = Vector2(0.5, 0.5)
+texture = ExtResource("1_fx6bw")
+
+[node name="SweepPivot" type="Node2D" parent="." unique_id=2000499201]
+position = Vector2(700, 420)
+
+[node name="SweepBar" type="ColorRect" parent="SweepPivot" unique_id=509086887]
+offset_left = -6.0
+offset_top = -80.0
+offset_right = 6.0
+color = Color(0.13, 0.83, 0.93, 1)
+
+[node name="Scanline" type="ColorRect" parent="." unique_id=369784847]
+offset_left = 620.0
+offset_top = 560.0
+offset_right = 1120.0
+offset_bottom = 564.0
+color = Color(0.29, 0.87, 0.5, 1)
+
+[node name="FadeLabel" type="Label" parent="." unique_id=79208073]
+offset_left = 620.0
+offset_top = 300.0
+offset_right = 621.0
+offset_bottom = 323.0
+theme_override_font_sizes/font_size = 36
+text = "TYPED VALUES"
+
+[node name="Title" type="Label" parent="." unique_id=2108871838]
+offset_left = 40.0
+offset_top = 24.0
+offset_right = 41.0
+offset_bottom = 47.0
+theme_override_font_sizes/font_size = 24
+text = "Godot AI - animation showcase"
+
+[node name="AnimBounce" type="AnimationPlayer" parent="." unique_id=2042910536]
+libraries/ = SubResource("AnimationLibrary_xx6x6")
+autoplay = &"bounce"
+
+[node name="AnimOrbit" type="AnimationPlayer" parent="." unique_id=850279110]
+libraries/ = SubResource("AnimationLibrary_ikxqh")
+autoplay = &"orbit"
+
+[node name="AnimSweep" type="AnimationPlayer" parent="." unique_id=1466652533]
+libraries/ = SubResource("AnimationLibrary_anfeg")
+autoplay = &"sweep"
+
+[node name="AnimDrift" type="AnimationPlayer" parent="." unique_id=490787756]
+libraries/ = SubResource("AnimationLibrary_hhwr8")
+autoplay = &"drift"
+
+[node name="AnimSpin" type="AnimationPlayer" parent="." unique_id=250277946]
+libraries/ = SubResource("AnimationLibrary_24q03")
+autoplay = &"spin"
+
+[node name="AnimFloat" type="AnimationPlayer" parent="." unique_id=1792299849]
+libraries/ = SubResource("AnimationLibrary_hpk8d")
+autoplay = &"float_scale"
+
+[node name="AnimFade" type="AnimationPlayer" parent="." unique_id=1310767399]
+libraries/ = SubResource("AnimationLibrary_sd75a")
+autoplay = &"fade"

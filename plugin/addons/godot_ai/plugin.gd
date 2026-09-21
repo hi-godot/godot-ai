@@ -365,6 +365,8 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("theme", HANDLERS_DIR + "theme_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("animation", HANDLERS_DIR + "animation_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("material", HANDLERS_DIR + "material_handler.gd", [undo, _connection])
+	_dispatcher.register_lazy_handler("shader", HANDLERS_DIR + "shader_handler.gd", [])
+	_dispatcher.register_lazy_handler("visual_shader", HANDLERS_DIR + "visual_shader_handler.gd", [])
 	_dispatcher.register_lazy_handler("particle", HANDLERS_DIR + "particle_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("camera", HANDLERS_DIR + "camera_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("audio", HANDLERS_DIR + "audio_handler.gd", [undo])
@@ -478,6 +480,10 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("animation_preset_shake", "animation", &"preset_shake")
 	_dispatcher.register_lazy("animation_preset_pulse", "animation", &"preset_pulse")
 	_dispatcher.register_lazy("material_create", "material", &"create_material")
+	_dispatcher.register_lazy("visual_shader_create_graph", "visual_shader", &"create_graph")
+	_dispatcher.register_lazy("visual_shader_get", "visual_shader", &"get_graph")
+	_dispatcher.register_lazy("visual_shader_node_catalog", "visual_shader", &"node_catalog")
+	_dispatcher.register_lazy("visual_shader_edit", "visual_shader", &"edit_graph")
 	_dispatcher.register_lazy("material_set_param", "material", &"set_param")
 	_dispatcher.register_lazy("material_set_shader_param", "material", &"set_shader_param")
 	_dispatcher.register_lazy("material_get", "material", &"get_material")
@@ -485,6 +491,10 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("material_assign", "material", &"assign_material")
 	_dispatcher.register_lazy("material_apply_to_node", "material", &"apply_to_node")
 	_dispatcher.register_lazy("material_apply_preset", "material", &"apply_preset")
+	_dispatcher.register_lazy("shader_create", "shader", &"create_shader")
+	_dispatcher.register_lazy("shader_get", "shader", &"get_shader")
+	_dispatcher.register_lazy("shader_validate", "shader", &"validate_shader")
+	_dispatcher.register_lazy("shader_patch", "shader", &"patch_shader")
 	_dispatcher.register_lazy("particle_create", "particle", &"create_particle")
 	_dispatcher.register_lazy("particle_set_main", "particle", &"set_main")
 	_dispatcher.register_lazy("particle_set_process", "particle", &"set_process")
@@ -548,6 +558,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dock.name = "Godot AI"
 	_dock.update_requested.connect(_on_dock_update_requested)
 	_dock.client_action_requested.connect(_on_dock_client_action_requested)
+	_dock.client_action_cancel_requested.connect(_on_dock_client_action_cancel_requested)
 	_dock.client_status_refresh_requested.connect(_on_dock_client_status_refresh_requested)
 	_dock.status_snapshot_requested.connect(_on_dock_status_snapshot_requested)
 	_dock.live_server_probe_requested.connect(_on_dock_live_server_probe_requested)
@@ -641,6 +652,14 @@ func _on_dock_client_action_requested(client_id: String, action: String) -> void
 	if _client_jobs == null:
 		return
 	if not _client_jobs.request_action(client_id, action) and _dock != null:
+		_dock.present_client_work_snapshot(_client_jobs.snapshot())
+
+
+func _on_dock_client_action_cancel_requested(client_id: String) -> void:
+	if _client_jobs == null:
+		return
+	_client_jobs.cancel_pending_action(client_id)
+	if _dock != null:
 		_dock.present_client_work_snapshot(_client_jobs.snapshot())
 
 
@@ -1747,7 +1766,16 @@ func restart_or_start_managed_server() -> bool:
 		_lifecycle.force_restart_server()
 		return true
 	var port := ClientConfigurator.http_port()
-	if PortResolver.is_port_in_use(port):
+	var occupied: bool
+	if OS.get_name() == "Windows":
+		var occupancy := PortResolver.windows_port_occupancy(port)
+		if occupancy == PortResolver.PortOccupancy.UNKNOWN:
+			_lifecycle.start_server()
+			return true
+		occupied = occupancy == PortResolver.PortOccupancy.OCCUPIED
+	else:
+		occupied = PortResolver.is_port_in_use(port)
+	if occupied:
 		push_warning(
 			"MCP | refusing to restart the unowned server on port %d; stop it from its launcher"
 			% port

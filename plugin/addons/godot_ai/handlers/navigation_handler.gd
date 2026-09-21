@@ -2,14 +2,10 @@
 extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const MeshWorkload := preload("res://addons/godot_ai/utils/mesh_workload.gd")
 const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializer.gd")
 
-## Navigation authoring for 2D and 3D: baking a region's navmesh/polygon and
-## path queries on an explicitly selected map.
-##
-## Every op is dimension-aware — the same params serve NavigationRegion3D /
-## NavigationMesh and their 2D counterparts, selected by `dimension` ("3d"
-## default) or inferred from an existing node's class.
+## Bounded 3D mesh-only baking and explicit-map path queries in 2D/3D.
 
 const _CLASSES := {
 	"2d": {
@@ -26,6 +22,8 @@ const _CLASSES := {
 ## handler's timeout is this plus its transport margin (a source-shape test
 ## keeps the two together).
 const _BAKE_DEFERRED_TIMEOUT_MS := 30000
+const _SOURCE_MAX_NODES := 256
+const _SOURCE_MAX_GRID_CELLS := 1000000
 
 ## In-flight bakes keyed by region instance id. `bake()` reserves its region
 ## before the first yield so a second call in the same frame cannot start a
@@ -47,16 +45,12 @@ func _init(undo_redo: EditorUndoRedoManager, connection = null) -> void:
 # navigation_bake
 # ============================================================================
 
-## Bake a region's navigation mesh/polygon and commit a scene-anchored swap
+## Bake a 3D region's navigation mesh and commit a scene-anchored swap
 ## between the retained pre-bake and baked resources.
 ##
-## The bake runs on the region's own background thread (`bake_navigation_mesh(true)`);
-## Godot still parses the source geometry synchronously inside that call (an
-## engine requirement that cannot be preempted), and the measured duration is
-## reported as `parse_ms`. The op replies out-of-band (deferred) and is bounded
-## by `_BAKE_DEFERRED_TIMEOUT_MS` with per-frame cancellation checks.
-## Undo restores the exact pre-bake resource; redo restores the exact baked
-## resource instead of re-baking current geometry.
+## Source collection visits one bounded mesh/container per frame, without the
+## general scene parser or custom parser callbacks. Only the engine bake runs
+## on a background thread. Undo/redo retain the exact before/after resources.
 func bake(params: Dictionary) -> Dictionary:
 	var resolved := _resolve_region(params)
 	if resolved.has("error"):
@@ -67,7 +61,10 @@ func bake(params: Dictionary) -> Dictionary:
 	if before == null:
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
 			"%s has no %s resource" % [resolved.path, _CLASSES[dimension].mesh])
-	if _active_bakes.has(region.get_instance_id()) or bool(region.call("is_baking")):
+	var source_error := _validate_bake_source(dimension, before)
+	if not source_error.is_empty():
+		return source_error
+	if _active_bakes.has(region.get_instance_id()) or bool(region.call("is_baking")) or NavigationServer3D.is_baking_navigation_mesh(before):
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"%s is already baking a navigation mesh" % resolved.path)
 
@@ -90,9 +87,8 @@ func bake(params: Dictionary) -> Dictionary:
 		_undo_redo, _connection, request_id, force_sync
 	)
 	## Reserve the region before the driver yields: the region's own
-	## `is_baking()` only flips once the first step calls bake_*, which happens
-	## after a frame, so without this a second request in the same frame would
-	## start a second bake on the same mesh.
+	## native bake has not started during source collection, so checking only
+	## the engine bake state would admit a second request for the same region.
 	_active_bakes[region.get_instance_id()] = request_id
 	## No step here: the dispatcher registers the deferred request only after
 	## this handler returns the sentinel, and `_bake_step`'s first pending
@@ -188,9 +184,7 @@ static func _begin_bake(region: Node, dimension: String) -> Dictionary:
 	return {"before": before, "working": working}
 
 
-## The whole bake request as a value the frame loop (or a test) advances with
-## `_bake_step`. The bake itself runs on the region's own thread; every step
-## only polls it and performs the bounded lifecycle/cancellation checks.
+## Request state retained by the static frame driver through collection/baking.
 static func _bake_job(
 	region: Node, dimension: String, scene_root: Node, before: Resource,
 	working: Resource, undo_redo: EditorUndoRedoManager, connection, request_id: String,
@@ -211,6 +205,15 @@ static func _bake_job(
 		"started_ms": Time.get_ticks_msec(),
 		"deadline_ms": _BAKE_DEFERRED_TIMEOUT_MS,
 		"parse_ms": 0,
+		"source_data": NavigationMeshSourceGeometryData3D.new(),
+		"pending": [region],
+		"sources": [],
+		"meshes": [],
+		"source_changed": false,
+		"triangles": 0,
+		"vertices": 0,
+		"bounds": AABB(),
+		"has_bounds": false,
 		"result": {},
 	}
 
@@ -218,6 +221,11 @@ static func _bake_job(
 ## Drop this job's reservation so the region can bake again. Every terminal
 ## path (commit, abort, abandonment, or a driver that never starts) calls it.
 static func _release_bake(job: Dictionary) -> void:
+	for mesh in job.meshes:
+		var callback := _source_changed.bind(job)
+		if mesh.changed.is_connected(callback):
+			mesh.changed.disconnect(callback)
+	job.meshes.clear()
 	_active_bakes.erase(int(job.region_id))
 
 
@@ -252,37 +260,138 @@ static func _bake_step(job: Dictionary) -> bool:
 		_bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH,
 			"The edited scene changed while the navigation mesh was baking"))
 		return true
-	if str(job.phase) == "start":
-		job.phase = "baking"
-		var parse_started := Time.get_ticks_msec()
-		if str(job.dimension) == "3d":
-			region.call("bake_navigation_mesh", true)
-		else:
-			region.call("bake_navigation_polygon", true)
-		## The source-geometry parse inside bake_* is a synchronous engine call
-		## that cannot be preempted, so it is measured and reported. If it alone
-		## exhausted the budget, fail now instead of waiting on a bake that has
-		## already overspent it.
-		job.parse_ms = Time.get_ticks_msec() - parse_started
-		if int(job.parse_ms) > int(job.deadline_ms):
-			_bake_abort(job, ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT,
-				"navigation_bake spent %d ms parsing source geometry, over its %d ms budget"
-				% [int(job.parse_ms), int(job.deadline_ms)]))
-			return true
-		return false
-	if bool(region.call("is_baking")):
-		return false
-	## `is_baking()` is cleared by NavMeshGenerator3D::sync() only after the
-	## worker finished and wrote the baked data, so the mesh is final here.
-	## Commit only while the region still holds this job's working duplicate: a
-	## manual assignment (or another tool) may have replaced it mid-bake, and
-	## overwriting that newer resource would discard the user's change.
 	if _get_region_mesh(region, str(job.dimension)) != job.working:
 		_bake_abort(job, ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
 			"The region's navigation resource was replaced while the bake was in flight; the bake result was discarded"))
 		return true
+	if bool(job.source_changed):
+		_bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH,
+			"A source mesh changed during navigation baking; retry with stable source geometry"))
+		return true
+	if str(job.phase) == "start" or str(job.phase) == "collect":
+		var source_error := _validate_bake_source(str(job.dimension), job.working)
+		if not source_error.is_empty():
+			_bake_abort(job, source_error)
+			return true
+		job.phase = "collect"
+		var started := Time.get_ticks_usec()
+		var collected := _collect_source_step(job)
+		job.parse_ms = float(job.parse_ms) + (Time.get_ticks_usec() - started) / 1000.0
+		if not collected.is_empty():
+			_bake_abort(job, collected)
+			return true
+		if not job.pending.is_empty():
+			return false
+		if not job.source_data.has_data():
+			_bake_abort(job, ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "No supported mesh triangles found below the navigation region"))
+			return true
+		if not _sources_match(job):
+			_bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "Navigation source nodes changed while geometry was collected"))
+			return true
+		var final_grid_error := _grid_error(job.bounds, job.working)
+		if not final_grid_error.is_empty():
+			_bake_abort(job, final_grid_error)
+			return true
+		NavigationServer3D.bake_from_source_geometry_data_async(job.working, job.source_data)
+		job.phase = "baking"
+		return false
+	if NavigationServer3D.is_baking_navigation_mesh(job.working):
+		return false
+	if not _sources_match(job):
+		_bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "Navigation source nodes changed while baking"))
+		return true
 	_bake_commit(job)
 	return true
+
+
+static func _validate_bake_source(dimension: String, mesh: Resource) -> Dictionary:
+	if dimension != "3d":
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "navigation_bake supports bounded 3D mesh-only sources; 2D baking is not supported (2D path queries remain available)")
+	if mesh.geometry_source_geometry_mode != NavigationMesh.SOURCE_GEOMETRY_ROOT_NODE_CHILDREN or mesh.geometry_parsed_geometry_type == NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "navigation_bake requires root-children mesh-instance or both source settings; collider-only and group sources are not supported")
+	return {}
+
+
+static func _source_changed(job: Dictionary) -> void:
+	job.source_changed = true
+
+
+static func _sources_match(job: Dictionary) -> bool:
+	if bool(job.source_changed):
+		return false
+	for source in job.sources:
+		var node = source.node
+		if not is_instance_valid(node) or not node.is_inside_tree() or node.get_parent() != source.parent or node.get_child_count() != int(source.children):
+			return false
+		if node is Node3D and node.global_transform != source.transform:
+			return false
+		if node is MeshInstance3D and node.mesh != source.mesh:
+			return false
+	return true
+
+
+static func _grid_error(bounds: AABB, mesh: NavigationMesh) -> Dictionary:
+	if not is_finite(mesh.cell_size) or not is_finite(mesh.cell_height) or mesh.cell_size <= 0.0 or mesh.cell_height <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation cell size and height must be finite and positive")
+	var size := bounds.size
+	var filter_size := mesh.filter_baking_aabb.size
+	size = Vector3(maxf(size.x, filter_size.x), maxf(size.y, filter_size.y), maxf(size.z, filter_size.z))
+	var cells := Vector3(size.x / mesh.cell_size, size.y / mesh.cell_height, size.z / mesh.cell_size)
+	var count := 1
+	for extent in [cells.x, cells.y, cells.z]:
+		if not is_finite(extent) or extent > _SOURCE_MAX_GRID_CELLS:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation source extent/cell size exceeds the bounded voxel grid; reduce the extent or increase cell size")
+		count *= maxi(1, int(ceil(extent)))
+		if count > _SOURCE_MAX_GRID_CELLS:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation source exceeds the %d-cell voxel grid limit; reduce the extent or increase cell size" % _SOURCE_MAX_GRID_CELLS)
+	return {}
+
+
+static func _collect_source_step(job: Dictionary) -> Dictionary:
+	var node = job.pending.pop_back()
+	if not is_instance_valid(node) or not node.is_inside_tree():
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "A navigation source node was removed during collection")
+	if node != job.region and (node.get_script() != null or node.get_class() not in ["Node", "Node3D", "MeshInstance3D"]):
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Unsupported navigation source %s (%s): mesh-only baking accepts unscripted Node/Node3D containers and MeshInstance3D; colliders, CSG, GridMap, obstacles and custom parser sources are not supported" % [node.name, node.get_class()])
+	var children: int = node.get_child_count()
+	if job.sources.size() + job.pending.size() + children + 1 > _SOURCE_MAX_NODES:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation source traversal exceeds %d nodes" % _SOURCE_MAX_NODES)
+	var source := {"node": node, "parent": node.get_parent(), "children": children}
+	if node is Node3D:
+		source.transform = node.global_transform
+	for index in children:
+		job.pending.append(node.get_child(index))
+	if node is MeshInstance3D:
+		var mesh: Mesh = node.mesh
+		source.mesh = mesh
+		if mesh != null:
+			var counts := MeshWorkload.estimate(mesh)
+			if counts.has("error"):
+				return counts
+			if int(counts.triangles) == 0:
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation source %s has no supported triangles" % node.name)
+			job.triangles = int(job.triangles) + int(counts.triangles)
+			job.vertices = int(job.vertices) + int(counts.vertices)
+			if int(job.triangles) > MeshWorkload.MAX_TRIANGLES or int(job.vertices) > MeshWorkload.MAX_VERTICES:
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation sources exceed the aggregate %d-triangle/%d-vertex limit" % [MeshWorkload.MAX_TRIANGLES, MeshWorkload.MAX_VERTICES])
+			var root_transform: Transform3D = job.region.global_transform
+			if not root_transform.is_finite() or is_zero_approx(root_transform.basis.determinant()):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation region transform must be finite and invertible")
+			var relative: Transform3D = root_transform.affine_inverse() * node.global_transform
+			var bounds: AABB = relative * mesh.get_aabb()
+			if not relative.is_finite() or not bounds.is_finite():
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation mesh transform/bounds must be finite")
+			job.bounds = job.bounds.merge(bounds) if bool(job.has_bounds) else bounds
+			job.has_bounds = true
+			var grid_error := _grid_error(job.bounds, job.working)
+			if not grid_error.is_empty():
+				return grid_error
+			if not job.meshes.has(mesh):
+				mesh.changed.connect(_source_changed.bind(job))
+				job.meshes.append(mesh)
+			job.source_data.add_mesh(mesh, relative)
+	job.sources.append(source)
+	return {}
 
 
 ## Push the baked resource to the server region and commit one scene-anchored
@@ -334,7 +443,9 @@ static func _bake_commit(job: Dictionary) -> void:
 			"vertex_count": vertex_count,
 			"force_sync": bool(job.force_sync),
 			"bake_settle": "settled",
-			"parse_ms": int(job.parse_ms),
+			"parse_ms": float(job.parse_ms),
+			"source_mode": "mesh_only",
+			"source_triangles": int(job.triangles),
 			"undoable": true,
 		}
 	}

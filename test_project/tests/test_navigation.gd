@@ -86,14 +86,9 @@ func _make_polygon_2d(size: float) -> Polygon2D:
 	return poly
 
 
-## Prepare + drive one bake job through the same commit path production uses.
-##
-## A test body runs synchronously (the runner calls it without awaiting), so it
-## cannot yield the engine frame that clears `is_baking()` for a threaded 3D
-## bake. The helper therefore bakes synchronously into the job's working
-## resource, then lets `_bake_step` commit the scene-anchored swap. The threaded
-## start phase has its own test below; the full deferred frame loop is covered
-## by the live MCP smoke. `connection` may be null (no dispatcher checks).
+## Synchronous tests collect through the production helper, bake the bounded
+## source data synchronously, then exercise the production commit/undo path.
+## The live native probe separately exercises the asynchronous frame driver.
 func _run_bake_job(region: Node, dimension: String, force_sync := false, connection = null) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var prepared := NavigationHandler._begin_bake(region, dimension)
@@ -102,10 +97,13 @@ func _run_bake_job(region: Node, dimension: String, force_sync := false, connect
 		region, dimension, scene_root, prepared.before, prepared.working,
 		_undo_redo, connection, "rid-nav-bake", force_sync
 	)
-	if dimension == "3d":
-		region.call("bake_navigation_mesh", false)
-	else:
-		region.call("bake_navigation_polygon", false)
+	while not job.pending.is_empty():
+		var error := NavigationHandler._collect_source_step(job)
+		assert_true(error.is_empty(), str(error))
+		if not error.is_empty():
+			NavigationHandler._bake_abort(job, error)
+			return job
+	NavigationServer3D.bake_from_source_geometry_data(job.working, job.source_data)
 	job.phase = "baking"
 	assert_true(NavigationHandler._bake_step(job), "the commit step must resolve the job")
 	assert_eq(str(job.phase), "done", "the bake job must settle")
@@ -167,8 +165,7 @@ func test_bake_direct_call_is_refused() -> void:
 
 
 func test_bake_job_start_phase_starts_a_threaded_bake() -> void:
-	## The production start phase must hand the bake to the region's own
-	## background thread and report "still baking" to the frame driver.
+	## Collection yields before the bounded source is handed to the engine worker.
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		skip("No scene root")
@@ -182,11 +179,12 @@ func test_bake_job_start_phase_starts_a_threaded_bake() -> void:
 		_undo_redo, null, "", false
 	)
 	assert_false(NavigationHandler._bake_step(job), "the start step must not resolve immediately")
+	assert_eq(str(job.phase), "collect")
+	assert_false(NavigationHandler._bake_step(job), "the bounded floor starts the async bake")
 	assert_eq(str(job.phase), "baking")
-	assert_true(region.is_baking(), "the region must report a background bake in progress")
+	assert_true(NavigationServer3D.is_baking_navigation_mesh(job.working), "the working resource must be baking asynchronously")
 	assert_true(int(job.parse_ms) >= 0, "the start step must record the source-parse duration")
-	## Abandon it: the worker holds its own mesh reference and finishes on a
-	## later engine frame, which this test deliberately does not wait for.
+	NavigationHandler._bake_abort(job, ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT, "test cleanup"))
 	_remove_node(region)
 
 
@@ -214,6 +212,30 @@ func test_bake_region_freed_mid_job_aborts_cleanly() -> void:
 	## And the restore path must tolerate the freed region too.
 	NavigationHandler._bake_restore(job)
 	assert_true(NavigationHandler._active_bakes.is_empty(), "the reservation must be released")
+
+
+func test_bake_replaced_before_start_does_not_bake_the_replacement() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var region := _make_region("3d", "NavBakeReplacedBeforeStart") as NavigationRegion3D
+	_add_child_node(region, _make_box_mesh(Vector3(20, 1, 20)), "Floor")
+	var prepared := NavigationHandler._begin_bake(region, "3d")
+	var job := NavigationHandler._bake_job(
+		region, "3d", scene_root, prepared.before, prepared.working,
+		_undo_redo, null, "before-start", false
+	)
+	NavigationHandler._active_bakes[region.get_instance_id()] = "before-start"
+	var replacement := NavigationMesh.new()
+	region.navigation_mesh = replacement
+	assert_true(NavigationHandler._bake_step(job), "replacement must terminate before starting the engine bake")
+	assert_is_error(job.result, ErrorCodes.RESOURCE_NOT_FOUND)
+	assert_false(region.is_baking(), "the replacement must never be submitted to the baker")
+	assert_eq(region.navigation_mesh, replacement)
+	assert_eq(replacement.get_polygon_count(), 0)
+	assert_true(NavigationHandler._active_bakes.is_empty())
+	_remove_node(region)
 
 
 func test_bake_replaced_resource_is_not_clobbered() -> void:
@@ -505,26 +527,18 @@ func test_bake_job_deadline_restores_prebake_mesh() -> void:
 	_remove_node(region)
 
 
-func test_bake_2d_job_reports_and_undoes() -> void:
-	var scene_root := EditorInterface.get_edited_scene_root()
-	if scene_root == null:
+func test_bake_2d_is_refused_without_changing_the_resource() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
 		skip("No scene root")
 		return
 	var region := _make_region("2d", "NavBake2D") as NavigationRegion2D
-	assert_true(region != null, "fixture must exist")
-	_add_child_node(region, _make_polygon_2d(10.0), "Floor")
-	region.navigation_polygon.cell_size = 1.0
-	region.navigation_polygon.agent_radius = 1.0
-	_undo_redo.clear_history()
-	var job := _run_bake_job(region, "2d")
-	assert_has_key(job.result, "data")
-	assert_eq(job.result.data.mesh_class, "NavigationPolygon")
-	assert_true(job.result.data.polygon_count >= 0, "bake must report a polygon count")
-	## 2D bake output can be empty until the navigation server processes a
-	## physics frame in the editor; the undo contract holds either way.
-	var did_undo := editor_undo(_undo_redo)
-	assert_true(did_undo, "undo should succeed")
-	assert_eq(region.navigation_polygon.get_polygon_count(), 0, "undo must restore the pre-bake polygon")
+	var before := region.navigation_polygon
+	var result := _handler.bake({"path": McpScenePath.from_node(region, root)})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "2D baking is not supported")
+	assert_eq(region.navigation_polygon, before)
+	assert_true(NavigationHandler._active_bakes.is_empty())
 	_remove_node(region)
 
 
@@ -766,3 +780,175 @@ class _AdmissionProbeConnection:
 	func get_tree() -> SceneTree:
 		reserved_when_driver_started = NavigationHandler._active_bakes.has(region_id)
 		return null
+
+
+func _collection_job(region: NavigationRegion3D) -> Dictionary:
+	var prepared := NavigationHandler._begin_bake(region, "3d")
+	return NavigationHandler._bake_job(region, "3d", EditorInterface.get_edited_scene_root(), prepared.before, prepared.working, _undo_redo, null, "", false)
+
+
+func test_mesh_only_source_settings_refuse_groups_and_colliders() -> void:
+	var mesh := NavigationMesh.new()
+	assert_true(NavigationHandler._validate_bake_source("3d", mesh).is_empty(), "default BOTH is supported only with strict traversal")
+	mesh.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_MESH_INSTANCES
+	assert_true(NavigationHandler._validate_bake_source("3d", mesh).is_empty())
+	mesh.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
+	assert_is_error(NavigationHandler._validate_bake_source("3d", mesh), ErrorCodes.VALUE_OUT_OF_RANGE)
+	mesh.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_BOTH
+	mesh.geometry_source_geometry_mode = NavigationMesh.SOURCE_GEOMETRY_GROUPS_WITH_CHILDREN
+	assert_is_error(NavigationHandler._validate_bake_source("3d", mesh), ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+func test_mesh_only_rejects_unsupported_sources_without_partial_bake() -> void:
+	for source in [StaticBody3D.new(), CSGBox3D.new(), GridMap.new(), NavigationObstacle3D.new()]:
+		var region := _make_region("3d", "UnsupportedSource") as NavigationRegion3D
+		_add_child_node(region, source, "Unsupported")
+		var job := _collection_job(region)
+		assert_false(NavigationHandler._bake_step(job), "root collection yields")
+		assert_true(NavigationHandler._bake_step(job), "unsupported child ends the job")
+		assert_is_error(job.result, ErrorCodes.WRONG_TYPE)
+		assert_eq(region.navigation_mesh, job.before, "no partial source bake may replace the original")
+		assert_eq(job.working.get_polygon_count(), 0)
+		_remove_node(region)
+
+
+func test_mesh_only_geometry_cap_precedes_primitive_extraction() -> void:
+	var region := _make_region("3d", "GeometryLimit") as NavigationRegion3D
+	var instance := _make_box_mesh(Vector3.ONE)
+	instance.mesh.subdivide_width = 100000
+	_add_child_node(region, instance, "Oversized")
+	var job := _collection_job(region)
+	assert_false(NavigationHandler._bake_step(job))
+	assert_true(NavigationHandler._bake_step(job))
+	assert_is_error(job.result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_false(job.source_data.has_data(), "oversized primitive never reaches source extraction")
+	assert_eq(region.navigation_mesh, job.before)
+	_remove_node(region)
+
+
+func test_mesh_only_traversal_limit_refuses_before_visiting_children() -> void:
+	var region := _make_region("3d", "TraversalLimit") as NavigationRegion3D
+	for index in NavigationHandler._SOURCE_MAX_NODES:
+		_add_child_node(region, Node3D.new(), "Child%d" % index)
+	var job := _collection_job(region)
+	assert_true(NavigationHandler._bake_step(job))
+	assert_is_error(job.result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_eq(job.sources.size(), 0)
+	assert_eq(region.navigation_mesh, job.before)
+	_remove_node(region)
+
+
+func test_mesh_only_voxel_extent_and_filter_are_bounded() -> void:
+	var mesh := NavigationMesh.new()
+	assert_true(NavigationHandler._grid_error(AABB(Vector3.ZERO, Vector3(20, 1, 20)), mesh).is_empty())
+	assert_is_error(NavigationHandler._grid_error(AABB(Vector3.ZERO, Vector3(100000, 1, 100000)), mesh), ErrorCodes.VALUE_OUT_OF_RANGE)
+	mesh.filter_baking_aabb = AABB(Vector3.ZERO, Vector3(10000, 10000, 10000))
+	assert_is_error(NavigationHandler._grid_error(AABB(Vector3.ZERO, Vector3.ONE), mesh), ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+func test_mesh_only_changed_geometry_aborts_and_disconnects() -> void:
+	var region := _make_region("3d", "ChangedSource") as NavigationRegion3D
+	var instance := _make_box_mesh(Vector3(20, 1, 20))
+	_add_child_node(region, instance, "Floor")
+	var job := _collection_job(region)
+	assert_true(NavigationHandler._collect_source_step(job).is_empty())
+	assert_true(NavigationHandler._collect_source_step(job).is_empty())
+	assert_eq(job.meshes.size(), 1)
+	instance.mesh.size = Vector3(30, 1, 20)
+	assert_true(job.source_changed)
+	assert_true(NavigationHandler._bake_step(job))
+	assert_is_error(job.result, ErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_eq(region.navigation_mesh, job.before)
+	assert_eq(job.meshes.size(), 0, "all change subscriptions released")
+	assert_false(instance.mesh.changed.is_connected(NavigationHandler._source_changed.bind(job)))
+	_remove_node(region)
+
+
+func test_mesh_only_source_transform_change_discards_collected_geometry() -> void:
+	var region := _make_region("3d", "MovedSource") as NavigationRegion3D
+	var instance := _make_box_mesh(Vector3(20, 1, 20))
+	_add_child_node(region, instance, "Floor")
+	var job := _collection_job(region)
+	assert_true(NavigationHandler._collect_source_step(job).is_empty())
+	assert_true(NavigationHandler._collect_source_step(job).is_empty())
+	assert_true(NavigationHandler._sources_match(job))
+	instance.position.x += 1
+	assert_false(NavigationHandler._sources_match(job))
+	NavigationHandler._bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "source changed"))
+	assert_eq(region.navigation_mesh, job.before)
+	_remove_node(region)
+
+
+func test_mesh_only_aggregate_limit_counts_distinct_instances() -> void:
+	var region := _make_region("3d", "AggregateLimit") as NavigationRegion3D
+	var box := BoxMesh.new()
+	box.subdivide_width = 100
+	for index in 3:
+		var instance := MeshInstance3D.new()
+		instance.mesh = box
+		_add_child_node(region, instance, "Mesh%d" % index)
+	var job := _collection_job(region)
+	assert_false(NavigationHandler._bake_step(job))
+	assert_false(NavigationHandler._bake_step(job))
+	assert_false(NavigationHandler._bake_step(job))
+	assert_true(NavigationHandler._bake_step(job))
+	assert_is_error(job.result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_eq(region.navigation_mesh, job.before)
+	assert_eq(job.meshes.size(), 0, "shared source subscription released on aggregate refusal")
+	_remove_node(region)
+
+
+func test_mesh_only_collection_uses_region_relative_transform() -> void:
+	var region := _make_region("3d", "RelativeSource") as NavigationRegion3D
+	region.position = Vector3(100, 20, -30)
+	var instance := _make_box_mesh(Vector3(2, 2, 2))
+	instance.position = Vector3(3, 0, 0)
+	_add_child_node(region, instance, "Box")
+	var job := _collection_job(region)
+	assert_true(NavigationHandler._collect_source_step(job).is_empty())
+	assert_true(NavigationHandler._collect_source_step(job).is_empty())
+	var vertices: PackedFloat32Array = job.source_data.get_vertices()
+	assert_true(vertices.size() > 0, "source must contain actual vertices")
+	var minimum := INF
+	var maximum := -INF
+	for index in range(0, vertices.size(), 3):
+		minimum = minf(minimum, vertices[index])
+		maximum = maxf(maximum, vertices[index])
+	assert_eq(minimum, 2.0, "source coordinates exclude region world translation")
+	assert_eq(maximum, 4.0)
+	NavigationHandler._bake_abort(job, ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT, "fixture cleanup"))
+	_remove_node(region)
+
+
+func test_mesh_only_removed_source_is_detected_without_freed_reference_error() -> void:
+	var region := _make_region("3d", "FreedSource") as NavigationRegion3D
+	var instance := _make_box_mesh(Vector3(20, 1, 20))
+	_add_child_node(region, instance, "Floor")
+	var job := _collection_job(region)
+	assert_true(NavigationHandler._collect_source_step(job).is_empty())
+	assert_true(NavigationHandler._collect_source_step(job).is_empty())
+	instance.free()
+	assert_false(NavigationHandler._sources_match(job))
+	NavigationHandler._bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "source removed"))
+	assert_eq(region.navigation_mesh, job.before)
+	assert_eq(job.meshes.size(), 0)
+	_remove_node(region)
+
+
+func test_mesh_only_grid_settings_changed_after_mesh_collection_are_rechecked() -> void:
+	var region := _make_region("3d", "ChangedGrid") as NavigationRegion3D
+	_add_child_node(region, Node3D.new(), "TrailingContainer")
+	_add_child_node(region, _make_box_mesh(Vector3(20, 1, 20)), "Floor")
+	var job := _collection_job(region)
+	assert_false(NavigationHandler._bake_step(job), "collect root")
+	assert_false(NavigationHandler._bake_step(job), "collect mesh before trailing container")
+	assert_eq(job.pending.size(), 1)
+	region.navigation_mesh.filter_baking_aabb = AABB(Vector3.ZERO, Vector3(128, 1, 128))
+	assert_is_error(NavigationHandler._grid_error(job.bounds, job.working), ErrorCodes.VALUE_OUT_OF_RANGE)
+	var finished := NavigationHandler._bake_step(job)
+	assert_true(finished, "changed grid settings must refuse before native submission")
+	assert_is_error(job.result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	if not finished:
+		NavigationHandler._bake_abort(job, ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT, "regression fixture cleanup"))
+	assert_eq(region.navigation_mesh, job.before)
+	_remove_node(region)

@@ -5,20 +5,58 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from godot_ai.handlers import material as material_handlers
+from godot_ai.handlers import shader as shader_handlers
+from godot_ai.handlers import visual_shader as visual_shader_handlers
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
 Material authoring (StandardMaterial3D, ORMMaterial3D, ShaderMaterial,
-CanvasItemMaterial). Albedo, metallic/roughness, emission, transparency,
-shader uniforms.
+CanvasItemMaterial), raw shader source (.gdshader / .gdshaderinc), and
+VisualShader graph authoring/editing. Albedo, metallic/roughness, emission,
+transparency, shader uniforms, render modes.
 
-Resource form: ``godot://materials`` — prefer for active-session reads.
+Resource forms: ``godot://materials`` (all materials),
+``godot://shader/{path}`` (raw source + metadata),
+``godot://visual_shader/{path}`` (VisualShader graph).
 
 Ops:
+  • visual_shader_create_graph(resource_path, stages, shader_type="spatial",
+                               overwrite=False, varyings=None)
+        Create/save a VisualShader .tres only (not undoable). Each stages entry is
+        {stage, nodes: [{id, type, position?, params?}], connections:
+        [{from_node, from_port, to_node, to_port}]}. Explicit stages must match
+        spatial/canvas_item (vertex/fragment/light), particles
+        (start/process/collide/start_custom/process_custom), sky (sky), or fog (fog).
+        IDs are stage-local integers >=2 or nonempty strings; output is "output"/0.
+        Limits: 256 nodes, 1024 connections total. Existing destination directory
+        required. Returns id_map by stage as [{id, node_id}] in request order.
+        varyings: [{name, mode: "vertex_to_frag_light"|"frag_to_light",
+        type: "float"|"int"|"uint"|"vector2"|"vector3"|"vector4"|"boolean"|"transform"}]
+        (spatial/canvas_item only).
+        The generated source is parsed through the engine's shader compiler
+        before saving; a graph it rejects (for example a parameter named after
+        a shader keyword) is not written. Renderers that cannot compile a
+        shader type fall back to validating the generated declarations, so the
+        advertised modes stay accepted.
+        Use create(type="shader", shader_path=<saved .tres>) then assign separately.
+  • visual_shader_get(path)
+        Inspect a VisualShader .tres: shader_type, per-stage nodes (id, type,
+        position, params), connections, and varyings. Use before visual_shader_edit.
+  • visual_shader_node_catalog(filter="", offset=0, limit=100)
+        List instantiable VisualShaderNode classes with the properties this tool
+        accepts, plus legacy aliases. Discover valid node types and params before
+        authoring a graph.
+  • visual_shader_edit(resource_path, operations)
+        Apply a validated operation list to an existing VisualShader .tres:
+        add_node / remove_node / replace_node / set_node_params /
+        set_node_position / connect / disconnect / add_varying / remove_varying.
+        Operations run in order; string node ids added by the call are returned
+        in `added` and can be referenced by later operations. The whole result
+        is validated in memory, then saved atomically; not undoable.
   • create(path, type="standard", shader_path="", overwrite=False)
         Create + save a material .tres at a res:// path. type:
         "standard" | "orm" | "canvas_item" | "shader". For "shader",
-        shader_path points to the .gdshader.
+        shader_path points to a .gdshader or VisualShader .tres.
   • set_param(path, param, value)
         Set a built-in property on a .tres material. Enum-valued params
         accept names ("alpha" -> TRANSPARENCY_ALPHA). Color/Vector dicts.
@@ -42,6 +80,25 @@ Ops:
   • apply_preset(preset, path="", node_path="", overrides=None)
         Curated looks: metal, glass, emissive, unlit, matte, ceramic.
         path saves to disk; node_path assigns to a node; overrides merge.
+  • shader_create(resource_path, code, overwrite=False, shader_type="spatial")
+        Create/replace a raw .gdshader (or .gdshaderinc include) from source
+        text. The code is parsed through Godot's shader compiler for the
+        declared shader type before anything is written: parse errors reject
+        the write with diagnostics and leave any existing file untouched.
+        This is parse/type validation, not a guarantee that every renderer
+        variant compiles. Returns shader_type, uniforms (type, hint,
+        hint_string, default), and cleanup hints. Not undoable.
+  • shader_get(path)
+        Read a .gdshader/.gdshaderinc: full source, shader_type, uniforms,
+        render modes, and #include list.
+  • shader_validate(code, kind="shader", shader_type="spatial", base_dir="")
+        Parse/type-check shader source without writing a file. Returns valid
+        plus errors/warnings. Pass base_dir (a res:// directory) to validate
+        relative #include resolution against where the shader will live.
+        Renderer-specific variant compilation is out of scope.
+  • shader_patch(path, old_text, new_text, replace_all=False)
+        Anchor-based edit of a shader file: exact substring match, result
+        revalidated before the file is replaced. Not undoable.
 """
 
 
@@ -51,6 +108,10 @@ def register_material_tools(mcp: FastMCP) -> None:
         tool_name="material_manage",
         description=_DESCRIPTION,
         ops={
+            "visual_shader_create_graph": visual_shader_handlers.create_graph,
+            "visual_shader_get": visual_shader_handlers.get_graph,
+            "visual_shader_node_catalog": visual_shader_handlers.node_catalog,
+            "visual_shader_edit": visual_shader_handlers.edit_graph,
             "create": material_handlers.material_create,
             "set_param": material_handlers.material_set_param,
             "set_shader_param": material_handlers.material_set_shader_param,
@@ -59,9 +120,17 @@ def register_material_tools(mcp: FastMCP) -> None:
             "assign": material_handlers.material_assign,
             "apply_to_node": material_handlers.material_apply_to_node,
             "apply_preset": material_handlers.material_apply_preset,
+            "shader_create": shader_handlers.shader_create,
+            "shader_get": shader_handlers.shader_get,
+            "shader_validate": shader_handlers.shader_validate,
+            "shader_patch": shader_handlers.shader_patch,
         },
         read_resource_forms={
             "get": None,  ## Per-material read; no per-resource URI shape.
             "list": "godot://materials",
+            "shader_get": "godot://shader/{path*}",
+            "shader_validate": None,  ## Takes source text, not a path.
+            "visual_shader_get": "godot://visual_shader/{path*}",
+            "visual_shader_node_catalog": None,  ## Class catalog, not a resource.
         },
     )

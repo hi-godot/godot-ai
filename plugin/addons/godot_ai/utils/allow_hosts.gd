@@ -168,3 +168,17 @@ static func _is_private_ipv4(addr: String) -> bool:
 		var second := int(addr.get_slice(".", 1))
 		return second >= 16 and second <= 31
 	return false
+
+
+## Syntax and bind-family errors shared by settings and saved launch plans.
+static func configuration_error(raw: String, platform: String = OS.get_name()) -> String:
+	var invalid := invalid_tokens(raw)
+	if not invalid.is_empty():
+		return "Invalid entries (must be a CIDR or bare IP, comma-separated): %s" % ", ".join(invalid)
+	var value := normalize(raw)
+	if platform != "Windows" or value.is_empty():
+		return ""
+	for token in value.split(","):
+		if not token.contains(":"):
+			return ""
+	return "IPv6-only remote access is unsupported on Windows: the editor and attach bridge require IPv4 loopback. Use an IPv4 allowlist or clear Allow remote hosts to disable remote access. Full IPv6 support is tracked in #1072."
