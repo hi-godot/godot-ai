@@ -58,3 +58,11 @@ async def resource_create(
         params["properties"] = properties
     params.update(target_params(path, property, resource_path, overwrite))
     return await runtime.send_command("create_resource", params)
+
+
+async def resource_inspect(
+    runtime: DirectRuntime, node_path: str, property: str, depth: int = 2
+) -> dict:
+    return await runtime.send_command(
+        "inspect_resource", {"node_path": node_path, "property": property, "depth": depth}
+    )

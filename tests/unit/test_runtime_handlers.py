@@ -6151,3 +6151,22 @@ async def test_navigation_bake_requires_writable():
     runtime = DirectRuntime(registry=registry, client=client)
     with pytest.raises(GodotCommandError):
         await navigation_handlers.navigation_bake(runtime, path="/Main/Region")
+
+
+async def test_resource_inspect_handler_preserves_graph_and_routes_read():
+    from unittest.mock import AsyncMock
+
+    runtime = AsyncMock(spec=DirectRuntime)
+    expected = {
+        "root": {"ref": "r1"},
+        "resources": [
+            {"id": "r1", "type": "BoxShape3D", "properties": {"size": {"x": 2, "y": 3, "z": 4}}}
+        ],
+        "truncations": [],
+    }
+    runtime.send_command.return_value = expected
+    result = await resource_handlers.resource_inspect(runtime, "/Main/Collider", "shape", 1)
+    assert result == expected
+    runtime.send_command.assert_awaited_once_with(
+        "inspect_resource", {"node_path": "/Main/Collider", "property": "shape", "depth": 1}
+    )

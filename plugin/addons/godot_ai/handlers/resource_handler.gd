@@ -2,6 +2,7 @@
 extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const ResourceInspector := preload("res://addons/godot_ai/utils/resource_inspector.gd")
 const ClassIntrospection := preload("res://addons/godot_ai/utils/class_introspection.gd")
 
 ## Handles resource search, inspection, and assignment to nodes.
@@ -589,3 +590,35 @@ static func _custom_resource_info(type_str: String) -> Variant:
 			"property_count": props.size(),
 		}}
 	return null
+
+
+func inspect_resource(params: Dictionary) -> Dictionary:
+	for name in ["node_path", "property"]:
+		if not params.has(name):
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "inspect_resource requires %s" % name)
+		if params[name] is not String:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a String" % name)
+		if params[name].is_empty():
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "inspect_resource requires %s" % name)
+	var depth: Variant = params.get("depth", 2)
+	if typeof(depth) not in [TYPE_INT, TYPE_FLOAT]:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "depth must be an integer from 0 through 3")
+	if not is_finite(float(depth)) or float(depth) != floor(float(depth)) or depth < 0 or depth > 3:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "depth must be an integer from 0 through 3; received %s" % str(depth))
+	var resolved := McpNodeValidator.resolve_or_error(params.node_path, "node_path")
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var native_resource_property := false
+	for property in ClassDB.class_get_property_list(node.get_class()):
+		if str(property.name) == params.property and int(property.type) == TYPE_OBJECT and int(property.hint) == PROPERTY_HINT_RESOURCE_TYPE:
+			native_resource_property = true
+			break
+	if not native_resource_property:
+		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS, "Property '%s' on %s is not a native Resource property; script and dynamic getters are not inspected" % [params.property, node.get_class()])
+	var resource: Variant = ClassDB.class_get_property(node, params.property)
+	if resource is not Resource:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Property '%s' on '%s' does not contain a Resource; assign one before inspecting" % [params.property, params.node_path])
+	if not ResourceInspector.supported(resource):
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource '%s' is scripted or outside the supported native shape, mesh, material, physics material, stylebox, gradient and curve families" % resource.get_class())
+	return ResourceInspector.new().inspect(resource, int(depth))

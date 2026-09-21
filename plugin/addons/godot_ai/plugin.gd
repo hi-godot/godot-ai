@@ -431,6 +431,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("find_symbols", "script", &"find_symbols")
 	_dispatcher.register_lazy("search_resources", "resource", &"search_resources")
 	_dispatcher.register_lazy("load_resource", "resource", &"load_resource")
+	_dispatcher.register_lazy("inspect_resource", "resource", &"inspect_resource")
 	_dispatcher.register_lazy("assign_resource", "resource", &"assign_resource")
 	_dispatcher.register_lazy("create_resource", "resource", &"create_resource")
 	_dispatcher.register_lazy("get_resource_info", "resource", &"get_resource_info")
