@@ -186,14 +186,18 @@ never compiles .NET, so nothing on this surface reports a C# compiler error.
   (whether the connected editor build has .NET at all). Overwrites and
   patches report `reloaded: false, reload_reason: "csharp_requires_build"`
   — C# only picks up new source when the assembly is rebuilt.
-- To see compiler errors, build the project (editor **Build** button or
-  `dotnet build`) and read `logs_read`; the editor log router already tags
-  `.cs` file references.
+- To see compiler errors, use the editor **Build** button and inspect its
+  Build panel, or run `dotnet build` and inspect the terminal output.
+  `logs_read` can surface engine runtime/load errors; it does not capture
+  the .NET build output.
 - On a non-.NET editor build a `.cs` is not a resource: `script_create`
   replies synchronously (no import-settle wait), `cleanup.rm` lists only the
   `.cs` (no `.uid` sidecar), and `script_attach` returns
   `VALUE_OUT_OF_RANGE` naming the missing .NET support instead of a generic
-  "Script not found". On a .NET build, attach after building and scanning.
+  "Script not found". Overwriting also reports `import_settled: false` and
+  `import_settle: "not_waited"` on a non-.NET build. On a .NET build, resource
+  recognition does not verify compilation; build before expecting executable
+  behavior from an attached script.
 - `script_manage(op="find_symbols")` outlines a `.cs` from a line scan:
   the first `class` and its base type, methods, `[Signal]` delegates (the
   Godot `EventHandler` suffix is dropped) and `[Export]` members. Response
@@ -250,6 +254,7 @@ Calls take the form:
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
 | `tileset_manage` | `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
 | `gridmap_manage` | `gridmap_set_item`, `gridmap_fill`, `gridmap_clear`, `gridmap_get_used_cells`, `gridmap_list_library_items` |
+| `navigation_manage` | `bake`, `path_get` |
 | `csg_manage` | `csg_create`, `csg_set_operation` |
 | `custom_manage` | `list`, `invoke` |
 

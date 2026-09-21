@@ -30,7 +30,8 @@ Ops:
 
 Language support: GDScript is the full contract. C# (.cs) is text-only —
 files are written, read and outlined, but Godot AI does not build .NET or
-report C# compiler errors; build in the editor and read ``logs_read``.
+report C# compiler errors; inspect the editor Build panel or ``dotnet build``
+terminal output. ``logs_read`` does not capture .NET compiler output.
 """
 
 
@@ -46,7 +47,8 @@ def register_script_tools(mcp: FastMCP) -> None:
 
         Writes content to the path. Overwrites if it exists. Registers the
         file with the editor. New files include ``data.cleanup.rm`` listing
-        the file plus its ``.uid`` sidecar; overwrite omits it.
+        the file and, when supported by the editor, its ``.uid`` sidecar;
+        overwrite omits it.
 
         .gd: source is parse-validated and the response carries
         ``diagnostics`` (``diagnostics_status="checked"``); an already-loaded
@@ -116,8 +118,8 @@ def register_script_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node (e.g. "/Main/Player").
             script_path: res:// path of the .gd (e.g. "res://scripts/player.gd").
-                A .cs attaches only on a .NET-enabled editor build, after the
-                project assembly has been built; other builds get a clear error.
+                A .cs requires a .NET-enabled editor build; other builds get a
+                clear error. Build the assembly before expecting executable behavior.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)

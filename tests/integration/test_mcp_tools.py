@@ -2886,6 +2886,94 @@ class TestPhysicsShapeGenerateTool:
 
 
 # ---------------------------------------------------------------------------
+# navigation_manage
+# ---------------------------------------------------------------------------
+
+
+class TestNavigationManageTool:
+    async def test_bake_dispatches_deferred_command(self, mcp_stack):
+        """bake forwards the region path and force_sync and reports the settled shape."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "navigation_bake"
+            assert cmd["params"] == {"path": "/Main/NavRegion3D", "force_sync": True}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "/Main/NavRegion3D",
+                    "mesh_class": "NavigationMesh",
+                    "polygon_count": 2,
+                    "vertex_count": 4,
+                    "force_sync": True,
+                    "bake_settle": "settled",
+                    "undoable": True,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "navigation_manage",
+            {"op": "bake", "params": {"path": "/Main/NavRegion3D"}},
+        )
+        await task
+        assert result.data["polygon_count"] == 2
+        assert result.data["bake_settle"] == "settled"
+        assert result.data["undoable"] is True
+
+    async def test_path_get_dispatches(self, mcp_stack):
+        """path_get forwards the explicit region/map and force_sync params."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "navigation_path_get"
+            assert cmd["params"] == {
+                "from_point": {"x": -8.0, "y": 0.5, "z": -8.0},
+                "to_point": {"x": 8.0, "y": 0.5, "z": 8.0},
+                "dimension": "3d",
+                "optimize": True,
+                "navigation_layers": 1,
+                "force_sync": False,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "dimension": "3d",
+                    "from_point": {"x": -8.0, "y": 0.5, "z": -8.0},
+                    "to_point": {"x": 8.0, "y": 0.5, "z": 8.0},
+                    "optimize": True,
+                    "navigation_layers": 1,
+                    "force_sync": False,
+                    "region_path": "",
+                    "map_source": "world",
+                    "point_count": 2,
+                    "points": [
+                        {"x": -8.0, "y": 0.5, "z": -8.0},
+                        {"x": 8.0, "y": 0.5, "z": 8.0},
+                    ],
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "navigation_manage",
+            {
+                "op": "path_get",
+                "params": {
+                    "from_point": {"x": -8.0, "y": 0.5, "z": -8.0},
+                    "to_point": {"x": 8.0, "y": 0.5, "z": 8.0},
+                },
+            },
+        )
+        await task
+        assert result.data["point_count"] == 2
+        assert len(result.data["points"]) == 2
+        assert result.data["map_source"] == "world"
+
+
+# ---------------------------------------------------------------------------
 # filesystem_read_text
 # ---------------------------------------------------------------------------
 

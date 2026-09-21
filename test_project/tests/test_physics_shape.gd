@@ -776,7 +776,7 @@ func test_generate_supports_convex_and_trimesh_shapes() -> void:
 	torus.ring_segments = 8
 	var unsupported := PhysicsShapeHandler._validate_hull_workload(torus, "/Torus", "convex")
 	assert_is_error(unsupported, ErrorCodes.VALUE_OUT_OF_RANGE)
-	assert_contains(unsupported.error.message, "no bounded hull preflight")
+	assert_contains(unsupported.error.message, "no bounded geometry preflight")
 	var baked := ArrayMesh.new()
 	baked.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, torus.get_mesh_arrays())
 	var mesh := _add_generate_mesh_with_mesh("GenerateTorusHull", baked)

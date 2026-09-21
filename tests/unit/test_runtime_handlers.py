@@ -27,6 +27,7 @@ from godot_ai.handlers import filesystem as filesystem_handlers
 from godot_ai.handlers import game as game_handlers
 from godot_ai.handlers import input_map as input_map_handlers
 from godot_ai.handlers import material as material_handlers
+from godot_ai.handlers import navigation as navigation_handlers
 from godot_ai.handlers import node as node_handlers
 from godot_ai.handlers import particle as particle_handlers
 from godot_ai.handlers import physics_shape as physics_shape_handlers
@@ -5885,3 +5886,81 @@ async def test_audio_player_create_blocks_when_not_writable():
     ## happened is the actual write command leaving the server.
     sent = [call["command"] for call in client.calls]
     assert "audio_player_create" not in sent
+
+
+async def test_navigation_bake_and_path_get_handlers():
+    """Bake claims the deferred budget; path_get forwards the explicit map params."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await navigation_handlers.navigation_bake(runtime, path="/Main/Region")
+    assert client.calls[-1]["command"] == "navigation_bake"
+    assert client.calls[-1]["params"] == {"path": "/Main/Region", "force_sync": True}
+    ## The bake is deferred; the transport timeout must cover the plugin's
+    ## deferred budget plus a margin.
+    assert client.calls[-1]["timeout"] == navigation_handlers.NAVIGATION_BAKE_TIMEOUT_SEC
+    assert (
+        navigation_handlers.NAVIGATION_BAKE_TIMEOUT_SEC
+        > navigation_handlers.NAVIGATION_BAKE_PLUGIN_TIMEOUT_MS / 1000.0
+    )
+    await navigation_handlers.navigation_bake(
+        runtime, path="/Main/Region", scene_file="res://main.tscn", force_sync=False
+    )
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Region",
+        "force_sync": False,
+        "scene_file": "res://main.tscn",
+    }
+    await navigation_handlers.navigation_path_get(
+        runtime,
+        from_point={"x": -8.0, "y": 0.5, "z": -8.0},
+        to_point=[8.0, 0.5, 8.0],
+        dimension="3d",
+        optimize=False,
+        navigation_layers=2,
+    )
+    assert client.calls[-1]["command"] == "navigation_path_get"
+    assert client.calls[-1]["params"] == {
+        "from_point": {"x": -8.0, "y": 0.5, "z": -8.0},
+        "to_point": [8.0, 0.5, 8.0],
+        "dimension": "3d",
+        "optimize": False,
+        "navigation_layers": 2,
+        "force_sync": False,
+    }
+    await navigation_handlers.navigation_path_get(
+        runtime,
+        from_point=[-8.0, -8.0],
+        to_point=[8.0, 8.0],
+        dimension="2d",
+        region_path="/Main/NavRegion2D",
+        force_sync=True,
+    )
+    assert client.calls[-1]["params"] == {
+        "from_point": [-8.0, -8.0],
+        "to_point": [8.0, 8.0],
+        "dimension": "2d",
+        "optimize": True,
+        "navigation_layers": 1,
+        "force_sync": True,
+        "region_path": "/Main/NavRegion2D",
+    }
+
+
+async def test_navigation_bake_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    client.live_readiness = "importing"
+    session = Session(
+        session_id="s1",
+        godot_version="4.5",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await navigation_handlers.navigation_bake(runtime, path="/Main/Region")

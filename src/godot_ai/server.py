@@ -91,6 +91,7 @@ from godot_ai.tools.game import register_game_tools
 from godot_ai.tools.gridmap import register_gridmap_tools
 from godot_ai.tools.input_map import register_input_map_tools
 from godot_ai.tools.material import register_material_tools
+from godot_ai.tools.navigation import register_navigation_tools
 from godot_ai.tools.node import register_node_tools
 from godot_ai.tools.particle import register_particle_tools
 from godot_ai.tools.project import register_project_tools
@@ -307,6 +308,10 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "gridmap",
         "  gridmap_manage   gridmap_set_item, gridmap_fill, gridmap_clear,\n"
         "                   gridmap_get_used_cells, gridmap_list_library_items\n",
+    ),
+    (
+        "navigation",
+        "  navigation_manage bake, path_get\n",
     ),
     ("csg", "  csg_manage       csg_create, csg_set_operation\n"),
     ("custom", "  custom_manage    list, invoke\n"),
@@ -896,6 +901,8 @@ def create_server(
         register_tileset_tools(mcp)
     if "gridmap" not in exclude:
         register_gridmap_tools(mcp)
+    if "navigation" not in exclude:
+        register_navigation_tools(mcp)
     if "csg" not in exclude:
         register_csg_tools(mcp)
     if "custom" not in exclude:

@@ -184,7 +184,10 @@ def test_writes_report_committed_status_even_when_import_wait_times_out() -> Non
         "response must expose committed=true so callers know retrying is not a "
         "plain safe retry."
     )
-    assert '"import_settle": "already_known" if existed_before else "not_waited"' in script_source
+    assert (
+        '"import_settle": "already_known" if existed_before and can_settle else "not_waited"'
+        in script_source
+    )
     # write_file mirrors the same fields for .gd paths (#714).
     assert 'data["committed"] = true' in fs_source
     fs_settle_marker = 'data["import_settle"] = "already_known" if existed_before else "not_waited"'

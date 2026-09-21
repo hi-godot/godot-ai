@@ -12,8 +12,9 @@ const ValidationLogger := preload("res://addons/godot_ai/runtime/validation_logg
 ## outlined by `find_symbols`. C# (`.cs`) is text-only: the plugin writes the
 ## bytes and outlines the file, but it never compiles .NET — the caller has
 ## to build the project (editor Build button or `dotnet build`) to learn
-## about compiler errors, and a `.cs` is only loadable/attachable on a
-## .NET-enabled editor build after that build. Every `.cs` response says so
+## about compiler errors. Loading a `.cs` requires a .NET-enabled editor;
+## resource recognition does not prove its managed class was built. Every
+## `.cs` write says so
 ## (`diagnostics_status: "not_checked"`, `validation_hint`, `dotnet_editor`)
 ## instead of reporting a plain success the caller could mistake for
 ## validation.
@@ -53,6 +54,7 @@ func create_script(params: Dictionary) -> Dictionary:
 	if language.is_empty():
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, UNSUPPORTED_EXTENSION_MESSAGE)
 	var is_csharp := language == LANGUAGE_CSHARP
+	var can_settle := not is_csharp or editor_has_dotnet()
 
 	var existed_before := FileAccess.file_exists(path)
 
@@ -66,8 +68,8 @@ func create_script(params: Dictionary) -> Dictionary:
 		"path": path,
 		"size": content.length(),
 		"committed": true,
-		"import_settled": existed_before,
-		"import_settle": "already_known" if existed_before else "not_waited",
+		"import_settled": existed_before and can_settle,
+		"import_settle": "already_known" if existed_before and can_settle else "not_waited",
 		"undoable": false,
 		"reason": "File system operations cannot be undone via editor undo",
 		"language": language,
@@ -131,7 +133,6 @@ func create_script(params: Dictionary) -> Dictionary:
 	# A `.cs` on a non-.NET editor never becomes a resource at all — waiting
 	# would burn the whole settle window for nothing, so reply synchronously.
 	var request_id: String = params.get("_request_id", "")
-	var can_settle := not is_csharp or editor_has_dotnet()
 	if can_settle and not existed_before and _connection != null and not request_id.is_empty():
 		McpResourceIO.finish_text_write_deferred(_connection, request_id, path, data)
 		return McpDispatcher.DEFERRED_RESPONSE
@@ -551,8 +552,9 @@ static func _csharp_load_hint(is_csharp: bool) -> String:
 	if not is_csharp:
 		return ""
 	return (
-		" (a .cs is loadable only after the project assembly is built — use the "
-		+ "editor Build button or `dotnet build`, then filesystem_manage(op=\"scan\"))"
+		" (check the C# source path and build the project assembly using the "
+		+ "editor Build button or `dotnet build`, then filesystem_manage(op=\"scan\"); "
+		+ "resource recognition alone does not verify a compiled class)"
 	)
 
 

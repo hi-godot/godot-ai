@@ -32,8 +32,9 @@ animation, particles, cameras, and environments.
 the tools are parse-validated, hot-reloaded, attached, and outlined. C# is
 **text-only**: `script_create` / `script_patch` write `.cs` files and
 `script_manage(op="find_symbols")` outlines them, but Godot AI does not build
-.NET or report C# compiler errors — build in the editor (or `dotnet build`)
-and read `logs_read`. Attaching a `.cs` needs a .NET-enabled editor build.
+.NET or report C# compiler errors. Build in the editor and inspect its Build
+panel, or run `dotnet build` and inspect the terminal output.
+Attaching a `.cs` needs a .NET-enabled editor build.
 Details: [C# support](docs/TOOLS.md#c-support).
 
 ### 1. Install or update

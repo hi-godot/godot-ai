@@ -118,7 +118,7 @@ func suite_teardown() -> void:
 	if FileAccess.file_exists(TEST_SCRIPT_PATH):
 		DirAccess.remove_absolute(TEST_SCRIPT_PATH)
 	if FileAccess.file_exists(CS_TEST_PATH):
-		DirAccess.remove_absolute(CS_TEST_PATH)
+		_remove_reload_helper(CS_TEST_PATH)
 
 
 # ----- create_script -----
@@ -1045,7 +1045,7 @@ func test_create_script_csharp_is_text_only() -> void:
 		assert_eq(result.data.cleanup.rm, [path, path + ".uid"])
 	else:
 		assert_eq(result.data.cleanup.rm, [path])
-	DirAccess.remove_absolute(path)
+	_remove_reload_helper(path)
 
 
 func test_create_script_csharp_overwrite_reports_requires_build() -> void:
@@ -1053,9 +1053,10 @@ func test_create_script_csharp_overwrite_reports_requires_build() -> void:
 	var first := _handler.create_script({"path": path, "content": "// v1\n"})
 	assert_has_key(first, "data")
 	var second := _handler.create_script({"path": path, "content": "// v2\n"})
-	DirAccess.remove_absolute(path)
+	_remove_reload_helper(path)
 	assert_has_key(second, "data")
-	assert_eq(second.data.import_settle, "already_known")
+	assert_eq(second.data.import_settled, ScriptHandler.editor_has_dotnet())
+	assert_eq(second.data.import_settle, "already_known" if ScriptHandler.editor_has_dotnet() else "not_waited")
 	_assert_csharp_not_checked(second.data)
 	## C# never hot-reloads from source: the overwrite arm must not claim the
 	## running code changed, and must say why.
@@ -1080,7 +1081,7 @@ func test_patch_script_csharp_is_text_only() -> void:
 	var on_disk := file.get_as_text() if file != null else ""
 	if file != null:
 		file.close()
-	DirAccess.remove_absolute(path)
+	_remove_reload_helper(path)
 	assert_has_key(result, "data")
 	assert_eq(result.data.replacements, 1)
 	assert_contains(on_disk, "Hp = 2")

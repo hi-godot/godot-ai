@@ -1,0 +1,639 @@
+@tool
+extends "res://addons/godot_ai/handlers/command_handler.gd"
+
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const MeshWorkload := preload("res://addons/godot_ai/utils/mesh_workload.gd")
+const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializer.gd")
+
+## Bounded 3D mesh-only baking and explicit-map path queries in 2D/3D.
+
+const _CLASSES := {
+	"2d": {
+		"region": "NavigationRegion2D",
+		"mesh": "NavigationPolygon",
+	},
+	"3d": {
+		"region": "NavigationRegion3D",
+		"mesh": "NavigationMesh",
+	},
+}
+
+## One deferred bake may spend this long across editor frames. The Python
+## handler's timeout is this plus its transport margin (a source-shape test
+## keeps the two together).
+const _BAKE_DEFERRED_TIMEOUT_MS := 30000
+const _SOURCE_MAX_NODES := 256
+const _SOURCE_MAX_GRID_CELLS := 1000000
+
+## In-flight bakes keyed by region instance id. `bake()` reserves its region
+## before the first yield so a second call in the same frame cannot start a
+## second bake on a region Godot is already baking (the engine logs
+## "NavigationMesh is already baking" and the two jobs split the result).
+## Every terminal path releases the reservation.
+static var _active_bakes: Dictionary = {}
+
+var _undo_redo: EditorUndoRedoManager
+var _connection
+
+
+func _init(undo_redo: EditorUndoRedoManager, connection = null) -> void:
+	_undo_redo = undo_redo
+	_connection = connection
+
+
+# ============================================================================
+# navigation_bake
+# ============================================================================
+
+## Bake a 3D region's navigation mesh and commit a scene-anchored swap
+## between the retained pre-bake and baked resources.
+##
+## Source collection visits one bounded mesh/container per frame, without the
+## general scene parser or custom parser callbacks. Only the engine bake runs
+## on a background thread. Undo/redo retain the exact before/after resources.
+func bake(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_region(params)
+	if resolved.has("error"):
+		return resolved
+	var region: Node = resolved.node
+	var dimension: String = resolved.dimension
+	var before: Resource = _get_region_mesh(region, dimension)
+	if before == null:
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
+			"%s has no %s resource" % [resolved.path, _CLASSES[dimension].mesh])
+	var source_error := _validate_bake_source(dimension, before)
+	if not source_error.is_empty():
+		return source_error
+	if _active_bakes.has(region.get_instance_id()) or bool(region.call("is_baking")) or NavigationServer3D.is_baking_navigation_mesh(before):
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+			"%s is already baking a navigation mesh" % resolved.path)
+
+	var request_id: String = params.get("_request_id", "")
+	if _connection == null or request_id.is_empty():
+		## The bake is threaded and answered out-of-band, so a direct caller
+		## (batch_execute, unit tests) cannot wait for it without blocking the
+		## editor's frame budget. Refuse instead of silently baking in place.
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+			"navigation_bake is deferred (threaded bake, bounded deadline); call "
+			+ "navigation_manage(op='bake') directly - batch_execute cannot await it")
+
+	var force_sync := bool(params.get("force_sync", true))
+	var prepared := _begin_bake(region, dimension)
+	if prepared.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"Failed to prepare the %s bake" % _CLASSES[dimension].mesh)
+	var job := _bake_job(
+		region, dimension, resolved.scene_root, prepared.before, prepared.working,
+		_undo_redo, _connection, request_id, force_sync
+	)
+	## Reserve the region before the driver yields: the region's own
+	## native bake has not started during source collection, so checking only
+	## the engine bake state would admit a second request for the same region.
+	_active_bakes[region.get_instance_id()] = request_id
+	## No step here: the dispatcher registers the deferred request only after
+	## this handler returns the sentinel, and `_bake_step`'s first pending
+	## check would otherwise see the request as expired and abandon the job.
+	## `_drive_bake_job` performs the first step after its registration yield.
+	_drive_bake_job(job)
+
+	return {
+		"_deferred": true,
+		"_deferred_timeout_ms": _BAKE_DEFERRED_TIMEOUT_MS,
+	}
+
+
+# ============================================================================
+# navigation_path_get
+# ============================================================================
+
+## Query a path on an explicitly selected navigation map. Read-only: it never
+## guesses a region and never changes the shared async-iteration policy unless
+## `force_sync` asks it to.
+func path_get(params: Dictionary) -> Dictionary:
+	var dimension_result := _resolve_dimension(params)
+	if dimension_result.has("error"):
+		return dimension_result
+	var dimension: String = dimension_result.dimension
+
+	var from := _coerce_vector(params.get("from_point", null), dimension, "from_point")
+	if from.has("error"):
+		return from
+	var to := _coerce_vector(params.get("to_point", null), dimension, "to_point")
+	if to.has("error"):
+		return to
+	var optimize := bool(params.get("optimize", true))
+	var navigation_layers := int(params.get("navigation_layers", 1))
+	var force_sync := bool(params.get("force_sync", false))
+	var region_path := String(params.get("region_path", ""))
+
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "No edited scene open")
+
+	var map_result := _resolve_query_map(
+		scene_root, dimension, region_path, params.get("scene_file", "")
+	)
+	if map_result.has("error"):
+		return map_result
+
+	var points: Array = []
+	if dimension == "3d":
+		if force_sync:
+			_force_map_sync_3d(map_result.map)
+		for point in NavigationServer3D.map_get_path(map_result.map, from.ok, to.ok, optimize, navigation_layers):
+			points.append(VariantSerializer.serialize(point))
+	else:
+		if force_sync:
+			_force_map_sync_2d(map_result.map)
+		for point in NavigationServer2D.map_get_path(map_result.map, from.ok, to.ok, optimize, navigation_layers):
+			points.append(VariantSerializer.serialize(point))
+
+	return {
+		"data": {
+			"dimension": dimension,
+			"from_point": VariantSerializer.serialize(from.ok),
+			"to_point": VariantSerializer.serialize(to.ok),
+			"optimize": optimize,
+			"navigation_layers": navigation_layers,
+			"force_sync": force_sync,
+			"region_path": map_result.region_path,
+			"map_source": map_result.map_source,
+			"point_count": points.size(),
+			"points": points,
+		}
+	}
+
+
+# ============================================================================
+# Helpers — deferred bake
+# ============================================================================
+
+## Snapshot the pre-bake resource and install the working duplicate the
+## threaded bake writes into. Returns `{}` when there is no mesh to bake.
+## Baking in place would mutate the resource the undo action restores, so a
+## second undo after a redo could no longer reach the pre-bake state.
+static func _begin_bake(region: Node, dimension: String) -> Dictionary:
+	var before: Resource = _get_region_mesh(region, dimension)
+	if before == null:
+		return {}
+	var working: Resource = before.duplicate()
+	if dimension == "3d":
+		region.call("set_navigation_mesh", working)
+	else:
+		region.call("set_navigation_polygon", working)
+	return {"before": before, "working": working}
+
+
+## Request state retained by the static frame driver through collection/baking.
+static func _bake_job(
+	region: Node, dimension: String, scene_root: Node, before: Resource,
+	working: Resource, undo_redo: EditorUndoRedoManager, connection, request_id: String,
+	force_sync: bool,
+) -> Dictionary:
+	return {
+		"region": region,
+		"region_id": region.get_instance_id(),
+		"dimension": dimension,
+		"scene_root": scene_root,
+		"before": before,
+		"working": working,
+		"undo_redo": undo_redo,
+		"connection": connection,
+		"request_id": request_id,
+		"force_sync": force_sync,
+		"phase": "start",
+		"started_ms": Time.get_ticks_msec(),
+		"deadline_ms": _BAKE_DEFERRED_TIMEOUT_MS,
+		"parse_ms": 0,
+		"source_data": NavigationMeshSourceGeometryData3D.new(),
+		"pending": [region],
+		"sources": [],
+		"meshes": [],
+		"source_changed": false,
+		"triangles": 0,
+		"vertices": 0,
+		"bounds": AABB(),
+		"has_bounds": false,
+		"result": {},
+	}
+
+
+## Drop this job's reservation so the region can bake again. Every terminal
+## path (commit, abort, abandonment, or a driver that never starts) calls it.
+static func _release_bake(job: Dictionary) -> void:
+	for mesh in job.meshes:
+		var callback := _source_changed.bind(job)
+		if mesh.changed.is_connected(callback):
+			mesh.changed.disconnect(callback)
+	job.meshes.clear()
+	_active_bakes.erase(int(job.region_id))
+
+
+## Advance a bake job by one editor-frame check. Returns true once the job is
+## resolved (committed, aborted, or abandoned); `job.result` holds the reply,
+## or stays empty when the request was abandoned and nothing may be answered.
+static func _bake_step(job: Dictionary) -> bool:
+	if str(job.phase) == "done":
+		return true
+	## Read the region untyped first: a typed `Node` assignment on a freed
+	## instance raises "Trying to assign invalid previously freed instance"
+	## before any validity check could run.
+	var region_ref = job.region
+	if not is_instance_valid(region_ref) or not (region_ref as Node).is_inside_tree():
+		_bake_abort(job, ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
+			"The navigation region went away while it was baking"))
+		return true
+	var region: Node = region_ref
+	var connection = job.connection
+	if connection != null and not _deferred_request_pending(connection, str(job.request_id)):
+		## The dispatcher gave up on this request (timeout, client gone):
+		## restore the pre-bake resource and answer nothing.
+		_bake_restore(job)
+		_release_bake(job)
+		job.phase = "done"
+		return true
+	if Time.get_ticks_msec() - int(job.started_ms) > int(job.deadline_ms):
+		_bake_abort(job, ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT,
+			"navigation_bake exceeded its %d ms budget" % int(job.deadline_ms)))
+		return true
+	if EditorInterface.get_edited_scene_root() != job.scene_root:
+		_bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH,
+			"The edited scene changed while the navigation mesh was baking"))
+		return true
+	if _get_region_mesh(region, str(job.dimension)) != job.working:
+		_bake_abort(job, ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
+			"The region's navigation resource was replaced while the bake was in flight; the bake result was discarded"))
+		return true
+	if bool(job.source_changed):
+		_bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH,
+			"A source mesh changed during navigation baking; retry with stable source geometry"))
+		return true
+	if str(job.phase) == "start" or str(job.phase) == "collect":
+		var source_error := _validate_bake_source(str(job.dimension), job.working)
+		if not source_error.is_empty():
+			_bake_abort(job, source_error)
+			return true
+		job.phase = "collect"
+		var started := Time.get_ticks_usec()
+		var collected := _collect_source_step(job)
+		job.parse_ms = float(job.parse_ms) + (Time.get_ticks_usec() - started) / 1000.0
+		if not collected.is_empty():
+			_bake_abort(job, collected)
+			return true
+		if not job.pending.is_empty():
+			return false
+		if not job.source_data.has_data():
+			_bake_abort(job, ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "No supported mesh triangles found below the navigation region"))
+			return true
+		if not _sources_match(job):
+			_bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "Navigation source nodes changed while geometry was collected"))
+			return true
+		var final_grid_error := _grid_error(job.bounds, job.working)
+		if not final_grid_error.is_empty():
+			_bake_abort(job, final_grid_error)
+			return true
+		NavigationServer3D.bake_from_source_geometry_data_async(job.working, job.source_data)
+		job.phase = "baking"
+		return false
+	if NavigationServer3D.is_baking_navigation_mesh(job.working):
+		return false
+	if not _sources_match(job):
+		_bake_abort(job, ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "Navigation source nodes changed while baking"))
+		return true
+	_bake_commit(job)
+	return true
+
+
+static func _validate_bake_source(dimension: String, mesh: Resource) -> Dictionary:
+	if dimension != "3d":
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "navigation_bake supports bounded 3D mesh-only sources; 2D baking is not supported (2D path queries remain available)")
+	if mesh.geometry_source_geometry_mode != NavigationMesh.SOURCE_GEOMETRY_ROOT_NODE_CHILDREN or mesh.geometry_parsed_geometry_type == NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "navigation_bake requires root-children mesh-instance or both source settings; collider-only and group sources are not supported")
+	return {}
+
+
+static func _source_changed(job: Dictionary) -> void:
+	job.source_changed = true
+
+
+static func _sources_match(job: Dictionary) -> bool:
+	if bool(job.source_changed):
+		return false
+	for source in job.sources:
+		var node = source.node
+		if not is_instance_valid(node) or not node.is_inside_tree() or node.get_parent() != source.parent or node.get_child_count() != int(source.children):
+			return false
+		if node is Node3D and node.global_transform != source.transform:
+			return false
+		if node is MeshInstance3D and node.mesh != source.mesh:
+			return false
+	return true
+
+
+static func _grid_error(bounds: AABB, mesh: NavigationMesh) -> Dictionary:
+	if not is_finite(mesh.cell_size) or not is_finite(mesh.cell_height) or mesh.cell_size <= 0.0 or mesh.cell_height <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation cell size and height must be finite and positive")
+	var size := bounds.size
+	var filter_size := mesh.filter_baking_aabb.size
+	size = Vector3(maxf(size.x, filter_size.x), maxf(size.y, filter_size.y), maxf(size.z, filter_size.z))
+	var cells := Vector3(size.x / mesh.cell_size, size.y / mesh.cell_height, size.z / mesh.cell_size)
+	var count := 1
+	for extent in [cells.x, cells.y, cells.z]:
+		if not is_finite(extent) or extent > _SOURCE_MAX_GRID_CELLS:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation source extent/cell size exceeds the bounded voxel grid; reduce the extent or increase cell size")
+		count *= maxi(1, int(ceil(extent)))
+		if count > _SOURCE_MAX_GRID_CELLS:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation source exceeds the %d-cell voxel grid limit; reduce the extent or increase cell size" % _SOURCE_MAX_GRID_CELLS)
+	return {}
+
+
+static func _collect_source_step(job: Dictionary) -> Dictionary:
+	var node = job.pending.pop_back()
+	if not is_instance_valid(node) or not node.is_inside_tree():
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "A navigation source node was removed during collection")
+	if node != job.region and (node.get_script() != null or node.get_class() not in ["Node", "Node3D", "MeshInstance3D"]):
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Unsupported navigation source %s (%s): mesh-only baking accepts unscripted Node/Node3D containers and MeshInstance3D; colliders, CSG, GridMap, obstacles and custom parser sources are not supported" % [node.name, node.get_class()])
+	var children: int = node.get_child_count()
+	if job.sources.size() + job.pending.size() + children + 1 > _SOURCE_MAX_NODES:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation source traversal exceeds %d nodes" % _SOURCE_MAX_NODES)
+	var source := {"node": node, "parent": node.get_parent(), "children": children}
+	if node is Node3D:
+		source.transform = node.global_transform
+	for index in children:
+		job.pending.append(node.get_child(index))
+	if node is MeshInstance3D:
+		var mesh: Mesh = node.mesh
+		source.mesh = mesh
+		if mesh != null:
+			var counts := MeshWorkload.estimate(mesh)
+			if counts.has("error"):
+				return counts
+			if int(counts.triangles) == 0:
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation source %s has no supported triangles" % node.name)
+			job.triangles = int(job.triangles) + int(counts.triangles)
+			job.vertices = int(job.vertices) + int(counts.vertices)
+			if int(job.triangles) > MeshWorkload.MAX_TRIANGLES or int(job.vertices) > MeshWorkload.MAX_VERTICES:
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation sources exceed the aggregate %d-triangle/%d-vertex limit" % [MeshWorkload.MAX_TRIANGLES, MeshWorkload.MAX_VERTICES])
+			var root_transform: Transform3D = job.region.global_transform
+			if not root_transform.is_finite() or is_zero_approx(root_transform.basis.determinant()):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation region transform must be finite and invertible")
+			var relative: Transform3D = root_transform.affine_inverse() * node.global_transform
+			var bounds: AABB = relative * mesh.get_aabb()
+			if not relative.is_finite() or not bounds.is_finite():
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Navigation mesh transform/bounds must be finite")
+			job.bounds = job.bounds.merge(bounds) if bool(job.has_bounds) else bounds
+			job.has_bounds = true
+			var grid_error := _grid_error(job.bounds, job.working)
+			if not grid_error.is_empty():
+				return grid_error
+			if not job.meshes.has(mesh):
+				mesh.changed.connect(_source_changed.bind(job))
+				job.meshes.append(mesh)
+			job.source_data.add_mesh(mesh, relative)
+	job.sources.append(source)
+	return {}
+
+
+## Push the baked resource to the server region and commit one scene-anchored
+## swap action. Every do/undo target is the region node, so the action lands in
+## the edited scene's history — a RefCounted handler target would select the
+## global history and trip the editor's history-mismatch check.
+static func _bake_commit(job: Dictionary) -> void:
+	var region: Node = job.region
+	var dimension: String = job.dimension
+	var working: Resource = job.working
+	var rid: RID = region.call("get_rid")
+	if rid.is_valid():
+		if dimension == "3d":
+			NavigationServer3D.region_set_navigation_mesh(rid, working)
+		else:
+			NavigationServer2D.region_set_navigation_polygon(rid, working)
+	if bool(job.force_sync):
+		var map: RID = region.call("get_navigation_map")
+		if dimension == "3d":
+			_force_map_sync_3d(map)
+		else:
+			_force_map_sync_2d(map)
+
+	var undo_redo: EditorUndoRedoManager = job.undo_redo
+	undo_redo.create_action("MCP: Bake navigation on %s" % region.name)
+	if dimension == "3d":
+		undo_redo.add_do_method(region, "set_navigation_mesh", working)
+		undo_redo.add_undo_method(region, "set_navigation_mesh", job.before)
+	else:
+		undo_redo.add_do_method(region, "set_navigation_polygon", working)
+		undo_redo.add_undo_method(region, "set_navigation_polygon", job.before)
+	## Both retained resources stay referenced by the action: the scene holds
+	## only one of them at a time, the other must survive for undo/redo.
+	undo_redo.add_do_reference(working)
+	undo_redo.add_undo_reference(job.before)
+	## The region already holds `working`, so record without re-running do.
+	undo_redo.commit_action(false)
+
+	var polygon_count := 0
+	var vertex_count := 0
+	if working != null:
+		polygon_count = int(working.call("get_polygon_count"))
+		vertex_count = int(working.call("get_vertices").size())
+	job.result = {
+		"data": {
+			"path": McpScenePath.from_node(region, job.scene_root),
+			"mesh_class": working.get_class() if working != null else "",
+			"polygon_count": polygon_count,
+			"vertex_count": vertex_count,
+			"force_sync": bool(job.force_sync),
+			"bake_settle": "settled",
+			"parse_ms": float(job.parse_ms),
+			"source_mode": "mesh_only",
+			"source_triangles": int(job.triangles),
+			"undoable": true,
+		}
+	}
+	_release_bake(job)
+	job.phase = "done"
+
+
+static func _bake_abort(job: Dictionary, error: Dictionary) -> void:
+	_bake_restore(job)
+	_release_bake(job)
+	job.result = error
+	job.phase = "done"
+
+
+## Put the pre-bake resource back after an aborted bake. The region may have
+## been freed meanwhile, so it is validity-checked before the typed assignment;
+## and the pre-bake resource is only restored while the region still holds this
+## job's working duplicate — a newer assignment must not be clobbered.
+static func _bake_restore(job: Dictionary) -> void:
+	var region_ref = job.region
+	if not is_instance_valid(region_ref):
+		return
+	var region: Node = region_ref
+	if _get_region_mesh(region, str(job.dimension)) != job.working:
+		return
+	if str(job.dimension) == "3d":
+		region.call("set_navigation_mesh", job.before)
+	else:
+		region.call("set_navigation_polygon", job.before)
+
+
+## Drive a bake job one editor frame at a time and reply when it ends.
+## `static` is load-bearing: the coroutine must outlive this RefCounted
+## handler, which can be freed mid-await by an editor_reload_plugin.
+static func _drive_bake_job(job: Dictionary) -> void:
+	var connection = job.connection
+	if not is_instance_valid(connection):
+		## `_begin_bake` already replaced the region's resource with the working
+		## duplicate and no undo action owns it yet, so a driver that cannot run
+		## must put the pre-bake resource back (ownership-guarded) before
+		## releasing the region for another bake.
+		_bake_restore(job)
+		_release_bake(job)
+		return
+	var tree: SceneTree = connection.get_tree()
+	if tree == null:
+		_bake_restore(job)
+		_release_bake(job)
+		return
+	var work := ScriptWork.begin("navigation_bake")
+	## The first yield lets the dispatcher register the deferred request before
+	## any result or abort can be answered.
+	await tree.process_frame
+	while not _bake_step(job):
+		await tree.process_frame
+	ScriptWork.finish(work)
+	if is_instance_valid(connection) and not job.result.is_empty():
+		connection.send_deferred_response(str(job.request_id), job.result)
+
+
+## Check that the connection and deferred dispatcher entry are both live.
+static func _deferred_request_pending(connection, request_id: String) -> bool:
+	if not is_instance_valid(connection):
+		return false
+	var dispatcher = connection.dispatcher
+	return dispatcher == null or dispatcher.has_pending_deferred_response(request_id)
+
+
+## Sync a 3D map immediately. Godot 4.7's navigation server iterates maps
+## asynchronously by default, and `map_force_update` is documented as
+## unsupported in that mode — turn async iterations off for the forced sync,
+## then restore the previous setting. Only ever called when the caller asked
+## for it (`force_sync`), never silently from a read.
+static func _force_map_sync_3d(map: RID) -> void:
+	if not map.is_valid():
+		return
+	var was_async := NavigationServer3D.map_get_use_async_iterations(map)
+	if was_async:
+		NavigationServer3D.map_set_use_async_iterations(map, false)
+	NavigationServer3D.map_force_update(map)
+	if was_async:
+		NavigationServer3D.map_set_use_async_iterations(map, true)
+
+
+static func _force_map_sync_2d(map: RID) -> void:
+	if not map.is_valid():
+		return
+	var was_async := NavigationServer2D.map_get_use_async_iterations(map)
+	if was_async:
+		NavigationServer2D.map_set_use_async_iterations(map, false)
+	NavigationServer2D.map_force_update(map)
+	if was_async:
+		NavigationServer2D.map_set_use_async_iterations(map, true)
+
+
+# ============================================================================
+# Helpers — resolution
+# ============================================================================
+
+static func _resolve_dimension(params: Dictionary) -> Dictionary:
+	var dimension: String = params.get("dimension", "3d")
+	if dimension != "2d" and dimension != "3d":
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Invalid dimension '%s'. Valid: 2d, 3d" % dimension)
+	return {"dimension": dimension}
+
+
+## Resolve `path` to a navigation region and infer its dimension from the
+## class. Success shape: `{node, dimension, path, scene_root}`.
+func _resolve_region(params: Dictionary) -> Dictionary:
+	var resolved := McpNodeValidator.resolve_or_error(
+		params.get("path", ""), "path", params.get("scene_file", "")
+	)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var dimension := ""
+	if node is NavigationRegion2D:
+		dimension = "2d"
+	elif node is NavigationRegion3D:
+		dimension = "3d"
+	else:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"Node at %s is %s — expected a navigation region" % [resolved.path, node.get_class()])
+	return {
+		"node": node,
+		"dimension": dimension,
+		"path": McpScenePath.from_node(node, resolved.scene_root),
+		"scene_root": resolved.scene_root,
+	}
+
+
+## The map a path query runs against: the explicitly named region's map, or
+## the edited scene root's world map when no region is given. Never guesses
+## the scene's "first" region — a scene can host several maps.
+static func _resolve_query_map(
+	scene_root: Node, dimension: String, region_path: String, scene_file: String
+) -> Dictionary:
+	if not region_path.is_empty():
+		var resolved := McpNodeValidator.resolve_or_error(region_path, "region_path", scene_file)
+		if resolved.has("error"):
+			return resolved
+		var node: Node = resolved.node
+		var expected: String = _CLASSES[dimension].region
+		if not _is_a_class(node, expected):
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+				"Node at %s is %s — expected a %s for a %s query"
+				% [resolved.path, node.get_class(), expected, dimension.to_upper()])
+		var region_map: RID = node.call("get_navigation_map")
+		if not region_map.is_valid():
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
+				"%s has no valid navigation map" % resolved.path)
+		return {"map": region_map, "map_source": "region", "region_path": resolved.path}
+	var world_method := "get_world_3d" if dimension == "3d" else "get_world_2d"
+	if scene_root.has_method(world_method):
+		var world_map: RID = scene_root.call(world_method).navigation_map
+		if world_map.is_valid():
+			return {"map": world_map, "map_source": "world", "region_path": ""}
+	return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
+		"No %s navigation map found in the edited scene" % dimension.to_upper())
+
+
+## Exact class or subclass check. `ClassDB.is_parent_class` is strict, so an
+## exact-class node would otherwise be rejected.
+static func _is_a_class(node: Node, expected: String) -> bool:
+	return node.get_class() == expected or ClassDB.is_parent_class(node.get_class(), expected)
+
+
+static func _get_region_mesh(region: Node, dimension: String) -> Resource:
+	if dimension == "3d":
+		return region.get("navigation_mesh")
+	return region.get("navigation_polygon")
+
+
+# ============================================================================
+# Helpers — path points
+# ============================================================================
+
+## Parse a world point for path queries from {x,y[,z]} / [x,y[,z]].
+static func _coerce_vector(raw: Variant, dimension: String, param_name: String) -> Dictionary:
+	var parsed: Variant = null
+	if dimension == "3d":
+		parsed = McpJsonValues.parse_vector3(raw)
+	else:
+		parsed = McpJsonValues.parse_vector2(raw)
+	if parsed == null:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"'%s' must be a %s point ({x,y%s} or [x,y%s])" % [
+				param_name, dimension.to_upper(), ",z" if dimension == "3d" else "", ",z" if dimension == "3d" else ""
+			])
+	return {"ok": parsed}

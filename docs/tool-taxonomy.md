@@ -166,7 +166,7 @@ These are the tools that move the project from "functional prototype" toward "re
 - `shader.*` — raw `.gdshader` / `.gdshaderinc` CRUD shipped under `material_manage` (`shader_create`, `shader_get`, `shader_validate`, `shader_patch`); every write is parse/type-validated for the declared shader type before it touches disk, and a successful write refreshes the cached resource identity so held `ShaderMaterial`/include references stay current
 - `physics.*` helpers — `physics_shape_autofit` op (under `resource_manage`) derives a Shape2D/Shape3D from a target node's bounds; layer/mask/body helpers still pending
 - light `tilemap.*` — shipped (#622): `tilemap_manage` (set_cell / set_cells_rect / clear / get_cells) + `tileset_manage` (atlas tiles / atlas image)
-- light `navigation.*` — pending
+- light `navigation.*` — shipped: `navigation_manage` (`bake` / `path_get`)
 
 These matter, but they should come after the project can already run, inspect, and safely iterate.
 
