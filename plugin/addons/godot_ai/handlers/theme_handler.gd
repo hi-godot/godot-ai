@@ -31,6 +31,13 @@ const _NATIVE_INT32 := 0
 const _NATIVE_FLOAT32 := 1
 const _NATIVE_INT32_FLOAT32 := 2
 
+## Top-level keys of the StyleBoxFlat patch vocabulary shared by
+## set_stylebox_flat and stylebox_override. Nested dicts validate their own
+## keys inside _apply_flat_props; this guards the outer dict so a typo
+## (`bg_colour`) cannot install an unchanged override plus an undo entry while
+## reporting success.
+const _FLAT_PATCH_KEYS := ["bg_color", "border_color", "border", "corners", "margins", "shadow", "anti_aliasing"]
+
 var _undo_redo: EditorUndoRedoManager
 var _connection: McpConnection
 
@@ -145,8 +152,10 @@ static func _parse_int32_value(v: Variant) -> Variant:
 
 
 # Shared implementation for scalar Theme slots (color, constant, font_size).
-# Captures old value, applies new value, saves to disk, registers undo that
-# restores the old value and saves again.
+# Captures old value, applies new value, persists it as a pre-flight save, then
+# registers undo that restores the old value and saves again. A failed
+# pre-flight save restores the old value and reports an error instead of
+# leaving memory and disk out of sync.
 func _set_scalar(
 	params: Dictionary,
 	kind: String,
@@ -189,13 +198,27 @@ func _set_scalar(
 	var had_before: bool = has_fn.call(theme, name, class_name_param)
 	var before_value = getter.call(theme, name, class_name_param) if had_before else null
 
+	## Pre-flight: apply and persist before the undo action exists, so an
+	## unwritable theme file (read-only, permissions) fails here with the
+	## cached resource restored instead of reporting success while the file
+	## never changed.
+	var save_err: int = _apply_scalar(theme_path, setter, name, class_name_param, parsed)
+	if save_err != OK:
+		if had_before:
+			_apply_scalar(theme_path, setter, name, class_name_param, before_value)
+		else:
+			_clear_scalar(theme_path, clearer, name, class_name_param)
+		return _save_failure(theme_path, save_err)
+
 	_undo_redo.create_action("MCP: Theme set %s %s/%s" % [kind, class_name_param, name])
 	_undo_redo.add_do_method(self, "_apply_scalar", theme_path, setter, name, class_name_param, parsed)
 	if had_before:
 		_undo_redo.add_undo_method(self, "_apply_scalar", theme_path, setter, name, class_name_param, before_value)
 	else:
 		_undo_redo.add_undo_method(self, "_clear_scalar", theme_path, clearer, name, class_name_param)
-	_undo_redo.commit_action()
+	## The do method already ran as the pre-flight save; register without
+	## re-executing so a second save's error cannot be discarded.
+	_undo_redo.commit_action(false)
 
 	return {
 		"data": {
@@ -210,22 +233,33 @@ func _set_scalar(
 	}
 
 
-func _apply_scalar(theme_path: String, setter: Callable, name: String, class_name_param: String, value: Variant) -> void:
+func _apply_scalar(theme_path: String, setter: Callable, name: String, class_name_param: String, value: Variant) -> int:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
-		return
+		return ERR_FILE_CANT_OPEN
 	setter.call(theme, name, class_name_param, value)
-	McpResourceIO.guarded_save(theme, theme_path, _connection)
+	return McpResourceIO.guarded_save(theme, theme_path, _connection)
 
 
-func _clear_scalar(theme_path: String, clearer: Callable, name: String, class_name_param: String) -> void:
+func _clear_scalar(theme_path: String, clearer: Callable, name: String, class_name_param: String) -> int:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
-		return
+		return ERR_FILE_CANT_OPEN
 	clearer.call(theme, name, class_name_param)
-	McpResourceIO.guarded_save(theme, theme_path, _connection)
+	return McpResourceIO.guarded_save(theme, theme_path, _connection)
+
+
+## Error dict for a failed pre-flight save. The caller has already restored the
+## previous slot in memory, so the theme file and the cached resource both hold
+## the pre-request state and no undo action was committed.
+static func _save_failure(theme_path: String, save_err: int) -> Dictionary:
+	return ErrorCodes.make(
+		ErrorCodes.INTERNAL_ERROR,
+		"Failed to save theme to %s: %s (error %d); the change was rolled back"
+		% [theme_path, error_string(save_err), save_err]
+	)
 
 
 # ============================================================================
@@ -249,7 +283,9 @@ func _clear_scalar(theme_path: String, clearer: Callable, name: String, class_na
 ## and the float32-backed ints behind border widths/corner radii) and flags
 ## real booleans; invalid input is refused with a structured error before
 ## anything is applied, so a refused call leaves the theme slot and undo
-## history untouched.
+## history untouched. A slot change is persisted before the undo action is
+## registered: if the theme file cannot be written, the previous slot is
+## restored and the call fails with INTERNAL_ERROR.
 func set_stylebox_flat(params: Dictionary) -> Dictionary:
 	var load_result := _load_theme_from_params(params)
 	if load_result.has("error"):
@@ -272,6 +308,16 @@ func set_stylebox_flat(params: Dictionary) -> Dictionary:
 
 	var had_before := theme.has_stylebox(name, class_name_param)
 	var before_sb: StyleBox = theme.get_stylebox(name, class_name_param) if had_before else null
+	## Pre-flight: apply and persist before the undo action exists, so an
+	## unwritable theme file fails here with the cached resource restored
+	## instead of reporting success while the file never changed.
+	var save_err: int = _apply_stylebox(theme_path, name, class_name_param, sb)
+	if save_err != OK:
+		if had_before:
+			_apply_stylebox(theme_path, name, class_name_param, before_sb)
+		else:
+			_clear_stylebox(theme_path, name, class_name_param)
+		return _save_failure(theme_path, save_err)
 	_commit_stylebox(theme_path, name, class_name_param, sb, before_sb, had_before)
 
 	return {
@@ -393,8 +439,20 @@ func _apply_flat_props(sb: StyleBoxFlat, params: Dictionary) -> Dictionary:
 	return {"ok": true}
 
 
+## Top-level keys in `patch` that are not part of the StyleBoxFlat vocabulary.
+static func _unknown_flat_keys(patch: Dictionary) -> Array:
+	var unknown: Array = []
+	for key in patch.keys():
+		if not _FLAT_PATCH_KEYS.has(key):
+			unknown.append(str(key))
+	return unknown
+
+
 ## Record one stylebox set as an undoable action (apply new, restore or clear
 ## the previous slot). Shared by set_stylebox_flat and set_stylebox_texture.
+## The caller has already applied and persisted the new stylebox as its
+## pre-flight save, so the action is committed without re-executing the do
+## method.
 func _commit_stylebox(
 	theme_path: String, name: String, class_name_param: String,
 	sb: StyleBox, before_sb: StyleBox, had_before: bool
@@ -405,7 +463,7 @@ func _commit_stylebox(
 		_undo_redo.add_undo_method(self, "_apply_stylebox", theme_path, name, class_name_param, before_sb)
 	else:
 		_undo_redo.add_undo_method(self, "_clear_stylebox", theme_path, name, class_name_param)
-	_undo_redo.commit_action()
+	_undo_redo.commit_action(false)
 
 
 # ============================================================================
@@ -425,7 +483,9 @@ func _commit_stylebox(
 ##
 ## Numeric values must be finite and within the native storage's range, and
 ## flags real booleans; invalid input is refused with a structured error before
-## anything is applied.
+## anything is applied. A slot change is persisted before the undo action is
+## registered: if the theme file cannot be written, the previous slot is
+## restored and the call fails with INTERNAL_ERROR.
 func set_stylebox_texture(params: Dictionary) -> Dictionary:
 	var load_result := _load_theme_from_params(params)
 	if load_result.has("error"):
@@ -491,6 +551,16 @@ func set_stylebox_texture(params: Dictionary) -> Dictionary:
 
 	var had_before := theme.has_stylebox(name, class_name_param)
 	var before_sb: StyleBox = theme.get_stylebox(name, class_name_param) if had_before else null
+	## Pre-flight: apply and persist before the undo action exists, so an
+	## unwritable theme file fails here with the cached resource restored
+	## instead of reporting success while the file never changed.
+	var save_err: int = _apply_stylebox(theme_path, name, class_name_param, sb)
+	if save_err != OK:
+		if had_before:
+			_apply_stylebox(theme_path, name, class_name_param, before_sb)
+		else:
+			_clear_stylebox(theme_path, name, class_name_param)
+		return _save_failure(theme_path, save_err)
 	_commit_stylebox(theme_path, name, class_name_param, sb, before_sb, had_before)
 
 	return {
@@ -563,13 +633,26 @@ func _set_resource_slot(
 	if not had_before:
 		before_value = null
 
+	## Pre-flight: apply and persist before the undo action exists, so an
+	## unwritable theme file fails here with the cached resource restored
+	## instead of reporting success while the file never changed.
+	var save_err: int = _apply_slot(theme_path, kind, name, class_name_param, loaded)
+	if save_err != OK:
+		if had_before:
+			_apply_slot(theme_path, kind, name, class_name_param, before_value)
+		else:
+			_clear_slot(theme_path, kind, name, class_name_param)
+		return _save_failure(theme_path, save_err)
+
 	_undo_redo.create_action("MCP: Theme set %s %s/%s" % [kind, class_name_param, name])
 	_undo_redo.add_do_method(self, "_apply_slot", theme_path, kind, name, class_name_param, loaded)
 	if had_before:
 		_undo_redo.add_undo_method(self, "_apply_slot", theme_path, kind, name, class_name_param, before_value)
 	else:
 		_undo_redo.add_undo_method(self, "_clear_slot", theme_path, kind, name, class_name_param)
-	_undo_redo.commit_action()
+	## The do method already ran as the pre-flight save; register without
+	## re-executing so a second save's error cannot be discarded.
+	_undo_redo.commit_action(false)
 
 	return {
 		"data": {
@@ -597,7 +680,10 @@ static func _is_instance_of_class(resource: Resource, expected_class: String) ->
 ## patch (same keys as set_stylebox_flat), and attach it as a per-node
 ## override. Undo restores the previous override, or removes the override when
 ## the node had none. Patch values are validated the same way as
-## set_stylebox_flat; a refused patch leaves the node's override untouched.
+## set_stylebox_flat — unknown top-level keys are refused — and a refused
+## patch leaves the node's override untouched. The action is committed to the
+## Control's scene history, so the editor's scene undo reverts it (a method
+## bound to this handler object would land in GLOBAL_HISTORY instead).
 func stylebox_override(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("path", "")
 	if node_path.is_empty():
@@ -608,6 +694,10 @@ func stylebox_override(params: Dictionary) -> Dictionary:
 	var patch: Variant = params.get("patch", {})
 	if typeof(patch) != TYPE_DICTIONARY:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "'patch' must be a dict of StyleBoxFlat properties")
+	var unknown_keys := _unknown_flat_keys(patch)
+	if not unknown_keys.is_empty():
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+			"Unknown patch key(s): %s (valid: %s)" % [", ".join(unknown_keys), ", ".join(_FLAT_PATCH_KEYS)])
 
 	var resolved := McpNodeValidator.resolve_or_error(node_path, "path")
 	if resolved.has("error"):
@@ -632,13 +722,18 @@ func stylebox_override(params: Dictionary) -> Dictionary:
 		return applied
 
 	var had_override: bool = control.has_theme_stylebox_override(slot)
-	_undo_redo.create_action("MCP: Stylebox override %s on %s" % [slot, node.name])
-	_undo_redo.add_do_method(self, "_apply_node_stylebox", control, slot, patched)
+	var scene_root: Node = resolved.scene_root
+	var scene_ur: UndoRedo = _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(scene_root))
+	if scene_ur == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"No undo history is available for scene %s" % scene_root.name)
+	scene_ur.create_action("MCP: Stylebox override %s on %s" % [slot, node.name])
+	scene_ur.add_do_method(_apply_node_stylebox.bind(control, slot, patched))
 	if had_override:
-		_undo_redo.add_undo_method(self, "_apply_node_stylebox", control, slot, base)
+		scene_ur.add_undo_method(_apply_node_stylebox.bind(control, slot, base))
 	else:
-		_undo_redo.add_undo_method(self, "_remove_node_stylebox", control, slot)
-	_undo_redo.commit_action()
+		scene_ur.add_undo_method(_remove_node_stylebox.bind(control, slot))
+	scene_ur.commit_action()
 
 	return {
 		"data": {
@@ -750,22 +845,22 @@ static func _apply_sides(sb: Object, sides_dict: Variant, dict_name: String,
 	return {"ok": true}
 
 
-func _apply_stylebox(theme_path: String, name: String, class_name_param: String, sb: StyleBox) -> void:
+func _apply_stylebox(theme_path: String, name: String, class_name_param: String, sb: StyleBox) -> int:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
-		return
+		return ERR_FILE_CANT_OPEN
 	theme.set_stylebox(name, class_name_param, sb)
-	McpResourceIO.guarded_save(theme, theme_path, _connection)
+	return McpResourceIO.guarded_save(theme, theme_path, _connection)
 
 
-func _clear_stylebox(theme_path: String, name: String, class_name_param: String) -> void:
+func _clear_stylebox(theme_path: String, name: String, class_name_param: String) -> int:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
-		return
+		return ERR_FILE_CANT_OPEN
 	theme.clear_stylebox(name, class_name_param)
-	McpResourceIO.guarded_save(theme, theme_path, _connection)
+	return McpResourceIO.guarded_save(theme, theme_path, _connection)
 
 
 # ============================================================================
@@ -881,30 +976,30 @@ static func _serialize_value(value: Variant) -> Variant:
 
 ## Set a font/icon slot from inside an undo action. Stylebox slots use the
 ## dedicated `_apply_stylebox` path (they need the StyleBox-typed setter).
-func _apply_slot(theme_path: String, kind: String, name: String, class_name_param: String, value: Variant) -> void:
+func _apply_slot(theme_path: String, kind: String, name: String, class_name_param: String, value: Variant) -> int:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
-		return
+		return ERR_FILE_CANT_OPEN
 	match kind:
 		"font":
 			theme.set_font(name, class_name_param, value)
 		"icon":
 			theme.set_icon(name, class_name_param, value)
-	McpResourceIO.guarded_save(theme, theme_path, _connection)
+	return McpResourceIO.guarded_save(theme, theme_path, _connection)
 
 
-func _clear_slot(theme_path: String, kind: String, name: String, class_name_param: String) -> void:
+func _clear_slot(theme_path: String, kind: String, name: String, class_name_param: String) -> int:
 	var theme: Theme = ResourceLoader.load(theme_path)
 	if theme == null:
 		push_warning("MCP: Failed to load theme for undo/redo: %s" % theme_path)
-		return
+		return ERR_FILE_CANT_OPEN
 	match kind:
 		"font":
 			theme.clear_font(name, class_name_param)
 		"icon":
 			theme.clear_icon(name, class_name_param)
-	McpResourceIO.guarded_save(theme, theme_path, _connection)
+	return McpResourceIO.guarded_save(theme, theme_path, _connection)
 
 
 ## Parse a 9-slice region from {position: {x,y}, size: {x,y}} or [x,y,w,h].

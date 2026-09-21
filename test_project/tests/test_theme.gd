@@ -10,12 +10,21 @@ const ThemeHandler := preload("res://addons/godot_ai/handlers/theme_handler.gd")
 var _handler: ThemeHandler
 var _undo_redo: EditorUndoRedoManager
 
+## Unix permission bits captured before `_deny_writes` chmods the regression
+## directory, restored by the matching call.
+var _ro_dir_permissions: int = 0
+
 ## Suite-scoped Texture2D / Font fixtures under user:// (recreated on every
 ## save so a stale ResourceLoader cache can't outlive the file).
 var _texture_fixture: String = ""
 var _font_fixture: String = ""
 
 const TEST_THEME_PATH := "res://tests/_mcp_test_theme.tres"
+
+## Dedicated directory for the unwritable-theme regression; the test denies
+## writes to it so a save fails without touching the shared test theme.
+const TEST_RO_THEME_DIR := "res://tests/_mcp_ro_theme"
+const TEST_RO_THEME_PATH := "res://tests/_mcp_ro_theme/theme.tres"
 
 
 func suite_name() -> String:
@@ -894,6 +903,109 @@ func test_set_icon_assigns_texture() -> void:
 	assert_true(theme.has_icon("checked", "CheckBox"))
 
 
+func test_unwritable_theme_reports_failure_and_rolls_back() -> void:
+	## dsarno's probe: set_font/set_icon/set_stylebox_texture reported success
+	## while the file bytes stayed identical when the theme could not be
+	## written. The pre-flight save now fails loudly, the cached resource is
+	## restored, and no undo action is committed. Covers the scalar, stylebox
+	## and font/icon write paths.
+	##
+	## The write denial is directory-level: the editor's safe-save replaces a
+	## read-only file via a temp file, so a read-only file alone would not fail
+	## the save in-editor.
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(TEST_RO_THEME_DIR))
+	_remove_ro_theme()
+	var created := _handler.create_theme({"path": TEST_RO_THEME_PATH})
+	assert_has_key(created, "data")
+	_handler.set_color({
+		"theme_path": TEST_RO_THEME_PATH, "class_name": "Label",
+		"name": "font_color", "value": "#112233",
+	})
+	_handler.set_stylebox_flat({
+		"theme_path": TEST_RO_THEME_PATH, "class_name": "Panel",
+		"name": "panel", "bg_color": "#112233",
+	})
+	var theme: Theme = ResourceLoader.load(TEST_RO_THEME_PATH)
+	var bytes_before := FileAccess.get_file_as_bytes(TEST_RO_THEME_PATH)
+	_undo_redo.clear_history()
+	if not _deny_writes(TEST_RO_THEME_DIR, true):
+		_remove_ro_theme()
+		skip("Cannot deny writes to a directory on this platform")
+		return
+	var probe := FileAccess.open(TEST_RO_THEME_DIR.path_join("_probe.tmp"), FileAccess.WRITE)
+	if probe != null:
+		probe.close()
+		_remove_ro_theme()
+		skip("The filesystem did not enforce the directory write denial")
+		return
+
+	var color_result := _handler.set_color({
+		"theme_path": TEST_RO_THEME_PATH, "class_name": "Label",
+		"name": "font_color", "value": "#ff0000",
+	})
+	var stylebox_result := _handler.set_stylebox_flat({
+		"theme_path": TEST_RO_THEME_PATH, "class_name": "Panel",
+		"name": "panel", "bg_color": "#ff0000",
+	})
+	var font_result := _handler.set_font({
+		"theme_path": TEST_RO_THEME_PATH, "class_name": "Button",
+		"name": "font", "font_path": _font_fixture,
+	})
+	_deny_writes(TEST_RO_THEME_DIR, false)
+
+	assert_is_error(color_result, ErrorCodes.INTERNAL_ERROR)
+	assert_contains(color_result.error.message, "Failed to save theme")
+	assert_is_error(stylebox_result, ErrorCodes.INTERNAL_ERROR)
+	assert_is_error(font_result, ErrorCodes.INTERNAL_ERROR)
+	assert_true(
+		(theme.get_color("font_color", "Label")).is_equal_approx(Color("#112233")),
+		"a failed save must restore the cached color, got %s" % str(theme.get_color("font_color", "Label"))
+	)
+	assert_true(
+		(theme.get_stylebox("panel", "Panel") as StyleBoxFlat).bg_color.is_equal_approx(Color("#112233")),
+		"a failed save must restore the cached stylebox"
+	)
+	assert_false(theme.has_font("font", "Button"),
+		"a failed save must clear a slot the theme did not have before")
+	assert_eq(FileAccess.get_file_as_bytes(TEST_RO_THEME_PATH), bytes_before,
+		"the theme file must be byte-identical after a failed save")
+	assert_false(editor_undo(_undo_redo), "a failed save must not commit an undo action")
+	_remove_ro_theme()
+
+
+## Deny (or restore) write access to a project directory so a save into it
+## fails. Windows uses an icacls deny ACE; Unix uses the owner permission bits.
+## Returns false when the platform mechanism failed.
+func _deny_writes(dir_path: String, deny: bool) -> bool:
+	var absolute := ProjectSettings.globalize_path(dir_path)
+	if OS.get_name() == "Windows":
+		var user := OS.get_environment("USERNAME")
+		if user.is_empty():
+			return false
+		var args: Array = [absolute, "/deny", "%s:(W)" % user] if deny else [absolute, "/remove:d", user]
+		var output: Array = []
+		return OS.execute("icacls", args, output, true) == 0
+	if deny:
+		_ro_dir_permissions = FileAccess.get_unix_permissions(absolute)
+		return FileAccess.set_unix_permissions(absolute,
+			FileAccess.UNIX_READ_OWNER | FileAccess.UNIX_EXECUTE_OWNER) == OK
+	return FileAccess.set_unix_permissions(absolute, _ro_dir_permissions) == OK
+
+
+func _remove_ro_theme() -> void:
+	var absolute_dir := ProjectSettings.globalize_path(TEST_RO_THEME_DIR)
+	var dir := DirAccess.open(absolute_dir)
+	if dir != null:
+		dir.list_dir_begin()
+		var name := dir.get_next()
+		while name != "":
+			if not dir.current_is_dir():
+				dir.remove(name)
+			name = dir.get_next()
+		dir.list_dir_end()
+	DirAccess.remove_absolute(absolute_dir)
+
+
 # ----- stylebox_override -----
 
 func test_stylebox_override_patches_control_and_undoes() -> void:
@@ -925,6 +1037,40 @@ func test_stylebox_override_patches_control_and_undoes() -> void:
 	assert_true(did_undo, "undo should succeed")
 	assert_false(panel.has_theme_stylebox_override("panel"),
 		"undo must remove an override the node did not have before")
+	panel.get_parent().remove_child(panel)
+	panel.queue_free()
+
+
+func test_stylebox_override_commits_to_scene_history() -> void:
+	## dsarno's probe: the override action must live in the Control's scene
+	## history, so the editor's scene undo reverts it. A method bound to the
+	## handler RefCounted lands in GLOBAL_HISTORY instead, where the scene
+	## undo cannot reach it.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var panel := Panel.new()
+	panel.name = "OverrideSceneHistory"
+	scene_root.add_child(panel)
+	panel.owner = scene_root
+	_undo_redo.clear_history()
+	var result := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverrideSceneHistory",
+		"slot": "panel",
+		"patch": {"bg_color": {"r": 0.9, "g": 0.0, "b": 0.0, "a": 1.0}},
+	})
+	assert_has_key(result, "data")
+	var scene_ur: UndoRedo = _undo_redo.get_history_undo_redo(
+		_undo_redo.get_object_history_id(scene_root))
+	assert_true(scene_ur.undo(), "the scene history must own the override action")
+	assert_false(panel.has_theme_stylebox_override("panel"),
+		"scene undo must remove the override")
+	assert_true(scene_ur.redo(), "the scene history must redo the override")
+	assert_true(panel.has_theme_stylebox_override("panel"),
+		"scene redo must restore the override")
+	var global_ur: UndoRedo = _undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+	assert_false(global_ur.undo(), "the override must not enter the global history")
 	panel.get_parent().remove_child(panel)
 	panel.queue_free()
 
@@ -1043,6 +1189,32 @@ func test_stylebox_override_rejects_unknown_patch_key() -> void:
 	assert_contains(result.error.message, "wobble")
 	assert_false(panel.has_theme_stylebox_override("panel"),
 		"a refused patch must not leave an override")
+	panel.get_parent().remove_child(panel)
+	panel.queue_free()
+
+
+func test_stylebox_override_rejects_unknown_top_level_patch_key() -> void:
+	## A typo like bg_colour must be refused at the patch boundary: the old
+	## behavior installed an unchanged override plus an undo entry.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var panel := Panel.new()
+	panel.name = "OverrideBadTopLevel"
+	scene_root.add_child(panel)
+	panel.owner = scene_root
+	_undo_redo.clear_history()
+	var result := _handler.stylebox_override({
+		"path": "/" + scene_root.name + "/OverrideBadTopLevel",
+		"slot": "panel",
+		"patch": {"bg_colour": {"r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0}},
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "bg_colour")
+	assert_false(panel.has_theme_stylebox_override("panel"),
+		"a refused patch must not install an override")
+	assert_false(editor_undo(_undo_redo), "a refused patch must not commit an undo action")
 	panel.get_parent().remove_child(panel)
 	panel.queue_free()
 

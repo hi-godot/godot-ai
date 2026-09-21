@@ -26,6 +26,10 @@ booleans; a non-numeric or non-finite value is refused with a structured error
 before anything is applied, so a refused call leaves the theme and undo history
 untouched.
 
+Slot changes are persisted immediately: if the theme file cannot be written the
+call fails with an error, the previous slot is restored, and no undo entry is
+committed.
+
 Ops (pass via op="..." plus a params dict):
   • create(path, overwrite=False)
         Create a new empty Theme .tres at a res:// path.
@@ -55,9 +59,11 @@ Ops (pass via op="..." plus a params dict):
   • stylebox_override(path, slot, patch)
         Per-node stylebox override: duplicate the stylebox the Control
         resolves for `slot`, apply a StyleBoxFlat patch (same keys as
-        set_stylebox_flat), and attach it via add_theme_stylebox_override.
-        Undo restores the previous override or removes it. The zero-border
-        angular-frame / flash-the-bar-bg pattern without mutating the theme.
+        set_stylebox_flat; unknown top-level keys are refused), and attach it
+        via add_theme_stylebox_override. The action lands in the scene's undo
+        history, so the editor's scene undo restores the previous override or
+        removes it. The zero-border angular-frame / flash-the-bar-bg pattern
+        without mutating the theme.
   • apply(node_path, theme_path="")
         Assign the theme to a Control (cascades to descendants). Empty
         theme_path clears.
