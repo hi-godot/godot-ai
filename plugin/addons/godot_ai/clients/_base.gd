@@ -123,13 +123,20 @@ var config_merge_first_wins: bool = false
 ## status reports the ambiguity instead of green-lighting the default file.
 var config_scope_globs: PackedStringArray = PackedStringArray()
 
-## Top-level array key in the config file that hides a server by name whatever
-## the entry itself says (omp: `disabledServers`). Configure removes the
-## server name from that array in the file it writes — mirroring the client's
-## own writer, which drops the conflicting denylist name — so a Configure
-## result cannot stay silently suppressed by a stale override. Empty means
-## the client's format has no such key.
+## Environment names that make the effective config destination unknown.
+## Configure, Remove and status refuse while any is set; values are not reported.
+var config_scope_envs: PackedStringArray = PackedStringArray()
+
+## Top-level server-name denylist in the first declared merge tier (the default
+## primary file), independent of which tier owns the entry. Configure and status
+## refuse a suppressed name; Remove preserves this user state. Empty disables it.
 var config_denylist_key: String = ""
+
+## Effective-entry enable toggle and primary force-enable list. Boolean false
+## and strings "false"/"0" suppress the entry unless the allowlist names it.
+## The denylist still wins. Empty keys disable these checks.
+var config_enabled_key: String = ""
+var config_allowlist_key: String = ""
 
 ## De-duplicate persistent path-ambiguity warnings across recurring status
 ## refreshes. The actionable message still returns on every resolution; only

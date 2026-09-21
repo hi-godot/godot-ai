@@ -80,6 +80,9 @@ static func _configure_merged(
 	var tiers: Array = loaded.get("tiers", [])
 	if tiers.is_empty():
 		return {"status": "error", "message": "Could not resolve config path for %s on this OS" % client.display_name}
+	var denylist_error := _denylist_error(client, tiers, server_name)
+	if not denylist_error.is_empty():
+		return {"status": "error", "message": denylist_error}
 	var target_index := 0
 	for index in range(tiers.size()):
 		var config: Dictionary = tiers[index]["data"]
@@ -94,8 +97,10 @@ static func _configure_merged(
 	var config: Dictionary = tier["data"]
 	var holder := _ensure_path(config, select_server_key_path(config, client))
 	var existing: Variant = holder.get(server_name, null)
+	var disabled_error := _disabled_entry_error(client, tiers, server_name, existing, str(tier["path"]))
+	if not disabled_error.is_empty():
+		return {"status": "error", "message": disabled_error}
 	holder[server_name] = build_entry(client, server_url, existing, launch)
-	_scrub_denylist(client, config, server_name)
 	var path := str(tier["path"])
 	# F5: refuse to re-serialize a tier whose parsed integers above 2^53 would
 	# lose precision. The same check guards the simple `configure` path.
@@ -159,7 +164,7 @@ static func check_status_details(
 	return _entry_status_details(client, holder[server_name], server_url, launch)
 
 
-## Verify the effective last definition after applying the client's merge order.
+## Verify the effective definition after applying the client's merge order.
 static func _check_status_merged(
 	client: McpClient,
 	server_name: String,
@@ -175,11 +180,13 @@ static func _check_status_merged(
 	if not loaded.get("ok", false):
 		return {"status": McpClient.Status.ERROR, "error_msg": str(loaded.get("error", "Cannot read merged config tiers"))}
 	var effective: Variant = null
+	var effective_path := ""
 	for tier in loaded.get("tiers", []):
 		var config: Dictionary = tier["data"]
 		var holder := _walk_path(config, select_server_key_path(config, client))
 		if holder is Dictionary and holder.has(server_name):
 			effective = holder[server_name]
+			effective_path = str(tier["path"])
 			## First-definition-wins: the earliest defining tier is the one the
 			## client actually reads; stop instead of overwriting with a dead one.
 			if _first_wins(client):
@@ -188,6 +195,10 @@ static func _check_status_merged(
 	if not project.get("ok", false):
 		return {"status": McpClient.Status.ERROR, "error_msg": str(project.get("error", "Cannot inspect project config tiers"))}
 	var project_tiers: Array = project.get("tiers", [])
+	if effective != null or not project_tiers.is_empty():
+		var denylist_error := _denylist_error(client, loaded.get("tiers", []), server_name)
+		if not denylist_error.is_empty():
+			return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": denylist_error}
 	if not project_tiers.is_empty():
 		# The project tier that drives the client's effective config: the
 		# latest for last-wins clients (pi-codemode-mcp merges project tiers
@@ -198,6 +209,9 @@ static func _check_status_merged(
 		# only the file the user actually has to edit.
 		var effective_index := 0 if _first_wins(client) else project_tiers.size() - 1
 		var effective_tier: Dictionary = project_tiers[effective_index]
+		var disabled_error := _disabled_entry_error(client, loaded.get("tiers", []), server_name, effective_tier["entry"], str(effective_tier["path"]))
+		if not disabled_error.is_empty():
+			return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": disabled_error}
 		var details := _entry_status_details(client, effective_tier["entry"], server_url, launch)
 		if details.get("status") != McpClient.Status.CONFIGURED:
 			## Keep `owned` from the effective entry: the post-update migration
@@ -209,6 +223,9 @@ static func _check_status_merged(
 		return {"status": McpClient.Status.CONFIGURED, "error_msg": ""}
 	if effective == null:
 		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
+	var disabled_error := _disabled_entry_error(client, loaded.get("tiers", []), server_name, effective, effective_path)
+	if not disabled_error.is_empty():
+		return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": disabled_error}
 	return _entry_status_details(client, effective, server_url, launch)
 
 
@@ -669,8 +686,13 @@ static func _first_wins(client: McpClient) -> bool:
 ## Fail-closed gate for clients whose user scope can be relocated by something
 ## the editor cannot observe (omp named profiles). Any directory matching a
 ## declared `config_scope_globs` template means the effective destination is
-## ambiguous; returns the actionable error, "" when the scope is unambiguous.
+## ambiguous. Declared relocation environment names also cause refusal.
 static func _scope_ambiguity_error(client: McpClient) -> String:
+	var env_names: Variant = client.get("config_scope_envs")
+	if env_names is PackedStringArray:
+		for env_name in env_names:
+			if not McpPathTemplate.env_lookup(env_name).is_empty():
+				return "%s is set and may relocate %s configuration. Confirm the active client config path and edit the entry manually; default-profile files were not changed." % [env_name, client.display_name]
 	var globs: Variant = client.get("config_scope_globs")
 	if not (globs is PackedStringArray):
 		return ""
@@ -687,18 +709,30 @@ static func _scope_ambiguity_error(client: McpClient) -> String:
 	)
 
 
-## Remove `server_name` from the denylist array of the config being written
-## (`McpClient.config_denylist_key`, omp `disabledServers`), so the freshly
-## configured entry cannot stay hidden by a stale override — the client's own
-## writer drops the conflicting denylist name the same way. Other names and
-## unknown shapes are preserved untouched.
-static func _scrub_denylist(client: McpClient, config: Dictionary, server_name: String) -> void:
+static func _disabled_entry_error(client: McpClient, tiers: Array, server_name: String, entry: Variant, path: String) -> String:
+	if client.config_enabled_key.is_empty() or not (entry is Dictionary):
+		return ""
+	var enabled: Variant = entry.get(client.config_enabled_key)
+	var disabled: bool = (enabled is bool and not enabled) or (enabled is String and enabled.to_lower() in ["false", "0"])
+	if not disabled:
+		return ""
+	if not client.config_allowlist_key.is_empty() and not tiers.is_empty():
+		var allowed: Variant = tiers[0]["data"].get(client.config_allowlist_key)
+		if allowed is Array and allowed.has(server_name):
+			return ""
+	return "%s is disabled by %s in %s. Re-enable it in %s before configuring; all files were left unchanged." % [server_name, client.config_enabled_key, path, client.display_name]
+
+
+static func _denylist_error(client: McpClient, tiers: Array, server_name: String) -> String:
 	var key: Variant = client.get("config_denylist_key")
-	if not (key is String) or String(key).is_empty():
-		return
-	var denylist: Variant = config.get(String(key), null)
-	if denylist is Array:
-		(denylist as Array).erase(server_name)
+	if not (key is String) or String(key).is_empty() or tiers.is_empty():
+		return ""
+	var primary: Dictionary = tiers[0]
+	var denylist: Variant = primary["data"].get(key, null)
+	if denylist is Array and denylist.has(server_name):
+		return "%s is disabled by %s in %s. Review that primary config manually before configuring; all files were left unchanged." % [server_name, key, primary["path"]]
+	return ""
+
 
 ## Resolve the global config tiers in the client's documented merge order.
 static func _merge_paths(client: McpClient) -> PackedStringArray:

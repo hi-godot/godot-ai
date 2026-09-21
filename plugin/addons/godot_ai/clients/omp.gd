@@ -8,8 +8,8 @@ extends McpClient
 ## read order with `config_merge_first_wins`, so Configure updates the file
 ## that already owns the server instead of shadowing a compatibility
 ## entry's user state (#1085). omp never writes the compatibility files
-## itself; the write fold landing on `mcp.json` keeps that true here too —
-## a fresh entry is created only on tiers[0].
+## itself; this adapter updates an existing compatibility entry in place.
+## A fresh entry is created only on tiers[0].
 ##
 ## The user scope can be relocated per launch (`omp --profile`,
 ## OMP_PROFILE/PI_PROFILE). `config_scope_globs` fails Configure/Remove
@@ -44,10 +44,11 @@ func _init() -> void:
 	config_merge_project_paths = PackedStringArray([".omp/mcp.json", ".omp/.mcp.json"])
 	config_merge_first_wins = true
 	config_scope_globs = PackedStringArray(["~/.omp/profiles/*"])
-	## A stale `disabledServers` name hides the server whatever the entry
-	## says; Configure scrubs it from the file it writes, like omp's own
-	## writer. Other names are preserved.
+	config_scope_envs = PackedStringArray(["PI_CODING_AGENT_DIR", "PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE"])
+	## The primary user file owns this override even for a compatibility entry.
 	config_denylist_key = "disabledServers"
+	config_enabled_key = "enabled"
+	config_allowlist_key = "enabledServers"
 	server_key_path = PackedStringArray(["mcpServers"])
 	command_shape = McpClient.CommandShape.FLAT
 	command_legacy_keys = PackedStringArray(["url", "headers", "type"])

@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from godot_ai import __version__ as _SERVER_VERSION
 from godot_ai.protocol.envelope import KNOWN_READINESS, WS_PROTOCOL_VERSION
+from godot_ai.protocol.errors import EditorTransportError, EditorTransportSubCode
 from godot_ai.telemetry import (
     MilestoneType,
     RecordType,
@@ -200,7 +201,8 @@ class SessionRegistry:
         for request_id, future in entry.pending.items():
             if not future.done():
                 future.set_exception(
-                    ConnectionError(
+                    EditorTransportError(
+                        EditorTransportSubCode.EDITOR_DISCONNECTED,
                         f"Session {session_id} disconnected while request "
                         f"{request_id} was in flight"
                     )

@@ -2367,9 +2367,19 @@ func _build_settings_tab(tabs: TabContainer) -> void:
 	## `_reset_tools_pending_from_setting` / `_on_open_clients_window`).
 	var settings_tab := VBoxContainer.new()
 	settings_tab.add_theme_constant_override("separation", 8)
+	settings_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	## The section stack below (Vision Routing + Remote access) can outgrow
+	## the window's minimum height, especially at larger editor scales —
+	## scroll instead of growing the window, same idiom as the Clients and
+	## Tools tabs (#1090).
+	var settings_scroll := ScrollContainer.new()
+	settings_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	settings_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	settings_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	settings_scroll.add_child(settings_tab)
 	var settings_margin := _build_margin_container()
 	settings_margin.name = "Settings"
-	settings_margin.add_child(settings_tab)
+	settings_margin.add_child(settings_scroll)
 	tabs.add_child(settings_margin)
 
 	## Vision Routing is configuration, not status — it lives here rather

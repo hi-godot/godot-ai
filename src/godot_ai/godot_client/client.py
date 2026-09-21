@@ -16,7 +16,7 @@ from godot_ai.godot_client.session_diagnostics import (
     session_not_found_message,
 )
 from godot_ai.protocol.envelope import find_non_finite_float
-from godot_ai.protocol.errors import ErrorCode
+from godot_ai.protocol.errors import EditorTransportError, ErrorCode
 from godot_ai.sessions.registry import PendingCommandLimitError
 from godot_ai.transport.websocket import GodotWebSocketServer
 
@@ -225,6 +225,23 @@ class GodotClient:
                 params=params,
                 timeout=timeout,
             )
+        except EditorTransportError as exc:
+            self._record_failure(session_id, kind=exc.sub_code.value)
+            raise GodotCommandError(
+                code=ErrorCode.TRANSPORT_OUTCOME_UNKNOWN,
+                message=(
+                    "The editor command ended without a usable response; its outcome is unknown."
+                ),
+                data={
+                    "sub_code": exc.sub_code.value,
+                    "retryable": False,
+                    "session_id": session_id,
+                    "hint": (
+                        "The command may have executed. Inspect editor state before "
+                        "deciding whether to retry."
+                    ),
+                },
+            ) from exc
         except (ConnectionError, TimeoutError) as exc:
             self._record_failure(session_id, kind=type(exc).__name__)
             raise

@@ -71,6 +71,17 @@ def test_fresh_writes_defer_and_overwrites_reply_sync() -> None:
         "create_script must return the DEFERRED_RESPONSE sentinel on the "
         "deferred path so the dispatcher skips auto-sending the reply."
     )
+    # A `.cs` is only ever a resource on a .NET editor build (#908). On any
+    # other build ResourceLoader.exists() never flips, so create_script must
+    # not enter the settle wait for it — same shape as write_file's .gd scoping.
+    assert "var can_settle := not is_csharp or editor_has_dotnet()" in script_source, (
+        "create_script must scope the settle wait: .gd always, .cs only when "
+        "the editor build has .NET (CSharpScript registered)."
+    )
+    assert f"if can_settle and {create_guard}" in script_source, (
+        "create_script's deferral must be gated by can_settle in addition to "
+        "the fresh-file / connection / request_id guard."
+    )
     # write_file's deferral must additionally be scoped to .gd paths:
     # ResourceLoader never learns plain text files, so an unconditional wait
     # would burn the full settle window on every fresh .txt write (#714).
@@ -173,7 +184,10 @@ def test_writes_report_committed_status_even_when_import_wait_times_out() -> Non
         "response must expose committed=true so callers know retrying is not a "
         "plain safe retry."
     )
-    assert '"import_settle": "already_known" if existed_before else "not_waited"' in script_source
+    assert (
+        '"import_settle": "already_known" if existed_before and can_settle else "not_waited"'
+        in script_source
+    )
     # write_file mirrors the same fields for .gd paths (#714).
     assert 'data["committed"] = true' in fs_source
     fs_settle_marker = 'data["import_settle"] = "already_known" if existed_before else "not_waited"'

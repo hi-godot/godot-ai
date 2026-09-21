@@ -28,6 +28,15 @@ animation, particles, cameras, and environments.
   `uvx` for the Python server
 - An MCP client
 
+**Script languages.** GDScript is fully supported: scripts written through
+the tools are parse-validated, hot-reloaded, attached, and outlined. C# is
+**text-only**: `script_create` / `script_patch` write `.cs` files and
+`script_manage(op="find_symbols")` outlines them, but Godot AI does not build
+.NET or report C# compiler errors. Build in the editor and inspect its Build
+panel, or run `dotnet build` and inspect the terminal output.
+Attaching a `.cs` needs a .NET-enabled editor build.
+Details: [C# support](docs/TOOLS.md#c-support).
+
 ### 1. Install or update
 
 **New project:** choose a published version from

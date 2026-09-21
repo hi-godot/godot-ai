@@ -26,6 +26,52 @@ class _FallbackDiagnosticsScriptHandler extends ScriptHandler:
 		}
 
 const TEST_SCRIPT_PATH := "res://tests/_mcp_test_script.gd"
+const CS_TEST_PATH := "res://tests/_mcp_test_script.cs"
+const CS_TEST_CONTENT := """using Godot;
+using System.Threading.Tasks;
+
+namespace McpTests;
+
+// The Godot C# conventions find_symbols has to understand: attribute on its
+// own line, attribute sharing the member's line, stacked attributes, an
+// expression-bodied method, a generic async method, and control-flow lines
+// that look like calls.
+public partial class McpTestCsharp : CharacterBody2D
+{
+	[Signal]
+	public delegate void HealthChangedEventHandler(int newValue);
+
+	[Signal] public delegate void DiedEventHandler();
+
+	[Export]
+	public float Speed { get; set; } = 10.0f;
+
+	[Export(PropertyHint.Range, "0,100")] private int _maxHealth = 100;
+
+	[Export] [Obsolete("stacked")] public string Label = "x";
+
+	private int _internal;
+
+	public override void _Ready()
+	{
+		if (Speed > 0)
+		{
+			GD.Print("ready");
+		}
+		else if (Speed < 0)
+		{
+			return;
+		}
+	}
+
+	public static McpTestCsharp MakeDefault() => null;
+
+	private async Task<bool> Move(Vector2 direction)
+	{
+		return await Task.FromResult(true);
+	}
+}
+"""
 const TEST_SCRIPT_CONTENT := """class_name _McpTestScript
 extends Node3D
 
@@ -60,6 +106,10 @@ func suite_setup(ctx: Dictionary) -> void:
 	if file:
 		file.store_string(TEST_SCRIPT_CONTENT)
 		file.close()
+	var cs_file := FileAccess.open(CS_TEST_PATH, FileAccess.WRITE)
+	if cs_file:
+		cs_file.store_string(CS_TEST_CONTENT)
+		cs_file.close()
 
 
 func suite_teardown() -> void:
@@ -67,6 +117,8 @@ func suite_teardown() -> void:
 	# Clean up test script file
 	if FileAccess.file_exists(TEST_SCRIPT_PATH):
 		DirAccess.remove_absolute(TEST_SCRIPT_PATH)
+	if FileAccess.file_exists(CS_TEST_PATH):
+		_remove_reload_helper(CS_TEST_PATH)
 
 
 # ----- create_script -----
@@ -350,7 +402,11 @@ func test_create_script_invalid_prefix() -> void:
 
 func test_create_script_wrong_extension() -> void:
 	var result := _handler.create_script({"path": "res://test.txt"})
-	assert_is_error(result)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	## #908: the rejection has to teach the caller what IS accepted and where
+	## other text files go, so an agent doesn't burn a turn guessing.
+	assert_contains(result.error.message, ".gd or .cs")
+	assert_contains(result.error.message, "write_text")
 
 
 func test_create_script_rejects_traversal_path() -> void:
@@ -945,3 +1001,189 @@ func test_patch_script_refreshes_before_the_editor_reloads_on_register() -> void
 	assert_false(result.data.has("reload_reason"), "a reloaded script carries no skip reason")
 	assert_eq(loaded.new().value(), "new")
 	_remove_reload_helper(path)
+
+
+# ----- #908: C# authoring is text-only -----
+
+## Every `.cs` write must say it was NOT validated. The GDScript shape
+## (`diagnostics: []` + `diagnostics_status: "checked"`) would read as
+## "compiled clean", which is exactly the false success #908 warns about.
+func _assert_csharp_not_checked(data: Dictionary) -> void:
+	assert_eq(data.language, "csharp")
+	assert_eq(data.diagnostics, [])
+	assert_eq(data.diagnostics_scope, "this_file")
+	assert_eq(data.diagnostics_status, "not_checked")
+	assert_eq(data.diagnostics_detail, "none")
+	assert_has_key(data, "validation_hint")
+	assert_contains(data.validation_hint, "dotnet build")
+	assert_has_key(data, "dotnet_editor")
+	assert_eq(data.dotnet_editor, ScriptHandler.editor_has_dotnet())
+
+
+func test_create_script_csharp_is_text_only() -> void:
+	var path := "res://tests/_mcp_test_created.cs"
+	var content := "using Godot;\n\npublic partial class Created : Node\n{\n}\n"
+	var result := _handler.create_script({"path": path, "content": content})
+	assert_has_key(result, "data")
+	assert_eq(result.data.path, path)
+	assert_eq(result.data.size, content.length())
+	assert_eq(result.data.committed, true)
+	assert_eq(result.data.import_settled, false)
+	assert_eq(result.data.import_settle, "not_waited")
+	assert_false(result.data.undoable, "File write should not be undoable")
+	_assert_csharp_not_checked(result.data)
+	## The class_name scan hint is a GDScript concept; a C# class must not
+	## trigger it (nothing here declares `class_name`).
+	assert_false(result.data.has("class_registration"), "no GDScript scan hint for C#")
+	assert_true(FileAccess.file_exists(path), "C# file should be written")
+	var file := FileAccess.open(path, FileAccess.READ)
+	assert_eq(file.get_as_text(), content)
+	file.close()
+	## A `.cs.uid` sidecar only appears on a .NET editor build.
+	assert_has_key(result.data, "cleanup")
+	if ScriptHandler.editor_has_dotnet():
+		assert_eq(result.data.cleanup.rm, [path, path + ".uid"])
+	else:
+		assert_eq(result.data.cleanup.rm, [path])
+	_remove_reload_helper(path)
+
+
+func test_create_script_csharp_overwrite_reports_requires_build() -> void:
+	var path := "res://tests/_mcp_test_overwrite.cs"
+	var first := _handler.create_script({"path": path, "content": "// v1\n"})
+	assert_has_key(first, "data")
+	var second := _handler.create_script({"path": path, "content": "// v2\n"})
+	_remove_reload_helper(path)
+	assert_has_key(second, "data")
+	assert_eq(second.data.import_settled, ScriptHandler.editor_has_dotnet())
+	assert_eq(second.data.import_settle, "already_known" if ScriptHandler.editor_has_dotnet() else "not_waited")
+	_assert_csharp_not_checked(second.data)
+	## C# never hot-reloads from source: the overwrite arm must not claim the
+	## running code changed, and must say why.
+	assert_eq(second.data.reloaded, false)
+	assert_eq(second.data.reload_reason, "csharp_requires_build")
+	assert_false(second.data.has("cleanup"), "overwrite omits the cleanup hint")
+
+
+func test_patch_script_csharp_is_text_only() -> void:
+	var path := "res://tests/_mcp_test_patch.cs"
+	var created := _handler.create_script({
+		"path": path,
+		"content": "public partial class P : Node\n{\n\tpublic int Hp = 1;\n}\n",
+	})
+	assert_has_key(created, "data")
+	var result := _handler.patch_script({
+		"path": path,
+		"old_text": "Hp = 1",
+		"new_text": "Hp = 2",
+	})
+	var file := FileAccess.open(path, FileAccess.READ)
+	var on_disk := file.get_as_text() if file != null else ""
+	if file != null:
+		file.close()
+	_remove_reload_helper(path)
+	assert_has_key(result, "data")
+	assert_eq(result.data.replacements, 1)
+	assert_contains(on_disk, "Hp = 2")
+	_assert_csharp_not_checked(result.data)
+	assert_eq(result.data.reloaded, false)
+	assert_eq(result.data.reload_reason, "csharp_requires_build")
+
+
+func test_patch_script_wrong_extension_names_both_languages() -> void:
+	var result := _handler.patch_script({
+		"path": "res://notes.txt",
+		"old_text": "x",
+		"new_text": "y",
+	})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, ".gd or .cs")
+
+
+func test_find_symbols_csharp_outline() -> void:
+	var result := _handler.find_symbols({"path": CS_TEST_PATH})
+	assert_has_key(result, "data")
+	assert_eq(result.data.language, "csharp")
+	assert_eq(result.data.class_name, "McpTestCsharp")
+	assert_eq(result.data.extends, "CharacterBody2D")
+
+	var func_names: Array[String] = []
+	for fn: Dictionary in result.data.functions:
+		func_names.append(fn.name)
+	assert_contains(func_names, "_Ready")
+	assert_contains(func_names, "MakeDefault", "expression-bodied methods count")
+	assert_contains(func_names, "Move", "generic async return types count")
+	assert_eq(result.data.function_count, 3,
+		"control flow (`if`, `else if`, `return`) and calls (`GD.Print`) are not methods: %s" % [func_names])
+
+	## Godot signal names drop the C# `EventHandler` suffix.
+	assert_eq(result.data.signal_count, 2)
+	assert_contains(result.data.signals, "HealthChanged")
+	assert_contains(result.data.signals, "Died")
+
+	var export_names: Array[String] = []
+	for exp: Dictionary in result.data.exports:
+		export_names.append(exp.name)
+	assert_eq(result.data.export_count, 3, "own-line, same-line and stacked attributes: %s" % [export_names])
+	assert_contains(export_names, "Speed")
+	assert_contains(export_names, "_maxHealth")
+	assert_contains(export_names, "Label")
+
+
+func test_find_symbols_gdscript_reports_language() -> void:
+	var result := _handler.find_symbols({"path": TEST_SCRIPT_PATH})
+	assert_has_key(result, "data")
+	assert_eq(result.data.language, "gdscript")
+
+
+func test_attach_script_csharp_without_dotnet_reports_clear_error() -> void:
+	if ScriptHandler.editor_has_dotnet():
+		skip("editor build has .NET; the non-.NET attach guard does not apply")
+		return
+	var result := _handler.attach_script({"path": "/Main", "script_path": CS_TEST_PATH})
+	## Not "Script not found" — the path is fine, the editor build is the problem.
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, ".NET")
+	assert_contains(result.error.message, CS_TEST_PATH)
+
+
+func test_script_language_classifies_extensions() -> void:
+	assert_eq(ScriptHandler.script_language("res://a.gd"), "gdscript")
+	assert_eq(ScriptHandler.script_language("res://a.cs"), "csharp")
+	assert_eq(ScriptHandler.script_language("res://a.txt"), "")
+	assert_eq(ScriptHandler.script_language("res://a.gdshader"), "")
+
+
+func test_find_symbols_rejects_existing_non_script_without_mutation() -> void:
+	var path := "res://tests/_mcp_outline_unsupported.txt"
+	var content := "extends Node\nfunc misleading_symbol():\n\tpass\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		assert_true(false, "could not create the disposable outline fixture")
+		return
+	file.store_string(content)
+	file.close()
+	var result := _handler.find_symbols({"path": path})
+	var after := FileAccess.get_file_as_string(path)
+	DirAccess.remove_absolute(path)
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, ".gd or .cs")
+	assert_contains(result.error.message, path)
+	assert_contains(result.error.message, "read_text")
+	assert_eq(after, content, "refused outline must leave source bytes unchanged")
+
+
+func test_find_symbols_csharp_qualified_return_type() -> void:
+	var path := "res://tests/_mcp_qualified_outline.cs"
+	var content := "public partial class QualifiedOutline\n{\n    public System.Threading.Tasks.Task LoadAsync() => null;\n}\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		assert_true(false, "could not create the disposable C# outline fixture")
+		return
+	file.store_string(content)
+	file.close()
+	var result := _handler.find_symbols({"path": path})
+	_remove_reload_helper(path)
+	assert_has_key(result, "data")
+	assert_eq(result.data.language, "csharp")
+	assert_eq(result.data.functions, [{"name": "LoadAsync", "line": 3}])

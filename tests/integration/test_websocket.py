@@ -818,8 +818,7 @@ class TestPendingFutureScoping:
         """#690 finding 1: a connection close must fail that session's
         in-flight futures NOW, not leave the caller to wait out its full
         per-command timeout (120s for test_run) — and the failure must be a
-        ConnectionError, not a TimeoutError, so the circuit breaker records
-        a disconnect."""
+        structured outcome-unknown error, with the circuit recording a disconnect."""
         plugin = await harness.connect_plugin(session_id="dc-inflight")
         client = GodotClient(harness.server)
 
@@ -831,8 +830,13 @@ class TestPendingFutureScoping:
         crash_task = asyncio.create_task(crash_mid_command())
         loop = asyncio.get_running_loop()
         started = loop.time()
-        with pytest.raises(ConnectionError):
+        with pytest.raises(GodotCommandError) as caught:
             await client.send("run_tests", session_id="dc-inflight", timeout=30.0)
+        assert caught.value.code == "TRANSPORT_OUTCOME_UNKNOWN"
+        assert caught.value.data["sub_code"] == "EDITOR_DISCONNECTED"
+        assert caught.value.data["retryable"] is False
+        assert harness.registry.pending_count == 0
+        assert client.circuit_breaker.snapshot("dc-inflight")["consecutive_failures"] == 1
         elapsed = loop.time() - started
         await crash_task
 
@@ -841,7 +845,8 @@ class TestPendingFutureScoping:
             f"the 30s command timeout (took {elapsed:.1f}s)"
         )
         assert (
-            client.circuit_breaker.snapshot("dc-inflight")["last_failure_kind"] == "ConnectionError"
+            client.circuit_breaker.snapshot("dc-inflight")["last_failure_kind"]
+            == "EDITOR_DISCONNECTED"
         ), "the breaker must see a disconnect, not a timeout"
 
     async def test_disconnect_leaves_other_sessions_futures_pending(self, harness):
@@ -899,6 +904,26 @@ class TestPendingFutureScoping:
 
 
 class TestErrors:
+    @pytest.mark.parametrize("code", ["INTERNAL_ERROR", "TRANSPORT_OUTCOME_UNKNOWN"])
+    async def test_application_error_that_resembles_transport_is_preserved(self, harness, code):
+        plugin = await harness.connect_plugin(session_id="application")
+        client = GodotClient(harness.server)
+        client.circuit_breaker.record_failure("application", kind="previous_failure")
+        message = "Session application disconnected while request was in flight"
+        data = {"sub_code": "PLUGIN_CUSTOM", "retryable": True, "detail": "retained"}
+
+        async def respond():
+            command = await plugin.recv_command()
+            await plugin.send_error(command["request_id"], code, message, data)
+
+        handler = asyncio.create_task(respond())
+        with pytest.raises(GodotCommandError) as caught:
+            await client.send("write_file", session_id="application")
+        await handler
+        assert caught.value.to_payload() == {"code": code, "message": message, "data": data}
+        assert client.circuit_breaker.snapshot("application")["consecutive_failures"] == 0
+        await plugin.close()
+
     async def test_plugin_error_raises_godot_command_error(self, harness):
         plugin = await harness.connect_plugin()
         client = GodotClient(harness.server)
@@ -2060,8 +2085,12 @@ class TestMalformedFrameResilience:
             await plugin.ws.send(json.dumps({"request_id": cmd["request_id"], "status": 42}))
 
         handler_task = asyncio.create_task(mock_handler())
-        with pytest.raises(ConnectionError, match="Malformed response"):
+        with pytest.raises(GodotCommandError) as caught:
             await client.send("get_editor_state", timeout=5.0)
+        assert caught.value.code == "TRANSPORT_OUTCOME_UNKNOWN"
+        assert caught.value.data["sub_code"] == "MALFORMED_EDITOR_RESPONSE"
+        assert caught.value.data["retryable"] is False
+        assert harness.registry.pending_count == 0
         await handler_task
 
         assert harness.registry.get("bad-corr") is not None
@@ -2094,8 +2123,12 @@ class TestMalformedFrameResilience:
             )
 
         handler_task = asyncio.create_task(mock_handler())
-        with pytest.raises(ConnectionError, match="Malformed response"):
+        with pytest.raises(GodotCommandError) as caught:
             await client.send("get_editor_state", timeout=5.0)
+        assert caught.value.code == "TRANSPORT_OUTCOME_UNKNOWN"
+        assert caught.value.data["sub_code"] == "MALFORMED_EDITOR_RESPONSE"
+        assert caught.value.data["retryable"] is False
+        assert harness.registry.pending_count == 0
         await handler_task
 
         live = harness.registry.get("bad-watermark")

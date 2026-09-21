@@ -775,6 +775,11 @@ static func warm_env_snapshot(endpoint_policy: Dictionary = {}) -> void:
 		for env_name in [client.get("config_file_env"), client.get("config_home_env")]:
 			if env_name is String and not env_name.is_empty() and not extras.has(env_name):
 				extras.append(env_name)
+		var scope_envs: Variant = client.get("config_scope_envs")
+		if scope_envs is PackedStringArray:
+			for env_name in scope_envs:
+				if not env_name.is_empty() and not extras.has(env_name):
+					extras.append(env_name)
 	McpPathTemplate.warm_env_snapshot(extras)
 	UvResolution.warm_environment()
 	_editor_setting_lookup(MODE_OVERRIDE_SETTING)

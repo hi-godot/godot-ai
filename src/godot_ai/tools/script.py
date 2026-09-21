@@ -14,7 +14,7 @@ from godot_ai.tools import DEFER_META
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
-Script (.gd) reading, detachment, and outline.
+Script (.gd / .cs) reading, detachment, and outline.
 
 Resource form: ``godot://script/{path}`` — prefer for active-session reads.
 
@@ -24,7 +24,14 @@ Ops:
   • detach(path)
         Remove the currently attached script from a node. Undoable.
   • find_symbols(path)
-        Outline a .gd — class_name, extends, functions, signals, @export vars.
+        Outline a script. .gd: class_name, extends, functions, signals,
+        @export vars. .cs: class, base type, methods, [Signal] delegates,
+        [Export] members. Response ``language`` says which parser ran.
+
+Language support: GDScript is the full contract. C# (.cs) is text-only —
+files are written, read and outlined, but Godot AI does not build .NET or
+report C# compiler errors; inspect the editor Build panel or ``dotnet build``
+terminal output. ``logs_read`` does not capture .NET compiler output.
 """
 
 
@@ -36,15 +43,25 @@ def register_script_tools(mcp: FastMCP) -> None:
         content: str = "",
         session_id: str = "",
     ) -> dict:
-        """Create a new GDScript source file (.gd) on disk.
+        """Create a script file on disk: GDScript (.gd, validated) or C# (.cs, text only).
 
-        Writes content to a .gd file in the project. Overwrites if it exists.
-        Triggers a filesystem scan. New files include ``data.cleanup.rm``
-        listing the .gd + .gd.uid sidecar; overwrite omits it.
+        Writes content to the path. Overwrites if it exists. Registers the
+        file with the editor. New files include ``data.cleanup.rm`` listing
+        the file and, when supported by the editor, its ``.uid`` sidecar;
+        overwrite omits it.
+
+        .gd: source is parse-validated and the response carries
+        ``diagnostics`` (``diagnostics_status="checked"``); an already-loaded
+        script is refreshed in place. .cs: written as text only — Godot AI
+        does not compile .NET, so ``diagnostics_status="not_checked"`` and
+        ``validation_hint`` says to build the project (editor Build button
+        or ``dotnet build``) to see compiler errors. ``dotnet_editor``
+        reports whether the connected editor build has .NET at all. Any
+        other extension is rejected; use filesystem_manage op="write_text".
 
         Args:
-            path: res:// path (e.g. "res://scripts/player.gd").
-            content: GDScript source. Empty creates a blank file.
+            path: res:// path ending in .gd or .cs (e.g. "res://scripts/player.gd").
+            content: GDScript or C# source. Empty creates a blank file.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -59,17 +76,20 @@ def register_script_tools(mcp: FastMCP) -> None:
         replace_all: bool = False,
         session_id: str = "",
     ) -> dict:
-        """Anchor-based string-replace edit on a .gd file.
+        """Anchor-based string-replace edit on a .gd or .cs file.
 
         Finds an exact ``old_text`` and replaces with ``new_text``. Fails
         on multiple matches unless ``replace_all=True``; fails on zero matches.
-        Exact byte match (whitespace significant). Triggers filesystem scan and
-        refreshes an already-loaded GDScript in place so the next call runs the
-        new code (response reloaded=true; otherwise reload_reason says why).
+        Exact byte match (whitespace significant). Triggers filesystem scan.
+        .gd: parse-validated (``diagnostics``) and an already-loaded GDScript
+        is refreshed in place so the next call runs the new code (response
+        reloaded=true; otherwise reload_reason says why). .cs: text only —
+        ``diagnostics_status="not_checked"``, ``reload_reason=
+        "csharp_requires_build"``; rebuild the .NET assembly to run it.
         Not undoable via Ctrl+Z.
 
         Args:
-            path: res:// path ending in .gd.
+            path: res:// path ending in .gd or .cs.
             old_text: Exact substring to find. Must be unique unless replace_all.
             new_text: Replacement (empty deletes).
             replace_all: Replace every occurrence. Default False.
@@ -98,6 +118,8 @@ def register_script_tools(mcp: FastMCP) -> None:
         Args:
             path: Scene path of the node (e.g. "/Main/Player").
             script_path: res:// path of the .gd (e.g. "res://scripts/player.gd").
+                A .cs requires a .NET-enabled editor build; other builds get a
+                clear error. Build the assembly before expecting executable behavior.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
