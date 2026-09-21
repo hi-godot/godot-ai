@@ -199,7 +199,10 @@ static func _build_json(
 		target = {"path": resolved_path, "key_path": client.server_key_path}
 	var target_path := str(target.get("path", resolved_path))
 	var key_path: PackedStringArray = target.get("key_path", client.server_key_path)
-	var key := key_path[0] if key_path.size() > 0 else "mcpServers"
+	## Name the whole server-map path. A nested map (ZCode's `mcp.servers`) must
+	## not collapse to its first segment, or the instructions place the entry a
+	## level too high for the client parser to find.
+	var key := ".".join(key_path) if key_path.size() > 0 else "mcpServers"
 	if client.command_shape != McpClient.CommandShape.NONE:
 		var lines: Array[String] = []
 		var launch_error := McpJsonStrategy.command_launch_error(client, launch)

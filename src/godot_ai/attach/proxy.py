@@ -11,13 +11,13 @@ from functools import partial
 from typing import Any
 
 import anyio
-import httpx
+import httpx2 as httpx
 from fastmcp import Client, FastMCP
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.server.providers.proxy import ProxyProvider, ProxyTool
-from mcp.shared.exceptions import McpError
-from mcp.types import INTERNAL_ERROR, CallToolRequestParams, ErrorData, TextContent
+from mcp.shared.exceptions import MCPError
+from mcp.types import INTERNAL_ERROR, CallToolRequestParams, TextContent
 
 from godot_ai.attach.ensure import AttachStartupError, BackendStatus
 from godot_ai.fastmcp_compat import ToolResult
@@ -147,10 +147,10 @@ class AttachProxyTool(ProxyTool):
                 arguments=arguments,
                 meta=meta,
             )
-        result_type = GodotCommandErrorToolResult if result.isError else ToolResult
+        result_type = GodotCommandErrorToolResult if result.is_error else ToolResult
         return result_type(
             content=result.content,
-            structured_content=result.structuredContent,
+            structured_content=result.structured_content,
             meta=result.meta,
         )
 
@@ -183,7 +183,7 @@ def _http_client_factory(
     capability_provider: CapabilityProvider,
     headers: dict[str, str] | None = None,
     auth: httpx.Auth | None = None,
-    follow_redirects: bool = True,
+    follow_redirects: bool = False,
     **_kwargs: Any,
 ) -> httpx.AsyncClient:
     """Build the downstream client with no post-dispatch read deadline.
@@ -207,7 +207,8 @@ def _http_client_factory(
     return httpx.AsyncClient(
         headers=request_headers,
         auth=auth,
-        follow_redirects=follow_redirects,
+        # A redirect can move the capability or repeat an already dispatched mutation.
+        follow_redirects=False,
         timeout=timeout,
         transport=RecordingAsyncHTTPTransport(),
         event_hooks={"response": [_record_http_error_response]},
@@ -324,17 +325,17 @@ def _mcp_error(
     *,
     retryable: bool,
     data: dict[str, Any] | None = None,
-) -> McpError:
+) -> MCPError:
     code_value = code.value if isinstance(code, ErrorCode) else code
     details = dict(data or {})
     details.setdefault("code", code_value)
     details.setdefault("sub_code", code_value)
     details.setdefault("retryable", retryable)
     details.setdefault("hint", hint)
-    return McpError(ErrorData(code=INTERNAL_ERROR, message=message, data=details))
+    return MCPError(code=INTERNAL_ERROR, message=message, data=details)
 
 
-def _startup_mcp_error(exc: AttachStartupError) -> McpError:
+def _startup_mcp_error(exc: AttachStartupError) -> MCPError:
     return _mcp_error(
         exc.code,
         exc.message,
@@ -344,7 +345,7 @@ def _startup_mcp_error(exc: AttachStartupError) -> McpError:
     )
 
 
-def _backend_unstable_mcp_error() -> McpError:
+def _backend_unstable_mcp_error() -> MCPError:
     return _mcp_error(
         ErrorCode.PLUGIN_DISCONNECTED,
         "The shared Godot AI backend changed or failed twice during this request.",
@@ -545,14 +546,12 @@ def create_attach_proxy(
         # A new disconnected client and transport per provider operation keeps
         # the bridge sessionless. MCP request deadlines are disabled; the HTTP
         # factory separately retains bounded connect/write/pool phases.
-        # FastMCP 3.0 exposes an event_store option, but end-to-end resumption
-        # after a severed response stream hangs at the supported floor. Do not
-        # enable it until that compatibility gap is fixed. A same-instance
-        # network stream loss, or a server request task that dies without a
-        # response, can therefore wait indefinitely; upstream cancellation is
+        # A same-instance stream loss, or a request task that dies without a
+        # response, can wait indefinitely; upstream cancellation is
         # the safe escape hatch and must remain cancellation-clean.
         return Client(
             transport,
+            mode="legacy",
             timeout=None,
             init_timeout=DEFAULT_INIT_TIMEOUT_SECONDS,
         )

@@ -723,17 +723,14 @@ func stylebox_override(params: Dictionary) -> Dictionary:
 
 	var had_override: bool = control.has_theme_stylebox_override(slot)
 	var scene_root: Node = resolved.scene_root
-	var scene_ur: UndoRedo = _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(scene_root))
-	if scene_ur == null:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
-			"No undo history is available for scene %s" % scene_root.name)
-	scene_ur.create_action("MCP: Stylebox override %s on %s" % [slot, node.name])
-	scene_ur.add_do_method(_apply_node_stylebox.bind(control, slot, patched))
+	_undo_redo.create_action("MCP: Stylebox override %s on %s" % [slot, node.name],
+		UndoRedo.MERGE_DISABLE, scene_root)
+	_undo_redo.add_do_method(self, "_apply_node_stylebox", control, slot, patched)
 	if had_override:
-		scene_ur.add_undo_method(_apply_node_stylebox.bind(control, slot, base))
+		_undo_redo.add_undo_method(self, "_apply_node_stylebox", control, slot, base)
 	else:
-		scene_ur.add_undo_method(_remove_node_stylebox.bind(control, slot))
-	scene_ur.commit_action()
+		_undo_redo.add_undo_method(self, "_remove_node_stylebox", control, slot)
+	_undo_redo.commit_action()
 
 	return {
 		"data": {

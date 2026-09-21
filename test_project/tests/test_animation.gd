@@ -4,6 +4,8 @@ extends McpTestSuite
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const AnimationHandler := preload("res://addons/godot_ai/handlers/animation_handler.gd")
+const AnimationValues := preload("res://addons/godot_ai/handlers/animation_values.gd")
+const TypedTargetFixture := preload("res://tests/mcp_animation_typed_target.gd")
 
 ## Tests for AnimationHandler — AnimationPlayer authoring.
 ##
@@ -2212,3 +2214,424 @@ func test_auto_create_player_missing_parent_is_node_not_found() -> void:
 	assert_contains(result.error.message, "Cannot auto-create AnimationPlayer")
 	assert_contains(result.error.message, missing_player_path,
 		"error must name the failing player_path")
+
+
+# ─── Value coercion — extended types ─────────────────────────────────────────
+
+func test_coerce_quaternion_shapes() -> void:
+	var from_dict := AnimationValues.coerce_for_type(
+		{"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}, TYPE_QUATERNION, "quaternion")
+	assert_false(from_dict.has("error"), "quaternion dict must coerce: %s" % str(from_dict))
+	assert_true(from_dict.ok is Quaternion, "dict must coerce to Quaternion")
+	assert_true((from_dict.ok as Quaternion).is_equal_approx(Quaternion.IDENTITY))
+	var from_array := AnimationValues.coerce_for_type([0.0, 0.0, 0.0, 1.0], TYPE_QUATERNION, "quaternion")
+	assert_true(from_array.ok is Quaternion, "array must coerce to Quaternion")
+	var bad := AnimationValues.coerce_for_type({"x": 0.0, "y": 0.0, "z": 0.0}, TYPE_QUATERNION, "quaternion")
+	assert_true(bad.has("error"), "a quaternion without w must be rejected")
+
+
+func test_coerce_vector3i_shapes() -> void:
+	var from_dict := AnimationValues.coerce_for_type({"x": 1, "y": 2, "z": 3}, TYPE_VECTOR3I, "cell")
+	assert_false(from_dict.has("error"), "Vector3i dict must coerce: %s" % str(from_dict))
+	assert_true(from_dict.ok is Vector3i, "dict must coerce to Vector3i")
+	assert_eq(from_dict.ok, Vector3i(1, 2, 3))
+	var from_array := AnimationValues.coerce_for_type([4, 5, 6], TYPE_VECTOR3I, "cell")
+	assert_eq(from_array.ok, Vector3i(4, 5, 6))
+	var bad := AnimationValues.coerce_for_type({"x": 1, "y": 2}, TYPE_VECTOR3I, "cell")
+	assert_true(bad.has("error"), "a Vector3i without z must be rejected")
+
+
+func test_coerce_basis_shapes() -> void:
+	var dict_shape := AnimationValues.coerce_for_type({
+		"x": {"x": 2.0, "y": 0.0, "z": 0.0},
+		"y": {"x": 0.0, "y": 1.0, "z": 0.0},
+		"z": {"x": 0.0, "y": 0.0, "z": 1.0},
+	}, TYPE_BASIS, "basis")
+	assert_false(dict_shape.has("error"), "basis dict must coerce: %s" % str(dict_shape))
+	assert_true(dict_shape.ok is Basis, "dict must coerce to Basis")
+	assert_true((dict_shape.ok as Basis).get_scale().is_equal_approx(Vector3(2, 1, 1)))
+	var array_shape := AnimationValues.coerce_for_type(
+		[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], TYPE_BASIS, "basis")
+	assert_true(array_shape.ok is Basis, "nested array must coerce to Basis")
+	var bad := AnimationValues.coerce_for_type({
+		"x": {"x": 1.0, "y": 0.0, "z": 0.0},
+		"y": {"x": 0.0, "y": 1.0, "z": 0.0},
+	}, TYPE_BASIS, "basis")
+	assert_true(bad.has("error"), "a basis without a z axis must be rejected")
+
+
+func test_coerce_transform3d_shapes() -> void:
+	var canonical := AnimationValues.coerce_for_type({
+		"basis": {"x": {"x": 1.0, "y": 0.0, "z": 0.0},
+			"y": {"x": 0.0, "y": 1.0, "z": 0.0}, "z": {"x": 0.0, "y": 0.0, "z": 1.0}},
+		"origin": {"x": 1.0, "y": 2.0, "z": 3.0},
+	}, TYPE_TRANSFORM3D, "transform")
+	assert_false(canonical.has("error"), "canonical transform must coerce: %s" % str(canonical))
+	assert_true(canonical.ok is Transform3D, "canonical shape must coerce to Transform3D")
+	assert_eq((canonical.ok as Transform3D).origin, Vector3(1, 2, 3))
+	var ergonomic := AnimationValues.coerce_for_type(
+		{"position": [1.0, 2.0, 3.0], "rotation_degrees": [0.0, 90.0, 0.0], "scale": [2.0, 2.0, 2.0]},
+		TYPE_TRANSFORM3D, "transform")
+	assert_true(ergonomic.ok is Transform3D, "ergonomic shape must coerce to Transform3D")
+	assert_eq((ergonomic.ok as Transform3D).origin, Vector3(1, 2, 3))
+	assert_true(
+		(ergonomic.ok as Transform3D).basis.get_scale().is_equal_approx(Vector3(2, 2, 2)),
+		"scale must be applied to the ergonomic shape")
+	var position_only := AnimationValues.coerce_for_type(
+		{"position": {"x": 5.0, "y": 0.0, "z": 0.0}}, TYPE_TRANSFORM3D, "transform")
+	assert_true(position_only.ok is Transform3D, "a bare position must be a valid transform")
+	assert_eq((position_only.ok as Transform3D).origin, Vector3(5, 0, 0))
+	## Rotation + non-uniform scale must scale in the rotated (local) axes; a
+	## global-axis scale would skew the basis.
+	var rotated_scaled := AnimationValues.coerce_for_type(
+		{"position": [0.0, 0.0, 0.0], "rotation_degrees": [0.0, 45.0, 0.0], "scale": [2.0, 1.0, 1.0]},
+		TYPE_TRANSFORM3D, "transform")
+	assert_true(rotated_scaled.ok is Transform3D, "rotated non-uniform scale must coerce")
+	var rotated_basis: Basis = (rotated_scaled.ok as Transform3D).basis
+	var plain_basis := Basis.from_euler(Vector3(0.0, deg_to_rad(45.0), 0.0))
+	assert_true(
+		rotated_basis.x.normalized().is_equal_approx(plain_basis.x.normalized()),
+		"local scale must keep the x axis direction, got %s vs %s" % [str(rotated_basis.x), str(plain_basis.x)]
+	)
+	assert_true(absf(rotated_basis.x.length() - 2.0) < 0.001, "the x axis must carry the x scale")
+	assert_true(absf(rotated_basis.y.length() - 1.0) < 0.001, "the y axis must stay unscaled")
+	var bad := AnimationValues.coerce_for_type(
+		{"basis": {"x": {"x": 1.0, "y": 0.0, "z": 0.0}}}, TYPE_TRANSFORM3D, "transform")
+	assert_true(bad.has("error"), "a basis without an origin must be rejected")
+
+
+func test_coerce_rect2_and_aabb_shapes() -> void:
+	var rect := AnimationValues.coerce_for_type(
+		{"position": {"x": 1.0, "y": 2.0}, "size": {"x": 8.0, "y": 4.0}}, TYPE_RECT2, "region_rect")
+	assert_false(rect.has("error"), "rect dict must coerce: %s" % str(rect))
+	assert_true(rect.ok is Rect2, "dict must coerce to Rect2")
+	assert_eq(rect.ok, Rect2(1, 2, 8, 4))
+	var rect_array := AnimationValues.coerce_for_type([0.0, 0.0, 4.0, 6.0], TYPE_RECT2, "region_rect")
+	assert_true(rect_array.ok is Rect2, "array must coerce to Rect2")
+	assert_eq(rect_array.ok, Rect2(0, 0, 4, 6))
+	var aabb := AnimationValues.coerce_for_type(
+		{"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "size": {"x": 1.0, "y": 2.0, "z": 3.0}},
+		TYPE_AABB, "custom_aabb")
+	assert_false(aabb.has("error"), "AABB dict must coerce: %s" % str(aabb))
+	assert_true(aabb.ok is AABB, "dict must coerce to AABB")
+	assert_eq((aabb.ok as AABB).size, Vector3(1, 2, 3))
+	var aabb_array := AnimationValues.coerce_for_type(
+		[0.0, 0.0, 0.0, 1.0, 1.0, 1.0], TYPE_AABB, "custom_aabb")
+	assert_eq((aabb_array.ok as AABB).size, Vector3.ONE)
+	var bad_rect := AnimationValues.coerce_for_type(
+		{"position": {"x": 0.0, "y": 0.0}}, TYPE_RECT2, "region_rect")
+	assert_true(bad_rect.has("error"), "a Rect2 without size must be rejected")
+
+
+func test_coerce_node_path_and_string_name() -> void:
+	var node_path := AnimationValues.coerce_for_type("Player/Camera", TYPE_NODE_PATH, "root_node")
+	assert_false(node_path.has("error"), "NodePath string must coerce: %s" % str(node_path))
+	assert_true(node_path.ok is NodePath, "string must coerce to NodePath")
+	assert_eq(str(node_path.ok), "Player/Camera")
+	var string_name := AnimationValues.coerce_for_type("idle", TYPE_STRING_NAME, "name")
+	assert_true(string_name.ok is StringName, "string must coerce to StringName")
+	assert_eq(str(string_name.ok), "idle")
+	var bad := AnimationValues.coerce_for_type(42, TYPE_NODE_PATH, "root_node")
+	assert_true(bad.has("error"), "a non-string NodePath must be rejected")
+
+
+func test_add_property_track_coerces_transform3d_rect2_and_aabb() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var cube: Node3D = _add_sibling(Node3D.new(), "CoerceXform") as Node3D
+	var sprite: Sprite2D = _add_sibling(Sprite2D.new(), "CoerceRect") as Sprite2D
+	var mesh: MeshInstance3D = _add_sibling(MeshInstance3D.new(), "CoerceAabb") as MeshInstance3D
+	var player_path := _add_player("TestCoerceExtended")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/CoerceXform")
+		_remove_node("/" + scene_root.name + "/CoerceRect")
+		_remove_node("/" + scene_root.name + "/CoerceAabb")
+		skip("Scene not ready")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "coerce", "length": 1.0})
+
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "coerce",
+		"track_path": "CoerceXform:transform",
+		"keyframes": [
+			{"time": 0.0, "value": {"position": [0.0, 0.0, 0.0]}},
+			{"time": 1.0, "value": {"position": [1.0, 2.0, 3.0]}},
+		],
+	})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "coerce",
+		"track_path": "CoerceRect:region_rect",
+		"keyframes": [
+			{"time": 0.0, "value": {"position": [0.0, 0.0], "size": [8.0, 4.0]}},
+			{"time": 1.0, "value": [1.0, 1.0, 16.0, 8.0]},
+		],
+	})
+	_handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "coerce",
+		"track_path": "CoerceAabb:custom_aabb",
+		"keyframes": [
+			{"time": 0.0, "value": {"position": [0.0, 0.0, 0.0], "size": [1.0, 1.0, 1.0]}},
+			{"time": 1.0, "value": [0.0, 0.0, 0.0, 2.0, 2.0, 2.0]},
+		],
+	})
+
+	var anim := _fetch_anim(player_path, "coerce")
+	assert_true(anim != null, "the coerce clip must exist")
+	var xform_value = anim.track_get_key_value(0, 1)
+	assert_true(xform_value is Transform3D,
+		"transform key must coerce to Transform3D, got %s" % type_string(typeof(xform_value)))
+	assert_eq((xform_value as Transform3D).origin, Vector3(1, 2, 3))
+	var rect_value = anim.track_get_key_value(1, 1)
+	assert_true(rect_value is Rect2,
+		"region_rect key must coerce to Rect2, got %s" % type_string(typeof(rect_value)))
+	assert_eq(rect_value, Rect2(1, 1, 16, 8))
+	var aabb_value = anim.track_get_key_value(2, 1)
+	assert_true(aabb_value is AABB,
+		"custom_aabb key must coerce to AABB, got %s" % type_string(typeof(aabb_value)))
+	assert_eq((aabb_value as AABB).size, Vector3(2, 2, 2))
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/CoerceXform")
+	_remove_node("/" + scene_root.name + "/CoerceRect")
+	_remove_node("/" + scene_root.name + "/CoerceAabb")
+
+
+func test_add_property_track_rejects_bad_quaternion() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root — is a scene open?")
+		return
+	var cube: Node3D = _add_sibling(Node3D.new(), "CoerceBadQuat") as Node3D
+	var player_path := _add_player("TestCoerceBadQuat")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/CoerceBadQuat")
+		skip("Scene not ready")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "bad", "length": 1.0})
+	var result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "bad",
+		"track_path": "CoerceBadQuat:quaternion",
+		"keyframes": [
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}},
+			{"time": 1.0, "value": {"x": 0.0, "y": 0.0, "z": 0.0}},
+		],
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "Quaternion")
+	var anim := _fetch_anim(player_path, "bad")
+	assert_eq(anim.get_track_count(), 0, "a rejected track must not be added")
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/CoerceBadQuat")
+
+
+# ─── typed value boundaries: Vector3i range + quaternion rotation contract ───
+
+func test_coerce_vector3i_rejects_out_of_range_and_nonfinite() -> void:
+	## GDScript's int() wraps 2147483648 to -2147483648 and zeroes 1e40, so the
+	## int32 range is validated before conversion (dsarno's native probe).
+	var over_max := AnimationValues.coerce_for_type([2147483648, 0, 0], TYPE_VECTOR3I, "cell")
+	assert_true(over_max.has("error"), "2147483648 must be refused, got %s" % str(over_max))
+	var huge := AnimationValues.coerce_for_type([1e40, 0, 0], TYPE_VECTOR3I, "cell")
+	assert_true(huge.has("error"), "1e40 must be refused, got %s" % str(huge))
+	var nonfinite := AnimationValues.coerce_for_type({"x": NAN, "y": 0, "z": 0}, TYPE_VECTOR3I, "cell")
+	assert_true(nonfinite.has("error"), "a NaN component must be refused")
+	var bounds := AnimationValues.coerce_for_type([2147483647, -2147483648, 0], TYPE_VECTOR3I, "cell")
+	assert_false(bounds.has("error"), "int32 bounds must be accepted: %s" % str(bounds))
+	assert_eq(bounds.ok, Vector3i(2147483647, -2147483648, 0))
+	var truncated := AnimationValues.coerce_for_type([3.7, 0.0, 0.0], TYPE_VECTOR3I, "cell")
+	assert_eq(truncated.ok, Vector3i(3, 0, 0), "in-range fractional truncation stays")
+
+
+func test_coerce_quaternion_rotation_contract() -> void:
+	## The generic parser refuses non-finite components; the animation boundary
+	## refuses zero-length rotations and normalizes valid nonzero ones so
+	## AnimationPlayer's slerp never sees a non-unit quaternion.
+	var infinite := AnimationValues.coerce_for_type([1e40, 0.0, 0.0, 1.0], TYPE_QUATERNION, "quaternion")
+	assert_true(infinite.has("error"), "an infinite quaternion must be refused, got %s" % str(infinite))
+	var zero := AnimationValues.coerce_for_type([0.0, 0.0, 0.0, 0.0], TYPE_QUATERNION, "quaternion")
+	assert_true(zero.has("error"), "a zero-length quaternion must be refused")
+	assert_contains(zero.error, "zero-length")
+	var scaled := AnimationValues.coerce_for_type([0.0, 0.0, 0.0, 2.0], TYPE_QUATERNION, "quaternion")
+	assert_false(scaled.has("error"), "a nonzero quaternion must normalize: %s" % str(scaled))
+	assert_true((scaled.ok as Quaternion).is_equal_approx(Quaternion.IDENTITY),
+		"(0,0,0,2) must normalize to identity, got %s" % str(scaled.ok))
+	## Large finite components: their float32 squared length overflows to INF,
+	## so a length_squared() threshold let (0,0,0,0) through to slerp. The
+	## scaled normalization must still return a usable unit rotation.
+	var huge := AnimationValues.coerce_for_type([0.0, 0.0, 1e20, 1e20], TYPE_QUATERNION, "quaternion")
+	assert_false(huge.has("error"), "1e20 components must normalize: %s" % str(huge))
+	var huge_quat: Quaternion = huge.ok
+	assert_true(absf(huge_quat.length() - 1.0) < 0.001,
+		"1e20 components must normalize to unit length, got %s" % str(huge_quat))
+	assert_true(huge_quat.is_equal_approx(Quaternion(0.0, 0.0, sqrt(0.5), sqrt(0.5))),
+		"1e20 components must keep their rotation, got %s" % str(huge_quat))
+	var huger := AnimationValues.coerce_for_type([0.0, 0.0, 1e30, 1e30], TYPE_QUATERNION, "quaternion")
+	assert_false(huger.has("error"), "1e30 components must normalize: %s" % str(huger))
+	assert_true(absf((huger.ok as Quaternion).length() - 1.0) < 0.001,
+		"1e30 components must normalize to unit length, got %s" % str(huger.ok))
+	## Tiny nonzero components are a valid rotation too: their squared length
+	## underflows below any epsilon, but only exact zero is zero-length.
+	var tiny := AnimationValues.coerce_for_type([0.0, 0.0, 1e-7, 1e-7], TYPE_QUATERNION, "quaternion")
+	assert_false(tiny.has("error"), "a tiny nonzero quaternion must normalize: %s" % str(tiny))
+	assert_true(absf((tiny.ok as Quaternion).length() - 1.0) < 0.001,
+		"tiny components must normalize to unit length, got %s" % str(tiny.ok))
+
+
+func test_coerce_rejects_nonfinite_components() -> void:
+	## 1e40 overflows float32 to INF; an unusable value must be refused rather
+	## than stored as an infinite Transform3D/Basis/Rect2/AABB.
+	var xform := AnimationValues.coerce_for_type({"position": [1e40, 0.0, 0.0]}, TYPE_TRANSFORM3D, "transform")
+	assert_true(xform.has("error"), "an infinite transform origin must be refused")
+	var canonical := AnimationValues.coerce_for_type({
+		"basis": {"x": [1e40, 0.0, 0.0], "y": [0.0, 1.0, 0.0], "z": [0.0, 0.0, 1.0]},
+		"origin": [0.0, 0.0, 0.0],
+	}, TYPE_TRANSFORM3D, "transform")
+	assert_true(canonical.has("error"), "an infinite basis axis must be refused")
+	var basis := AnimationValues.coerce_for_type({
+		"x": [1e40, 0.0, 0.0], "y": [0.0, 1.0, 0.0], "z": [0.0, 0.0, 1.0],
+	}, TYPE_BASIS, "basis")
+	assert_true(basis.has("error"), "an infinite basis axis must be refused")
+	var rect := AnimationValues.coerce_for_type({"position": [0.0, 0.0], "size": [1e40, 1.0]}, TYPE_RECT2, "rect")
+	assert_true(rect.has("error"), "an infinite rect size must be refused")
+	var aabb := AnimationValues.coerce_for_type({
+		"position": [0.0, 0.0, 0.0], "size": [1e40, 1.0, 1.0],
+	}, TYPE_AABB, "aabb")
+	assert_true(aabb.has("error"), "an infinite aabb size must be refused")
+	## Valid controls still pass.
+	assert_false(AnimationValues.coerce_for_type({"position": [1.0, 2.0, 3.0]}, TYPE_TRANSFORM3D, "transform").has("error"))
+	assert_false(AnimationValues.coerce_for_type({"position": [0.0, 0.0], "size": [4.0, 4.0]}, TYPE_RECT2, "rect").has("error"))
+	assert_false(AnimationValues.coerce_for_type({
+		"position": [0.0, 0.0, 0.0], "size": [1.0, 1.0, 1.0],
+	}, TYPE_AABB, "aabb").has("error"))
+
+
+func test_vector3i_track_interpolates_stored_values() -> void:
+	## Interpolation regression: a stored Vector3i track interpolates through
+	## Animation.value_track_interpolate, and an out-of-range keyframe is
+	## refused before any track is added. (Interpolation rounds components
+	## through float32, so the valid control uses representable values; the
+	## int32 bounds themselves are covered at the coercion level.)
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root - is a scene open?")
+		return
+	_add_sibling(TypedTargetFixture.new(), "TypedVector3iTarget")
+	var player_path := _add_player("TestVector3iBounds")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/TypedVector3iTarget")
+		skip("Scene not ready")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "cell_anim", "length": 1.0})
+	var result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "cell_anim",
+		"track_path": "TypedVector3iTarget:cell",
+		"keyframes": [
+			{"time": 0.0, "value": [1000, -2000, 0]},
+			{"time": 1.0, "value": [1, 2, 3]},
+		],
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "cell_anim")
+	assert_eq(anim.get_track_count(), 1)
+	var at_start: Variant = anim.value_track_interpolate(0, 0.0)
+	assert_true(at_start is Vector3i, "interpolation must return Vector3i, got %s" % str(at_start))
+	assert_eq(at_start, Vector3i(1000, -2000, 0))
+	var refused := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "cell_anim",
+		"track_path": "TypedVector3iTarget:cell",
+		"keyframes": [{"time": 0.0, "value": [2147483648, 0, 0]}],
+	})
+	assert_is_error(refused, ErrorCodes.INVALID_PARAMS)
+	assert_eq(anim.get_track_count(), 1, "a refused keyframe must not add a track")
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/TypedVector3iTarget")
+
+
+func test_quaternion_track_normalizes_and_interpolates() -> void:
+	## Rotation-contract regression against the actual interpolation path:
+	## (0,0,0,2) is stored as a unit quaternion and slerp returns unit values;
+	## zero-length and non-finite rotations are refused.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root - is a scene open?")
+		return
+	_add_sibling(TypedTargetFixture.new(), "TypedQuatTarget")
+	var player_path := _add_player("TestQuatInterp")
+	if player_path.is_empty():
+		_remove_node("/" + scene_root.name + "/TypedQuatTarget")
+		skip("Scene not ready")
+		return
+	_handler.create_animation({"player_path": player_path, "name": "quat_anim", "length": 1.0})
+	var half_turn := Quaternion(Vector3.UP, PI * 0.5)
+	var result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "quat_anim",
+		"track_path": "TypedQuatTarget:quat",
+		"keyframes": [
+			{"time": 0.0, "value": [0.0, 0.0, 0.0, 2.0]},
+			{"time": 1.0, "value": {"x": half_turn.x, "y": half_turn.y, "z": half_turn.z, "w": half_turn.w}},
+		],
+	})
+	assert_has_key(result, "data")
+	var anim := _fetch_anim(player_path, "quat_anim")
+	assert_eq(anim.get_track_count(), 1)
+	var at_start: Variant = anim.value_track_interpolate(0, 0.0)
+	assert_true(at_start is Quaternion, "interpolation must return a Quaternion, got %s" % str(at_start))
+	assert_true((at_start as Quaternion).is_equal_approx(Quaternion.IDENTITY),
+		"(0,0,0,2) must be stored normalized, got %s" % str(at_start))
+	var mid: Variant = anim.value_track_interpolate(0, 0.5)
+	assert_true(mid is Quaternion, "slerp must return a Quaternion, got %s" % str(mid))
+	assert_true(absf((mid as Quaternion).length() - 1.0) < 0.001,
+		"an interpolated quaternion must stay unit length, got %s" % str(mid))
+	## Large finite components through the actual interpolation path: the
+	## engine errors and returns identity when a stored keyframe is not a
+	## usable rotation, so the interpolated value itself is the regression.
+	_handler.create_animation({"player_path": player_path, "name": "quat_large_anim", "length": 1.0})
+	var large_result := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "quat_large_anim",
+		"track_path": "TypedQuatTarget:quat",
+		"keyframes": [
+			{"time": 0.0, "value": [0.0, 0.0, 1e20, 1e20]},
+			{"time": 1.0, "value": [0.0, 0.0, 1e30, 1e30]},
+		],
+	})
+	assert_has_key(large_result, "data")
+	var large_anim := _fetch_anim(player_path, "quat_large_anim")
+	assert_eq(large_anim.get_track_count(), 1)
+	var expected_large := Quaternion(0.0, 0.0, sqrt(0.5), sqrt(0.5))
+	var large_start: Variant = large_anim.value_track_interpolate(0, 0.0)
+	assert_true(large_start is Quaternion, "interpolation must return a Quaternion, got %s" % str(large_start))
+	assert_true((large_start as Quaternion).is_equal_approx(expected_large),
+		"1e20 components must interpolate as their rotation, got %s" % str(large_start))
+	var large_mid: Variant = large_anim.value_track_interpolate(0, 0.5)
+	assert_true(large_mid is Quaternion, "slerp must return a Quaternion, got %s" % str(large_mid))
+	assert_true(absf((large_mid as Quaternion).length() - 1.0) < 0.001,
+		"a large-component slerp must stay unit length, got %s" % str(large_mid))
+	var zero := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "quat_anim",
+		"track_path": "TypedQuatTarget:quat",
+		"keyframes": [{"time": 0.0, "value": [0.0, 0.0, 0.0, 0.0]}],
+	})
+	assert_is_error(zero, ErrorCodes.INVALID_PARAMS)
+	assert_contains(zero.error.message, "zero-length")
+	var infinite := _handler.add_property_track({
+		"player_path": player_path,
+		"animation_name": "quat_anim",
+		"track_path": "TypedQuatTarget:quat",
+		"keyframes": [{"time": 0.0, "value": [1e40, 0.0, 0.0, 1.0]}],
+	})
+	assert_is_error(infinite, ErrorCodes.INVALID_PARAMS)
+	assert_eq(anim.get_track_count(), 1, "refused keyframes must not add tracks")
+	_remove_node(player_path)
+	_remove_node("/" + scene_root.name + "/TypedQuatTarget")
+
+

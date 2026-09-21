@@ -14,6 +14,7 @@ const PORT_EXCLUDED := 7
 const FOREIGN_PORT := 8
 const STOPPING := 10
 const STOPPED := 11
+const UNSUPPORTED_CONFIG := 12
 
 const _NAMES := {
 	UNINITIALIZED: "uninitialized",
@@ -26,6 +27,7 @@ const _NAMES := {
 	FOREIGN_PORT: "foreign_port",
 	STOPPING: "stopping",
 	STOPPED: "stopped",
+	UNSUPPORTED_CONFIG: "unsupported_config",
 }
 
 
@@ -45,13 +47,14 @@ static func is_terminal_diagnosis(state: int) -> bool:
 		or state == PORT_EXCLUDED
 		or state == INCOMPATIBLE
 		or state == FOREIGN_PORT
+		or state == UNSUPPORTED_CONFIG
 	)
 
 
 ## True when the dock should skip interpreting client health (incompatible
 ## tool surface). This must NOT block Configure writes — those take an
 ## explicit url and the live plugin version (#916). Currently just
-## INCOMPATIBLE — FOREIGN_PORT is transitional and may resolve to READY
+## INCOMPATIBLE and UNSUPPORTED_CONFIG — FOREIGN_PORT may resolve to READY
 ## if the foreign occupant turns out to speak our handshake.
 static func blocks_client_health(state: int) -> bool:
-	return state == INCOMPATIBLE
+	return state in [INCOMPATIBLE, UNSUPPORTED_CONFIG]

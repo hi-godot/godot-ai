@@ -154,11 +154,7 @@ def test_replacement_is_bound_to_status_instance_and_exact_process() -> None:
 
 def test_status_probe_is_authenticated_and_instance_pinned() -> None:
     source = _lifecycle()
-    probe = get_func_block(
-        source,
-        "static func _probe_with_capability("
-        "port: int, capability: Dictionary, timeout_ms: int) -> Dictionary:",
-    )
+    probe = get_func_block(source, "\nstatic func _probe_with_capability(")
     match = get_func_block(
         source,
         "static func _authenticated_status_matches_record("

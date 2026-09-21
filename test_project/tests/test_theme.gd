@@ -929,12 +929,14 @@ func test_unwritable_theme_reports_failure_and_rolls_back() -> void:
 	var bytes_before := FileAccess.get_file_as_bytes(TEST_RO_THEME_PATH)
 	_undo_redo.clear_history()
 	if not _deny_writes(TEST_RO_THEME_DIR, true):
+		_deny_writes(TEST_RO_THEME_DIR, false)
 		_remove_ro_theme()
 		skip("Cannot deny writes to a directory on this platform")
 		return
 	var probe := FileAccess.open(TEST_RO_THEME_DIR.path_join("_probe.tmp"), FileAccess.WRITE)
 	if probe != null:
 		probe.close()
+		assert_true(_deny_writes(TEST_RO_THEME_DIR, false), "restore directory write permissions")
 		_remove_ro_theme()
 		skip("The filesystem did not enforce the directory write denial")
 		return
@@ -1061,18 +1063,29 @@ func test_stylebox_override_commits_to_scene_history() -> void:
 		"patch": {"bg_color": {"r": 0.9, "g": 0.0, "b": 0.0, "a": 1.0}},
 	})
 	assert_has_key(result, "data")
-	var scene_ur: UndoRedo = _undo_redo.get_history_undo_redo(
-		_undo_redo.get_object_history_id(scene_root))
-	assert_true(scene_ur.undo(), "the scene history must own the override action")
+	assert_true(panel.has_theme_stylebox_override("panel"))
+	assert_true(_invoke_editor_history_command("Undo"), "editor Undo command must exist")
 	assert_false(panel.has_theme_stylebox_override("panel"),
-		"scene undo must remove the override")
-	assert_true(scene_ur.redo(), "the scene history must redo the override")
+		"editor Undo must remove the override through manager bookkeeping")
+	assert_true(_invoke_editor_history_command("Redo"), "editor Redo command must exist")
 	assert_true(panel.has_theme_stylebox_override("panel"),
-		"scene redo must restore the override")
+		"editor Redo must restore the override")
+	assert_true((panel.get_theme_stylebox("panel") as StyleBoxFlat).bg_color.is_equal_approx(Color(0.9, 0, 0)),
+		"editor Redo must restore the actual patched value")
 	var global_ur: UndoRedo = _undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
 	assert_false(global_ur.undo(), "the override must not enter the global history")
 	panel.get_parent().remove_child(panel)
 	panel.queue_free()
+
+
+func _invoke_editor_history_command(command: String) -> bool:
+	for node in EditorInterface.get_base_control().find_children("*", "PopupMenu", true, false):
+		var menu := node as PopupMenu
+		for index in range(menu.item_count):
+			if menu.get_item_text(index) == command:
+				menu.id_pressed.emit(menu.get_item_id(index))
+				return true
+	return false
 
 
 func test_stylebox_override_restores_previous_override() -> void:
