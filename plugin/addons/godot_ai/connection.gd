@@ -373,24 +373,10 @@ func _attempt_reconnect() -> void:
 	_connect_to_server()
 
 
-## Buffer sizes must be final BEFORE `connect_to_url`. Godot hands
-## `inbound_buffer_size` to wslay exactly once, when the client handshake
-## completes (`wslay_event_config_set_max_recv_msg_length` in
-## `_do_client_handshake`), and never re-reads it for an open peer — so a
-## later assignment is a silent no-op. Before this fix the peer started at the
-## 8 KiB pre-auth ceiling and "raised" it after the server proof; the raise
-## never took effect, every session stayed capped at 8 KiB, and any command
-## frame larger than that (a `script_create` with a real script, most
-## `write_text` calls) closed the socket with 1009 "Message too big" before
-## the handler ever saw it. Telemetry showed this as ~35% of all v4
-## `ConnectionError`s (issue #1056).
-##
-## The pre-auth size ceiling is still enforced: `_handle_message` rejects
-## any frame over MAX_HANDSHAKE_FRAME_BYTES while the handshake is
-## incomplete and closes with PROTOCOL_MISMATCH. What we give up is the
-## memory bound on a rogue *server* during the handshake (at most one
-## 4 MiB frame from a localhost peer we dialed ourselves), which is the
-## right trade against silently breaking every non-trivial write.
+## WSLPeer fixes its receive limit during the WebSocket handshake; changing
+## this property after the server proof cannot raise that limit (#1056).
+## The peer buffers use the command budget even before authentication.
+## `_handle_message` separately enforces the smaller handshake message limit.
 static func _configure_peer_buffers(peer: WebSocketPeer) -> void:
 	## Outbound: screenshots are several MB of base64 (default is 64 KiB).
 	peer.outbound_buffer_size = OUTBOUND_BUFFER_LIMIT_BYTES
@@ -665,8 +651,6 @@ func _handle_auth_challenge(parsed: Dictionary) -> void:
 	_server_nonce = str(parsed["server_nonce"])
 	_challenged_server_version = str(parsed["server_version"])
 	_server_verified = true
-	## (The inbound buffer is NOT raised here: wslay fixed the receive limit
-	## at handshake time. See _configure_peer_buffers.)
 	_last_readiness = get_readiness()
 	var response := _build_auth_response()
 	if response.is_empty() or not _send_json(response, true):

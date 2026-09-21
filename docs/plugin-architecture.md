@@ -494,8 +494,11 @@ ACK, and publishes the peer only after that send succeeds. Missing/wrong
 capabilities, duplicate JSON keys, replayed nonces, protocol-1/v3 frames, and
 Godot versions below 4.7 fail closed. There is no tokenless retry or downgrade.
 
-Before authentication, frames and parser queues stay under small handshake
-limits; authenticated peers receive the normal bounded command budget. Response
+Before authentication, application handshake messages are limited to 8 KiB.
+The editor configures its WebSocket receive buffer and message ceiling at
+4 MiB before connecting because Godot fixes them during the WebSocket
+handshake. The 8 KiB check runs after receipt, so it is not a pre-authentication
+memory bound. The peer queue remains capped at 64 packets. Response
 settlement is bound to the peer and request reservation that originated the
 command, so an unsolicited or replacement peer cannot mutate a session snapshot
 with a guessed request ID.
