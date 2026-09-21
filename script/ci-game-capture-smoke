@@ -125,9 +125,22 @@ SESSION_WAIT_PROGRESS_SEC = 15.0
 ## reports elapsed time.
 EDITOR_LOG = os.environ.get("GODOT_EDITOR_LOG", "godot-editor.log")
 EDITOR_LOG_TAIL_LINES = 40
+GAME_READY_WAIT_SEC = 180.0
+DIAGNOSTICS_BUDGET_SEC = 30.0
 
 
-def _post(session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
+def _remaining_timeout(cap: float, deadline: float | None) -> float:
+    if deadline is None:
+        return cap
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Smoke phase deadline expired")
+    return min(cap, remaining)
+
+
+def _post(
+    session_id: str | None, body: dict, timeout: float = 10.0, *, deadline: float | None = None
+) -> dict:
     headers = dict(HEADERS)
     headers["Authorization"] = authorization_header(SERVER_URL)
     if session_id:
@@ -138,7 +151,9 @@ def _post(session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
         headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    # urllib bounds socket operations, not a continuously arriving response;
+    # the phase deadline also rejects results that arrive late.
+    with urllib.request.urlopen(req, timeout=_remaining_timeout(timeout, deadline)) as resp:
         raw = resp.read().decode("utf-8")
         new_session = resp.headers.get("mcp-session-id")
     result = {"_session_id": new_session, "_raw": raw}
@@ -151,6 +166,7 @@ def _post(session_id: str | None, body: dict, timeout: float = 10.0) -> dict:
             result.update(json.loads(raw))
         except json.JSONDecodeError:
             pass
+    _remaining_timeout(timeout, deadline)
     return result
 
 
@@ -160,6 +176,8 @@ def _tool_call(
     args: dict,
     request_id: int,
     timeout: float = 30.0,
+    *,
+    deadline: float | None = None,
 ) -> dict:
     body = {
         "jsonrpc": "2.0",
@@ -167,24 +185,32 @@ def _tool_call(
         "method": "tools/call",
         "params": {"name": name, "arguments": args},
     }
-    resp = _post(session_id, body, timeout=timeout)
+    resp = _post(session_id, body, timeout=timeout, deadline=deadline)
+    if "error" in resp:
+        return {"error": resp["error"]}
     ## Prefer structuredContent; fall back to the text block the transport
     ## wraps around dict/list results.
     result = resp.get("result", {})
-    sc = result.get("structuredContent")
-    if sc:
-        return sc
-    content = result.get("content") or []
-    for block in content:
-        if block.get("type") == "text":
-            try:
-                return json.loads(block["text"])
-            except json.JSONDecodeError:
-                return {"_text": block["text"]}
-    return {"_raw": resp.get("_raw", "")}
+    if not isinstance(result, dict):
+        return {"unexpected_result": result}
+    value = result.get("structuredContent")
+    if not value:
+        value = {"_raw": resp.get("_raw", "")}
+        for block in result.get("content") or []:
+            if block.get("type") == "text":
+                try:
+                    value = json.loads(block["text"])
+                except json.JSONDecodeError:
+                    value = {"_text": block["text"]}
+                break
+    if result.get("isError") and not (isinstance(value, dict) and "error" in value):
+        return {"error": value}
+    return value
+
 
 
 def _initialize_session() -> str:
+    deadline = time.monotonic() + 20
     body = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -195,67 +221,102 @@ def _initialize_session() -> str:
             "clientInfo": {"name": "ci-game-capture-smoke", "version": "1.0"},
         },
     }
-    resp = _post(None, body)
+    resp = _post(None, body, deadline=deadline)
     session_id = resp.get("_session_id")
     if not session_id:
         raw = resp.get("_raw", "")[:300]
         raise RuntimeError(f"No Mcp-Session-Id in initialize response: {raw}")
-    _post(session_id, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+    _post(session_id, {"jsonrpc": "2.0", "method": "notifications/initialized"}, deadline=deadline)
     return session_id
 
 
 class _EditorLogTail:
-    """Stream new lines of the editor's redirected stdout as they land.
-
-    Reads incrementally from a byte offset so a multi-minute wait costs one
-    small read per poll, tolerates the file not existing yet (the editor is
-    started by a separate CI step), and caps what one flush prints so a
-    chatty editor cannot flood the job log.
-    """
-
     MAX_LINES_PER_FLUSH = 40
+    MAX_READ_BYTES = 16 * 1024
+    MAX_LINE_BYTES = 4096
 
     def __init__(self, path: str, sink) -> None:
         self._path = path
         self.sink = sink
         self._offset = 0
         self._partial = b""
+        self._partial_truncated = False
+        self._identity = None
         self.lines_seen = 0
+
+    def _line(self, raw: bytes, truncated: bool = False) -> str:
+        text = raw.decode("utf-8", "replace").rstrip("\r")
+        encoded = text.encode("utf-8")
+        if len(encoded) > self.MAX_LINE_BYTES:
+            truncated = True
+        text = encoded[:self.MAX_LINE_BYTES].decode("utf-8", "ignore")
+        return text + (" [line truncated]" if truncated else "")
 
     def flush(self) -> None:
         try:
             with open(self._path, "rb") as fh:
+                stat = os.fstat(fh.fileno())
+                identity = (stat.st_dev, stat.st_ino)
+                if identity != self._identity or stat.st_size < self._offset:
+                    self._offset = 0
+                    self._partial = b""
+                    self._partial_truncated = False
+                self._identity = identity
                 fh.seek(self._offset)
-                chunk = fh.read()
+                chunk = fh.read(self.MAX_READ_BYTES)
         except OSError:
             return
         if not chunk:
             return
         self._offset += len(chunk)
         pieces = (self._partial + chunk).split(b"\n")
-        self._partial = pieces.pop()
-        lines = [piece.decode("utf-8", "replace").rstrip("\r") for piece in pieces]
-        lines = [line for line in lines if line.strip()]
-        if not lines:
-            return
-        self.lines_seen += len(lines)
-        for line in lines[: self.MAX_LINES_PER_FLUSH]:
-            self.sink(f"[editor-log] {line}")
-        hidden = len(lines) - self.MAX_LINES_PER_FLUSH
+        partial = pieces.pop()
+        old_truncated = self._partial_truncated
+        self._partial_truncated = (
+            len(partial) > self.MAX_LINE_BYTES or (not pieces and old_truncated)
+        )
+        self._partial = partial[:self.MAX_LINE_BYTES]
+        emitted = 0
+        shown = 0
+        for index, piece in enumerate(pieces):
+            line = self._line(piece, index == 0 and old_truncated)
+            if not line.strip():
+                continue
+            self.lines_seen += 1
+            output = f"[editor-log] {line}"
+            size = len(output.encode("utf-8"))
+            if shown < self.MAX_LINES_PER_FLUSH and emitted + size <= self.MAX_READ_BYTES:
+                self.sink(output)
+                emitted += size
+                shown += 1
+        hidden = sum(bool(piece.strip()) for piece in pieces) - shown
         if hidden > 0:
-            self.sink(f"[editor-log] (+{hidden} more lines)")
+            self.sink(f"[editor-log] (+{hidden} more lines; output truncated)")
 
     def tail(self, count: int = EDITOR_LOG_TAIL_LINES) -> list[str]:
         try:
             with open(self._path, "rb") as fh:
-                data = fh.read()
+                fh.seek(0, os.SEEK_END)
+                start = max(0, fh.tell() - self.MAX_READ_BYTES)
+                fh.seek(start)
+                data = fh.read(self.MAX_READ_BYTES)
         except OSError as exc:
             return [f"({self._path} unreadable: {exc})"]
-        lines = [line.decode("utf-8", "replace").rstrip("\r") for line in data.split(b"\n")]
-        lines = [line for line in lines if line.strip()]
+        lines = [self._line(line) for line in data.split(b"\n") if line.strip()]
         if not lines:
             return [f"({self._path} is empty)"]
-        return lines[-count:]
+        selected = []
+        used = 0
+        for line in reversed(lines[-count:]):
+            size = len(line.encode("utf-8"))
+            if used + size > self.MAX_READ_BYTES:
+                break
+            selected.append(line)
+            used += size
+        selected.reverse()
+        if start or len(selected) < min(count, len(lines)):
+            selected.insert(0, "(editor-log tail truncated)")
+        return selected
 
 
 def _godot_process_snapshot() -> list[str]:
@@ -278,16 +339,21 @@ def _godot_process_snapshot() -> list[str]:
     return rows or ["(no godot process found)"]
 
 
-def _summarize_session_reply(reply: dict | None) -> str:
-    if reply is None:
-        return "no reply yet"
-    if "count" in reply:
-        return f"count={reply['count']}"
-    ## A reply without `count` is a tool error or an unexpected shape —
-    ## surfacing it is the difference between "server said no sessions" and
-    ## "server said something else entirely" (both used to read as
-    ## "last err: None").
-    return "unexpected reply " + json.dumps(reply, default=str)[:300]
+def _session_outcome(reply: object) -> dict[str, str]:
+    detail = json.dumps(reply, default=str)[:300]
+    if not isinstance(reply, dict):
+        return {"kind": "malformed", "detail": f"unexpected reply {detail}"}
+    if "error" in reply:
+        return {"kind": "tool_error", "detail": f"tool error {detail}"}
+    count, sessions = reply.get("count"), reply.get("sessions")
+    if type(count) is not int or not isinstance(sessions, list) or count != len(sessions):
+        return {"kind": "malformed", "detail": f"unexpected reply {detail}"}
+    if count:
+        return {"kind": "ready", "detail": detail}
+    return {
+        "kind": "empty",
+        "detail": "latest reply contained no sessions (count=0); the server answered",
+    }
 
 
 def _wait_for_godot_session(
@@ -296,91 +362,67 @@ def _wait_for_godot_session(
     editor_log: _EditorLogTail | None = None,
     history: list[str] | None = None,
 ) -> float:
-    """Poll until the editor's session registers; return the seconds it took.
-
-    Every poll streams whatever the editor has printed since the last one,
-    so the job log carries the boot timeline (engine banner → rendering
-    driver → plugin startup-trace phases → "plugin loaded" → probing →
-    connected) stamped with elapsed time. On timeout the raise names how
-    long it waited and what the server said, and the editor-log tail plus a
-    process snapshot go to the job log and the diag artifacts — the old
-    "never registered; last err: None" carried none of that (2026-09-08).
-    """
     start = time.monotonic()
     deadline = start + timeout
 
-    def _record(stamped: str) -> None:
-        print(stamped)
+    def record(line: str) -> None:
+        print(line)
         if history is not None:
-            history.append(stamped)
+            history.append(line)
 
-    def _note(line: str) -> None:
-        _record(f"[session-wait +{time.monotonic() - start:.1f}s] {line}")
+    def note(line: str) -> None:
+        record(f"[session-wait +{time.monotonic() - start:.1f}s] {line}")
 
-    ## Editor lines keep flowing through this sink after registration (the
-    ## caller flushes once more at exit), so they carry a bare elapsed stamp
-    ## rather than the wait's own label.
-    def _stamp_editor_line(line: str) -> None:
-        _record(f"[+{time.monotonic() - start:.1f}s] {line}")
+    def stamp_editor(line: str) -> None:
+        record(f"[+{time.monotonic() - start:.1f}s] {line}")
 
     if editor_log is None:
-        editor_log = _EditorLogTail(EDITOR_LOG, _stamp_editor_line)
+        editor_log = _EditorLogTail(EDITOR_LOG, stamp_editor)
     else:
-        editor_log.sink = _stamp_editor_line
-    last_err: Exception | None = None
-    last_reply: dict | None = None
+        editor_log.sink = stamp_editor
+    outcome = {"kind": "none", "detail": "no reply yet"}
     polls = 0
     next_progress = start + SESSION_WAIT_PROGRESS_SEC
     print(
         f"Waiting up to {timeout:.0f}s for the editor's session to register "
         f"(streaming {EDITOR_LOG})"
     )
-    while True:
+    while time.monotonic() < deadline:
         polls += 1
         try:
-            result = _tool_call(session_id, "session_manage", {"op": "list"}, 2)
+            result = _tool_call(
+                session_id, "session_manage", {"op": "list"}, 2,
+                timeout=_remaining_timeout(30, deadline), deadline=deadline,
+            )
+            _remaining_timeout(30, deadline)
         except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
-            last_err = exc
+            outcome = {"kind": "transport_error", "detail": f"last transport error: {exc!r}"[:500]}
         else:
-            last_reply = result
-            if isinstance(result.get("count"), (int, float)) and result["count"] > 0:
+            outcome = _session_outcome(result)
+            if outcome["kind"] == "ready":
                 elapsed = time.monotonic() - start
                 editor_log.flush()
                 print(
-                    f"Godot session connected after {elapsed:.1f}s ({polls} polls): "
-                    f"{result.get('active_session_id') or result}"
+                    f"Godot session connected after {elapsed:.1f}s "
+                    f"({polls} polls): {outcome['detail']}"
                 )
                 return elapsed
         editor_log.flush()
         now = time.monotonic()
         if now >= next_progress:
-            _note(
-                f"no editor session yet ({polls} polls; server reply: "
-                f"{_summarize_session_reply(last_reply)}; transport error: {last_err!r})"
-            )
+            note(f"no editor session yet ({polls} polls; {outcome['detail']})")
             next_progress = now + SESSION_WAIT_PROGRESS_SEC
-        if now >= deadline:
-            break
-        time.sleep(min(SESSION_POLL_DELAY_SEC, max(0.0, deadline - now)))
+        if now < deadline:
+            time.sleep(min(SESSION_POLL_DELAY_SEC, deadline - now))
 
-    _note(f"giving up after {polls} polls; last {EDITOR_LOG_TAIL_LINES} editor-log lines:")
+    note(f"giving up after {polls} polls; last {EDITOR_LOG_TAIL_LINES} editor-log lines:")
     for line in editor_log.tail():
-        _note(f"    {line}")
-    _note("godot processes:")
+        note(f"    {line}")
+    note("godot processes:")
     for row in _godot_process_snapshot():
-        _note(f"    {row}")
-    if last_err is None:
-        verdict = (
-            "every poll got a reply with no sessions — the MCP server was up and the "
-            "editor never connected to it, so look at the editor-log timeline above "
-            "(still booting, crashed, or plugin loaded but not connecting), not at "
-            "the transport"
-        )
-    else:
-        verdict = f"last transport error: {last_err!r}"
+        note(f"    {row}")
     raise RuntimeError(
-        f"Godot session never registered within {timeout:.0f}s ({polls} polls; "
-        f"server reply: {_summarize_session_reply(last_reply)}); {verdict}"
+        f"Godot session never registered within {timeout:.0f}s ({polls} polls); {outcome['detail']}"
     )
 
 
@@ -389,7 +431,7 @@ def _wait_for_godot_session(
 ## paravirtualized runner. The poll exits the moment it's ready, so the
 ## ceiling only costs time when something is genuinely wrong.
 def _wait_for_game_capture_ready(
-    session_id: str, timeout: float = 180.0, history: list[str] | None = None
+    session_id: str, timeout: float = GAME_READY_WAIT_SEC, history: list[str] | None = None
 ) -> None:
     ## is_playing flips when the editor *spawns* the game subprocess; it does
     ## NOT imply the game's _mcp_game_helper autoload has reached _ready() and
@@ -429,7 +471,11 @@ def _wait_for_game_capture_ready(
 
     while time.monotonic() < deadline:
         try:
-            state = _tool_call(session_id, "editor_state", {}, 100)
+            state = _tool_call(
+                session_id, "editor_state", {}, 100,
+                timeout=_remaining_timeout(30, deadline), deadline=deadline,
+            )
+            _remaining_timeout(30, deadline)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             state = {"error": {"code": "TRANSPORT_ERROR", "message": str(exc)}}
         err = state.get("error")
@@ -456,7 +502,9 @@ def _wait_for_game_capture_ready(
                 f"game_capture_ready={state.get('game_capture_ready')} "
                 f"readiness={state.get('readiness')}"
             )
-        time.sleep(0.5)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.5, remaining))
     raise RuntimeError(
         "Game subprocess never registered its mcp capture within "
         f"{timeout:.0f}s (last observed: {last_note or 'nothing'})"
@@ -468,9 +516,11 @@ def _within_tolerance(a: tuple[int, int, int], b: tuple[int, int, int]) -> bool:
 
 
 def _dump_diagnostics(session_id: str) -> None:
-    """On failure, print everything that could explain what happened."""
+    deadline = time.monotonic() + DIAGNOSTICS_BUDGET_SEC
     try:
-        autoloads = _tool_call(session_id, "autoload_manage", {"op": "list"}, 900)
+        autoloads = _tool_call(
+            session_id, "autoload_manage", {"op": "list"}, 900, deadline=deadline
+        )
         print("\n[diag] autoloads:", json.dumps(autoloads, indent=2))
     except Exception as exc:
         print(f"[diag] autoload_list failed: {exc}")
@@ -481,7 +531,7 @@ def _dump_diagnostics(session_id: str) -> None:
             session_id,
             "filesystem_manage",
             {"op": "read_text", "params": {"path": "res://project.godot"}},
-            901,
+            901, deadline=deadline,
         )
         text = proj.get("content", "")
         in_autoload = False
@@ -499,7 +549,7 @@ def _dump_diagnostics(session_id: str) -> None:
     except Exception as exc:
         print(f"[diag] filesystem_read_file failed: {exc}")
     try:
-        logs = _tool_call(session_id, "logs_read", {"count": 50}, 902)
+        logs = _tool_call(session_id, "logs_read", {"count": 50}, 902, deadline=deadline)
         print("[diag] recent plugin logs:")
         for line in logs.get("lines", []):
             print(f"    {line}")
@@ -507,7 +557,9 @@ def _dump_diagnostics(session_id: str) -> None:
         print(f"[diag] logs_read failed: {exc}")
 
 
-def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes | None]:
+def _capture_attempt(
+    session_id: str, request_id: int, *, deadline: float | None = None
+) -> tuple[list[str], bytes | None]:
     """One capture-and-check pass. Returns (failures, png_bytes).
 
     An empty failures list means the frame passed every quadrant check.
@@ -526,7 +578,7 @@ def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes
         "editor_screenshot",
         {"source": "game", "include_image": False, "max_resolution": 0},
         request_id,
-        timeout=40,
+        timeout=_remaining_timeout(40, deadline), deadline=deadline,
     )
     if "source" in meta and meta["source"] != "game":
         return ([f"metadata source mismatch: {meta}"], None)
@@ -545,7 +597,7 @@ def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes
             "arguments": {"source": "game", "include_image": True, "max_resolution": 0},
         },
     }
-    resp = _post(session_id, body, timeout=40)
+    resp = _post(session_id, body, timeout=_remaining_timeout(40, deadline), deadline=deadline)
     raw = resp.get("_raw", "")
     image_b64: str | None = None
     for line in raw.splitlines():
@@ -588,6 +640,7 @@ def _capture_attempt(session_id: str, request_id: int) -> tuple[list[str], bytes
         failures.append(
             f"frame is uniform {samples[0]} — likely captured before the scene's first draw"
         )
+    _remaining_timeout(40, deadline)
     return (failures, png)
 
 
@@ -606,50 +659,34 @@ def _write_diag_artifacts(attempt_log: list[str], last_png: bytes | None) -> Non
 
 def main() -> int:
     print(f"Connecting to MCP server at {SERVER_URL}")
-    session_id = _initialize_session()
+    session_id: str | None = None
+    run_attempted = False
     attempt_log: list[str] = []
+    last_png: bytes | None = None
     editor_log = _EditorLogTail(EDITOR_LOG, print)
     try:
+        session_id = _initialize_session()
         _wait_for_godot_session(session_id, editor_log=editor_log, history=attempt_log)
-    except Exception:
-        ## The wait's own timeline (streamed editor lines, log tail, process
-        ## snapshot) is the evidence for a boot-time failure; keep it in the
-        ## uploaded artifacts alongside the traceback.
-        attempt_log.append("")
-        attempt_log.append(traceback.format_exc().rstrip())
-        _write_diag_artifacts(attempt_log, None)
-        raise
-
-    ## Dump autoload state BEFORE we touch the game — tells us whether the
-    ## plugin's _enter_tree actually persisted _mcp_game_helper, which is the
-    ## hinge for the whole capture path.
-    _dump_diagnostics(session_id)
-
-    print(f"Opening {SCENE_PATH}")
-    _tool_call(session_id, "scene_open", {"path": SCENE_PATH}, 10)
-    time.sleep(1)
-
-    last_png: bytes | None = None
-    try:
+        _dump_diagnostics(session_id)
+        print(f"Opening {SCENE_PATH}")
+        _tool_call(session_id, "scene_open", {"path": SCENE_PATH}, 10,
+                   deadline=time.monotonic() + 30)
+        time.sleep(1)
         print("Running project (current scene)")
-        ## 60s, not 20 (#673): the reply waits on the editor spawning a
-        ## whole game process under a software rasterizer, and a busy
-        ## runner has blown a 20s socket margin. The ready-poll below
-        ## exits the moment the game is up, so the higher ceiling costs
-        ## nothing on healthy runs. Inside the try so a timeout here
-        ## still dumps diagnostics and writes the diag artifacts.
-        _tool_call(session_id, "project_run", {"mode": "current"}, 11, timeout=60)
-
+        run_attempted = True
+        _tool_call(session_id, "project_run", {"mode": "current"}, 11,
+                   timeout=60, deadline=time.monotonic() + 60)
         _wait_for_game_capture_ready(session_id, history=attempt_log)
 
         deadline = time.monotonic() + CAPTURE_BUDGET_SEC
         attempt = 0
-        last_failures: list[str] = []
-        while True:
+        last_failures: list[str] = ["capture budget expired before an attempt"]
+        while time.monotonic() < deadline:
             attempt += 1
             print(f"Capturing source='game' (attempt {attempt})")
             try:
-                failures, png = _capture_attempt(session_id, 100 + attempt * 10)
+                failures, png = _capture_attempt(session_id, 100 + attempt * 10, deadline=deadline)
+                _remaining_timeout(40, deadline)
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 failures, png = ([f"transport error: {exc}"], None)
             if not failures:
@@ -661,46 +698,36 @@ def main() -> int:
             summary = "; ".join(failures)
             attempt_log.append(f"attempt {attempt}: {summary}")
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            print(
-                f"Attempt {attempt} not clean ({summary}); "
-                f"{remaining:.0f}s of budget left, retrying"
-            )
-            time.sleep(min(CAPTURE_RETRY_DELAY_SEC, max(0.0, remaining)))
+            if remaining > 0:
+                print(f"Attempt {attempt} not clean ({summary}); {remaining:.0f}s left, retrying")
+                time.sleep(min(CAPTURE_RETRY_DELAY_SEC, remaining))
 
         print(
             f"\nCapture smoke test FAILED after {attempt} attempts "
             f"over {CAPTURE_BUDGET_SEC:.0f}s:"
         )
-        for f in last_failures:
-            print(f"  - {f}")
+        for failure in last_failures:
+            print(f"  - {failure}")
         _dump_diagnostics(session_id)
+        editor_log.flush()
         _write_diag_artifacts(attempt_log, last_png)
         return 1
     except Exception:
         print("\nCapture smoke test raised — dumping diagnostics:", file=sys.stderr)
-        _dump_diagnostics(session_id)
-        ## This path used to exit without touching DIAG_DIR, so a
-        ## ready-wait failure uploaded no artifacts at all (#675). Write
-        ## whatever timeline exists plus the traceback.
-        attempt_log.append("")
+        if session_id is not None:
+            _dump_diagnostics(session_id)
+        editor_log.flush()
         attempt_log.append(traceback.format_exc().rstrip())
         _write_diag_artifacts(attempt_log, last_png)
         raise
     finally:
-        ## Whatever the editor printed after registration (the startup
-        ## trace's "done" line, game-run output) belongs in the job log on
-        ## pass as well as fail — it is the only per-run record of where the
-        ## editor's boot time went.
         editor_log.flush()
-        try:
-            ## "stop" has no named tool — it lives only under the project_manage
-            ## rollup, so calling "project_stop" returns an unknown-tool error
-            ## and the game subprocess is never stopped.
-            _tool_call(session_id, "project_manage", {"op": "stop"}, 999, timeout=10)
-        except Exception as exc:
-            print(f"(cleanup) project stop failed: {exc}", file=sys.stderr)
+        if session_id is not None and run_attempted:
+            try:
+                _tool_call(session_id, "project_manage", {"op": "stop"}, 999,
+                           timeout=10, deadline=time.monotonic() + 10)
+            except Exception as exc:
+                print(f"(cleanup) project stop failed: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

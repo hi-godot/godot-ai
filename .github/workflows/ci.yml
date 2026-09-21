@@ -8,7 +8,6 @@ on:
       - "docs/**"
       - "**.md"
   pull_request:
-    branches: [main, codex/v4-release-promotion]
     paths-ignore:
       - "docs/**"
       - "**.md"
@@ -65,6 +64,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Unit fixture preparation archives published v3 tags, including v3.2.5.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -142,7 +143,7 @@ jobs:
 
       - name: Build sdist and wheel
         run: |
-          python -m pip install "build==1.6.0"
+          python -m pip install "build==1.6.1"
           python -m build
 
       - name: Upload build artifacts
@@ -173,7 +174,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Download shared distributions
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
@@ -284,6 +285,8 @@ jobs:
             tests/integration/test_godot_editor_restart.py \
             tests/integration/test_test_run_cache_warning.py \
             tests/integration/test_migration_bridge_failures.py \
+            tests/integration/test_linux_listener_tools.py \
+            tests/integration/test_self_update_status_driver.py \
             tests/integration/test_self_update_upgrade_paths.py \
             tests/integration/test_qualification_https.py \
             tests/integration/test_plugin_reload_persistence.py \
@@ -613,10 +616,9 @@ jobs:
           fi
 
       - name: Run capture smoke test
-        ## Covers the worst case of the script's internal ceilings: 240s
-        ## session wait + 180s capture-ready wait + 120s capture budget
-        ## (9 min), plus initialize and failure diagnostics.
-        timeout-minutes: 12
+        # Phase ceilings: registration240 + readiness180 + capture120,
+        # setup111 + diagnostics60 + stop10 =721s; allow cleanup/I/O margin.
+        timeout-minutes: 16
         shell: bash
         env:
           ## Stream output as it happens — a killed/timed-out step otherwise

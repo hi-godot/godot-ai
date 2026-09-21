@@ -296,6 +296,7 @@ func _run_post_update_repin(
 	var configured_ids: Array[String] = []
 	var repinned_ids: Array[String] = []
 	var foreign_ids: Array[String] = []
+	var deferred: Array[Dictionary] = []
 	if bool(prewarm.get("termination_failed", false)):
 		return _post_update_result(
 			false,
@@ -324,8 +325,15 @@ func _run_post_update_repin(
 		if status == Client.Status.NOT_CONFIGURED:
 			continue
 		if status == Client.Status.ERROR:
-			return _post_update_result(false, generation, configured_ids, repinned_ids,
-				"%s status failed: %s" % [client_id, str(details.get("error_msg", "unknown error"))], prewarm)
+			## One client whose configuration cannot even be read must not
+			## hold every other client and the server itself hostage: leave
+			## it for the dock's Configure and say so.
+			deferred.append({
+				"id": client_id,
+				"reason": "its configuration could not be read: %s"
+				% str(details.get("error_msg", "unknown error")),
+			})
+			continue
 		if status == Client.Status.CONFIGURED:
 			configured_ids.append(client_id)
 			continue
@@ -339,8 +347,16 @@ func _run_post_update_repin(
 		elif not ClientConfigurator.entry_drift_is_version_pin_only(
 			client_id, from_version, context
 		):
-			return _post_update_result(false, generation, configured_ids, repinned_ids,
-				"%s has non-version configuration drift; automatic migration refused." % client_id, prewarm)
+			## #890's write restriction stands: an entry that is not provably
+			## what Configure wrote before the update is never rewritten here.
+			## But refusing the write is not a reason to refuse the server
+			## (#999): the entry is left untouched, named, and deferred to
+			## the dock's Configure, and startup continues.
+			deferred.append({
+				"id": client_id,
+				"reason": "its godot-ai entry differs from what Configure wrote before the update",
+			})
+			continue
 		var configured := ClientConfigurator.configure(client_id, server_url, context)
 		if str(configured.get("status", "error")) != "ok":
 			return _post_update_result(false, generation, configured_ids, repinned_ids,
@@ -363,8 +379,9 @@ func _run_post_update_repin(
 	configured_ids.sort()
 	repinned_ids.sort()
 	foreign_ids.sort()
+	deferred.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.id) < str(b.id))
 	return _post_update_result(
-		true, generation, configured_ids, repinned_ids, "", prewarm, false, "", foreign_ids
+		true, generation, configured_ids, repinned_ids, "", prewarm, false, "", foreign_ids, deferred
 	)
 
 
@@ -378,6 +395,7 @@ static func _post_update_result(
 	termination_failed: bool = false,
 	unsafe_client_id: String = "",
 	foreign_ids: Array[String] = [],
+	deferred: Array[Dictionary] = [],
 ) -> Dictionary:
 	return {
 		"ok": ok,
@@ -390,6 +408,10 @@ static func _post_update_result(
 		"unsafe_client_id": unsafe_client_id,
 		## Entries under our name that launch something else; left unchanged.
 		"foreign_ids": foreign_ids.duplicate(),
+		## `{id, reason}` for entries the migration left unchanged because
+		## they were unreadable or drifted beyond the version pin (#999).
+		## They are the dock's Configure job, not a startup barrier.
+		"deferred": deferred.duplicate(true),
 	}
 
 

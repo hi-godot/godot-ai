@@ -8,10 +8,10 @@ from functools import partial
 from types import SimpleNamespace
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 import pytest
-from mcp.shared.exceptions import McpError
-from mcp.types import CallToolResult, ErrorData, TextContent, Tool
+from mcp.shared.exceptions import MCPError
+from mcp.types import CallToolResult, TextContent, Tool
 
 from godot_ai import __version__
 from godot_ai.attach import proxy as proxy_module
@@ -117,10 +117,14 @@ async def test_ambiguous_tools_call_is_not_replayed() -> None:
     mcp_result = result.to_mcp_result()
 
     assert calls == 1
-    assert mcp_result.isError is True
-    error = mcp_result.structuredContent["error"]
+    assert mcp_result.is_error is True
+    error = mcp_result.structured_content["error"]
     assert error["code"] == "TRANSPORT_OUTCOME_UNKNOWN"
     assert error["data"]["retryable"] is False
+    wire = mcp_result.model_dump(by_alias=True, exclude_none=True)
+    assert wire["isError"] is True
+    assert wire["structuredContent"]["error"] == error
+    assert "is_error" not in wire and "structured_content" not in wire
 
 
 async def test_test_run_unknown_outcome_names_idempotent_probe() -> None:
@@ -134,7 +138,7 @@ async def test_test_run_unknown_outcome_names_idempotent_probe() -> None:
         _context(tool_name="test_run"),
         call_next,
     )
-    hint = result.to_mcp_result().structuredContent["error"]["data"]["hint"]
+    hint = result.to_mcp_result().structured_content["error"]["data"]["hint"]
 
     assert 'test_manage(op="results_get")' in hint
 
@@ -216,7 +220,7 @@ async def test_mutation_is_not_replayed_after_backend_instance_change() -> None:
         observe,
         dispatch_monitor_seconds=0.001,
     ).on_call_tool(_context(), call_next)
-    error = result.to_mcp_result().structuredContent["error"]
+    error = result.to_mcp_result().structured_content["error"]
 
     assert calls == 1
     assert error["code"] == "TRANSPORT_OUTCOME_UNKNOWN"
@@ -277,7 +281,7 @@ async def test_monitor_requires_consecutive_probe_failures() -> None:
         dispatch_monitor_seconds=0.001,
         monitor_failure_threshold=3,
     ).on_call_tool(_context(), call_next)
-    error = result.to_mcp_result().structuredContent["error"]
+    error = result.to_mcp_result().structured_content["error"]
 
     assert calls == 1
     assert error["code"] == "TRANSPORT_OUTCOME_UNKNOWN"
@@ -301,7 +305,7 @@ async def test_incompatible_backend_after_safe_connect_retry_is_structured() -> 
         raise httpx.ConnectError("refused", request=httpx.Request("POST", "http://x"))
 
     result = await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
-    error = result.to_mcp_result().structuredContent["error"]
+    error = result.to_mcp_result().structured_content["error"]
 
     assert error["code"] == "NEW_CLIENT_SESSION_REQUIRED"
     assert error["data"]["retryable"] is False
@@ -319,7 +323,7 @@ async def test_second_connect_refusal_is_retryable_but_not_replayed_again() -> N
         raise httpx.ConnectError("refused", request=httpx.Request("POST", "http://x"))
 
     result = await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
-    error = result.to_mcp_result().structuredContent["error"]
+    error = result.to_mcp_result().structured_content["error"]
 
     assert calls == 2
     assert error["code"] == "PLUGIN_DISCONNECTED"
@@ -352,10 +356,10 @@ async def test_second_laundered_initialize_failure_is_not_outcome_unknown() -> N
                 connect_class=False,
             )
         )
-        raise McpError(ErrorData(code=-32000, message="Connection closed"))
+        raise MCPError(code=-32000, message="Connection closed")
 
     result = await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
-    error = result.to_mcp_result().structuredContent["error"]
+    error = result.to_mcp_result().structured_content["error"]
 
     assert calls == 2
     assert error["code"] == "PLUGIN_DISCONNECTED"
@@ -515,7 +519,7 @@ def test_shared_transport_trace_classifies_laundered_connect_timeout() -> None:
     )
     token = _OPERATION_TRACE.set(trace)
     try:
-        wrapped = McpError(ErrorData(code=-32000, message="request timed out"))
+        wrapped = MCPError(code=-32000, message="request timed out")
         assert _is_proven_pre_dispatch_failure(wrapped) is True
     finally:
         _OPERATION_TRACE.reset(token)
@@ -580,8 +584,8 @@ async def test_backend_editor_busy_error_passes_through_untouched() -> None:
     context = SimpleNamespace(request_context=SimpleNamespace(meta={"trace": "abc"}))
     forwarded = (await tool.run({}, context)).to_mcp_result()
 
-    assert forwarded.isError is True
-    assert forwarded.structuredContent == {"error": payload}
+    assert forwarded.is_error is True
+    assert forwarded.structured_content == {"error": payload}
     assert forwarded.content == [TextContent(type="text", text=payload["message"])]
     assert forwarded.meta == {"backend-trace": "xyz"}
     assert received["meta"] == {"trace": "abc"}
@@ -633,8 +637,9 @@ def test_create_attach_proxy_wires_fresh_client_provider_and_outer_middleware(
             captured["factory"] = httpx_client_factory
 
     class FakeClient:
-        def __init__(self, transport, *, timeout, init_timeout) -> None:
+        def __init__(self, transport, *, mode, timeout, init_timeout) -> None:
             captured["transport"] = transport
+            captured["mode"] = mode
             captured["timeout"] = timeout
             captured["init_timeout"] = init_timeout
 
@@ -661,6 +666,7 @@ def test_create_attach_proxy_wires_fresh_client_provider_and_outer_middleware(
     assert isinstance(captured["factory"], partial)
     assert captured["factory"].func is proxy_module._http_client_factory
     assert captured["timeout"] is None
+    assert captured["mode"] == "legacy"
     assert captured["init_timeout"] == proxy_module.DEFAULT_INIT_TIMEOUT_SECONDS
     assert isinstance(proxy.middleware[0], AttachRecoveryMiddleware)
 
@@ -715,7 +721,7 @@ async def test_tool_initial_ensure_failure_is_structured() -> None:
         raise AssertionError("must not dispatch")
 
     result = await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
-    assert result.to_mcp_result().structuredContent["error"]["code"] == (
+    assert result.to_mcp_result().structured_content["error"]["code"] == (
         "NEW_CLIENT_SESSION_REQUIRED"
     )
 
@@ -733,7 +739,7 @@ async def test_tool_startup_error_preserves_code_data_hint_and_retryability() ->
         _context(),
         lambda _context: None,  # type: ignore[arg-type]
     )
-    error = result.to_mcp_result().structuredContent["error"]
+    error = result.to_mcp_result().structured_content["error"]
 
     assert error["code"] == "PORT_OCCUPIED"
     assert error["data"] == {
@@ -754,7 +760,7 @@ async def test_safe_request_initial_startup_error_is_protocol_structured() -> No
             data={"path": "attach.lock"},
         )
 
-    with pytest.raises(McpError) as exc_info:
+    with pytest.raises(MCPError) as exc_info:
         await AttachRecoveryMiddleware(ensure).on_request(
             _context(method="tools/list"),
             lambda _context: None,  # type: ignore[arg-type]
@@ -781,7 +787,7 @@ async def test_safe_request_second_backend_change_is_protocol_structured(
         raise _BackendChanged("instance-a")
 
     monkeypatch.setattr(middleware, "_run_with_instance_monitor", always_changed)
-    with pytest.raises(McpError) as exc_info:
+    with pytest.raises(MCPError) as exc_info:
         await middleware.on_request(
             _context(method="tools/list"),
             lambda _context: None,  # type: ignore[arg-type]
@@ -815,7 +821,7 @@ async def test_safe_request_retry_preserves_startup_error(
         raise _BackendChanged("instance-a")
 
     monkeypatch.setattr(middleware, "_run_with_instance_monitor", changed_once)
-    with pytest.raises(McpError) as exc_info:
+    with pytest.raises(MCPError) as exc_info:
         await middleware.on_request(
             _context(method="tools/list"),
             lambda _context: None,  # type: ignore[arg-type]
@@ -842,7 +848,7 @@ async def test_safe_request_preserves_startup_error_from_dispatch(
         )
 
     monkeypatch.setattr(middleware, "_run_with_instance_monitor", fail_during_dispatch)
-    with pytest.raises(McpError) as exc_info:
+    with pytest.raises(MCPError) as exc_info:
         await middleware.on_request(
             _context(method="tools/list"),
             lambda _context: None,  # type: ignore[arg-type]
@@ -867,7 +873,7 @@ async def test_safe_request_second_transport_failure_is_protocol_structured(
         )
 
     monkeypatch.setattr(middleware, "_run_with_instance_monitor", always_reset)
-    with pytest.raises(McpError) as exc_info:
+    with pytest.raises(MCPError) as exc_info:
         await middleware.on_request(
             _context(method="tools/list"),
             lambda _context: None,  # type: ignore[arg-type]
@@ -1064,7 +1070,7 @@ async def test_single_replay_maps_retry_failures(
 
     monkeypatch.setattr(middleware, "_run_with_instance_monitor", run_once)
     result = await middleware.on_call_tool(_context(), lambda _context: None)  # type: ignore[arg-type]
-    assert result.to_mcp_result().structuredContent["error"]["code"] == expected_code
+    assert result.to_mcp_result().structured_content["error"]["code"] == expected_code
 
 
 async def test_single_replay_reraises_unexpected_retry_failure(

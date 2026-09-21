@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -416,3 +418,100 @@ def test_target_ancestors_are_held_to_the_same_rule(monkeypatch) -> None:
 
     with pytest.raises(OSError, match="unsafe ancestor"):
         capability_module._reject_unsafe_posix_ancestors(Path(f"{FAKE_ROOT}/home/me"))
+
+
+def test_private_mkdir_passes_no_mode_on_windows(tmp_path, monkeypatch) -> None:
+    """CPython turns mode=0o700 into an OWNER RIGHTS-only DACL on Windows (#988)."""
+    modes: list[int] = []
+    real_mkdir = Path.mkdir
+
+    def record(self, mode=0o777, parents=False, exist_ok=False):
+        modes.append(mode)
+        return real_mkdir(self, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", record)
+    capability_module.private_mkdir(tmp_path / "windows", windows=True)
+    capability_module.private_mkdir(tmp_path / "posix", windows=False)
+    assert modes == [0o777, 0o700]
+
+
+@pytest.mark.parametrize(
+    "relative", ["godot-ai/capabilities", "godot-ai/.worktrees/project/custom/runtime"]
+)
+def test_windows_repair_hint_names_only_the_directory_to_repair(tmp_path, relative) -> None:
+    directory = tmp_path / relative
+    hint = capability_module.windows_repair_hint(directory)
+    assert str(directory) in hint
+    assert "Remove-Item" not in hint
+    assert "permissions" in hint
+    assert "elevated" in hint
+
+
+def test_windows_repair_hint_is_non_destructive_outside_a_godot_ai_tree(tmp_path) -> None:
+    hint = capability_module.windows_repair_hint(tmp_path / "custom" / "runtime")
+    assert "Remove-Item" not in hint
+    assert str(tmp_path / "custom" / "runtime") in hint
+    assert "permissions" in hint
+
+
+def test_directory_access_error_is_none_when_missing_or_writable(tmp_path) -> None:
+    assert capability_module.directory_access_error(tmp_path / "missing") is None
+    assert capability_module.directory_access_error(tmp_path) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows access probe")
+def test_directory_access_error_reports_a_failed_probe(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        capability_module, "_windows_access_probe", lambda _d: PermissionError(13, "denied")
+    )
+    hint = capability_module.directory_access_error(tmp_path)
+    assert hint is not None
+    assert str(tmp_path) in hint
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows access probe")
+def test_publishing_into_an_unwritable_directory_raises_the_repair_hint(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        capability_module, "_windows_access_probe", lambda _d: PermissionError(13, "denied")
+    )
+    directory = tmp_path / "godot-ai" / "capabilities"
+    with pytest.raises(OSError) as exc_info:
+        write_capabilities(8122, HTTP, WEBSOCKET, instance_nonce=NONCE, directory=directory)
+    assert exc_info.value.errno == errno.EACCES
+    assert "Remove-Item" not in str(exc_info.value)
+    assert "permissions" in str(exc_info.value)
+    assert str(directory) in str(exc_info.value)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows DACL inheritance")
+def test_windows_capability_directory_inherits_the_parent_acl(tmp_path) -> None:
+    """The regression behind #988: the capability directory gets what a plain
+    mkdir gets in this parent, never the explicit ``mode=0o700`` DACL."""
+    directory = tmp_path / "godot-ai" / "capabilities"
+    write_capabilities(8122, HTTP, WEBSOCKET, instance_nonce=NONCE, directory=directory)
+    ## Two siblings define the environment: what a plain mkdir yields here is
+    ## the baseline, and what ``mode=0o700`` yields is the #988 signature. A
+    ## CI temp root can hand a plain child explicit, non-inherited ACEs of its
+    ## own (pytest creates its temp tree with 0o700, and the release
+    ## qualification row's C: profile temp shows OWNER RIGHTS on plain
+    ## children), so the assertions compare against these siblings rather
+    ## than against an absolute picture of inherited entries.
+    control = directory.parent / "control"
+    control.mkdir()
+    restricted = directory.parent / "restricted"
+    restricted.mkdir(mode=0o700)
+
+    def aces(path: Path) -> list[str]:
+        listing = subprocess.run(
+            ["icacls", str(path)], capture_output=True, text=True, check=True
+        ).stdout
+        return sorted(
+            line.replace(str(path), "").strip() for line in listing.splitlines() if ":(" in line
+        )
+
+    if aces(restricted) == aces(control):
+        pytest.skip("this interpreter or volume gives mode=0o700 the plain-mkdir DACL")
+    assert aces(directory) == aces(control)
+    assert aces(directory) != aces(restricted)

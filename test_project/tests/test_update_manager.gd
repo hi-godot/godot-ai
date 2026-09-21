@@ -335,6 +335,11 @@ func test_failed_refresh_clears_a_previous_install_candidate() -> void:
 
 func test_release_candidate_does_not_alias_emitted_view_model() -> void:
 	var manager := Manager.new()
+	var next_minor := int(McpClientConfigurator.get_plugin_version().get_slice(".", 1)) + 1
+	var candidate_tag := "v4.%d.0" % next_minor
+	var assets := _valid_assets()
+	for asset in assets:
+		asset.browser_download_url = str(asset.browser_download_url).replace("/v4.1.0/", "/%s/" % candidate_tag)
 	var emissions: Array[Dictionary] = []
 	manager.update_check_completed.connect(func(result: Dictionary) -> void:
 		emissions.append(result)
@@ -343,14 +348,17 @@ func test_release_candidate_does_not_alias_emitted_view_model() -> void:
 		HTTPRequest.RESULT_SUCCESS,
 		200,
 		PackedStringArray(),
-		_response(_valid_assets()),
+		_response(assets, candidate_tag),
 	)
 	assert_true(bool(manager._release.get("has_update", false)))
 	assert_eq(emissions.size(), 1)
+	if not bool(manager._release.get("has_update", false)) or emissions.size() != 1:
+		manager.free()
+		return
 	var emitted := emissions[0]
 	var original_url := str(manager._release.urls[Manager.ASSET_NAME])
 	emitted["tag"] = "mutated"
 	emitted.urls[Manager.ASSET_NAME] = "https://attacker.invalid/payload"
-	assert_eq(str(manager._release.tag), "v4.1.0")
+	assert_eq(str(manager._release.tag), candidate_tag)
 	assert_eq(str(manager._release.urls[Manager.ASSET_NAME]), original_url)
 	manager.free()

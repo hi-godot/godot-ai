@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import shutil
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -124,6 +126,13 @@ def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
                     case["godot"] = {
                         **engine.build_pin(godot, os_label),
                         "version": f"{godot.removesuffix('.0')}.stable.official.fixture",
+                    }
+                    case["attached_bridge"] = {
+                        "pin": "4.1.0",
+                        "ok_before_update": 3,
+                        "served_b": True,
+                        "errors": [],
+                        "fault": "",
                     }
             if os_label == "windows-latest":
                 omitted = directory / "row.json"
@@ -672,3 +681,176 @@ def test_ports_free_wait_reports_elapsed_and_refuses_a_lingering_backend(monkeyp
     with pytest.raises(support.ReleaseError, match="remained live after editor exit"):
         runtime._wait_for_ports_free(8000, 9500, timeout=0.2)
     assert runtime.EDITOR_EXIT_TIMEOUT_SECONDS >= 60.0
+
+
+## A stand-in for `godot-ai attach` over stdio: it answers `initialize` and
+## `session_manage` with whatever version the file named on its command line
+## holds, so a test can move the "editor" from A to B underneath the client.
+FAKE_BRIDGE = """
+import json
+import sys
+from pathlib import Path
+
+version_file = Path(sys.argv[1])
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {}}
+    elif method == "tools/call":
+        version = version_file.read_text(encoding="utf-8").strip()
+        if version == "error":
+            result = {"isError": True, "content": [{"type": "text", "text": "backend gone"}]}
+        else:
+            sessions = [{"plugin_version": version, "server_version": version}]
+            result = {"content": [{"type": "text", "text": json.dumps({"sessions": sessions})}]}
+    else:
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+"""
+
+
+def _wait_for(path: Path, timeout: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        assert time.monotonic() < deadline, f"{path.name} never appeared"
+        time.sleep(0.05)
+
+
+def test_attached_bridge_client_follows_the_update_over_stdio(tmp_path):
+    """The bridge process attached for A must list the session B serves."""
+    project = tmp_path / "project"
+    project.mkdir()
+    capability_dir = tmp_path / "capabilities"
+    capability_dir.mkdir()
+    version_file = tmp_path / "version.txt"
+    version_file.write_text("4.1.0", encoding="utf-8")
+    fake = tmp_path / "fake_bridge.py"
+    fake.write_text(FAKE_BRIDGE, encoding="utf-8")
+    bridge = runtime.AttachedBridge(
+        [sys.executable, str(fake), str(version_file)],
+        dict(os.environ),
+        project,
+        capability_dir,
+        "4.1.0",
+        "4.1.1",
+        tmp_path / "bridge.log",
+    )
+    with bridge:
+        assert not (project / runtime.BRIDGE_ATTACHED_FILE).exists()
+        # The bridge waits for A's capability record before it launches.
+        (capability_dir / f"http-{runtime.HTTP_PORT}.json").write_text("{}", encoding="utf-8")
+        _wait_for(project / runtime.BRIDGE_ATTACHED_FILE)
+        version_file.write_text("error", encoding="utf-8")
+        time.sleep(1.2)
+        version_file.write_text("4.1.1", encoding="utf-8")
+        _wait_for(project / runtime.BRIDGE_SERVED_B_FILE)
+    report = bridge.report()
+    assert report["served_b"] is True
+    assert report["ok_before_update"] >= 1
+    assert report["fault"] == ""
+    assert any("backend gone" in error for error in report["errors"])
+
+
+def test_attached_bridge_client_reports_a_backend_that_never_reaches_b(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    capability_dir = tmp_path / "capabilities"
+    capability_dir.mkdir()
+    (capability_dir / f"http-{runtime.HTTP_PORT}.json").write_text("{}", encoding="utf-8")
+    version_file = tmp_path / "version.txt"
+    version_file.write_text("4.1.0", encoding="utf-8")
+    fake = tmp_path / "fake_bridge.py"
+    fake.write_text(FAKE_BRIDGE, encoding="utf-8")
+    bridge = runtime.AttachedBridge(
+        [sys.executable, str(fake), str(version_file)],
+        dict(os.environ),
+        project,
+        capability_dir,
+        "4.1.0",
+        "4.1.1",
+        tmp_path / "bridge.log",
+    )
+    with bridge:
+        _wait_for(project / runtime.BRIDGE_ATTACHED_FILE)
+    assert bridge.served_b is False
+    assert not (project / runtime.BRIDGE_SERVED_B_FILE).exists()
+
+
+def test_bridge_command_is_the_client_entry_launch():
+    command = runtime._bridge_command("/tools/uvx", "4.1.0")
+    assert command[:5] == ["/tools/uvx", "--link-mode", "copy", "--from", "godot-ai==4.1.0"]
+    assert command[5:8] == ["godot-ai", "attach", "--port"]
+    assert "--disable-telemetry" in command
+
+
+def test_row_validation_requires_the_attached_bridge_evidence(monkeypatch, tmp_path):
+    monkeypatch.setattr(qualification, "dependency_inventory", lambda _root: [])
+    bindings = {"a": "candidate-a", "b": "candidate-b"}
+    for number, (kind, os_label, python, godot) in enumerate(
+        sorted(qualification.required_row_keys())
+    ):
+        directory = tmp_path / str(number)
+        directory.mkdir()
+        row = {
+            "kind": kind,
+            "os": os_label,
+            "python": python,
+            "status": "passed",
+            "candidates": bindings,
+            "files": {},
+        }
+        if kind == "python":
+            row.update(
+                dependencies=[],
+                installs={
+                    name: {"status": "passed", "managed_tree": {"plugin.cfg": {}}}
+                    for name in bindings
+                },
+                tests={"a": {"tests": 1, "failures": 0, "errors": 0}},
+            )
+        else:
+            case = {
+                "id": "exact-a-to-b-hot-update",
+                "status": "passed",
+                "godot": {
+                    **engine.build_pin(godot, os_label),
+                    "version": f"{godot.removesuffix('.0')}.stable.official.fixture",
+                },
+                ## The bridge attached, but the same process never listed B.
+                "attached_bridge": {"pin": "4.1.0", "ok_before_update": 2, "served_b": False},
+            }
+            row.update(required_skips=0, godot_version=godot, cases=[case])
+        (directory / "row.json").write_bytes(support.canonical(row))
+    with pytest.raises(support.ReleaseError, match="attached-bridge evidence"):
+        qualification.validate_rows(tmp_path, bindings)
+
+
+def test_attached_bridge_stop_is_prompt_even_when_the_bridge_never_answers(tmp_path):
+    """A silent bridge must not hold the row for the full call budget."""
+    project = tmp_path / "project"
+    project.mkdir()
+    capability_dir = tmp_path / "capabilities"
+    capability_dir.mkdir()
+    (capability_dir / f"http-{runtime.HTTP_PORT}.json").write_text("{}", encoding="utf-8")
+    silent = tmp_path / "silent_bridge.py"
+    silent.write_text(
+        "\n".join(["import sys", "for _line in sys.stdin:", "    pass", ""]),
+        encoding="utf-8",
+    )
+    bridge = runtime.AttachedBridge(
+        [sys.executable, str(silent)],
+        dict(os.environ),
+        project,
+        capability_dir,
+        "4.1.0",
+        "4.1.1",
+        tmp_path / "bridge.log",
+    )
+    started = time.monotonic()
+    with bridge:
+        time.sleep(1.0)
+    assert time.monotonic() - started < runtime.BRIDGE_CALL_TIMEOUT_SECONDS
+    assert not bridge._thread.is_alive()
+    assert bridge._process is not None and bridge._process.poll() is not None
+    assert bridge.served_b is False

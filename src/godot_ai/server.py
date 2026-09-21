@@ -60,6 +60,7 @@ from godot_ai.resources.project import register_project_resources
 from godot_ai.resources.scenes import register_scene_resources
 from godot_ai.resources.scripts import register_script_resources
 from godot_ai.resources.sessions import register_session_resources
+from godot_ai.runtime_info import disarm_startup_report, report_startup_failure
 from godot_ai.services.custom_tool_service import CustomToolService
 from godot_ai.services.promoted_tools import PromotedToolRegistrar
 from godot_ai.sessions.registry import SessionRegistry
@@ -284,7 +285,8 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "resource",
         "  resource_manage  search, load, assign, get_info, create,\n"
         "                   curve_set_points, environment_create,\n"
-        "                   physics_shape_autofit, gradient_texture_create,\n"
+        "                   physics_shape_autofit, physics_shape_generate,\n"
+        "                   gradient_texture_create,\n"
         "                   noise_texture_create\n",
     ),
     ("api", "  api_manage       get_class\n"),
@@ -459,10 +461,17 @@ def create_server(
                 break
             except PortClaimUnavailable as exc:
                 if loop.time() >= claim_deadline:
-                    raise RuntimeError(
+                    claimed = RuntimeError(
                         f"HTTP port {http_port} is already claimed by another godot-ai server"
-                    ) from exc
+                    )
+                    report_startup_failure(claimed)
+                    raise claimed from exc
                 await asyncio.sleep(0.05)
+            except OSError as exc:
+                ## The claim lives in the capability directory; a directory
+                ## this account cannot use fails here, before any listener.
+                report_startup_failure(exc)
+                raise
 
         ws_task = asyncio.create_task(ws_server.start())
         logger.info("WebSocket server starting on port %d", ws_server.port)
@@ -474,7 +483,14 @@ def create_server(
                 capabilities.websocket,
                 instance_nonce=SERVER_INSTANCE_ID,
             )
-        except BaseException:
+            ## Published: from here on a failure is a runtime fault the
+            ## plugin sees through the authenticated status route.
+            disarm_startup_report()
+        except BaseException as exc:
+            ## Uvicorn swallows a lifespan startup failure into a log line and
+            ## an exit code; the report is how the editor learns the cause.
+            if not isinstance(exc, asyncio.CancelledError):
+                report_startup_failure(exc)
             ws_task.cancel()
             try:
                 await ws_task

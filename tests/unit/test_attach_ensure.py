@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from godot_ai.attach.ensure import (
     BackendStatus,
     SpawnedBackend,
     _backend_spawn_env,
+    compatible_server_version,
     detached_spawn_kwargs,
     port_available,
     probe_backend,
@@ -824,6 +826,56 @@ async def test_lock_is_held_until_health_and_two_callers_spawn_once(tmp_path: Pa
     assert state["spawns"] == 1
 
 
+@pytest.mark.parametrize(
+    ("running", "required", "compatible"),
+    [
+        ("4.0.3", "4.0.2", True),
+        ("4.0.2", "4.0.3", True),
+        ("4.1.0", "4.0.3", True),
+        ("4.0.3", "4.1.0", True),
+        ("4.2.0+local.1", "4.0.3", True),
+        ("4.0.3", "4.0.3", True),
+        ("5.0.0", "4.0.3", False),
+        ("3.2.5", "4.0.3", False),
+        ("0.0.0", "4.0.3", False),
+        ("older-client-pin", "4.0.3", False),
+        ("4.0.3+", "4.0.3", False),
+        ("4.0.3.", "4.0.3", False),
+        ("4.0.3-", "4.0.3", False),
+        ("4.0.3.post1", "4.0.3", True),
+        ("4.0", "4.0.3", False),
+        ("4.0.3", "0+unknown", False),
+        ("weird", "weird", True),
+    ],
+)
+def test_bridge_tolerates_a_backend_of_the_same_major_version(
+    running: str, required: str, compatible: bool
+) -> None:
+    """A bridge is a proxy; the backend owns the catalog. Same major is the
+    contract, exact equality the fallback for anything that does not parse."""
+    assert compatible_server_version(running, required) is compatible
+
+
+async def test_patch_and_minor_skew_adopt_without_spawn(tmp_path: Path) -> None:
+    """The updated server on the port keeps serving the client's old bridge."""
+    spawns: list[bool] = []
+
+    async def probe(_port: int, *_args) -> BackendStatus:
+        return status(version="4.1.0")
+
+    ensurer = BackendEnsurer(
+        probe=probe,
+        spawn=lambda *_args: spawns.append(True),  # type: ignore[arg-type,return-value]
+        runtime_dir=tmp_path,
+        required_version="4.0.3",
+    )
+
+    adopted = await ensurer.ensure()
+
+    assert adopted.server_version == "4.1.0"
+    assert spawns == []
+
+
 async def test_version_skew_is_terminal_without_spawn_or_kill(tmp_path: Path) -> None:
     spawns: list[bool] = []
 
@@ -1141,6 +1193,8 @@ def test_backend_spawn_environment_removes_parent_process_markers(
 ) -> None:
     monkeypatch.setenv(PLUGIN_SPAWNED_ENV, "1")
     monkeypatch.setenv("GODOT_AI_OWNER_PID", "123")
+    monkeypatch.setenv("GODOT_AI_WAIT_FOR_PORT_MS", "15000")
+    monkeypatch.setenv("GODOT_AI_LAUNCH_ID", "launch-3")
     monkeypatch.setenv("GODOT_AI_WS_TOKEN", "secret")
     monkeypatch.setenv(DEV_TRANSPORT_ENV, "streamable-http")
     monkeypatch.setenv("GODOT_AI_UNRELATED", "preserved")
@@ -1151,6 +1205,8 @@ def test_backend_spawn_environment_removes_parent_process_markers(
     assert env["GODOT_AI_UNRELATED"] == "preserved"
     assert PLUGIN_SPAWNED_ENV not in env
     assert "GODOT_AI_OWNER_PID" not in env
+    assert "GODOT_AI_WAIT_FOR_PORT_MS" not in env
+    assert "GODOT_AI_LAUNCH_ID" not in env
     assert env["GODOT_AI_HTTP_CAPABILITY"] == TEST_TRANSPORT_CAPABILITIES.http
     assert env["GODOT_AI_WS_TOKEN"] == TEST_TRANSPORT_CAPABILITIES.websocket
     assert DEV_TRANSPORT_ENV not in env
@@ -1183,3 +1239,204 @@ import godot_ai.orphan_reaper
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+async def test_unanswered_listener_names_an_inaccessible_capability_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#988: a bound port whose record this account cannot read is not a foreign process."""
+    monkeypatch.setattr(
+        ensure_module, "directory_access_error", lambda: "check directory permissions"
+    )
+
+    async def probe(_port: int, *_args) -> BackendStatus | None:
+        return None
+
+    ensurer = BackendEnsurer(
+        probe=probe,
+        spawn=lambda *_args: pytest.fail("must not spawn"),  # type: ignore[arg-type,return-value]
+        port_check=lambda _port: False,
+        runtime_dir=tmp_path,
+        health_timeout_seconds=0.01,
+        poll_seconds=0.001,
+    )
+
+    with pytest.raises(AttachStartupError) as exc_info:
+        await ensurer.ensure()
+
+    assert exc_info.value.code == "CAPABILITY_DIR_INACCESSIBLE"
+    assert exc_info.value.hint == "check directory permissions"
+    assert exc_info.value.exit_code == 98
+
+
+async def test_unanswered_listener_with_a_usable_directory_stays_port_occupied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ensure_module, "directory_access_error", lambda: None)
+
+    async def probe(_port: int, *_args) -> BackendStatus | None:
+        return None
+
+    ensurer = BackendEnsurer(
+        probe=probe,
+        spawn=lambda *_args: pytest.fail("must not spawn"),  # type: ignore[arg-type,return-value]
+        port_check=lambda _port: False,
+        runtime_dir=tmp_path,
+        health_timeout_seconds=0.01,
+        poll_seconds=0.001,
+    )
+
+    with pytest.raises(AttachStartupError) as exc_info:
+        await ensurer.ensure()
+
+    assert exc_info.value.code == "PORT_OCCUPIED"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows repair hint; faking os.name breaks pathlib")
+def test_user_runtime_dir_windows_permission_error_carries_the_repair_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = tmp_path / "godot-ai" / "runtime"
+    monkeypatch.setenv(ensure_module.RUNTIME_DIR_ENV, str(runtime))
+
+    def deny(self, *_args, **_kwargs):
+        raise PermissionError(13, "denied", str(self))
+
+    monkeypatch.setattr(Path, "mkdir", deny)
+
+    with pytest.raises(AttachStartupError) as exc_info:
+        user_runtime_dir()
+
+    assert exc_info.value.code == "ATTACH_RUNTIME_DIR_ERROR"
+    ## An override names the user's own directory: never suggest deleting it.
+    assert "Remove-Item" not in exc_info.value.hint
+    assert ensure_module.RUNTIME_DIR_ENV in exc_info.value.hint
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows repair hint")
+def test_default_runtime_dir_permission_error_carries_directory_permission_guidance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ensure_module.RUNTIME_DIR_ENV, raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+    def deny(self, *_args, **_kwargs):
+        raise PermissionError(13, "denied", str(self))
+
+    monkeypatch.setattr(Path, "mkdir", deny)
+
+    with pytest.raises(AttachStartupError) as exc_info:
+        user_runtime_dir()
+
+    assert exc_info.value.code == "ATTACH_RUNTIME_DIR_ERROR"
+    assert "Remove-Item" not in exc_info.value.hint
+    assert "permissions" in exc_info.value.hint
+    assert str(tmp_path / "godot-ai" / "runtime") in exc_info.value.hint
+
+
+@pytest.mark.asyncio
+async def test_lost_backend_waits_for_its_replacement_before_spawning(tmp_path: Path) -> None:
+    """After serving a backend, a free port means an editor is replacing it.
+
+    The bridge gives the replacement a grace to answer instead of spawning a
+    backend of its own into the gap (the Ubuntu qualification rows of 4.0.4).
+    """
+    probes = {"n": 0}
+    spawns = {"n": 0}
+    statuses = [status(instance_id="instance-a")] + [None] * 4 + [status(instance_id="instance-b")]
+
+    async def probe(_port: int, *_args) -> BackendStatus | None:
+        index = min(probes["n"], len(statuses) - 1)
+        probes["n"] += 1
+        return statuses[index]
+
+    def port_check(port: int) -> bool:
+        ## Free while the old backend is gone and the replacement is not up.
+        return port != 8000 or 1 <= probes["n"] <= 4
+
+    def spawn(*_args) -> SpawnedBackend:
+        spawns["n"] += 1
+        return SpawnedBackend(FakeProcess(), tmp_path / "backend.log")
+
+    ensurer = BackendEnsurer(
+        probe=probe,
+        spawn=spawn,
+        port_check=port_check,
+        runtime_dir=tmp_path,
+        health_timeout_seconds=1,
+        poll_seconds=0.001,
+        replacement_grace_seconds=1.0,
+    )
+
+    first = await ensurer.ensure()
+    second = await ensurer.ensure()
+
+    assert first.instance_id == "instance-a"
+    assert second.instance_id == "instance-b"
+    assert spawns["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_lost_backend_is_respawned_once_the_grace_passes(tmp_path: Path) -> None:
+    probes = {"n": 0}
+    spawns = {"n": 0}
+
+    async def probe(_port: int, *_args) -> BackendStatus | None:
+        probes["n"] += 1
+        if probes["n"] == 1:
+            return status(instance_id="instance-a")
+        if spawns["n"]:
+            return status(instance_id="instance-spawned")
+        return None
+
+    def port_check(port: int) -> bool:
+        return port != 8000 or probes["n"] >= 1
+
+    def spawn(*_args) -> SpawnedBackend:
+        spawns["n"] += 1
+        return SpawnedBackend(FakeProcess(), tmp_path / "backend.log")
+
+    ensurer = BackendEnsurer(
+        probe=probe,
+        spawn=spawn,
+        port_check=port_check,
+        runtime_dir=tmp_path,
+        health_timeout_seconds=1,
+        poll_seconds=0.001,
+        replacement_grace_seconds=0.05,
+    )
+
+    assert (await ensurer.ensure()).instance_id == "instance-a"
+    started = time.monotonic()
+    second = await ensurer.ensure()
+
+    assert second.instance_id == "instance-spawned"
+    assert spawns["n"] == 1
+    assert time.monotonic() - started >= 0.05
+
+
+@pytest.mark.asyncio
+async def test_first_ensure_never_waits_for_a_replacement(tmp_path: Path) -> None:
+    spawns = {"n": 0}
+
+    async def probe(_port: int, *_args) -> BackendStatus | None:
+        return status() if spawns["n"] else None
+
+    def spawn(*_args) -> SpawnedBackend:
+        spawns["n"] += 1
+        return SpawnedBackend(FakeProcess(), tmp_path / "backend.log")
+
+    ensurer = BackendEnsurer(
+        probe=probe,
+        spawn=spawn,
+        port_check=lambda _port: True,
+        runtime_dir=tmp_path,
+        health_timeout_seconds=1,
+        poll_seconds=0.001,
+        replacement_grace_seconds=5.0,
+    )
+
+    started = time.monotonic()
+    assert (await ensurer.ensure()).instance_id == "instance-a"
+    assert spawns["n"] == 1
+    assert time.monotonic() - started < 1.0

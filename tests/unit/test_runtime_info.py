@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 from pathlib import Path
 
@@ -195,3 +196,97 @@ def test_main_plumbs_pid_file_into_runtime_info(monkeypatch, tmp_path):
         "port": 8123,
         "uvicorn_config": asgi.hardened_uvicorn_config(access_log=False),
     }
+
+
+@pytest.fixture
+def _reset_startup_report():
+    saved = runtime_info._STARTUP_REPORT_PATH
+    yield
+    runtime_info._STARTUP_REPORT_PATH = saved
+
+
+def test_startup_report_is_written_only_while_armed(tmp_path, _reset_startup_report):
+    runtime_info.install_startup_report(None)
+    assert runtime_info.report_startup_failure(RuntimeError("unarmed")) is None
+
+    path = tmp_path / "startup.json"
+    assert runtime_info.install_startup_report(path) == path
+    assert runtime_info.report_startup_failure(PermissionError(13, "denied"), hint="fix") == path
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["pid"] == os.getpid()
+    assert payload["error"] == "PermissionError"
+    assert "denied" in payload["message"]
+    assert payload["hint"] == "fix"
+
+    ## Published: later faults are runtime faults, never startup reports.
+    runtime_info.disarm_startup_report()
+    path.unlink()
+    assert runtime_info.report_startup_failure(RuntimeError("late")) is None
+    assert not path.exists()
+
+
+def test_startup_report_is_bounded_and_never_masks_the_failure(tmp_path, _reset_startup_report):
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    runtime_info.install_startup_report(blocker / "report.json")
+    assert runtime_info.report_startup_failure(RuntimeError("boom")) is None
+
+    path = tmp_path / "report.json"
+    runtime_info.install_startup_report(path)
+    runtime_info.report_startup_failure(RuntimeError("m" * 5000))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert len(payload["message"]) == runtime_info._STARTUP_REPORT_MAX_CHARS
+
+
+def test_main_reports_a_startup_failure_before_publication(
+    monkeypatch, tmp_path, _reset_startup_report
+):
+    """A server that dies before its capability record is published tells the dock why."""
+    report = tmp_path / "startup.json"
+
+    def _explode(**_kwargs):
+        raise RuntimeError("capability directory is not writable")
+
+    monkeypatch.setattr("godot_ai.server.create_server", _explode)
+
+    import godot_ai
+
+    monkeypatch.setattr(godot_ai, "preflight_check_port", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="not writable"):
+        godot_ai.main(
+            [
+                "--transport",
+                "streamable-http",
+                "--port",
+                "8123",
+                "--ws-port",
+                "9555",
+                "--startup-report",
+                str(report),
+            ]
+        )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["error"] == "RuntimeError"
+    assert "not writable" in payload["message"]
+
+
+def test_first_startup_report_wins_and_system_exit_is_named(tmp_path, _reset_startup_report):
+    path = tmp_path / "startup.json"
+    runtime_info.install_startup_report(path)
+    assert runtime_info.report_startup_failure(OSError(98, "WebSocket port in use")) == path
+    ## The generic catch-all in main() must not overwrite the specific cause.
+    assert runtime_info.report_startup_failure(SystemExit(98)) is None
+    assert "WebSocket port in use" in json.loads(path.read_text(encoding="utf-8"))["message"]
+
+    runtime_info.install_startup_report(path)
+    runtime_info.report_startup_failure(SystemExit(98))
+    assert json.loads(path.read_text(encoding="utf-8"))["message"] == "exited with code 98"
+
+
+def test_startup_report_requires_an_http_transport(_reset_startup_report):
+    import godot_ai
+
+    with pytest.raises(SystemExit):
+        godot_ai.main(["--transport", "stdio", "--startup-report", "x.json"])

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -570,6 +572,20 @@ class StubClient:
                 "shape_class": "BoxShape3D",
                 "shape_created": True,
                 "size": {"x": 2.0, "y": 1.0, "z": 1.0},
+                "undoable": True,
+            }
+        if command == "physics_shape_generate":
+            return {
+                "created": [
+                    {
+                        "mesh_path": path,
+                        "body_path": f"{path}Collider",
+                        "shape_path": f"{path}Collider/CollisionShape3D",
+                        "shape_type": params.get("shape_type", "box"),
+                        "body_type": params.get("body_type", "static"),
+                    }
+                    for path in params.get("paths", [])
+                ],
                 "undoable": True,
             }
         if command == "create_resource":
@@ -1998,6 +2014,24 @@ async def test_reload_plugin_reports_structured_failure_when_replacement_never_c
     assert error.data["project_path"] == "/tmp/test_project"
     assert error.data["timeout_seconds"] == 0.01
     assert error.data["diagnostics"]["check_sessions"] == "session_manage(op='list')"
+
+
+def test_plugin_scan_wait_fits_inside_the_reconnect_budget():
+    """The plugin's own scan wait must be long enough for a slow editor and
+    shorter than the server's reconnect wait, or a reload abandoned by the
+    plugin leaves the caller waiting for a replacement that never comes."""
+    root = Path(__file__).resolve().parents[2]
+    reload_script = (root / "plugin/addons/godot_ai/utils/plugin_reload.gd").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"^const SCAN_TIMEOUT_SECONDS := ([0-9.]+)$", reload_script, re.M)
+    assert match, "plugin_reload.gd must declare SCAN_TIMEOUT_SECONDS"
+    scan_wait = float(match.group(1))
+    assert 30.0 <= scan_wait < editor_handlers.PLUGIN_RELOAD_RECONNECT_TIMEOUT_SEC
+    smoke = (root / "script/ci-stale-server-smoke").read_text(encoding="utf-8")
+    client = re.search(r"Client\(transport, timeout=(\d+), init_timeout=\d+\)", smoke)
+    assert client, "the ownership smoke must bound its MCP client"
+    assert int(client.group(1)) > editor_handlers.PLUGIN_RELOAD_RECONNECT_TIMEOUT_SEC
 
 
 def test_reload_plugin_default_reconnect_budget_covers_slow_editor_imports():
@@ -3522,6 +3556,82 @@ async def test_physics_shape_autofit_requires_writable():
     runtime = DirectRuntime(registry=registry, client=client)
     with pytest.raises(GodotCommandError):
         await physics_shape_handlers.physics_shape_autofit(runtime, path="/Main/Body/Collision")
+
+
+async def test_physics_shape_generate_handler():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await physics_shape_handlers.physics_shape_generate(
+        runtime,
+        paths=["/Main/Body", "/Main/Wing"],
+        shape_type="sphere",
+        body_type="area",
+    )
+    assert result["created"][0]["shape_type"] == "sphere"
+    assert result["created"][0]["body_type"] == "area"
+    assert client.calls[-1]["command"] == "physics_shape_generate"
+    assert client.calls[-1]["params"] == {
+        "paths": ["/Main/Body", "/Main/Wing"],
+        "shape_type": "sphere",
+        "body_type": "area",
+    }
+    assert client.calls[-1]["timeout"] == physics_shape_handlers.PHYSICS_SHAPE_GENERATE_TIMEOUT_SEC
+
+
+async def test_physics_shape_generate_threads_scene_file_only_when_given():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_shape_handlers.physics_shape_generate(
+        runtime, paths=["/Main/Body"], scene_file="res://main.tscn"
+    )
+    assert client.calls[-1]["params"]["scene_file"] == "res://main.tscn"
+    await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
+    assert "scene_file" not in client.calls[-1]["params"]
+
+
+def test_physics_shape_generate_timeout_derives_from_the_plugin_budget():
+    """The plugin owns the deferred budget; Python adds only the transport margin."""
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "plugin/addons/godot_ai/handlers/physics_shape_handler.gd"
+    ).read_text(encoding="utf-8")
+    match = re.search(r"^const _GENERATE_DEFERRED_TIMEOUT_MS := (\d+)$", source, re.M)
+    assert match, "the handler must declare _GENERATE_DEFERRED_TIMEOUT_MS"
+    assert int(match.group(1)) == physics_shape_handlers.PHYSICS_SHAPE_GENERATE_PLUGIN_TIMEOUT_MS
+    assert physics_shape_handlers.PHYSICS_SHAPE_GENERATE_TIMEOUT_SEC == pytest.approx(
+        int(match.group(1)) / 1000.0 + 2.0
+    )
+
+
+async def test_physics_shape_generate_defaults():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
+    assert client.calls[-1]["params"] == {
+        "paths": ["/Main/Body"],
+        "shape_type": "box",
+        "body_type": "static",
+    }
+
+
+async def test_physics_shape_generate_requires_writable():
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    client.live_readiness = "importing"
+    session = Session(
+        session_id="s1",
+        godot_version="4.5",
+        project_path="/tmp/p",
+        plugin_version="0.1",
+        readiness="importing",
+    )
+    registry = SessionRegistry()
+    registry.register(session)
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
 
 
 async def test_resource_create_requires_writable():

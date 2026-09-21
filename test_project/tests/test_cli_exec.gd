@@ -128,14 +128,19 @@ func test_run_cancels_subprocess_without_reporting_timeout() -> void:
 		skip("No /bin/sleep or /usr/bin/sleep on this host")
 		return
 	var started_msec := Time.get_ticks_msec()
+	var cancellation_polls := [0]
+	var cancel_once := func() -> bool:
+		cancellation_polls[0] += 1
+		return cancellation_polls[0] == 1
 	var result := McpCliExec.run(
-		sleep_exe, ["5"], 5000, true, func() -> bool: return true
+		sleep_exe, ["5"], 5000, true, cancel_once
 	)
 	var elapsed_msec := Time.get_ticks_msec() - started_msec
 	assert_true(bool(result.get("cancelled", false)),
 		"a requested stop must be reported as cancellation")
 	assert_false(bool(result.get("timed_out", false)),
 		"cooperative shutdown is not a wall-clock timeout")
+	assert_eq(cancellation_polls[0], 1, "a quick-window cancellation stays latched through cleanup")
 	assert_eq(int(result.get("exit_code", 0)), -1)
 	assert_true(bool(result.get("termination_failed", false)),
 		"POSIX cancellation cannot prove the launcher had no descendants")

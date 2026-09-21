@@ -55,6 +55,20 @@ Ops:
         "sphere", "capsule", "cylinder" for 3D; "rectangle", "circle",
         "capsule" for 2D) or the matching Godot class name ("BoxShape3D",
         "RectangleShape2D", etc.).
+  • physics_shape_generate(paths, shape_type="box", body_type="static",
+                           scene_file="")
+        Generate a StaticBody3D or Area3D sibling (named <Mesh>Collider) with
+        a CollisionShape3D for every MeshInstance3D path. Shapes are fitted in
+        body-local space; a mesh that already has a collider sibling, a
+        duplicate path, or a scene-root mesh is refused before anything is
+        written. shape_type: box | sphere | capsule | cylinder (or the class
+        name); a sphere/capsule/cylinder under a non-uniformly scaled parent
+        is refused. body_type: static | area. scene_file pins the request to
+        that edited scene. Up to 1024 paths are processed in bounded work
+        across editor frames; inside batch_execute at most 16. The bulk
+        write is one undo action.
+        Returns: {created: [{mesh_path, body_path, shape_path, shape_type,
+                  body_type}], undoable: true}.
   • gradient_texture_create(stops, width=256, height=1, fill="linear",
                               path="", property="", resource_path="",
                               overwrite=False)
@@ -82,6 +96,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
             "curve_set_points": curve_handlers.curve_set_points,
             "environment_create": environment_handlers.environment_create,
             "physics_shape_autofit": physics_shape_handlers.physics_shape_autofit,
+            "physics_shape_generate": physics_shape_handlers.physics_shape_generate,
             "gradient_texture_create": texture_handlers.gradient_texture_create,
             "noise_texture_create": texture_handlers.noise_texture_create,
         },

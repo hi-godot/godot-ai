@@ -137,6 +137,14 @@ def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
                     case for case in row["cases"] if case["id"] == "exact-a-to-b-hot-update"
                 )
                 engine.validate_identity(hot_update.get("godot"), row["godot_version"], row["os"])
+                bridge = hot_update.get("attached_bridge")
+                support.require(
+                    type(bridge) is dict
+                    and bridge.get("served_b") is True
+                    and type(bridge.get("ok_before_update")) is int
+                    and bridge["ok_before_update"] >= 1,
+                    "runtime row lacks the attached-bridge evidence",
+                )
         found[key] = row
     missing = required - set(found)
     support.require(

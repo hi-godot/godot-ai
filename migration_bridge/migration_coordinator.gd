@@ -1,16 +1,12 @@
 @tool
 extends Node
 
-## Value-only handoff across the capsule -> v4 tree swap. This node is parented
-## outside the EditorPlugin so it survives the capsule being disabled. It owns
-## the #946 autoload cleanup, the editor lock, the two-rename swap performed by
-## `utils/update_installer.gd`, the #957 next-start persistence, and the
-## restart. Nothing here spawns a process or loads a v4 runtime script.
+## Prepare the capsule's value-only handoff to the shared activation runner.
+## This coordinator finishes before the runner disables the capsule or swaps
+## its source. The runner alone owns the scan and in-editor activation.
 
-const PLUGIN_CFG := "res://addons/godot_ai/plugin.cfg"
-const LIVE_ROOT := "res://addons/godot_ai"
-const CAPSULE_MARKER := "res://addons/godot_ai/migration_bridge.gd"
 const INSTALLER_SCRIPT := "res://addons/godot_ai/utils/update_installer.gd"
+const ACTIVATION_SCRIPT := "res://addons/godot_ai/utils/update_activation_runner.gd"
 const PORT_RESOLVER_SCRIPT := "res://addons/godot_ai/utils/port_resolver.gd"
 const STATUS_SETTING := "godot_ai/v4_migration_bridge_status"
 ## v3's `plugin.gd::_ensure_game_helper_autoload` wrote
@@ -22,10 +18,9 @@ const STATUS_SETTING := "godot_ai/v4_migration_bridge_status"
 const GAME_HELPER_AUTOLOAD_SETTING := "autoload/_mcp_game_helper"
 const GAME_HELPER_AUTOLOAD_TARGET := "res://addons/godot_ai/runtime/game_helper.gd"
 const REQUIRED_INSTALLER_METHODS := [
-	"acquire_lock", "release_lock", "swap", "persist_next_start_enabled", "request_restart",
+	"acquire_lock", "release_lock", "discard_stage",
 ]
 const PRE_DISABLE_DRAIN_FRAMES := 2
-const POST_DISABLE_DRAIN_FRAMES := 2
 ## Unknown pre-v4 versions still describe a major crossing. Manual-major
 ## client repinning replaces any owned pre-v4 entry, so this fallback is
 ## identity metadata rather than a client-selection authority.
@@ -33,7 +28,7 @@ const UNKNOWN_V3_VERSION := "3.0.0"
 
 signal state_changed(message: String, failed: bool)
 
-enum Phase { IDLE, DRAIN, DISABLED, WAIT_SCAN, DONE }
+enum Phase { IDLE, DRAIN, DONE }
 
 var _package: Dictionary = {}
 var _phase := Phase.IDLE
@@ -60,10 +55,6 @@ func _process(_delta: float) -> void:
 			_frames -= 1
 			if _frames <= 0:
 				_prepare_swap()
-		Phase.DISABLED:
-			_frames -= 1
-			if _frames <= 0:
-				_swap()
 		_:
 			set_process(false)
 
@@ -78,6 +69,11 @@ func _prepare_swap() -> void:
 				"The migration capsule is incomplete (utils/update_installer.gd is missing or invalid)."
 			)
 			return
+	var activation := GDScript.new()
+	activation.source_code = FileAccess.get_file_as_string(ACTIVATION_SCRIPT)
+	if activation.source_code.is_empty() or activation.reload() != OK or not _script_declares(activation, "start"):
+		_fail_before_swap("The migration capsule's activation runner is missing or invalid.")
+		return
 	var cleared := _remove_v3_game_helper_autoload()
 	if cleared != OK:
 		_fail_before_swap(
@@ -94,16 +90,6 @@ func _prepare_swap() -> void:
 		_fail_before_swap(_error_of(locked, "Another editor holds the Godot AI update lock."))
 		return
 	_lock_held = true
-	print("MCP | v3 bridge disabling transition plugin")
-	EditorInterface.set_plugin_enabled(PLUGIN_CFG, false)
-	if EditorInterface.is_plugin_enabled(PLUGIN_CFG):
-		_fail_before_swap("Godot could not disable the migration capsule safely.")
-		return
-	_frames = POST_DISABLE_DRAIN_FRAMES
-	_phase = Phase.DISABLED
-
-
-func _swap() -> void:
 	var from_version := str(_package.get("from_version", ""))
 	var record := {
 		"from_version": from_version if not from_version.is_empty() else UNKNOWN_V3_VERSION,
@@ -111,47 +97,27 @@ func _swap() -> void:
 		"manifest_sha256": str(_package.get("manifest_sha256", "")),
 		"expected_tree_sha256": str(_package.get("expected_tree_sha256", "")),
 		"editor_nonce": Crypto.new().generate_random_bytes(16).hex_encode(),
-		## The v4 plugin reads this after the restart: a v3-to-v4 crossing
+		## The v4 plugin reads this after activation: a v3-to-v4 crossing
 		## may replace owned client-config entries broadly, which an
 		## ordinary v4-to-v4 update must not do.
 		"replace_owned_mismatches": true,
 	}
-	print("MCP | v3 bridge swapping in the verified canonical v4 tree")
-	var swapped: Variant = _installer.call("swap", str(_package.get("stage_root", "")), LIVE_ROOT, record)
-	if not swapped is Dictionary or not bool(swapped.get("ok", false)):
-		_after_swap_failure(_error_of(swapped, "The v4 tree swap failed."))
+	var runner: Node = activation.new()
+	get_tree().root.add_child(runner)
+	var accepted: Variant = runner.call("start", {"stage_root": str(_package.stage_root), "record": record})
+	if not accepted is bool or not accepted:
+		var reason := str(runner.get("refusal_reason"))
+		runner.queue_free()
+		_fail_before_swap(reason if not reason.is_empty() else "The migration activation runner refused the prepared handoff.")
 		return
-	_release_lock()
-	## Disabling the capsule also removed it from editor_plugins/enabled.
-	## Persist the next-start intent without enabling the plugin in this
-	## process: that would load v4 scripts into the old class cache (#957).
-	var persisted: Variant = _installer.call("persist_next_start_enabled", PLUGIN_CFG)
-	if not persisted is int or int(persisted) != OK:
-		var reason := error_string(int(persisted)) if persisted is int else "no result"
-		_stop(
-			"Could not save v4 startup settings (%s); explicit recovery is required."
-			% reason
-		)
-		return
-	print("MCP | v3 bridge restarting editor into canonical v4 tree")
+	## No capsule Script or suspended callback crosses into the scan. The
+	## runner holds only its independent source and copied package values.
+	_lock_held = false
+	_installer = null
 	_phase = Phase.DONE
 	set_process(false)
-	_installer.call("request_restart")
-
-
-## The installer restores the backup when its second rename fails. If the
-## capsule tree is back in place, re-enable it after a scan so the dock can
-## offer Retry; anything else stays disabled and needs explicit recovery.
-func _after_swap_failure(error: String) -> void:
-	_release_lock()
-	record_status(error)
-	push_error("Godot AI v4 migration: %s" % error)
-	if FileAccess.file_exists(CAPSULE_MARKER):
-		_discard_stage()
-		_scan_then_enable()
-		return
-	_phase = Phase.DONE
-	set_process(false)
+	print("MCP | v3 bridge handing verified tree to in-editor activation")
+	queue_free()
 
 
 func _fail_before_swap(message: String) -> void:
@@ -161,40 +127,8 @@ func _fail_before_swap(message: String) -> void:
 	push_error("Godot AI v4 migration: %s" % message)
 	_phase = Phase.DONE
 	set_process(false)
-	if EditorInterface.is_plugin_enabled(PLUGIN_CFG):
-		## The capsule dock is still alive; let it present Retry directly.
-		state_changed.emit(message, true)
-		queue_free()
-		return
-	_scan_then_enable()
-
-
-func _scan_then_enable() -> void:
-	_phase = Phase.WAIT_SCAN
-	set_process(false)
-	var filesystem := EditorInterface.get_resource_filesystem()
-	if filesystem == null:
-		_enable_after_scan.call_deferred()
-		return
-	if not filesystem.filesystem_changed.is_connected(_enable_after_scan):
-		filesystem.filesystem_changed.connect(_enable_after_scan, CONNECT_ONE_SHOT)
-	filesystem.scan()
-
-
-func _enable_after_scan() -> void:
-	if _phase != Phase.WAIT_SCAN:
-		return
-	_phase = Phase.DONE
-	EditorInterface.set_plugin_enabled(PLUGIN_CFG, true)
+	state_changed.emit(message, true)
 	queue_free()
-
-
-func _stop(message: String) -> void:
-	_release_lock()
-	record_status(message)
-	_phase = Phase.DONE
-	set_process(false)
-	push_error("Godot AI v4 migration: %s" % message)
 
 
 func _release_lock() -> void:

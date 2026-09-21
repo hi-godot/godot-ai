@@ -20,8 +20,15 @@ from godot_ai.transport.capability import (
     WS_CAPABILITY_ENV,
     write_capabilities,
 )
+from script import release_support
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class _LoopbackServer(release_support.LoopbackBind, ThreadingHTTPServer):
+    """No FQDN lookup of 127.0.0.1: that stalls ~35 s per process on macOS."""
+
+
 RUNNER = ROOT / "script" / "ci-godot-tests"
 HTTP_CAPABILITY = "ci-runner-http-capability-0123456789abcdef"
 WS_CAPABILITY = "0123456789abcdef" * 4
@@ -221,7 +228,7 @@ def test_runner_reuses_one_mcp_session_and_accepts_both_response_shapes(
     runner_name: str,
 ) -> None:
     state = _RunnerState()
-    server = ThreadingHTTPServer(
+    server = _LoopbackServer(
         ("127.0.0.1", 0),
         _handler(state, ROOT / "test_project", response_shape, runner_name),
     )

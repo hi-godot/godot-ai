@@ -1,0 +1,195 @@
+name: Validate release migration and public installs
+run-name: Release validation / ${{ inputs.mode }} / qualification ${{ inputs.qualification_run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [predecessor, public]
+        required: true
+      qualification_run_id:
+        description: Successful exact-candidate qualification run
+        type: string
+        required: true
+      previous_version:
+        description: Published predecessor for the migration lane
+        type: string
+        default: "4.0.4"
+      publication_run_id:
+        description: Successful promotion run (public mode only)
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  GODOT_AI_DISABLE_TELEMETRY: "true"
+  QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+  PREVIOUS_VERSION: ${{ inputs.previous_version }}
+  PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
+  VALIDATION_MODE: ${{ inputs.mode }}
+
+jobs:
+  validate:
+    name: ${{ inputs.mode }} / ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify qualification provenance before downloading
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from script.release_promotion import check_run_provenance
+          from script.release_support import canonical
+          Path("qualification-run.json").write_bytes(canonical(check_run_provenance(os.environ["QUALIFICATION_RUN_ID"])))
+          PY
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-candidate-a
+          path: candidate
+      - name: Bind downloaded candidate to the checked run and attempt
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from script import release_support as support
+          record = support.verify_candidate(Path("candidate"), "a")
+          support.validate_run(support.read_json(Path("qualification-run.json")), record["workflow_sha"], record["run_id"], record["run_attempt"])
+          PY
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: inputs.mode == 'predecessor'
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-row-python-${{ matrix.os }}-${{ matrix.python }}
+          path: python-row
+      - uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2
+        if: inputs.mode == 'predecessor'
+        with:
+          version: "4.7.0"
+          use-dotnet: false
+      - name: Verify published predecessor updates to exact candidate A
+        if: inputs.mode == 'predecessor'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROW_OS: ${{ matrix.os }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install uv==0.11.7
+          python -m script.release_predecessor --candidate candidate --python-row python-row --previous-version "$PREVIOUS_VERSION" --godot "$GODOT" --godot-version 4.7.0 --output row --os "$ROW_OS"
+      - name: Verify public bytes and resolve fresh public installs
+        if: inputs.mode == 'public'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROW_OS: ${{ matrix.os }}
+        shell: bash
+        run: python -m script.release_public_verify --candidate candidate --output row --os "$ROW_OS"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: validation-${{ inputs.mode }}-${{ matrix.os }}-${{ matrix.python }}
+          path: row/
+          if-no-files-found: error
+          retention-days: 90
+
+  complete:
+    name: Require complete supplemental release evidence
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Verify qualification provenance before downloading
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from script.release_promotion import check_run_provenance
+          from script.release_support import canonical
+          Path("qualification-run.json").write_bytes(canonical(check_run_provenance(os.environ["QUALIFICATION_RUN_ID"])))
+          PY
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-candidate-a
+          path: candidate
+      - name: Bind downloaded candidate to the checked run and attempt
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from script import release_support as support
+          record = support.verify_candidate(Path("candidate"), "a")
+          support.validate_run(support.read_json(Path("qualification-run.json")), record["workflow_sha"], record["run_id"], record["run_attempt"])
+          PY
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: validation-${{ inputs.mode }}-*
+          path: rows
+      - name: Verify publication provenance before downloading its receipt
+        if: inputs.mode == 'public'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from script.release_validation import check_publication_run
+          check_publication_run(os.environ["PUBLICATION_RUN_ID"], Path("candidate"))
+          PY
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: inputs.mode == 'public'
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.publication_run_id }}
+          repository: hi-godot/godot-ai
+          name: v4-publication-receipt
+          path: publication
+      - name: Bind every platform row to candidate A
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir attestation
+          args=()
+          if [ "$VALIDATION_MODE" = public ]; then
+            args+=(--publication publication/publication.json)
+          fi
+          python -m script.release_validation --candidate candidate --rows rows --output attestation/validation.json --kind "$VALIDATION_MODE" "${args[@]}"
+          cp -R rows attestation/rows
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: v4-${{ inputs.mode }}-attestation
+          path: attestation/
+          if-no-files-found: error
+          retention-days: 90

@@ -4,13 +4,20 @@ name: Discord changelog
 ## the channel-scoped DISCORD_CHANGELOG_WEBHOOK secret. The v3 line did this as
 ## the last step of its release workflow. The v4 promotion (release.yml)
 ## publishes from a protected environment and runs nothing that is not needed
-## to publish, so the post lives here and fires on the `published` release
-## event GitHub emits when the promotion flips the draft release live.
+## to publish, so the post lives here and runs once a promotion completes
+## successfully. It reads the tag from the `v4-publication-receipt` artifact
+## that promotion uploaded, so the announcement follows from the same run
+## that published.
+##
+## The `published` release event GitHub emits when the draft flips live is
+## only a fallback for a draft published by hand: the promotion publishes with
+## the workflow token, and an event raised by the workflow token never starts
+## another workflow.
 ##
 ## A missing webhook secret fails the run: an unannounced release must not
 ## look like a success.
 ##
-## Dispatch it by hand with a tag to post a release the event did not cover,
+## Dispatch it by hand with a tag to post a release neither trigger covered,
 ## such as 4.0.0 to 4.0.2, which were published before this workflow existed.
 ##
 ## The post is silent: flags 4096 is Discord's SUPPRESS_NOTIFICATIONS, so the
@@ -20,6 +27,9 @@ name: Discord changelog
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Promote qualified v4 release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -27,8 +37,10 @@ on:
         required: true
         type: string
 
+## actions: read downloads the promotion run's publication receipt.
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: discord-changelog
@@ -37,15 +49,34 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
-    ## A fork has neither the webhook nor the channel.
-    if: github.repository == 'hi-godot/godot-ai'
+    ## A fork has neither the webhook nor the channel. A promotion that was
+    ## cancelled or failed published nothing, so there is nothing to announce.
+    if: >-
+      github.repository == 'hi-godot/godot-ai'
+      && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     steps:
+      - name: Resolve the tag from the promotion's publication receipt
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PROMOTION_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          gh run download "$PROMOTION_RUN_ID" --name v4-publication-receipt --dir receipt
+          tag=$(jq -r '.tag' receipt/publication.json)
+          case "$tag" in
+            v[0-9]*) ;;
+            *) echo "::error::publication receipt of run $PROMOTION_RUN_ID names no release tag." >&2; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        id: receipt
       - name: Post release notes to Discord
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name || steps.receipt.outputs.tag }}
         run: |
           set -euo pipefail
           # `gh secret set` keeps a trailing newline when the value was piped

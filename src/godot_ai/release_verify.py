@@ -492,13 +492,42 @@ def _verify_installed_tree(root: Path, manifest: dict[str, Any]) -> None:
         _fail("installed v4 tree", "files do not exactly match the signed inventory")
 
 
+def private_mkdir(path: Path, *, windows: bool | None = None) -> None:
+    """Create one directory only this user can read; standard library only.
+
+    The same rule as ``godot_ai.transport.capability.private_mkdir``: POSIX
+    gets mode ``0o700``, Windows deliberately no mode, because CPython turns
+    ``mode=0o700`` into an OWNER RIGHTS-only DACL there (#988). It lives here
+    too because ``script/v4-release`` loads this file standalone, on a runner
+    where the ``godot_ai`` package is not installed, so this module may
+    import nothing from the package.
+    """
+    on_windows = os.name == "nt" if windows is None else windows
+    if on_windows:
+        path.mkdir(exist_ok=True)
+    else:
+        path.mkdir(mode=0o700, exist_ok=True)
+
+
+def _private_mkdir_parents(directory: Path) -> None:
+    """``mkdir -p`` for a staged plugin path, one private directory at a time."""
+
+    missing: list[Path] = []
+    current = directory
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for path in reversed(missing):
+        private_mkdir(path)
+
+
 def _extract_verified_archive(archive_data: bytes, destination: Path) -> Path:
     plugin_root = destination / "addons" / "godot_ai"
     try:
         with zipfile.ZipFile(io.BytesIO(archive_data)) as archive:
             for info in archive.infolist():
                 target = plugin_root.joinpath(*info.filename[len(PLUGIN_PREFIX) :].split("/"))
-                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                _private_mkdir_parents(target.parent)
                 flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
                 descriptor = os.open(target, flags, 0o600)
                 with os.fdopen(descriptor, "wb") as handle:
@@ -543,7 +572,7 @@ def stage_verified_release(
     )
     if os.path.lexists(destination):
         _fail("staging", "destination already exists")
-    destination.mkdir(mode=0o700)
+    private_mkdir(destination)
     _sync_directory(destination.parent)
     try:
         plugin = _extract_verified_archive(archive_data, destination)

@@ -255,6 +255,11 @@ var _update_btn: Button
 const _UPDATE_ACTION_TEXT := "Update"
 const _UPDATE_LABEL_COLOR := Color(1.0, 0.85, 0.3)
 var _post_update_action := ""
+## True from the moment an update starts its client migration until the
+## server it then starts is connected. The transport reads "blocked" for
+## that whole window (the migration barrier, then the launch), which is
+## not a fault: name the phase instead of alarming the user (#999).
+var _post_update_server_pending := false
 
 func _ready() -> void:
 	_startup_grace_until_msec = Time.get_ticks_msec() + STARTUP_GRACE_MSEC
@@ -300,6 +305,15 @@ func _notification(what: int) -> void:
 		if _uv_recheck_pending:
 			_uv_recheck_pending = false
 			_refresh_setup_status.call_deferred()
+
+
+## Godot can leave its shared progress dialog under one of our modal windows.
+## Return it before removing the dock: freeing it leaves the editor's pointer dangling.
+func release_editor_progress_dialog() -> void:
+	if not is_inside_tree():
+		return
+	for dialog in find_children("*", "ProgressDialog", true, false):
+		dialog.reparent(get_tree().root)
 
 
 func _should_refresh_client_statuses_on_focus_in() -> bool:
@@ -792,6 +806,8 @@ func _update_status() -> void:
 	var state: int = int(server_status.get("state", ServerStateScript.UNINITIALIZED))
 	if ServerStateScript.blocks_client_health(state):
 		connected = false
+	if connected:
+		_post_update_server_pending = false
 
 	## One `match`/`elif` chain, one source of truth. Adding a new
 	## spawn outcome = one `ServerStateScript` constant + one arm here +
@@ -808,6 +824,9 @@ func _update_status() -> void:
 	elif connected:
 		status_text = _connected_status_text()
 		status_color = Color.GREEN
+	elif bool(server_status.get("handoff_retry_pending", false)):
+		status_text = "Recovering after update…"
+		status_color = COLOR_AMBER
 	elif state == ServerStateScript.CRASHED:
 		var exit_ms: int = server_status.get("exit_ms", 0)
 		status_text = "Server exited after %.1fs" % (exit_ms / 1000.0)
@@ -829,6 +848,14 @@ func _update_status() -> void:
 	elif state == ServerStateScript.NO_COMMAND:
 		status_text = "No server command found"
 		status_color = Color.RED
+	elif _post_update_server_pending:
+		## Every terminal spawn failure matched above; what is left is the
+		## post-update window where the server is being brought back.
+		status_text = "Finishing update — starting server…"
+		status_color = COLOR_AMBER
+	elif state == ServerStateScript.SPAWNING:
+		status_text = "Starting server…"
+		status_color = COLOR_AMBER
 	elif not transport_status.is_empty():
 		var transport_phase := str(transport_status.get("phase", ""))
 		if transport_phase == "connecting":
@@ -934,21 +961,18 @@ func _update_crash_panel(server_status: Dictionary) -> void:
 			and not bool(server_status.get("can_recover_incompatible", false))
 		)
 
-	## #647: the quick picker only moves `godot_ai/http_port`, so hide it
-	## when the diagnosed conflict is on the WebSocket port — the crash
-	## body already points at `godot_ai/ws_port` in Editor Settings.
+	## The picker moves both ports (#647 hid it for a WebSocket-side
+	## conflict when it could only move the HTTP port), seeded with the
+	## diagnosed conflict so only the contested port changes.
 	var conflict_port := int(server_status.get("conflict_port", 0))
-	var http_conflict := conflict_port <= 0 or conflict_port == ClientConfigurator.http_port()
 	var port_picker_visible := (
-		state == ServerStateScript.PORT_EXCLUDED
-		or (state == ServerStateScript.FOREIGN_PORT and http_conflict)
+		state == ServerStateScript.PORT_EXCLUDED or state == ServerStateScript.FOREIGN_PORT
+		or (state == ServerStateScript.INCOMPATIBLE
+			and not bool(server_status.get("can_recover_incompatible", false)))
 	)
 	_port_picker_panel.visible = port_picker_visible
 	if port_picker_visible:
-		## Seed the spinbox with a suggested non-reserved port each time the
-		## panel surfaces. Idempotent when the user already has a good
-		## candidate queued up.
-		_port_picker_panel.seed_suggested_port()
+		_port_picker_panel.seed_suggested_ports(conflict_port)
 
 
 static func _crash_body_for_state(state: int, server_status: Dictionary = {}) -> String:
@@ -1028,13 +1052,13 @@ static func _crash_body_for_state(state: int, server_status: Dictionary = {}) ->
 ## server we can't prove we own, which commonly holds both ports — moving only
 ## http would then leave the new server unable to bind ws. Both suggestions are
 ## routed through `suggest_free_port` so they clear Windows' winnat reservation
-## table (no point suggesting a port that 10013s on bind). Only the http port
-## reaches client configs; the ws port is server↔plugin, hence the wording.
+## table (no point suggesting a port that 10013s on bind). Both ports reach
+## the client's attach command, so clients must be reconfigured afterwards.
 ## The per-client reconfigure steps live behind the crash panel's docs link.
 static func _free_port_hint(port: int) -> String:
 	var free_http := ClientConfigurator.suggest_free_port(port + 1)
 	var free_ws := ClientConfigurator.suggest_free_port(ClientConfigurator.ws_port() + 1)
-	return "Ports %d (HTTP) and %d (WS) are free — set `godot_ai/http_port` and `godot_ai/ws_port` in Editor Settings, then update your client config with the new HTTP port (How to change the port, below)." % [free_http, free_ws]
+	return "Suggested ports: %d (HTTP) and %d (WS). Choose both ports below, click Apply + Reload, then Configure your AI clients to use the new pair." % [free_http, free_ws]
 
 
 ## URL for the port-conflict guide, pinned to the release tag that matches the
@@ -1061,8 +1085,8 @@ func _on_log_logging_enabled_changed(enabled: bool) -> void:
 
 ## Signal handler for the extracted PortPickerPanel. The replaceable Dock emits
 ## a copied value intent; the composition root owns persistence and reload.
-func _on_port_apply_requested(new_port: int) -> void:
-	settings_apply_requested.emit({"http_port": new_port}, true)
+func _on_port_apply_requested(new_http_port: int, new_ws_port: int) -> void:
+	settings_apply_requested.emit({"http_port": new_http_port, "ws_port": new_ws_port}, true)
 
 
 func _refresh_server_label(server_status: Dictionary = {}) -> void:
@@ -2093,7 +2117,8 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 
 	_update_confirm = ConfirmationDialog.new()
 	_update_confirm.title = "Update Godot AI?"
-	_update_confirm.ok_button_text = "Save & Update"
+	_update_confirm.ok_button_text = "Update plugin"
+	_update_confirm.cancel_button_text = "Later"
 	_update_confirm.confirmed.connect(_on_update_confirmed)
 	add_child(_update_confirm)
 
@@ -2734,12 +2759,12 @@ func _on_update_pressed() -> void:
 	if not _post_update_action.is_empty():
 		post_update_action_requested.emit(_post_update_action)
 		return
-	## The update saves every open scene, swaps the add-on tree and relaunches
-	## the editor (docs/self-update.md, step 8). Ask before doing that to a
-	## user's session. A dock that is not in a scene tree has no dialog to
-	## show and proceeds directly.
+	## Updating briefly disconnects AI tools while the add-on is replaced.
+	## A dock outside the scene tree has no dialog and proceeds directly.
 	if _update_confirm != null and is_inside_tree():
-		_update_confirm.dialog_text = update_confirm_text(_update_candidate_version)
+		_update_confirm.dialog_text = update_confirm_text(
+			_update_candidate_version, ClientConfigurator.get_plugin_version()
+		)
 		_update_confirm.popup_centered()
 		return
 	update_requested.emit()
@@ -2749,12 +2774,14 @@ func _on_update_confirmed() -> void:
 	update_requested.emit()
 
 
-static func update_confirm_text(version: String) -> String:
+static func update_confirm_text(version: String, current_version: String) -> String:
 	var target := "Godot AI v%s" % version if not version.is_empty() else "the new Godot AI"
-	return (
-		"This will save your project and relaunch the editor to install %s.\n"
-		+ "AI clients connected right now must be restarted afterwards.\n\nContinue?"
-	) % target
+	var text := "Update to %s? Unsaved changes are kept." % target
+	if McpServerVersionCheck.attached_bridges_follow(current_version, version):
+		text += "\n\nRestart AI clients older than v4.0.4."
+	else:
+		text += "\n\nRestart your AI client after updating."
+	return text
 
 
 func present_update_check(result: Dictionary) -> void:
@@ -2763,7 +2790,7 @@ func present_update_check(result: Dictionary) -> void:
 	_update_label.add_theme_color_override("font_color", _UPDATE_LABEL_COLOR)
 	_update_banner.visible = true
 	## A fresh candidate re-arms the action. The restarted editor after an
-	## update shows "Update complete" with the button disabled; a newer release
+	## update shows "Godot AI installed" with the button disabled; a newer release
 	## found later in that same session must still be installable. A running
 	## install or a pending post-update action keeps ownership of the button.
 	if _update_install_in_flight or not _post_update_action.is_empty():
@@ -2786,6 +2813,19 @@ func present_update_state(state: Dictionary) -> void:
 			_update_btn.text = _UPDATE_ACTION_TEXT
 	if state.has("install_in_flight"):
 		_update_install_in_flight = bool(state["install_in_flight"])
+	if String(state.get("post_update_action", "")) == "retry":
+		## The migration barrier refused: the connection really is blocked.
+		_post_update_server_pending = false
+	elif bool(state.get("install_in_flight", false)) or String(state.get("outcome", "")) == "success":
+		_post_update_server_pending = true
+		if _status_label != null:
+			_update_status()
+	elif state.has("install_in_flight"):
+		## The install ended without a swap (`_fail_update`): the previous
+		## version is live and the transport status is the truth again.
+		_post_update_server_pending = false
+		if _status_label != null:
+			_update_status()
 	if state.has("button_text") and _update_btn != null:
 		_update_btn.text = String(state["button_text"])
 	if state.has("button_disabled") and _update_btn != null:
@@ -2796,9 +2836,10 @@ func present_update_state(state: Dictionary) -> void:
 		_update_label.text = String(state["label_text"])
 	if state.has("banner_visible") and _update_banner != null:
 		_update_banner.visible = bool(state["banner_visible"])
-	if String(state.get("outcome", "")) == "success" and _update_label != null:
-		## Visual confirmation for successful terminal update states.
-		_update_label.add_theme_color_override("font_color", Color.GREEN)
+	if state.has("label_text") and _update_label != null:
+		## Installation is distinct from server/client readiness. Instructions
+		## can still name failed migrations or clients that must reconnect.
+		_update_label.add_theme_color_override("font_color", _UPDATE_LABEL_COLOR)
 
 
 func _set_update_status(text: String) -> void:

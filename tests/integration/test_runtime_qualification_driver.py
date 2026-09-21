@@ -1,8 +1,14 @@
 import shutil
 import subprocess
 
+import pytest
+
 from script import runtime_qualification as runtime
 from tests.integration._self_update_fixture import PLUGIN_ROOT, godot_bin_or_skip
+
+## Needs a real Godot editor (GODOT_BIN); skipped without one and excluded
+## from the iteration loop by `pytest -m "not editor"`.
+pytestmark = pytest.mark.editor
 
 
 def test_external_exact_candidate_driver_parses_in_real_godot(tmp_path):

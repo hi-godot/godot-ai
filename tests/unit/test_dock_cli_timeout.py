@@ -320,6 +320,21 @@ def test_root_owned_workers_quiesce_during_update_and_plugin_exit() -> None:
         "_dispatcher.clear()"
     )
     assert "var script_quiesced := prepare_for_update_reload()" in install_block
+    ## Each main-thread phase names itself in the dock and yields a frame first,
+    ## so the label repaints instead of the dock freezing on "Downloading…".
+    for label, work in (
+        ("Verifying signed update…", "ReleaseVerifier.verify_manifest("),
+        ("Staging the verified tree…", "UpdateInstaller.stage("),
+        ("Waiting for client workers…", "_client_jobs.quiesce("),
+    ):
+        phase = f'await _present_install_phase("{label}")'
+        assert phase in install_block, label
+        assert install_block.index(phase) < install_block.index(work), label
+    present = get_func_block(
+        plugin_source, "func _present_install_phase(status_text: String) -> void:"
+    )
+    assert '"install_in_flight": true' in present
+    assert "await tree.process_frame" in present
     exit_block = get_func_block(plugin_source, "func _exit_tree() -> void:")
     assert "_client_jobs.quiesce()" in exit_block
 
@@ -333,15 +348,30 @@ def test_composition_and_post_update_barriers_precede_every_normal_start_effect(
         plugin_source,
         "func _continue_enter_tree_after_update_barrier() -> void:",
     )
+    activation = get_func_block(plugin_source, "func _activate_startup_endpoints() -> void:")
     begin = get_func_block(plugin_source, "func _begin_startup_release() -> void:")
     release = get_func_block(plugin_source, "func _release_normal_startup() -> void:")
 
     assert "_continue_enter_tree_after_update_barrier()" in enter
-    assert compose.index("add_control_to_dock(") < compose.index("_resolve_ws_port(")
-    assert compose.index("_resolve_ws_port(") < compose.index("_begin_startup_release()")
-    assert "_client_jobs.activate()" not in compose
-    assert "_start_server()" not in compose
-    assert "check_for_updates" not in compose
+    assert compose.index("add_control_to_dock(") < compose.index("_activate_startup_endpoints()")
+    ordered_activation = (
+        "prepare_major_upgrade_endpoints(",
+        "v4_endpoint_ports_status()",
+        'if not bool(override.get("ok", false)):',
+        "ClientConfigurator.capture_endpoint_policy()",
+        "_resolve_ws_port(",
+        '_set_endpoint_policy(resolved_policy)',
+        "ClientConfigurator.warm_env_snapshot(_endpoint_policy)",
+        "_lifecycle.configure(_capture_lifecycle_plan())",
+        "_begin_startup_release()",
+    )
+    positions = [activation.index(step) for step in ordered_activation]
+    assert positions == sorted(positions)
+    for effect in ("_client_jobs.activate()", "_start_server()", "check_for_updates"):
+        assert effect not in compose
+        assert effect not in activation
+    assert "_resolve_ws_port(" not in compose
+    assert "_begin_startup_release()" not in compose
     expected_call = """_client_jobs.begin_post_update_repin(
         str(_post_update_outcome.get("from_version", "")),
         str(_post_update_outcome.get("to_version", "")),
@@ -472,3 +502,16 @@ def test_dock_emits_endpoint_setting_values_and_root_owns_persistence() -> None:
     )
     assert "ClientConfigurator.apply_endpoint_settings(changes.duplicate(true))" in routed
     assert "func apply_endpoint_settings(changes: Dictionary) -> Dictionary:" in configurator_source
+
+
+def test_post_update_drift_is_deferred_to_configure_not_a_startup_barrier() -> None:
+    """#999: an entry that is not provably ours is left alone and named, never a block."""
+    owner_source = (PLUGIN_ROOT / "utils" / "client_job_owner.gd").read_text(encoding="utf-8")
+    post_update = get_func_block(owner_source, "func _run_post_update_repin(")
+    result = get_func_block(owner_source, "func _post_update_result(")
+
+    assert "automatic migration refused" not in post_update
+    assert post_update.count("deferred.append(") == 2
+    assert "entry_drift_is_version_pin_only(" in post_update
+    assert "ClientConfigurator.configure(" in post_update, "#890 write restriction stays"
+    assert '"deferred": deferred.duplicate(true)' in result

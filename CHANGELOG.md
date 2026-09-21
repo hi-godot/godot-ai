@@ -5,10 +5,193 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
-## Unreleased
+## 4.1.0 (2026-09-11)
+
+Plugin updates now activate inside the running editor, preserving open scenes,
+unsaved changes, selection, and undo history. Updating from published 4.0.4
+still restarts the editor once through its existing updater; later updates use
+the new in-editor path. Published 3.2.5 can migrate through the new update
+capsule without restarting the editor. Older AI clients may still need one
+relaunch after migration.
+[Compare v4.0.4...v4.1.0](https://github.com/hi-godot/godot-ai/compare/v4.0.4...v4.1.0).
 
 ### Fixed
 
+- Fixed a native editor crash when an import runs while the Update confirmation
+  is open. Godot's shared progress dialog survives plugin replacement and can
+  be reused by the next filesystem scan.
+- Updates wait for filesystem scans before replacing and enabling scripts,
+  retain scripts needed by existing undo callbacks, and explain why an unsafe
+  activation was refused.
+- Startup and update recovery stay in a pending state until the server is
+  ready. Genuine failures retain their error state and diagnostics.
+- Windows process-inspection failures no longer masquerade as an exited
+  process. Server ownership checks retain the evidence needed for recovery.
+- Migration chooses an independent HTTP/WebSocket port pair. The dock's port
+  picker updates the effective pair, including migrated settings, and also
+  supports incompatible servers that cannot be reclaimed.
+- Backup scans skip linked child directories, and Linux startup explains when
+  required listener tools are missing.
+
+### Known issue
+
+- **Configure all** can report a client-configuration lock error when requests
+  overlap. Configure clients individually, waiting for each operation to finish,
+  and retry an affected client after the active operation completes. Tracked in
+  [#1047](https://github.com/hi-godot/godot-ai/issues/1047).
+
+## 4.0.4 (2026-09-09)
+
+Updating with AI clients attached no longer means quitting and relaunching
+them: from this version a client's `godot-ai attach` bridge keeps serving a
+server of the same major version, and the restarted editor replaces the
+server an old bridge left on the port by itself. Clients attached through
+4.0.3 or earlier still need one last relaunch after this update. Also the
+dock names each activation phase, a held WebSocket port is diagnosed before
+launch, `physics_shape_generate` lands, and release qualification updates
+with a real attached bridge.
+[Compare v4.0.3...v4.0.4](https://github.com/hi-godot/godot-ai/compare/v4.0.3...v4.0.4).
+
+### Added
+
+- `resource_manage(op="physics_shape_generate")`: bulk-generate a
+  `StaticBody3D` or `Area3D` sibling with a fitted `CollisionShape3D` (box,
+  sphere, capsule or cylinder) for every `MeshInstance3D` path, as one undo
+  action. Every path is validated before anything is written, and a deferred
+  request re-validates each mesh again when its body is added, so a scene
+  edited meanwhile fails the request instead of leaving a partial batch.
+  Contributed by @michaltomczykowski in
+  [#892](https://github.com/hi-godot/godot-ai/pull/892).
+
+### Fixed
+
+- The restarted editor's replacement of the server an attached bridge left on
+  the port no longer loses the port to that bridge. The replacement server
+  reports the moment it reaches its port wait and the occupant is killed only
+  then, so a launch that spends seconds in uvx installing the new version no
+  longer leaves the port free for the bridge to spawn a backend of the old
+  version into (the 4.0.4 qualification's Ubuntu rows: three replacement
+  attempts, each `HTTP port 8000 is already in use`). A bridge whose backend
+  vanishes with the port free now also waits five seconds for a replacement
+  to answer before spawning its own.
+- The dock no longer looks frozen on "Downloading…" after the download has
+  finished: activation now names each phase ("Verifying signed update…",
+  "Staging the verified tree…", "Waiting for client workers…", "Activating
+  verified update…") and lets the dock repaint before the phase's work runs.
+- A server that refused to start now says why in the dock. The launch-failure
+  message (`The launched process identity could not be captured…`) appends the
+  server's own startup report, which two 4.0.3 reports had on disk unread:
+  `WebSocket port 19630 is already in use by another process`.
+- Moving the HTTP port alone no longer lands the next launch on a WebSocket
+  port the previous server still holds: the lifecycle preflights the WebSocket
+  port before launching and names `godot_ai/ws_port`, and the dock's port picker
+  moves both ports, keeping whichever one is free.
+- `Port N is occupied by another process` now says why a godot-ai record for
+  that port did not authenticate the occupant (a probe timeout, a different
+  instance, a non-godot-ai listener), so the report is actionable.
+- After an update the restarted plugin replaces any older server of its
+  major version that an attach bridge left on the port, not only the exact
+  version it superseded, and its post-update status probe waits 3 s instead
+  of 800 ms so a backend still settling on the port is not reported as
+  "held by another process" with nothing replacing it.
+- The post-update banner and log line say "AI clients keep working" when the
+  clients were attached through 4.0.4 or newer (their bridges follow the new
+  server), and keep telling the user to quit and relaunch only for bridges
+  that predate it.
+
+### Changed
+
+- The `godot-ai attach` bridge keeps serving a server of the same **major**
+  version instead of requiring the exact package version. Updating the plugin
+  no longer requires quitting and relaunching every attached AI client: the
+  restarted editor's server is one patch or minor ahead of the client's bridge
+  pin, the bridge re-validates on every request and follows the new server
+  instance. The attach protocol version, ports and excluded domains are still
+  gated exactly. Bridges from 4.0.3 and earlier still refuse a newer server,
+  so the first update onto this version needs one last relaunch.
+- Release qualification's real-editor A-to-B update now runs with a real
+  `godot-ai attach` bridge attached through the update, and passes only when
+  that same bridge process serves the updated editor afterwards, so the gate
+  measures the workflow users actually run.
+
+## 4.0.3 (2026-09-08)
+
+Stabilizes the v4 line on Windows and Linux after the 3.x crossing: the
+private capability directory the account could not use, the post-update
+client barrier, servers left behind by a client's old 3.x bridge, the
+closed-editor recovery installer, the Reload Plugin crash, and the updater's
+lock. Quit and relaunch AI clients that were connected during the update.
+[Compare v4.0.2...v4.0.3](https://github.com/hi-godot/godot-ai/compare/v4.0.2...v4.0.3).
+
+### Fixed
+
+- `editor_reload_plugin` (and the dock's Reload) gave up after 5 s when the
+  editor was still scanning or importing, left the plugin unchanged with only
+  an editor-log error, and the calling AI client then waited out the server's
+  90 s reconnect budget for a replacement session that never came. The
+  reload now waits up to 60 s for its filesystem scan.
+- **OpenCode:** Configure wrote only `opencode.json` while OpenCode merges
+  it with `opencode.jsonc`, the latter winning per key, so a stale
+  `godot-ai` entry in an existing `opencode.jsonc` kept overriding the new
+  one. The descriptor now declares that merge order: Configure updates the
+  effective last definition, status verifies it, Remove clears both
+  ([#1011](https://github.com/hi-godot/godot-ai/issues/1011)).
+- A Godot AI 3.x server left on the port by an AI client whose bridge
+  attached before the update was reported as "held by another process". The
+  lifecycle now performs one untrusted, tokenless status read solely to word
+  the block: it names the pre-v4 server, tells the user to quit and relaunch
+  that client, and re-probes slowly for about three and a half minutes so
+  the editor comes up green once the old server's lease and idle backstop
+  run out. The read grants no adoption, replacement or kill authority. The
+  dock and the migration guide now say "quit and relaunch" rather than
+  "restart": Claude Desktop keeps its MCP configuration in memory and
+  respawns the old bridge until the application itself is relaunched.
+- After an update, a client entry the migration could not prove as
+  "what Configure wrote before the update" (a project `.mcp.json` with a
+  v3 `type: http` entry, an unreadable file) blocked the server with
+  `<client> has non-version configuration drift; automatic migration
+  refused` and a Retry that failed the same way. The entry is still never
+  rewritten (#890), but it no longer holds the server: it is left
+  unchanged, named in the completion banner with a Configure hint, and
+  startup continues. While an update brings the server back the dock now
+  reads `Finishing update — starting server…` instead of a red
+  `Connection blocked`
+  startup continues
+- **Closed-editor recovery installer** (`script/v4-release install`, the
+  #999 procedure): on Windows it treated every update-lock holder as dead
+  when `psutil` was not installed, which the published command never
+  installs, so a live editor's lock was replaced instead of refused; the
+  check now asks the kernel directly and needs no third-party module. A
+  recovery over an existing 4.x tree also records
+  `replace_owned_mismatches`, so the plugin's first start may repin every
+  owned client entry that launches Godot AI, whatever the live tree's
+  version, instead of refusing startup over a leftover v3-shaped entry
+  ([#999](https://github.com/hi-godot/godot-ai/issues/999)).
+- **Windows:** the server launched to replace an older godot-ai backend gave
+  up waiting for the port after 5 s, before the plugin had finished proving
+  the new process and killing the old one (each identity probe is a
+  PowerShell start), so a post-update replacement could loop on `The launched
+  process identity could not be captured`. The replacement now waits 15 s,
+  and that message names the process, whether it is still alive, and which
+  check refused it on each attempt.
+- **Windows:** the server created its private capability directory with
+  `mode=0o700`, which CPython turns into a DACL of SYSTEM, Administrators and
+  OWNER RIGHTS alone. A directory first created by an elevated process is
+  then owned by Administrators, and the user's own unelevated editor, server
+  and `godot-ai attach` bridge can never read or write it: the dock showed
+  `The managed server proof timed out at capability_record` and the bridge
+  reported `PORT_OCCUPIED` for a healthy backend. The directory now inherits
+  the per-user `%LOCALAPPDATA%` permissions; the plugin probes it before
+  spawning and the bridge checks it before blaming a foreign process, and
+  both name the directory and the elevated `Remove-Item` repair when the
+  account cannot use it
+  ([#988](https://github.com/hi-godot/godot-ai/issues/988)).
+- A plugin-spawned server that fails before publishing its capability record
+  now writes the failure to a startup report (`--startup-report`, beside the
+  pid file) and the dock appends it to the proof failure, so a port in use, an
+  unwritable directory or a crashed import is named instead of a bare
+  `proof timed out at capability_record`
+  ([#1012](https://github.com/hi-godot/godot-ai/issues/1012)).
 - `camera_create` / `camera_configure` / `camera_apply_preset` with
   `make_current` on a **Camera2D** could leave the camera not current while
   the response and `camera_get` said it was. Godot's `Camera2D.make_current()`

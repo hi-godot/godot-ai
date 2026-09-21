@@ -234,6 +234,50 @@ static func is_lower_hex(value: String, length: int) -> bool:
 	return is_hex(value, length) and value == value.to_lower()
 
 
+## Windows only: "" when this account can create and write the capability
+## directory, else a repair message. Python creates the directory with
+## ``mode=0o700`` on POSIX, but on Windows that mode yields a DACL of SYSTEM,
+## Administrators and OWNER RIGHTS alone; a directory first created by an
+## elevated process is then owned by Administrators and unusable from the
+## user's own unelevated editor, server and bridge (#988). Creating it here
+## first inherits the per-user %LOCALAPPDATA% DACL, and probing it before the
+## spawn turns a silent "proof timed out at capability_record" into a message
+## that names the directory and the fix.
+static func directory_write_problem(http_port: int) -> String:
+	if OS.get_name() != "Windows":
+		return ""
+	var record := path_for_http_port(http_port)
+	if record.is_empty():
+		return ""
+	return directory_write_problem_for(record.get_base_dir())
+
+
+static func directory_write_problem_for(directory: String) -> String:
+	if DirAccess.open(directory) == null:
+		var created := DirAccess.make_dir_recursive_absolute(directory)
+		if created != OK:
+			return windows_repair_hint(directory, error_string(created))
+	var probe := directory.path_join(".access-probe-%d-%s" % [
+		OS.get_process_id(), Crypto.new().generate_random_bytes(4).hex_encode(),
+	])
+	var file := FileAccess.open(probe, FileAccess.WRITE)
+	if file == null:
+		return windows_repair_hint(directory, error_string(FileAccess.get_open_error()))
+	file.close()
+	DirAccess.remove_absolute(probe)
+	return ""
+
+
+static func windows_repair_hint(directory: String, detail: String) -> String:
+	return (
+		"Godot AI cannot use the directory %s (%s): this Windows account cannot "
+		+ "access it. This can happen when an elevated (Run as administrator) "
+		+ "process created it. Check this directory's permissions and grant your "
+		+ "Windows account access, then reopen Godot and your AI clients without "
+		+ "Run as administrator."
+	) % [directory, detail]
+
+
 static func path_for_http_port(http_port: int) -> String:
 	if http_port < 1 or http_port > 65535:
 		return ""

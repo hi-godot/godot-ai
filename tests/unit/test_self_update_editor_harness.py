@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from godot_ai.transport.capability import CapabilityRecord
 from tests.integration import _self_update_fixture as fixture
 
 
@@ -143,7 +144,11 @@ async def test_attached_agent_uses_python_and_the_editors_isolated_environment(
         tmp_path, 18000, 19500, capability_dir=tmp_path, environment=environment
     )
     captured = {}
-    monkeypatch.setattr(fixture, "read_capabilities", lambda *_args: object())
+    capability = CapabilityRecord("h" * 64, "a" * 64, "b" * 32)
+    (tmp_path / fixture.PRE_INSTANCE_ID_FILE).write_text(
+        capability.instance_nonce, encoding="utf-8"
+    )
+    monkeypatch.setattr(fixture, "read_capabilities", lambda *_args: capability)
 
     def transport(**kwargs):
         captured.update(kwargs)

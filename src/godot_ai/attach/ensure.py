@@ -7,6 +7,7 @@ import errno
 import hmac
 import json
 import os
+import re
 import socket
 import stat
 import subprocess
@@ -31,17 +32,25 @@ from godot_ai.transport.capability import (
     HTTP_CAPABILITY_ENV,
     WS_CAPABILITY_ENV,
     LaunchCapabilities,
+    directory_access_error,
     generate_capabilities,
     read_capabilities,
     validate_capability,
     validate_instance_nonce,
     validate_launch_capabilities,
+    windows_repair_hint,
 )
 
 DEFAULT_HTTP_PORT = 8000
 DEFAULT_WS_PORT = 9500
 DEFAULT_HEALTH_TIMEOUT_SECONDS = 30.0
 DEFAULT_LOCK_TIMEOUT_MARGIN_SECONDS = 15.0
+## A backend this bridge already served that vanishes with its port free is
+## usually being replaced by an editor (an update restart, the dock's Restart
+## Server): the replacement takes the port within a retry of the kill. Wait
+## this long for it to answer before spawning a backend of our own into what
+## would otherwise be a race the editor's server loses on a fast machine.
+REPLACEMENT_GRACE_SECONDS = 5.0
 DEFAULT_PROBE_TIMEOUT_SECONDS = 1.0
 MAX_STATUS_RESPONSE_BYTES = 64 * 1024
 RUNTIME_DIR_ENV = "GODOT_AI_RUNTIME_DIR"
@@ -175,13 +184,18 @@ def user_runtime_dir() -> Path:
             if stat.S_IMODE(path.lstat().st_mode) != 0o700:
                 raise OSError(errno.EACCES, "runtime directory mode is not 0700", str(path))
     except OSError as exc:
+        hint = (
+            f"Choose a private directory owned by your user with {RUNTIME_DIR_ENV}, "
+            "or correct the directory ownership and permissions."
+        )
+        ## Explain Windows permissions for the default location; an explicit
+        ## runtime override retains the directory-selection guidance above.
+        if os.name == "nt" and isinstance(exc, PermissionError) and not override:
+            hint = windows_repair_hint(path)
         raise AttachStartupError(
             "ATTACH_RUNTIME_DIR_ERROR",
             f"Cannot use attach runtime directory {path}: {exc}.",
-            hint=(
-                f"Choose a private directory owned by your user with {RUNTIME_DIR_ENV}, "
-                "or correct the directory ownership and permissions."
-            ),
+            hint=hint,
             data={"path": str(path), "errno": exc.errno},
         ) from exc
     return path.resolve()
@@ -530,6 +544,10 @@ def _backend_spawn_env(capabilities: LaunchCapabilities) -> dict[str, str]:
     for inherited_process_key in (
         PLUGIN_SPAWNED_ENV,
         "GODOT_AI_OWNER_PID",
+        # A plugin launch's port-wait and launch name are that launch's: an
+        # attach-owned backend fails fast on a held port and reports no phase.
+        "GODOT_AI_WAIT_FOR_PORT_MS",
+        "GODOT_AI_LAUNCH_ID",
         HTTP_CAPABILITY_ENV,
         WS_CAPABILITY_ENV,
         # A bridge launched from a reload worker must not make its independent
@@ -565,6 +583,7 @@ class BackendEnsurer:
         lock_timeout_margin_seconds: float = DEFAULT_LOCK_TIMEOUT_MARGIN_SECONDS,
         poll_seconds: float = 0.1,
         required_version: str = __version__,
+        replacement_grace_seconds: float = REPLACEMENT_GRACE_SECONDS,
     ) -> None:
         self.port = port
         self.ws_port = ws_port
@@ -581,6 +600,8 @@ class BackendEnsurer:
         )
         self._poll_seconds = poll_seconds
         self._required_version = required_version
+        self._replacement_grace_seconds = replacement_grace_seconds
+        self._served_backend = False
 
     @property
     def base_url(self) -> str:
@@ -612,8 +633,12 @@ class BackendEnsurer:
         )
         async with lock:
             status = await self._adopt_existing()
+            if status is None and self._served_backend:
+                status = await self._await_replacement()
             if status is not None:
-                return self._validate(status)
+                validated = self._validate(status)
+                self._served_backend = True
+                return validated
             if not self._port_check(self.ws_port):
                 raise _foreign_occupant(self.ws_port, "WebSocket port is already occupied")
 
@@ -628,7 +653,9 @@ class BackendEnsurer:
             while time.monotonic() < deadline:
                 status = await self._probe(self.port, capabilities.http)
                 if status is not None:
-                    return self._validate(status)
+                    validated = self._validate(status)
+                    self._served_backend = True
+                    return validated
                 exit_code = spawned.process.poll()
                 if exit_code is not None:
                     raise AttachStartupError(
@@ -649,6 +676,21 @@ class BackendEnsurer:
                 data={"log_path": str(spawned.log_path)},
             )
 
+    async def _await_replacement(self) -> BackendStatus | None:
+        """Give an editor replacing our lost backend the port before we spawn.
+
+        Called only after this bridge served a backend that is now gone with
+        the port free. ``None`` after the grace means nobody took the port:
+        the caller spawns as it would have.
+        """
+        deadline = time.monotonic() + self._replacement_grace_seconds
+        while time.monotonic() < deadline:
+            await asyncio.sleep(self._poll_seconds)
+            status = await self._adopt_existing()
+            if status is not None:
+                return status
+        return None
+
     async def _adopt_existing(self) -> BackendStatus | None:
         """Retry the status probe while the HTTP port is bound.
 
@@ -665,6 +707,12 @@ class BackendEnsurer:
             if self._port_check(self.port):
                 return None
             if time.monotonic() >= deadline:
+                ## A listener that never answers an authenticated probe is
+                ## usually a godot-ai backend whose record this account cannot
+                ## read (#988): say so rather than blaming a foreign process.
+                access_problem = directory_access_error()
+                if access_problem:
+                    raise _capability_directory_inaccessible(self.port, access_problem)
                 raise _foreign_occupant(
                     self.port, "listener did not answer the godot-ai status probe"
                 )
@@ -672,7 +720,7 @@ class BackendEnsurer:
 
     def _validate(self, status: BackendStatus) -> BackendStatus:
         differences: dict[str, Any] = {}
-        if status.server_version != self._required_version:
+        if not compatible_server_version(status.server_version, self._required_version):
             differences["server_version"] = {
                 "running": status.server_version,
                 "required": self._required_version,
@@ -702,6 +750,44 @@ class BackendEnsurer:
         return status
 
 
+## A complete `major.minor.patch`, optionally followed by one separator and a
+## non-empty suffix (`4.0.3+local.1`, `4.1.0-rc1`); a dangling separator or
+## any other shape is not a version and falls back to exact equality.
+_VERSION_MAJOR = re.compile(r"^(\d+)\.\d+\.\d+(?:$|[.+-][0-9A-Za-z][0-9A-Za-z.+-]*$)")
+
+
+def compatible_server_version(running: str, required: str) -> bool:
+    """Whether a bridge pinned to ``required`` may keep serving ``running``.
+
+    The bridge is a stdio-to-HTTP proxy: tool catalogs, schemas and handlers
+    all come from the backend, so a backend one patch or one minor ahead of
+    (or behind) the bridge's package is the same protocol with a different
+    catalog. Requiring exact equality forced every AI client to be quit and
+    relaunched after every plugin update, because the running bridges kept
+    refusing the freshly updated server. Same major version is the contract
+    now; a version either side cannot parse falls back to exact equality, and
+    ``attach_protocol_version`` still gates the wire format separately.
+    """
+
+    if running == required:
+        return True
+    running_major = _VERSION_MAJOR.match(running.strip())
+    required_major = _VERSION_MAJOR.match(required.strip())
+    if running_major is None or required_major is None:
+        return False
+    return running_major.group(1) == required_major.group(1)
+
+
+def _capability_directory_inaccessible(port: int, repair: str) -> AttachStartupError:
+    return AttachStartupError(
+        "CAPABILITY_DIR_INACCESSIBLE",
+        f"Port {port} is bound, but this account cannot read the godot-ai capability directory.",
+        hint=repair,
+        exit_code=98,
+        data={"port": port},
+    )
+
+
 def _foreign_occupant(port: int, detail: str) -> AttachStartupError:
     return AttachStartupError(
         "PORT_OCCUPIED",
@@ -720,7 +806,7 @@ def _incompatible_backend(detail: str, *, payload: dict[str, Any]) -> AttachStar
         f"A different Godot AI backend is already running: {detail}.",
         hint=(
             "This running MCP client session cannot be repaired. Reconfigure every Godot AI "
-            "MCP client to the same package version and ports, then start a new MCP client "
+            "MCP client to the same major package version and ports, then start a new MCP client "
             "session. The bridge will not replace the running backend."
         ),
         data=payload,

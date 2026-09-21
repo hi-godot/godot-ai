@@ -36,6 +36,13 @@ const PARITY_ORDER := [
 const SHA256_ABC := "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 const SHA256_EMPTY := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+
+class _HashErrors extends Logger:
+	var errors: Array[String] = []
+
+	func _log_error(_function: String, _file: String, _line: int, code: String, rationale: String, _editor_notify: bool, _error_type: int, _script_backtraces: Array) -> void:
+		errors.append(code + rationale)
+
 var _crypto := Crypto.new()
 var _key: CryptoKey
 var _other_key: CryptoKey
@@ -680,8 +687,12 @@ func test_hash_tree_refuses_links() -> void:
 
 
 func test_sha256_helpers() -> void:
+	var errors := _HashErrors.new()
+	OS.add_logger(errors)
 	assert_eq(McpReleaseVerifier.sha256_bytes("abc".to_utf8_buffer()), SHA256_ABC)
 	assert_eq(McpReleaseVerifier.sha256_bytes(PackedByteArray()), SHA256_EMPTY)
+	OS.remove_logger(errors)
+	assert_eq(errors.errors, [], "valid byte buffers must hash without engine errors")
 	var path := FIXTURE_DIR + "/abc.bin"
 	assert_true(write_fixture(path, "abc".to_utf8_buffer()))
 	var hashed := McpReleaseVerifier.sha256_file(path)

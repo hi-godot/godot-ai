@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from typing import Any
 
 
 def _resolve_version(package_file: str | Path) -> str:
@@ -94,6 +95,21 @@ def preflight_check_port(
     ## the fail-fast contract below (#647).
     wait_seconds = _wait_for_port_seconds()
     wait_deadline = time.monotonic() + wait_seconds
+    if wait_seconds > 0:
+        ## Tell the plugin the bind loop is running before the first attempt:
+        ## it kills the occupant only now, and a launch that took seconds to
+        ## get here (uvx installing the new version) no longer leaves the
+        ## port free for a bridge to spawn into.
+        from godot_ai.runtime_info import STARTUP_PHASE_WAITING_FOR_PORT, report_startup_phase
+
+        report_startup_phase(
+            STARTUP_PHASE_WAITING_FOR_PORT,
+            port=port,
+            label=label,
+            ## The plugin names each launch; a phase from another launch's
+            ## report must never pass for this one.
+            launch_id=os.environ.get(LAUNCH_ID_ENV, "").strip(),
+        )
     while True:
         sock = socket.socket(family, socket.SOCK_STREAM)
         keep = False
@@ -120,12 +136,15 @@ def preflight_check_port(
                 ## condition this preflight exists to catch: let the real
                 ## server startup produce its existing failure mode.
                 return
-            print(
-                    f"godot-ai: {label} port {port} is already in use by another "
-                    f"process. Stop it or change the port ({setting} in Godot "
-                    "Editor Settings).",
-                    file=sys.stderr,
-                )
+            text = (
+                f"godot-ai: {label} port {port} is already in use by another "
+                f"process. Stop it or change the port ({setting} in Godot "
+                "Editor Settings)."
+            )
+            print(text, file=sys.stderr)
+            from godot_ai.runtime_info import report_startup_failure
+
+            report_startup_failure(OSError(errno.EADDRINUSE, text))
             raise SystemExit(EXIT_PORT_IN_USE) from exc
         finally:
             if not keep:
@@ -135,8 +154,11 @@ def preflight_check_port(
 
 
 WAIT_FOR_PORT_ENV = "GODOT_AI_WAIT_FOR_PORT_MS"
+LAUNCH_ID_ENV = "GODOT_AI_LAUNCH_ID"
 WAIT_FOR_PORT_RETRY_SECONDS = 0.05
-WAIT_FOR_PORT_MAX_SECONDS = 30.0
+# Match the plugin's bounded replacement wait. Windows identity checks and
+# termination have taken over 25 seconds after this process entered the wait.
+WAIT_FOR_PORT_MAX_SECONDS = 60.0
 
 
 def _wait_for_port_seconds() -> float:
@@ -199,6 +221,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--startup-report",
+        default=None,
+        help=(
+            "When startup fails before the capability record is published, "
+            "write the failure (type, message, hint) as JSON to this path. The "
+            "Godot plugin passes it beside --pid-file and shows the content in "
+            "the dock instead of a bare proof timeout."
+        ),
+    )
+    parser.add_argument(
         "--owner-pid",
         type=int,
         default=None,
@@ -251,7 +283,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     ## #421: parse --allow-host CIDRs. A typo here fails loudly at startup
     ## rather than silently binding loopback-only (or worse, wide open).
-    from godot_ai.transport.origin_guard import bind_host_for_networks, parse_allow_hosts
+    from godot_ai.transport.origin_guard import parse_allow_hosts
 
     try:
         allow_host_networks = parse_allow_hosts(args.allow_host or [])
@@ -270,6 +302,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             parser.error("--owner-pid requires an HTTP transport")
         if args.pid_file is not None:
             parser.error("--pid-file requires an HTTP transport")
+        if args.startup_report is not None:
+            parser.error("--startup-report requires an HTTP transport")
         from godot_ai.attach.main import main as attach_main
 
         attach_args = ["--port", str(args.port), "--ws-port", str(args.ws_port)]
@@ -284,6 +318,28 @@ def main(argv: Sequence[str] | None = None) -> None:
         capabilities = launch_capabilities_from_env()
     except ValueError as exc:
         parser.error(str(exc))
+
+    from godot_ai.runtime_info import install_startup_report, report_startup_failure
+
+    install_startup_report(args.startup_report)
+    try:
+        _serve(args, capabilities, exclude_domains, allow_host_networks)
+    except BaseException as exc:
+        ## Anything that escapes before the capability record is published is
+        ## invisible to the editor otherwise (the report is disarmed once the
+        ## record exists, so runtime faults are not misreported as startup).
+        if not isinstance(exc, KeyboardInterrupt):
+            report_startup_failure(exc)
+        raise
+
+
+def _serve(
+    args: argparse.Namespace,
+    capabilities: Any,
+    exclude_domains: Any,
+    allow_host_networks: Any,
+) -> None:
+    from godot_ai.transport.origin_guard import bind_host_for_networks
 
     ## Widen the HTTP bind off loopback only when an allowlist is named. The
     ## DNS-rebinding guard still gates every request by the CIDR(s); binding

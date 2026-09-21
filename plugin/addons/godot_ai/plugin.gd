@@ -125,11 +125,26 @@ var _post_update_outcome: Dictionary = {}
 ## update may spawn a backend of that version into the restart window; the
 ## restarted editor replaces it once instead of asking the user to.
 var _post_update_replaced_version := ""
+## Clients the post-update migration left unchanged (`{id, reason}`), named
+## in the dock's completion banner so the user knows to click Configure.
+## Untyped on purpose: a typed collection field is the hot-reload crash
+## class (#245) the self-update smoke injects to prove the swap survives it.
+var _post_update_deferred := []
 var _last_logged_block := ""
 ## Bounded re-probes while that backend is still binding its port: a port
 ## that is bound but not yet answering status reads as merely occupied.
 const POST_UPDATE_REPROBE_LIMIT := 10
 var _post_update_reprobes_left := POST_UPDATE_REPROBE_LIMIT
+var _post_update_retry_episode := 0
+## A pre-v4 server left on the port by a still-running v3 attach bridge
+## outlives the fast budget above: its lease lasts 30 s after that client
+## quits and its idle backstop another 120 s. Poll slowly across that
+## window so the editor comes up green once the user has relaunched the
+## client, without any replacement authority over a server we cannot
+## authenticate.
+const POST_UPDATE_STALE_REPROBE_SECONDS := 10.0
+const POST_UPDATE_STALE_REPROBE_LIMIT := 21
+var _post_update_stale_reprobes_left := POST_UPDATE_STALE_REPROBE_LIMIT
 ## An old bridge spawns again as soon as the port frees, so one replacement
 ## may not be the last; a few are allowed before the dock takes over.
 const POST_UPDATE_REPLACEMENT_LIMIT := 3
@@ -260,9 +275,6 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	## is an activation effect on Windows (`netsh`), so it runs only after every
 	## owner and the Dock have been constructed and wired below.
 	_endpoint_policy = ClientConfigurator.capture_endpoint_policy()
-	_endpoint_policy["capability_path"] = TransportCapability.path_for_http_port(
-		int(_endpoint_policy.http_port)
-	)
 	_resolved_ws_port = int(_endpoint_policy.ws_port)
 
 	## Construct plugin-lifetime work owners before attaching the replaceable
@@ -356,7 +368,9 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("particle", HANDLERS_DIR + "particle_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("camera", HANDLERS_DIR + "camera_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("audio", HANDLERS_DIR + "audio_handler.gd", [undo])
-	_dispatcher.register_lazy_handler("physics_shape", HANDLERS_DIR + "physics_shape_handler.gd", [undo])
+	_dispatcher.register_lazy_handler(
+		"physics_shape", HANDLERS_DIR + "physics_shape_handler.gd", [undo, _connection]
+	)
 	_dispatcher.register_lazy_handler("environment", HANDLERS_DIR + "environment_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("texture", HANDLERS_DIR + "texture_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("curve", HANDLERS_DIR + "curve_handler.gd", [undo, _connection])
@@ -492,6 +506,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("audio_stop", "audio", &"stop")
 	_dispatcher.register_lazy("audio_list", "audio", &"list_streams")
 	_dispatcher.register_lazy("physics_shape_autofit", "physics_shape", &"autofit")
+	_dispatcher.register_lazy("physics_shape_generate", "physics_shape", &"generate")
 	_dispatcher.register_lazy("environment_create", "environment", &"create_environment")
 	_dispatcher.register_lazy("gradient_texture_create", "texture", &"create_gradient_texture")
 	_dispatcher.register_lazy("noise_texture_create", "texture", &"create_noise_texture")
@@ -547,13 +562,70 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_startup_trace_phase("dock_attached")
 	## Activation barrier: no process, socket, or probe effect begins until all
 	## owners and the replaceable Dock have been constructed and wired.
-	var resolved_policy := _endpoint_policy.duplicate(true)
-	resolved_policy["ws_port"] = _resolve_ws_port(int(resolved_policy.ws_port))
+	_activate_startup_endpoints()
+
+
+## Endpoint selection is retryable before the immutable launch policy or any
+## client migration worker exists. An old bridge keeps its own ports.
+func _activate_startup_endpoints() -> void:
+	if str(_post_update_outcome.get("outcome", "")) == "success":
+		var prepared := ClientConfigurator.prepare_major_upgrade_endpoints(
+			str(_post_update_outcome.get("from_version", "")),
+			str(_post_update_outcome.get("to_version", "")),
+		)
+		if not bool(prepared.get("ok", false)):
+			_present_endpoint_setup_failure(str(prepared.get("error", "Endpoint selection failed.")))
+			return
+	var override := ClientConfigurator.v4_endpoint_ports_status()
+	if not bool(override.get("ok", false)):
+		_present_endpoint_setup_failure(str(override.get("error", "Invalid endpoint override.")))
+		return
+	var resolved_policy := ClientConfigurator.capture_endpoint_policy()
+	var http_port := int(resolved_policy.http_port)
+	var configured_ws := int(resolved_policy.ws_port)
+	if (
+		http_port < ClientConfigurator.MIN_PORT or http_port > ClientConfigurator.MAX_PORT
+		or configured_ws < ClientConfigurator.MIN_PORT or configured_ws > ClientConfigurator.MAX_PORT
+		or http_port == configured_ws
+	):
+		_present_endpoint_setup_failure("Choose distinct HTTP and WebSocket ports between %d and %d in Godot AI settings." % [ClientConfigurator.MIN_PORT, ClientConfigurator.MAX_PORT])
+		return
+	var resolved_ws := _resolve_ws_port(configured_ws)
+	if (
+		resolved_ws < ClientConfigurator.MIN_PORT or resolved_ws > ClientConfigurator.MAX_PORT
+		or resolved_ws == http_port
+		or (bool(override.present) and resolved_ws != configured_ws)
+	):
+		_present_endpoint_setup_failure("The configured WebSocket port is unavailable. Choose another endpoint pair in Godot AI settings, then retry.")
+		return
+	resolved_policy["ws_port"] = resolved_ws
+	resolved_policy["capability_path"] = TransportCapability.path_for_http_port(http_port)
 	_set_endpoint_policy(resolved_policy)
+	if _connection != null:
+		_connection.ws_port = resolved_ws
+	if _post_update_action == "retry_endpoints":
+		_post_update_action = ""
+		if _dock != null:
+			_dock.present_update_state({"post_update_action": "", "status_text": "", "label_text": "", "banner_visible": false})
 	## #691: publish every environment/setting value before the first worker.
 	ClientConfigurator.warm_env_snapshot(_endpoint_policy)
 	_lifecycle.configure(_capture_lifecycle_plan())
 	_begin_startup_release()
+
+
+func _present_endpoint_setup_failure(error: String) -> void:
+	_post_update_action = "retry_endpoints"
+	_lifecycle._block_without_effect("endpoint_setup_failed", error)
+	if _dock != null:
+		_dock.present_update_state({
+			"install_in_flight": false,
+			"button_text": "Retry endpoint setup",
+			"status_text": "Client endpoint setup failed",
+			"button_disabled": false,
+			"label_text": error,
+			"banner_visible": true,
+			"post_update_action": "retry_endpoints",
+		})
 
 
 func _client_health_is_blocked() -> bool:
@@ -642,6 +714,12 @@ func _lifecycle_snapshot_for_dock() -> Dictionary:
 		_normal_start_released and bool(snapshot.get("can_recover_incompatible", false))
 	)
 	snapshot["normal_start_released"] = _normal_start_released
+	if _post_update_retry_episode > 0 and int(snapshot.get("episode_id", 0)) == _post_update_retry_episode:
+		var episode: Dictionary = _lifecycle.episode_snapshot()
+		if str(episode.get("state", "")) == "BLOCKED" and str(episode.get("reason", "")) == "launch_gone" and str(episode.get("proof_pending_reason", "")) == "capability_pair":
+			## Only the presentation changes; transport remains blocked until proof.
+			snapshot["state"] = ServerStateScript.SPAWNING
+			snapshot["handoff_retry_pending"] = true
 	return snapshot
 
 
@@ -811,11 +889,19 @@ func _on_post_update_repin_completed(result: Dictionary) -> void:
 			"MCP | the %s entry named godot-ai launches something else; it was left unchanged. Use Configure in the dock to replace it."
 			% str(client_id)
 		)
+	_post_update_deferred = []
+	for entry in result.get("deferred", []):
+		if entry is Dictionary:
+			_post_update_deferred.append((entry as Dictionary).duplicate(true))
+			push_warning(
+				"MCP | %s was not migrated automatically because %s; it was left unchanged. Use Configure in the dock."
+				% [str(entry.get("id", "")), str(entry.get("reason", ""))]
+			)
 	## A click cannot prove that an external client restarted. The enforceable
 	## boundary is the one we own: repin its configuration, mark the update
-	## complete, then start and authenticate that server. Clients reconnect to
-	## the stable endpoint; a stale client can still be restarted as remediation,
-	## but it must not hold a healthy installation behind ceremony.
+	## complete, then start and authenticate that server. A major upgrade can
+	## select independent ports; old clients must reload the migrated config,
+	## but cannot hold the new editor endpoint behind their existing leases.
 	_finish_post_update()
 
 
@@ -826,6 +912,7 @@ func _present_post_update_barrier_failure(error: String) -> void:
 		_dock.present_update_state({
 			"install_in_flight": false,
 			"button_text": "Retry client migration",
+			"status_text": "Installed — client migration failed",
 			"button_disabled": false,
 			"label_text": "Server startup is blocked: %s" % error,
 			"banner_visible": true,
@@ -836,7 +923,9 @@ func _present_post_update_barrier_failure(error: String) -> void:
 func _on_dock_post_update_action_requested(action: String) -> void:
 	if action != _post_update_action:
 		return
-	if action == "retry":
+	if action == "retry_endpoints":
+		_activate_startup_endpoints()
+	elif action == "retry":
 		_begin_startup_release()
 
 
@@ -848,16 +937,22 @@ func _finish_post_update() -> void:
 	var recorded := UpdateInstaller.record_clients_migrated()
 	if recorded != OK:
 		push_warning("MCP | could not record client migration in the update marker: %s" % error_string(recorded))
-	## Backups are named by the version they hold: keep the one this update
-	## just retained (the previous version) and drop older ones.
-	UpdateInstaller.prune_backups(str(_post_update_outcome.get("from_version", "")))
+	## In-editor updates retain old script graphs for undo. Keep their backing
+	## files until a fresh editor process can safely prune older generations.
+	if not get_tree().root.has_meta("godot_ai_retained_update_scripts"):
+		UpdateInstaller.prune_backups(str(_post_update_outcome.get("from_version", "")))
 	_post_update_replaced_version = str(_post_update_outcome.get("from_version", ""))
 	_post_update_reprobes_left = POST_UPDATE_REPROBE_LIMIT
+	_post_update_stale_reprobes_left = POST_UPDATE_STALE_REPROBE_LIMIT
 	_post_update_replacements_left = POST_UPDATE_REPLACEMENT_LIMIT
-	print(
-		"MCP | AI clients attached before the update must restart to use v%s"
-		% str(_post_update_outcome.get("to_version", ""))
-	)
+	var to_version := str(_post_update_outcome.get("to_version", ""))
+	if McpServerVersionCheck.attached_bridges_follow(_post_update_replaced_version, to_version):
+		print("MCP | AI clients using v%s can reconnect to v%s; relaunch clients still using older versions" % [_post_update_replaced_version, to_version])
+	else:
+		print(
+			"MCP | Refresh the Godot AI MCP connection and reload its configuration once to use v%s; relaunch the AI app if it cannot reload the configuration"
+			% to_version
+		)
 	_present_post_update_complete()
 	_fan_post_update_outcome()
 	_release_normal_startup()
@@ -883,16 +978,33 @@ func _present_post_update_complete() -> void:
 	if _dock != null:
 		_dock.present_update_state({
 			"install_in_flight": false,
-			"status_text": "Update complete",
+			"status_text": "Godot AI installed" if _post_update_deferred.is_empty() else "Installed — client setup needed",
 			"button_disabled": true,
-			"label_text": (
-				"Restart AI clients that were connected during the update so they use v%s."
-				% str(_post_update_outcome.get("to_version", ""))
-			),
+			"label_text": _post_update_complete_label(),
 			"banner_visible": true,
 			"post_update_action": "",
 			"outcome": "success",
 		})
+
+
+func _post_update_complete_label() -> String:
+	var to_version := str(_post_update_outcome.get("to_version", ""))
+	var from_version := str(_post_update_outcome.get("from_version", ""))
+	var text := (
+		"AI clients already using v%s can reconnect to v%s without restarting. Refresh older MCP connections and reload their configuration; relaunch the AI app if needed." % [from_version, to_version]
+		if McpServerVersionCheck.attached_bridges_follow(from_version, to_version)
+		else "Refresh the Godot AI MCP connection and reload its configuration once to use v%s. If the AI app cannot reload its configuration, quit and relaunch it."
+		% to_version
+	)
+	if _post_update_deferred.is_empty():
+		return text
+	var named: Array[String] = []
+	for entry in _post_update_deferred:
+		var client_id := str(entry.get("id", ""))
+		var client := McpClientRegistry.get_by_id(client_id)
+		var name: String = client.display_name if client != null else client_id
+		named.append("%s (%s)" % [name, str(entry.get("reason", "not migrated"))])
+	return text + " Not migrated: %s. Use Configure to replace them." % ", ".join(named)
 
 
 ## Sole release point for ordinary work and the server lifecycle. Keeping
@@ -1005,6 +1117,7 @@ func _exit_tree() -> void:
 		_dispatcher.release_after_teardown()
 
 	if _dock:
+		_dock.release_editor_progress_dialog()
 		remove_control_from_docks(_dock)
 		_dock.queue_free()
 		_dock = null
@@ -1214,6 +1327,7 @@ func _capture_lifecycle_plan() -> Dictionary:
 		"expected_version": ClientConfigurator.get_plugin_version(),
 		"server_command": ClientConfigurator.get_server_command(),
 		"pid_file": ProjectSettings.globalize_path(PortResolver.SERVER_PID_FILE),
+		"startup_report": ProjectSettings.globalize_path(PortResolver.SERVER_STARTUP_REPORT),
 		"http_port_reserved": WindowsPortReservation.is_port_excluded(http_port),
 		"excluded_domains": str(policy.get("excluded_domains", "")),
 		"allow_hosts": str(policy.get("allow_hosts", "")),
@@ -1233,11 +1347,13 @@ static func _supports_godot_version(version_info: Dictionary) -> bool:
 
 
 func _on_lifecycle_snapshot_changed(snapshot: Dictionary) -> void:
+	if int(snapshot.get("episode_id", 0)) != _post_update_retry_episode or str(snapshot.get("episode_state", "")) != "BLOCKED":
+		_post_update_retry_episode = 0
 	if _connection != null and bool(snapshot.get("connection_blocked", true)):
 		_connection.connect_blocked = true
 		_connection.connect_block_reason = str(snapshot.get("message", ""))
-	_log_lifecycle_block(snapshot)
 	_replace_server_left_by_update(snapshot)
+	_log_lifecycle_block(snapshot)
 	if _client_jobs != null:
 		_client_jobs.set_client_health_blocked(
 			ServerStateScript.blocks_client_health(
@@ -1257,7 +1373,8 @@ func _log_lifecycle_block(snapshot: Dictionary) -> void:
 	if message.is_empty() or message == _last_logged_block:
 		return
 	_last_logged_block = message
-	print("MCP | server start blocked: %s" % message)
+	var retry_pending := bool(_lifecycle_snapshot_for_dock().get("handoff_retry_pending", false))
+	print("MCP | %s: %s" % ["server handoff retry pending" if retry_pending else "server start blocked", message])
 
 
 ## Once, right after an update: a godot-ai server at the version we just
@@ -1277,16 +1394,36 @@ func _replace_server_left_by_update(snapshot: Dictionary) -> void:
 		## bounded number of times; the re-probe finds that backend answering
 		## and takes the replacement path. Then the dock's Restart Server is
 		## the remaining path.
-		if str(snapshot.get("episode_state", "")) == "BLOCKED" and _post_update_reprobes_left > 0:
+		if str(snapshot.get("episode_state", "")) != "BLOCKED":
+			return
+		var episode_id := int(snapshot.get("episode_id", 0))
+		if episode_id <= 0 or episode_id == _post_update_retry_episode:
+			return
+		if str(snapshot.get("blocked_hint", "")) == ServerLifecycleManager.STALE_PRE_V4_HINT:
+			if _post_update_stale_reprobes_left <= 0:
+				return
+			if _post_update_stale_reprobes_left == POST_UPDATE_STALE_REPROBE_LIMIT:
+				print(
+					"MCP | a pre-v4 godot-ai server holds port %d; waiting for it to exit once its AI client is relaunched"
+					% int(snapshot.get("conflict_port", 0))
+				)
+			_post_update_stale_reprobes_left -= 1
+			_post_update_retry_episode = episode_id
+			get_tree().create_timer(POST_UPDATE_STALE_REPROBE_SECONDS).timeout.connect(
+				_reprobe_after_update.bind(episode_id), CONNECT_ONE_SHOT
+			)
+			return
+		if _post_update_reprobes_left > 0:
 			_post_update_reprobes_left -= 1
-			get_tree().create_timer(1.0).timeout.connect(_reprobe_after_update, CONNECT_ONE_SHOT)
+			_post_update_retry_episode = episode_id
+			get_tree().create_timer(1.0).timeout.connect(_reprobe_after_update.bind(episode_id), CONNECT_ONE_SHOT)
 		return
-	if str(snapshot.get("conflict_version", "")) != _post_update_replaced_version:
+	var version := str(snapshot.get("conflict_version", ""))
+	if not _update_may_replace(version):
 		return
 	if _post_update_replacements_left <= 0:
 		return
 	_post_update_replacements_left -= 1
-	var version := _post_update_replaced_version
 	print(
 		"MCP | replacing the v%s server left on port %d by the update"
 		% [version, int(snapshot.get("conflict_port", 0))]
@@ -1298,8 +1435,30 @@ func _replace_server_left_by_update(snapshot: Dictionary) -> void:
 		)
 
 
-func _reprobe_after_update() -> void:
+## The server the update superseded, or any older server of our major
+## version an attach bridge left on the port (a client pinned further back).
+## Never a newer one: that is another editor's server, and adoption or the
+## dock's explicit Restart Server decides there.
+func _update_may_replace(conflict_version: String) -> bool:
+	if conflict_version.is_empty():
+		return false
+	if conflict_version == _post_update_replaced_version:
+		return true
+	return McpServerVersionCheck.is_older_same_major(
+		conflict_version, ClientConfigurator.get_plugin_version()
+	)
+
+
+func _reprobe_after_update(episode_id: int) -> void:
+	if episode_id != _post_update_retry_episode:
+		return
+	_post_update_retry_episode = 0
 	if _post_update_replaced_version.is_empty() or _lifecycle == null or not _normal_start_released:
+		_publish_dock_status_snapshots()
+		return
+	var snapshot: Dictionary = _lifecycle.get_status_dict()
+	if int(snapshot.get("episode_id", 0)) != episode_id or str(snapshot.get("episode_state", "")) != "BLOCKED":
+		_publish_dock_status_snapshots()
 		return
 	_lifecycle.start_server()
 
@@ -1427,11 +1586,17 @@ static func _remove_tree(path: String) -> void:
 	DirAccess.remove_absolute(path)
 
 
-## Verify, stage, quiesce, swap, restart. Every check runs in this editor
+## Verify, stage, quiesce, then hand activation to an independent runner. Every check runs in this editor
 ## against the downloaded bytes; nothing outside the editor is executed. The
 ## live tree is touched only by the two renames inside `swap`, and only after
 ## the staged tree has been re-hashed against the signed manifest.
+## Activation runs on the main thread: verification hashes the archive,
+## staging extracts it, and the worker quiescence waits for threads. Each
+## phase names itself in the dock and yields one frame first so the label
+## repaints; without that the dock sat on "Downloading…" for seconds after
+## the download had finished, looking frozen.
 func install_downloaded_update(package: Dictionary) -> void:
+	await _present_install_phase("Verifying signed update…")
 	var manifest_bytes := FileAccess.get_file_as_bytes(str(package.get("manifest", "")))
 	var signature := FileAccess.get_file_as_bytes(str(package.get("signature", "")))
 	var verified: Dictionary = ReleaseVerifier.verify_manifest(
@@ -1452,12 +1617,14 @@ func install_downloaded_update(package: Dictionary) -> void:
 	if not bool(checked.get("ok", false)):
 		_fail_update("Update verification failed", "signed update refused: %s" % str(checked.get("error", "")))
 		return
+	await _present_install_phase("Staging the verified tree…")
 	var staged: Dictionary = UpdateInstaller.stage(str(package.get("archive", "")), manifest)
 	if not bool(staged.get("ok", false)):
 		_fail_update("Update staging failed", "update staging refused: %s" % str(staged.get("error", "")))
 		return
 	if _update_manager != null:
 		_update_manager.discard_downloads()
+	await _present_install_phase("Waiting for client workers…")
 	if _client_jobs != null:
 		var jobs_quiesced: Dictionary = _client_jobs.quiesce(
 			Time.get_ticks_msec() + ClientConfigurator.PREWARM_TIMEOUT_MS
@@ -1487,31 +1654,44 @@ func install_downloaded_update(package: Dictionary) -> void:
 		"editor_nonce": Crypto.new().generate_random_bytes(16).hex_encode(),
 		"replace_owned_mismatches": false,
 	}
-	var swapped: Dictionary = UpdateInstaller.swap(
-		str(staged.get("stage_root", "")), LIVE_ADDON_ROOT, record
+	## Compile an independent script with no resource path. Loading this as a
+	## normal Script would let the filesystem scan replace our live runner.
+	var runner_script := GDScript.new()
+	runner_script.source_code = FileAccess.get_file_as_string(
+		"res://addons/godot_ai/utils/update_activation_runner.gd"
 	)
-	if not bool(swapped.get("ok", false)):
-		var refused := "update swap refused: %s" % str(swapped.get("error", ""))
-		if not FileAccess.file_exists(PLUGIN_CFG):
-			_fail_update(
-				"Update failed — repair required",
-				refused + "; the previous tree is not live: run `script/v4-release install` or restore the backup by hand",
-			)
-			return
+	if runner_script.source_code.is_empty() or runner_script.reload() != OK:
 		UpdateInstaller.discard_stage()
-		_fail_update("Update failed — previous version kept", refused)
-		## Quiescence already stopped the server and cleared the dispatcher;
-		## the old tree is still live, so rebuild the plugin from it.
+		_fail_update("Update cancelled safely", "could not compile the independent activation runner")
 		_reload_plugin_after_failed_update()
 		return
+	var runner = runner_script.new()
+	get_tree().root.add_child(runner)
+	if not runner.start({"stage_root": str(staged.get("stage_root", "")), "record": record}):
+		var refusal_reason := str(runner.refusal_reason)
+		runner.queue_free()
+		UpdateInstaller.discard_stage()
+		_fail_update("Update cancelled safely", refusal_reason)
+		_reload_plugin_after_failed_update()
+		return
+	## The runner now owns the lock. Teardown's cancellation signal must not
+	## release it before the deferred disable/drain/swap sequence completes.
 	_update_swapped = true
-	## The lock covered download, stage and swap. From here the marker itself
-	## refuses a second update until the restarted editor verifies the tree,
-	## and that editor cannot prove this process dead, so release it now.
-	UpdateInstaller.release_lock()
-	UpdateInstaller.persist_next_start_enabled(PLUGIN_CFG)
-	print("MCP | update to %s swapped in; restarting the editor" % to_version)
-	UpdateInstaller.request_restart.call_deferred()
+	## Return: no frame of this plugin may be suspended across source replacement.
+
+
+
+## Name the activation phase in the dock and let it repaint before the
+## phase's main-thread work begins.
+func _present_install_phase(status_text: String) -> void:
+	_on_update_install_state_changed({
+		"install_in_flight": true,
+		"status_text": status_text,
+		"button_disabled": true,
+	})
+	var tree := get_tree()
+	if tree != null:
+		await tree.process_frame
 
 
 func _fail_update(status_text: String, error: String) -> void:

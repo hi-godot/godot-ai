@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import re
+import socketserver
 import stat
 import subprocess
 import sys
@@ -23,6 +24,24 @@ from email.parser import BytesParser
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from typing import Any
+
+
+class LoopbackBind:
+    """Bind a loopback ``HTTPServer`` without resolving its host name.
+
+    ``HTTPServer.server_bind`` looks up the bind address's fully qualified
+    name. On the macOS runners that reverse lookup of 127.0.0.1 stalls for
+    about 35 s per process, which is how the qualification's private origin,
+    its index and the test suite's own servers each paid 35 s on macOS and the
+    shutdown-bound test there failed. Mix in ahead of the server class.
+    """
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)  # type: ignore[arg-type]
+        host, port = self.server_address[:2]  # type: ignore[attr-defined]
+        self.server_name = host  # type: ignore[attr-defined]
+        self.server_port = port  # type: ignore[attr-defined]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "hi-godot/godot-ai"

@@ -93,7 +93,19 @@ def test_lifecycle_worker_uses_the_main_thread_capability_path_snapshot() -> Non
     read = get_func_block(lifecycle, "func _read_capability(port: int) -> Dictionary:")
 
     assert '"capability_path": str(policy.get("capability_path", ""))' in capture
-    assert '_endpoint_policy["capability_path"] = TransportCapability.path_for_http_port(' in plugin
+    activation = get_func_block(plugin, "func _activate_startup_endpoints() -> void:")
+    path_capture = (
+        'resolved_policy["capability_path"] = TransportCapability.path_for_http_port(http_port)'
+    )
+    assert activation.index("ClientConfigurator.capture_endpoint_policy()") < activation.index(
+        'var http_port := int(resolved_policy.http_port)'
+    ) < activation.index(path_capture)
+    assert activation.index(path_capture) < activation.index(
+        "_set_endpoint_policy(resolved_policy)"
+    )
+    assert activation.index("_set_endpoint_policy(resolved_policy)") < activation.index(
+        "_lifecycle.configure(_capture_lifecycle_plan())"
+    )
     assert 'str(_endpoint_policy.get("capability_path", ""))' in plugin
     assert 'str(_plan.get("capability_path", ""))' in read
     assert lifecycle.count("var capability := _read_capability(port)") == 4
@@ -105,11 +117,12 @@ def test_owned_launch_waits_boundedly_for_a_stable_branded_process_grant() -> No
     launch = get_func_block(source, "func _effect_launch(payload: Dictionary) -> Dictionary:")
 
     assert "const LAUNCH_FINGERPRINT_TIMEOUT_MS := 15_000" in source
-    assert "Time.get_ticks_msec() + LAUNCH_FINGERPRINT_TIMEOUT_MS" in launch
-    assert "capture_process_kill_grant(pid, true)" in launch
+    assert "capture_started + LAUNCH_FINGERPRINT_TIMEOUT_MS" in launch
+    ## Brand is required on every capture; the trailing list only records why a
+    ## capture was refused and never changes the result.
+    assert launch.count("capture_process_kill_grant(pid, true, attempts)") == 2
     assert (
-        "while exact_grant.is_empty() and Time.get_ticks_msec() < fingerprint_deadline:"
-        in launch
+        "while exact_grant.is_empty() and Time.get_ticks_msec() < fingerprint_deadline:" in launch
     )
     assert '"reason": "launch_unproven" if fingerprint.is_empty() else ""' in launch
     assert "kill_exact_processes" not in launch
@@ -117,7 +130,9 @@ def test_owned_launch_waits_boundedly_for_a_stable_branded_process_grant() -> No
 
 def test_windows_fingerprint_has_a_reuse_resistant_non_cim_fallback() -> None:
     source = (PLUGIN / "utils" / "port_resolver.gd").read_text(encoding="utf-8")
-    block = get_func_block(source, "static func process_fingerprint(pid: int) -> String:")
+    block = get_func_block(
+        source, "static func process_fingerprint(pid: int, snapshot: Variant = null) -> String:"
+    )
 
     assert "Get-CimInstance Win32_Process" in block
     assert "Get-Process -Id %d -ErrorAction Stop" in block
@@ -202,10 +217,14 @@ def test_root_starts_only_after_lifecycle_configuration() -> None:
         "func _continue_enter_tree_after_update_barrier() -> void:",
     )
     release = get_func_block(plugin, "func _release_normal_startup() -> void:")
-    assert "_lifecycle.configure(_capture_lifecycle_plan())" in compose
-    assert "_begin_startup_release()" in compose
-    assert compose.index("_lifecycle.configure") < compose.index("_begin_startup_release()")
+    activation = get_func_block(plugin, "func _activate_startup_endpoints() -> void:")
+    assert compose.index("add_control_to_dock(") < compose.index("_activate_startup_endpoints()")
+    assert activation.index("_set_endpoint_policy(resolved_policy)") < activation.index(
+        "_lifecycle.configure(_capture_lifecycle_plan())"
+    ) < activation.index("_begin_startup_release()")
+    assert "_begin_startup_release()" not in compose
     assert "_start_server()" not in compose
+    assert "_start_server()" not in activation
     assert "_start_server()" in release
 
 
@@ -251,8 +270,53 @@ def test_process_kill_boundary_revalidates_exact_identity_without_child_heuristi
         "static func kill_exact_processes(",
     )
 
-    assert "process_fingerprint(pid) != fingerprint" in kill
-    assert "require_brand and not pid_cmdline_is_godot_ai(pid)" in kill
+    assert "var snapshot: Variant = capture_process_snapshot(pid)" in kill
+    assert "process_fingerprint(pid, snapshot) != fingerprint" in kill
+    assert "require_brand and not pid_cmdline_is_godot_ai(pid, snapshot)" in kill
     assert 'taskkill", ["/PID", str(pid), "/T", "/F"]' in kill
     assert "not require_tree_proof and not pid_alive(pid)" in kill
     assert "find_windows_spawn_children" not in source
+
+
+def test_untrusted_pre_v4_peek_never_enters_the_trusted_probe_outcome() -> None:
+    """The tokenless read words the block only; it grants nothing."""
+    source = _lifecycle()
+    probe = get_func_block(source, "func _effect_probe(payload: Dictionary) -> Dictionary:")
+    peek = get_func_block(
+        source,
+        "static func _untrusted_pre_v4_occupant_version(port: int, timeout_ms: int) -> String:",
+    )
+
+    ## The peek result is a version string used for wording, applied only to
+    ## the already-built blocked result, after the authenticated branch.
+    occupied = probe.index('_blocked_probe_result("occupied", port, live, false, detail)')
+    assert occupied < probe.index("_untrusted_pre_v4_occupant_version(")
+    assert 'blocked["message"] = stale_pre_v4_message(' in probe
+    assert 'blocked["target"]["hint"] = STALE_PRE_V4_HINT' in probe
+    assert "replaceable" not in probe.split("_untrusted_pre_v4_occupant_version(", 1)[1]
+    assert "_transport_from(" not in probe.split("_untrusted_pre_v4_occupant_version(", 1)[1]
+    ## The peek itself sends no capability and returns nothing but a version.
+    assert "Authorization" not in peek
+    assert "http_capability" not in peek
+    assert "return pre_v4_version_from_status(parsed)" in peek
+    ## Replacement still requires the authenticated, instance-bound match.
+    replace = get_func_block(source, "func _effect_replace(payload: Dictionary) -> Dictionary:")
+    assert "_untrusted_pre_v4_occupant_version" not in replace
+    assert "_replacement_target_matches" in replace
+
+
+def test_post_update_stale_pre_v4_block_is_reprobed_slowly_within_a_bound() -> None:
+    plugin_source = (PLUGIN / "plugin.gd").read_text(encoding="utf-8")
+    block = get_func_block(
+        plugin_source, "func _replace_server_left_by_update(snapshot: Dictionary) -> void:"
+    )
+
+    assert "const POST_UPDATE_STALE_REPROBE_SECONDS := 10.0" in plugin_source
+    assert "const POST_UPDATE_STALE_REPROBE_LIMIT := 21" in plugin_source
+    assert "ServerLifecycleManager.STALE_PRE_V4_HINT" in block
+    assert "_post_update_stale_reprobes_left -= 1" in block
+    assert "create_timer(POST_UPDATE_STALE_REPROBE_SECONDS)" in block
+    ## Never a replacement: the stale-bridge branch returns before request_replacement.
+    after_hint = block.split("STALE_PRE_V4_HINT", 1)[1]
+    stale_branch = after_hint.split("if _post_update_reprobes_left > 0:", 1)[0]
+    assert "request_replacement" not in stale_branch

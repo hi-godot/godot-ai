@@ -68,6 +68,7 @@ MIGRATION_PAYLOAD_PREFIX = f"{PLUGIN_PREFIX}migration_payload/"
 MIGRATION_INSTALLER_SCRIPTS = (
     "utils/release_verifier.gd",
     "utils/update_installer.gd",
+    "utils/update_activation_runner.gd",
     "utils/port_resolver.gd",
 )
 MIGRATION_INSTALLER_MAX_FILES = 32
@@ -480,13 +481,19 @@ def _write_json(path: Path, record: dict[str, object]) -> None:
 
 
 def _process_is_live(pid: int) -> bool:
-    """``os.kill(pid, 0)`` semantics; Windows asks psutil, or treats the pid as dead."""
+    """``os.kill(pid, 0)`` semantics on every OS, with no third-party dependency.
+
+    Windows asks the kernel directly. The published recovery command installs
+    only ``cryptography``; the earlier psutil lookup silently treated every
+    lock holder as dead when psutil was absent, so a live editor's lock was
+    replaced instead of refused.
+    """
+    if pid <= 0:
+        # os.kill(0, 0) signals the caller's own process group and "succeeds";
+        # no lock is ever held by pid 0.
+        return False
     if os.name == "nt":
-        try:
-            import psutil
-        except ImportError:
-            return False
-        return psutil.pid_exists(pid)
+        return _windows_process_is_live(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -494,6 +501,34 @@ def _process_is_live(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _windows_process_is_live(pid: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    if pid <= 0:
+        return False
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    process_query_limited_information = 0x1000
+    error_access_denied = 5
+    still_active = 259
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        # A process this account may not open still exists.
+        return ctypes.get_last_error() == error_access_denied
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _foreign_lock_holder(lock: Path) -> int | None:
@@ -663,9 +698,13 @@ def install_verified_release(
         "to_version": expected[3],
         "manifest_sha256": manifest_sha256,
         "expected_tree_sha256": expected_tree,
-        # A pre-v4 tree carries v3-shaped owned client entries; the plugin's
-        # first start may replace them outright, as the capsule crossing does.
-        "replace_owned_mismatches": not from_version.startswith("4."),
+        # The user ran this recovery by hand, outside the editor, usually
+        # because the in-editor path left stale entries behind (a v3 client
+        # pin, a 4.0.0/4.0.1 install whose updater could not download). The
+        # plugin's first start may therefore replace every owned entry that
+        # launches Godot AI, whatever version the live tree carried; entries
+        # that launch something else are still left alone (#999).
+        "replace_owned_mismatches": True,
         "backup_root": str(update / "backup" / from_version) if from_version else "",
     }
     _write_json(lock, {"pid": os.getpid(), "owner": "script/v4-release install"})

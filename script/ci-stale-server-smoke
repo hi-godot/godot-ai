@@ -338,7 +338,9 @@ async def reload_and_probe(http_capability: str) -> tuple[dict, dict]:
         f"http://127.0.0.1:{HTTP_PORT}/mcp",
         headers={"Authorization": f"Bearer {http_capability}"},
     )
-    async with Client(transport, timeout=30, init_timeout=30) as client:
+    ## `editor_reload_plugin` legitimately waits up to the server's 90 s
+    ## reconnect budget while the editor finishes its scan and re-registers.
+    async with Client(transport, timeout=120, init_timeout=30) as client:
         deadline = time.monotonic() + 60
         while True:
             sessions = await client.call_tool("session_manage", {"op": "list"})

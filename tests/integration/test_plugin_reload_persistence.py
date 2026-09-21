@@ -12,11 +12,21 @@ from tests.integration._self_update_fixture import (
     run_godot_editor,
 )
 
+## Needs a real Godot editor (GODOT_BIN); skipped without one and excluded
+## from the iteration loop by `pytest -m "not editor"`.
+pytestmark = pytest.mark.editor
+
 PLUGIN = '''@tool
 extends EditorPlugin
 
 func _enter_tree() -> void:
     Engine.set_meta("reload_enters", int(Engine.get_meta("reload_enters", 0)) + 1)
+    if int(Engine.get_meta("reload_enters")) > 1:
+        var reload := load("res://plugin_reload.gd")
+        assert(reload.is_reload_pending(), "reload must gate dispatch through re-enable")
+        assert(reload.reload_enabled_plugin() == ERR_BUSY, "a nested toggle must be refused")
+        reload._finish_scan(int(reload._pending_scan.work), false)
+        assert(int(Engine.get_meta("reload_enters")) == 2, "queued completion cannot toggle twice")
     var fail_save := OS.get_environment("RELOAD_CASE") == "save-failure"
     if FileAccess.file_exists("res://armed") and fail_save:
         assert(DirAccess.rename_absolute("res://project.godot", "res://saved-project") == OK)
@@ -62,6 +72,7 @@ func _process(_delta: float) -> void:
             expected = ERR_FILE_CANT_OPEN
             assert(DirAccess.remove_absolute("res://project.godot") == OK)
             assert(DirAccess.rename_absolute("res://saved-project", "res://project.godot") == OK)
+        assert(not Reload.is_reload_pending(), "every toggle result releases dispatch")
     var saved := ConfigFile.new()
     assert(saved.load("res://project.godot") == OK)
     var enabled: PackedStringArray = saved.get_value(
@@ -174,6 +185,7 @@ func _exercise() -> void:
     else:
         if mode == "native-timeout":
             Engine.time_scale = 0.0
+            Reload._scan_timeout_seconds = 5.0
             Reload._start_scan(filesystem, null, work)
         else:
             Reload._start_scan(filesystem, timer, work)
@@ -212,7 +224,7 @@ func _exercise() -> void:
             assert(ProjectSettings.save() == OK)
             filesystem.filesystem_changed.emit()
         elif mode == "native-timeout":
-            pass # Real five-second timer must settle this uncompleted scan.
+            pass # The real (shortened) timer must settle this uncompleted scan.
         elif mode == "notification":
             filesystem.filesystem_changed.emit()
             assert(int(Engine.get_meta("reload_enters")) == 1,
@@ -225,8 +237,11 @@ func _exercise() -> void:
     assert(Work.quiescence().ok, "reload work must settle")
     if mode == "native-timeout":
         Engine.time_scale = 1.0
+        Reload._scan_timeout_seconds = Reload.SCAN_TIMEOUT_SECONDS
         assert(Time.get_ticks_msec() - started >= 4500)
         assert(Time.get_ticks_msec() - started < 8000)
+    assert(Reload._pending_scan.is_empty())
+    Reload.reload_after_scan(work) # A cancelled deferred entry cannot revive old work.
     assert(Reload._pending_scan.is_empty())
     assert(filesystem.filesystem_changed.get_connections().is_empty())
     assert(timer.timeout.get_connections().is_empty())

@@ -7,8 +7,8 @@ Django, `python -m http.server`, and other development servers.
 When a foreign process owns either port, Godot AI does not kill or reuse it.
 The dock reports the conflict and suggests free replacements, for example:
 
-> Port 8000 is occupied by an incompatible server. Port 8001 is free — set
-> `godot_ai/http_port` in Editor Settings, then reconfigure your clients.
+> Port 8000 is occupied by an incompatible server. Choose both ports below,
+> click Apply + Reload, then Configure your AI clients to use the new pair.
 
 This guide covers that foreign-process case. If the dock identifies a stale
 Godot AI process that it can prove belongs to the same local account, use the
@@ -23,13 +23,17 @@ Windows the check also excludes Hyper-V, WSL2, and Docker reserved ranges.
 Move only the occupied port if the other one is free. Moving both is often
 simpler when another tool owns the same pair.
 
-## 2. Change the Editor Settings
+## 2. Apply the ports in the dock
 
-1. Open **Editor → Editor Settings**.
-2. Set `godot_ai/http_port` to the chosen HTTP port.
-3. Set `godot_ai/ws_port` to the chosen WebSocket port.
-4. Reload the plugin from **Project → Project Settings → Plugins**, or restart
-   the editor.
+1. In the conflict panel, choose distinct HTTP and WebSocket ports.
+2. Click **Apply + Reload**. The plugin saves the effective pair and reloads.
+3. Reconfigure your clients as described below.
+
+For manual changes in **Editor → Editor Settings**, a migrated installation's
+`godot_ai/v4_endpoint_ports` Dictionary takes precedence over the legacy
+`godot_ai/http_port` and `godot_ai/ws_port` settings. Set its `http_port` and
+`ws_port` entries to distinct integers between `1024` and `65535`. Without that
+override, edit the two legacy settings instead. Then reload the plugin.
 
 These are Editor Settings, not Project Settings. They apply to every project
 opened by that Godot editor installation.
@@ -57,6 +61,6 @@ cannot carry the rotating private capability and is rejected by v4.
 
 ## Reverting
 
-After the foreign process is gone, set `godot_ai/http_port` back to `8000` and
-`godot_ai/ws_port` back to `9500` (or clear the overrides), reload the plugin,
-and run **Configure all** again.
+After the foreign process is gone, restore your previous effective pair using
+the manual settings described above, reload the plugin, and run **Configure
+all** again. Editing legacy keys alone does not change an existing v4 pair.

@@ -966,6 +966,71 @@ func test_pi_json_strategy_honors_merged_config_tier_precedence() -> void:
 	assert_true(high_after["servers"].has("high-other"), "Remove must preserve high-tier peers")
 
 
+func test_opencode_json_strategy_updates_the_jsonc_tier_that_wins_the_merge() -> void:
+	## #1011: OpenCode merges opencode.json then opencode.jsonc, the later file
+	## winning per key. Configure must update the effective (jsonc) definition,
+	## status must verify it, and Remove must clear both tiers.
+	var low_path := _scratch_dir.path_join("opencode_tier.json")
+	var high_path := _scratch_dir.path_join("opencode_tier.jsonc")
+	var stale_low := {"type": "local", "command": ["stale-low"], "enabled": true}
+	var stale_high := {"type": "local", "command": ["stale-high"], "enabled": true}
+	_write(low_path, JSON.stringify({"mcp": {"godot-ai": stale_low, "low-other": stale_low}}))
+	_write(high_path, JSON.stringify({"mcp": {"godot-ai": stale_high, "high-other": stale_high}}))
+	var client := _opencode_clone(low_path, PackedStringArray([low_path, high_path]))
+	var launch := _uvx_launch()
+	var expected_argv: Array = [str(launch.get("command"))]
+	expected_argv.append_array(launch.get("args", []))
+
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", launch)
+	assert_eq(configured.get("status"), "ok", configured.get("message", "configure failed"))
+	var low_written: Dictionary = JSON.parse_string(_read(low_path))
+	var high_written: Dictionary = JSON.parse_string(_read(high_path))
+	assert_eq(low_written["mcp"]["godot-ai"]["command"], ["stale-low"], "the overridden json tier is left alone")
+	assert_eq(high_written["mcp"]["godot-ai"]["command"], expected_argv, "Configure must update the winning jsonc tier")
+	assert_eq(high_written["mcp"]["godot-ai"]["type"], "local")
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch),
+		McpClient.Status.CONFIGURED,
+		"status must verify the jsonc definition that OpenCode will actually use",
+	)
+
+	var high_config: Dictionary = JSON.parse_string(_read(high_path))
+	high_config["mcp"]["godot-ai"]["command"] = ["stale-again"]
+	_write(high_path, JSON.stringify(high_config))
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch),
+		McpClient.Status.CONFIGURED_MISMATCH,
+		"a stale jsonc override must not read as configured",
+	)
+
+	var removed := McpJsonStrategy.remove(client, "godot-ai")
+	assert_eq(removed.get("status"), "ok", removed.get("message", "remove failed"))
+	var low_after: Dictionary = JSON.parse_string(_read(low_path))
+	var high_after: Dictionary = JSON.parse_string(_read(high_path))
+	assert_false(low_after["mcp"].has("godot-ai"), "Remove must clear the json tier")
+	assert_false(high_after["mcp"].has("godot-ai"), "Remove must clear the jsonc tier")
+	assert_true(low_after["mcp"].has("low-other"), "Remove must preserve json peers")
+	assert_true(high_after["mcp"].has("high-other"), "Remove must preserve jsonc peers")
+	DirAccess.remove_absolute(low_path)
+	DirAccess.remove_absolute(high_path)
+
+
+func test_opencode_exact_file_override_beats_the_merge_tiers() -> void:
+	## $OPENCODE_CONFIG names one exact file; it must win over both tiers.
+	var low_path := _scratch_dir.path_join("opencode_override_low.json")
+	var high_path := _scratch_dir.path_join("opencode_override_high.jsonc")
+	var exact_path := _scratch_dir.path_join("opencode_override_exact.json")
+	_write(exact_path, JSON.stringify({"mcp": {}}))
+	var client := _opencode_clone(low_path, PackedStringArray([low_path, high_path]))
+	client.config_file_env = "OPENCODE_CONFIG_TEST"
+	OS.set_environment("OPENCODE_CONFIG_TEST", exact_path)
+	var details: Dictionary = client.resolved_config_path_details()
+	OS.unset_environment("OPENCODE_CONFIG_TEST")
+	assert_eq(str(details.get("error", "")), "", str(details.get("error", "")))
+	assert_eq(str(details.get("path", "")).simplify_path(), exact_path.simplify_path())
+	DirAccess.remove_absolute(exact_path)
+
+
 func test_json_merge_transaction_rolls_back_earlier_write_failure() -> void:
 	var first_path := _scratch_dir.path_join("merge_transaction_first.json")
 	_write(first_path, "original")
@@ -1268,6 +1333,29 @@ func test_prewarm_timeout_budget_exceeds_the_cli_registry_default() -> void:
 		McpClientConfigurator.PREWARM_TIMEOUT_MS > McpCliExec.DEFAULT_TIMEOUT_MS * 5,
 		"pre-warm needs a budget sized for a cold package build"
 	)
+
+
+func _opencode_clone(path: String, tiers: PackedStringArray) -> McpClient:
+	var registered := McpClientRegistry.get_by_id("opencode")
+	var client := McpClient.new()
+	client.id = "opencode_test"
+	client.display_name = "OpenCode Test"
+	client.config_type = "json"
+	client.path_template = {"darwin": path, "windows": path, "linux": path, "unix": path}
+	client.config_merge_path_templates = {"darwin": tiers, "linux": tiers, "windows": tiers}
+	client.server_key_path = registered.server_key_path
+	client.entry_url_field = registered.entry_url_field
+	client.entry_extra_fields = registered.entry_extra_fields.duplicate(true)
+	client.entry_initial_fields = registered.entry_initial_fields.duplicate(true)
+	client.command_shape = registered.command_shape
+	client.command_transport_key = registered.command_transport_key
+	client.command_transport_value = registered.command_transport_value
+	client.command_legacy_keys = registered.command_legacy_keys
+	client.command_initial_fields = registered.command_initial_fields.duplicate(true)
+	client.command_user_fields = registered.command_user_fields
+	client.command_timeout_fields = registered.command_timeout_fields
+	client.command_env_legacy_keys = registered.command_env_legacy_keys
+	return client
 
 
 func _pi_clone(path: String) -> McpClient:

@@ -141,6 +141,7 @@ cd ~/godot-ai
 script/setup-dev             # creates .venv, installs deps, applies macOS .pth fix
 source .venv/bin/activate
 pytest -v                    # run tests
+pytest -m "not editor"       # iterate: skip the rows that launch a real editor
 ```
 
 `uv.lock` is intentionally untracked: dependencies resolve from `pyproject.toml`, and CI installs with pip (`pip install -e ".[dev]"`) rather than enforcing a uv lockfile.
@@ -214,10 +215,25 @@ A test that passes for the wrong reason is worse than a missing test: it ships a
 
 ## Before you commit
 
-**Always run the full gauntlet before every commit** — `ruff check`, `pytest -v`,
-then `test_run` against a live Godot editor, plus a live smoke of anything you
-changed. Python mocks do not catch GDScript bugs, editor API regressions, or
-undo/redo breakage. Steps: [docs/verification.md](docs/verification.md).
+**Before every commit:** `ruff check`, `pytest -m "not editor"`, then `test_run`
+against a live Godot editor, plus a live smoke of anything you changed. Python
+mocks do not catch GDScript bugs, editor API regressions, or undo/redo
+breakage. Steps: [docs/verification.md](docs/verification.md).
+
+**Turn the real-editor rows on deliberately, not by default.** The tests marked
+`editor` launch a real Godot editor (needs `GODOT_BIN` pointing at a 4.7+
+engine) and take about fifteen minutes. Run the full `pytest -v` with them:
+
+- before a commit that touches the server lifecycle, `update_manager.gd`,
+  `update_installer.gd`, `release_verifier.gd`, `release_verify.py`, the
+  migration bridge, plugin disable/enable, the attach bridge, or client
+  configuration;
+- before cutting a release, on each desktop OS the release claims.
+
+CI runs them nightly and in release qualification on Linux, macOS and
+Windows, so a skipped local run is never the last line of defence; a wrong
+`GODOT_BIN` (an engine below 4.7) is worse than an unset one, because the
+rows then run, fail slowly, and prove nothing.
 
 ## Tool inventory sources
 

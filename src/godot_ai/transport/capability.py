@@ -261,6 +261,71 @@ def _reject_unsafe_posix_ancestors(path: Path) -> Path:
     return current
 
 
+def private_mkdir(path: Path, *, windows: bool | None = None) -> None:
+    """Create one directory that only this user can read.
+
+    POSIX gets mode ``0o700``. Windows deliberately gets no mode: CPython
+    (3.12.4+, 3.13) turns ``mode=0o700`` into a non-inherited DACL holding
+    only SYSTEM, Administrators and OWNER RIGHTS. When the creating process
+    was elevated the owner is the Administrators group, so the user's own
+    unelevated editor, server and bridge can no longer read or write the
+    directory (#988). Inheriting ``%LOCALAPPDATA%``'s per-user DACL is what
+    makes the directory private on Windows.
+    """
+    on_windows = os.name == "nt" if windows is None else windows
+    if on_windows:
+        path.mkdir(exist_ok=True)
+    else:
+        path.mkdir(mode=0o700, exist_ok=True)
+
+
+def windows_repair_hint(directory: Path) -> str:
+    """Directory-specific permission guidance without destructive repair commands."""
+    return (
+        f"Godot AI cannot use the directory {directory}: this Windows account "
+        "cannot access it. This can happen when an elevated (Run as administrator) "
+        "process created it. Check this directory's permissions and grant your "
+        "Windows account access, then reopen Godot and your AI clients without "
+        "Run as administrator."
+    )
+
+
+def _windows_access_probe(directory: Path) -> OSError | None:
+    """Return the error a write into ``directory`` raises for this account."""
+
+    probe = directory / f".access-probe.{os.getpid()}.{secrets.token_hex(4)}"
+    try:
+        fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError as exc:
+        return exc
+    os.close(fd)
+    try:
+        probe.unlink()
+    except OSError:
+        pass
+    return None
+
+
+def directory_access_error(directory: Path | None = None) -> str | None:
+    """A repair message when this account cannot use the capability directory.
+
+    Windows only; ``None`` on POSIX, when the directory does not exist yet,
+    or when a write probe succeeds. Used by the bridge to explain an
+    unanswered status probe and by the server before it publishes.
+    """
+    if os.name != "nt":
+        return None
+    selected = Path(directory).expanduser() if directory is not None else capability_directory()
+    try:
+        if not selected.exists():
+            return None
+    except OSError:
+        return windows_repair_hint(selected)
+    if _windows_access_probe(selected) is None:
+        return None
+    return windows_repair_hint(selected)
+
+
 def _prepare_directory(directory: Path) -> None:
     if os.name != "nt":
         if not directory.is_absolute():
@@ -269,11 +334,16 @@ def _prepare_directory(directory: Path) -> None:
     _reject_link_components(directory)
     missing: list[Path] = []
     current = directory
-    while not current.exists():
-        missing.append(current)
-        current = current.parent
-    for path in reversed(missing):
-        path.mkdir(mode=0o700, exist_ok=True)
+    try:
+        while not current.exists():
+            missing.append(current)
+            current = current.parent
+        for path in reversed(missing):
+            private_mkdir(path)
+    except PermissionError as exc:
+        if os.name == "nt":
+            raise OSError(errno.EACCES, windows_repair_hint(directory), directory) from exc
+        raise
     if os.name != "nt":
         _reject_unsafe_posix_ancestors(directory)
     _reject_link_components(directory)
@@ -286,6 +356,8 @@ def _prepare_directory(directory: Path) -> None:
         directory.chmod(0o700)
         if stat.S_IMODE(directory.lstat().st_mode) != 0o700:
             raise OSError(errno.EACCES, "capability directory mode is not 0700", directory)
+    elif _windows_access_probe(directory) is not None:
+        raise OSError(errno.EACCES, windows_repair_hint(directory), directory)
 
 
 def acquire_port_claim(http_port: int, directory: Path | None = None) -> PortClaim:

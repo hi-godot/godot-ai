@@ -341,7 +341,20 @@ func _discover_suites(
 				else:
 					errors.append("%s (not a McpTestSuite subclass)" % file_name)
 			else:
-				errors.append("%s (cannot instantiate — abstract or broken)" % file_name)
+				## Name the cause: a fresh reload prints the parse or compile error
+				## the cached load swallowed and returns its code, so a CI log says
+				## more than "abstract or broken".
+				var reload_error: Error = script.reload(true)
+				var base: Variant = script.get_base_script()
+				errors.append(
+					"%s (cannot instantiate — abstract or broken; reload=%s, base=%s, valid=%s)"
+					% [
+						file_name,
+						error_string(reload_error),
+						str(base.resource_path) if base != null else "none",
+						str(script.can_instantiate()),
+					]
+				)
 		file_name = dir.get_next()
 
 	## Sort by suite name for deterministic order.

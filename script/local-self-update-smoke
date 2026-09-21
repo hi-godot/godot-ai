@@ -19,12 +19,14 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 import zipfile
@@ -53,6 +55,9 @@ SMOKE_STAGED_LOG = "MCP | self-update smoke: staged signed local bundle"
 # tree (docs/self-update.md); nothing of it lives outside the project.
 UPDATE_STATE_DIR = "addons/.godot_ai_update"
 SMOKE_SWAP_LOG_SUFFIX = "swapped in; restarting the editor"
+IN_EDITOR_SWAP_LOG_SUFFIX = "swapped in; reloading the plugin in this editor"
+IN_EDITOR_COMPLETED_LOG = "MCP | update activation completed in editor PID "
+V3_BRIDGE_HANDOFF_LOG = "MCP | v3 bridge handing verified tree to in-editor activation"
 SMOKE_MIGRATED_LOG = "MCP | client migration completed"
 RESTARTED_EDITOR_LOG_NAME = "godot-editor-restarted.log"
 RESTARTED_EDITOR_TIMEOUT_SECONDS = 120.0
@@ -77,6 +82,7 @@ CAPSULE_ONLY_ENTRIES = (
 CAPSULE_INSTALLER_SCRIPTS = (
     "release_verifier.gd",
     "update_installer.gd",
+    "update_activation_runner.gd",
     "port_resolver.gd",
     "windows_port_reservation.gd",
 )
@@ -131,6 +137,27 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--then-version",
+        default="",
+        help=(
+            "With --from-v3-tag, make the signed v4 target advertise a second "
+            "already-signed local update (for example 4.0.6)."
+        ),
+    )
+    parser.add_argument(
+        "--target-version",
+        default="",
+        help="With --from-v3-tag, stamp the locally signed v4 capsule target version.",
+    )
+    parser.add_argument(
+        "--start-published-v3-server",
+        action="store_true",
+        help=(
+            "Keep the published v3 plugin.gd server startup intact. This downloads/runs "
+            "the actual pinned v3 backend and is intended for interactive qualification."
+        ),
+    )
+    parser.add_argument(
         "--base-from-release-tag",
         default="",
         help=(
@@ -175,6 +202,11 @@ def parse_args() -> argparse.Namespace:
         help=f"Fixture-only MCP websocket port (default: {DEFAULT_WS_PORT})",
     )
     parser.add_argument(
+        "--preserve-port-settings",
+        action="store_true",
+        help="Exercise the real port reader with fixture-namespaced EditorSettings",
+    )
+    parser.add_argument(
         "--no-launch",
         action="store_true",
         help="Prepare and print instructions without launching Godot",
@@ -191,6 +223,13 @@ def main() -> int:
     args = parse_args()
     try:
         project_dir = args.project_dir.expanduser().resolve()
+        if not args.from_v3_tag and (
+            args.then_version or args.target_version or args.start_published_v3_server
+        ):
+            raise HarnessError(
+                "--then-version, --target-version and --start-published-v3-server "
+                "require --from-v3-tag"
+            )
         if args.from_v3_tag:
             return run_v3_crossing(args, project_dir)
         if args.base_from_release_tag and args.base_from_zip:
@@ -233,6 +272,7 @@ def main() -> int:
             http_port=args.http_port,
             ws_port=args.ws_port,
             force=args.force,
+            preserve_port_settings=args.preserve_port_settings,
             base_zip=base_zip,
             restart_log=project_dir / ".godot-ai-self-update-smoke" / RESTARTED_EDITOR_LOG_NAME,
         )
@@ -434,6 +474,7 @@ def prepare_project(
     force: bool,
     base_zip: Path | None = None,
     isolate_client_migration: bool = True,
+    preserve_port_settings: bool = False,
     restart_log: Path | None = None,
 ) -> None:
     ensure_safe_project_dir(project_dir, force)
@@ -493,6 +534,7 @@ def prepare_project(
         server_command=server_selector,
         isolate_client_migration=isolate_client_migration,
         client_launch_command=client_launch_command,
+        preserve_port_settings=preserve_port_settings,
     )
     patch_release_signing_key(base_addon / "utils" / "update_manager.gd", public_key)
     if restart_log is not None:
@@ -511,6 +553,7 @@ def prepare_project(
         server_command=server_selector,
         isolate_client_migration=isolate_client_migration,
         client_launch_command=client_launch_command,
+        preserve_port_settings=preserve_port_settings,
     )
     patch_vnext_hot_reload_trigger(vnext_root / "mcp_dock.gd")
     patch_vnext_topology_change(vnext_root)
@@ -600,6 +643,7 @@ def patch_fixture_plugin(
     isolate_client_migration: bool = False,
     skip_client_prewarm: bool = True,
     client_launch_command: Path | None = None,
+    preserve_port_settings: bool = False,
 ) -> None:
     _require_v4_addon_shape(addon_dir, version)
     patch_plugin_cfg(addon_dir / "plugin.cfg", version)
@@ -608,6 +652,7 @@ def patch_fixture_plugin(
         addon_dir / "utils" / "settings.gd",
         http_port,
         ws_port,
+        preserve_port_settings=preserve_port_settings,
     )
     patch_server_command(addon_dir / "client_configurator.gd", server_command)
     patch_expected_server_version(addon_dir / "plugin.gd", server_version)
@@ -656,6 +701,9 @@ def patch_isolated_client_launch(path: Path, command: Path) -> None:
         f"""static func resolve_attach_launch(
 \tlaunch_context: Dictionary, _discovery_override: Dictionary = {{}}
 ) -> Dictionary:
+\tvar isolation_error := _self_update_smoke_config_error()
+\tif not isolation_error.is_empty():
+\t\treturn {{"ok": false, "error": isolation_error}}
 \tvar version := str(launch_context.get("plugin_version", "")).strip_edges()
 \treturn {{
 \t\t"ok": not version.is_empty(),
@@ -669,6 +717,31 @@ def patch_isolated_client_launch(path: Path, command: Path) -> None:
 \t\t],
 \t}}""",
     )
+    signature = "static func _config_path_resolution_error(client: Client) -> String:\n"
+    text = replace_once(
+        path,
+        text,
+        signature,
+        signature
+        + "\tvar isolation_error := _self_update_smoke_config_error()\n"
+        + "\tif not isolation_error.is_empty():\n\t\treturn isolation_error\n",
+        "fixture config destination guard",
+    )
+    text += r"""
+
+static func _self_update_smoke_config_error() -> String:
+	var expected := ProjectSettings.globalize_path(
+		"res://.godot-ai-self-update-smoke/client-environment/codex"
+	).replace("\\", "/").simplify_path()
+	var integration := ProjectSettings.globalize_path(
+		"res://.self-update-integration/codex"
+	).replace("\\", "/").simplify_path()
+	var actual := OS.get_environment("CODEX_HOME").replace("\\", "/").simplify_path()
+	if actual != expected and actual != integration:
+		return ("Self-update fixture refuses client configuration outside its isolated CODEX_HOME; "
+			+ "use the harness launch environment.")
+	return ""
+"""
     path.write_text(text, encoding="utf-8")
 
 
@@ -702,7 +775,12 @@ def patch_plugin_cfg(path: Path, version: str) -> None:
 
 
 def patch_port_isolation(
-    configurator_path: Path, settings_path: Path, http_port: int, ws_port: int
+    configurator_path: Path,
+    settings_path: Path,
+    http_port: int,
+    ws_port: int,
+    *,
+    preserve_port_settings: bool = False,
 ) -> None:
     # SETTING_HTTP_PORT and SETTING_EXCLUDED_DOMAINS live in utils/settings.gd.
     stext = settings_path.read_text(encoding="utf-8")
@@ -746,14 +824,20 @@ def patch_port_isolation(
         'const SETTING_WS_PORT := "godot_ai_self_update_smoke/ws_port"',
         "SETTING_WS_PORT",
     )
-    text = replace_function(
-        text,
-        "static func _read_port_setting(key: String, default_port: int) -> int:",
-        """static func _read_port_setting(_key: String, default_port: int) -> int:
+    # Released base trees may predate the v4 endpoint override setting.
+    text = text.replace(
+        '"godot_ai/v4_endpoint_ports"',
+        '"godot_ai_self_update_smoke/v4_endpoint_ports"',
+    )
+    if not preserve_port_settings:
+        text = replace_function(
+            text,
+            "static func _read_port_setting(key: String, default_port: int) -> int:",
+            """static func _read_port_setting(_key: String, default_port: int) -> int:
 \t## The smoke fixture must not adopt or kill another editor's server through
 \t## global EditorSettings. Keep its ports deterministic and fixture-local.
 \treturn default_port""",
-    )
+        )
     configurator_path.write_text(text, encoding="utf-8")
 
 
@@ -1209,6 +1293,29 @@ def write_baseline(project_dir: Path, baseline: set[Path]) -> None:
     )
 
 
+def print_manual_launch(project_dir: Path, godot_bin: str, log_path: Path) -> None:
+    """Print a shell-safe wrapper that applies isolation only to the Godot child."""
+    wrapper = project_dir / ".godot-ai-self-update-smoke" / "launch-editor.py"
+    command = [godot_bin, "--editor", "--path", str(project_dir), "--log-file", str(log_path)]
+    wrapper.write_text(
+        "import os, subprocess\n"
+        "environment = os.environ.copy()\n"
+        + (f"environment.pop({CAPABILITY_DIR_ENV!r}, None)\n" if os.name == "nt" else "")
+        + f"environment.update({godot_child_environment(project_dir)!r})\n"
+        + f"raise SystemExit(subprocess.call({command!r}, env=environment))\n",
+        encoding="utf-8",
+    )
+    argv = [str(smoke_python()), str(wrapper)]
+    quoted = (
+        "& " + " ".join("'" + value.replace("'", "''") + "'" for value in argv)
+        if os.name == "nt"
+        else shlex.join(argv)
+    )
+    print("Launch command (PowerShell):" if os.name == "nt" else "Launch command:")
+    print(f"  {quoted}")
+    print(f"  Editor log (--log-file): {log_path}")
+
+
 def print_instructions(
     project_dir: Path,
     godot_bin: str,
@@ -1236,24 +1343,24 @@ def print_instructions(
         print("  crash report: non-macOS; .ips check is skipped")
     print("")
     print("Manual step:")
-    print("  1. In the Godot AI dock, click Update, then confirm 'Save & Update'.")
+    print("  1. In the Godot AI dock, click Update, then confirm the update dialog.")
     print("  2. The editor verifies, stages and swaps the bundle, prints")
-    print(f"     '... {SMOKE_SWAP_LOG_SUFFIX}' and restarts itself. Nothing else to click.")
-    print(f"  3. The restarted editor verifies the tree, prints '{SMOKE_MIGRATED_LOG}',")
+    print("     its activation result. The new updater keeps this editor open;")
+    print("     a published 4.0.4 updater still restarts on its first update.")
+    print(f"  3. The activated plugin verifies the tree, prints '{SMOKE_MIGRATED_LOG}',")
     print("     shows the update as complete in the dock, and brings the server back")
     print("     at the new version.")
-    print("  4. This script waits for that restarted editor, checks disk state, /godot-ai/status")
+    print("  4. This script checks the expected editor continuity, disk state, /godot-ai/status")
     print("     and .ips files, then leaves the editor open for inspection.")
     print("")
     print("Failure signals:")
     print("  - Godot exits without the swap line, exits non-zero, or a new Godot*.ips appears.")
-    print("  - The restarted editor never prints the migration line, or its server is not")
+    print("  - The activated plugin never prints the migration line, or its server is not")
     print("    listening at the new version.")
     print("  - The update marker does not record success, or the retained backup is missing.")
     print("  - 'MCP | [self-update-smoke vnext _exit_tree]' prints before the swap.")
     print("")
-    print("Launch command:")
-    print(f"  {godot_bin} --editor --path {project_dir} --log-file {log_path}")
+    print_manual_launch(project_dir, godot_bin, log_path)
     print("")
 
 
@@ -1270,6 +1377,9 @@ def launch_and_verify(
     if godot_path is None or not Path(godot_path).exists():
         raise HarnessError(f"Godot executable not found: {godot_bin}")
 
+    same_editor = "update_activation_runner.gd" in (
+        project_dir / "addons/godot_ai/plugin.gd"
+    ).read_text(encoding="utf-8")
     started = time.time()
     log_path = project_dir / ".godot-ai-self-update-smoke" / "godot-editor.log"
     child_environment = os.environ.copy()
@@ -1293,24 +1403,25 @@ def launch_and_verify(
     )
     lines: list[str] = []
     assert proc.stdout is not None
-    for line in proc.stdout:
-        print(line, end="")
-        lines.append(line.rstrip("\n"))
-    code = proc.wait()
-    if code != 0:
-        print(f"FAIL: Godot exited with code {code}")
-        print_new_reports(baseline, started, Path(godot_path))
-        return code or 1
-    if not smoke_restart_requested(lines):
-        print("FAIL: the editor closed before an update was swapped in (click Update in the dock)")
-        return 1
-
-    ## The swapping editor is gone; the one it restarted into verifies the
-    ## tree, repins clients and starts the new server. Its log is forwarded
-    ## by patch_restart_log; wait for it there, then for the live server.
-    restarted_log = project_dir / ".godot-ai-self-update-smoke" / RESTARTED_EDITOR_LOG_NAME
-    restarted_lines = wait_for_restarted_editor(restarted_log)
-    lines.extend(restarted_lines)
+    drain = threading.Thread(target=_drain_editor_output, args=(proc.stdout, lines), daemon=True)
+    drain.start()
+    if same_editor:
+        if not wait_for_in_editor_activation(proc, lines):
+            print("FAIL: the original editor did not complete in-editor activation")
+            print_new_reports(baseline, started, Path(godot_path))
+            return 1
+    else:
+        code = proc.wait()
+        drain.join()
+        if code != 0:
+            print(f"FAIL: Godot exited with code {code}")
+            print_new_reports(baseline, started, Path(godot_path))
+            return code or 1
+        if not smoke_restart_requested(lines):
+            print("FAIL: the editor closed before an update was swapped in (click Update)")
+            return 1
+        restarted_log = project_dir / ".godot-ai-self-update-smoke" / RESTARTED_EDITOR_LOG_NAME
+        lines.extend(wait_for_restarted_editor(restarted_log))
     post_update_status = wait_for_live_status(
         http_port,
         next_server_version,
@@ -1328,16 +1439,42 @@ def launch_and_verify(
         post_update_status=post_update_status,
         next_server_version=next_server_version,
         godot_path=Path(godot_path),
+        same_editor_pid=proc.pid if same_editor else None,
     )
-    print("The restarted editor stays open for inspection; close it when you are done.")
+    if same_editor and proc.poll() is not None:
+        print("FAIL: the original editor exited during verification")
+        ok = False
+    print("The editor stays open for inspection; close it when you are done.")
     return 0 if ok else 1
 
 
 def run_v3_crossing(args: argparse.Namespace, project_dir: Path) -> int:
+    if any(
+        (
+            args.base_version,
+            args.base_from_release_tag,
+            args.base_from_zip,
+            args.next_version,
+            args.server_version,
+            args.next_server_version,
+        )
+    ):
+        raise HarnessError(
+            "--from-v3-tag uses --target-version/--then-version, not v4 base/server overrides"
+        )
     from_version = release_tag_to_version(args.from_v3_tag)
     if re.fullmatch(r"3\.\d+\.\d+", from_version) is None:
         raise HarnessError("--from-v3-tag must name a v3 release tag, like v3.2.4")
-    target_version = read_plugin_version(PLUGIN_ROOT / "plugin.cfg")
+    target_version = args.target_version or read_plugin_version(PLUGIN_ROOT / "plugin.cfg")
+    if re.fullmatch(r"4\.\d+\.\d+", target_version) is None:
+        raise HarnessError("--target-version must be a canonical v4 version")
+    validate_v3_chain_versions(target_version, args.then_version or None)
+    if args.then_version and not args.no_launch:
+        raise HarnessError(
+            "two-hop fixtures require --no-launch and both native dock Update buttons"
+        )
+    if args.start_published_v3_server:
+        require_linux_listener_pid_tool()
     ensure_safe_project_dir(project_dir, args.force)
     baseline = diagnostic_reports_snapshot()
     marker_dir = project_dir / ".godot-ai-self-update-smoke"
@@ -1348,6 +1485,9 @@ def run_v3_crossing(args: argparse.Namespace, project_dir: Path) -> int:
         http_port=args.http_port,
         ws_port=args.ws_port,
         restart_log=marker_dir / RESTARTED_EDITOR_LOG_NAME,
+        preserve_port_settings=args.preserve_port_settings,
+        next_version=args.then_version or None,
+        start_published_v3_server=args.start_published_v3_server,
     )
     write_baseline(project_dir, baseline)
     print_v3_instructions(project_dir, args.godot, from_version, target_version)
@@ -1363,6 +1503,32 @@ def run_v3_crossing(args: argparse.Namespace, project_dir: Path) -> int:
     )
 
 
+def validate_v3_chain_versions(target_version: str, next_version: str | None) -> None:
+    """Validate before touching an existing fixture or creating runtime files."""
+    for version in (target_version, next_version):
+        if (
+            version is not None
+            and re.fullmatch(r"4\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", version) is None
+        ):
+            raise HarnessError("capsule and second-hop versions must be canonical v4 versions")
+    if next_version is not None and tuple(map(int, next_version.split("."))) <= tuple(
+        map(int, target_version.split("."))
+    ):
+        raise HarnessError("second-hop version must be greater than the capsule target")
+
+
+def require_linux_listener_pid_tool() -> None:
+    """Fail before a Linux qualification run that cannot prove listener ownership."""
+    if platform.system() != "Linux":
+        return
+    if shutil.which("lsof") is not None or shutil.which("ss") is not None:
+        return
+    raise HarnessError(
+        "Linux process-identity verification requires lsof or ss; install lsof "
+        "or iproute2 before running with --start-published-v3-server"
+    )
+
+
 def prepare_v3_crossing_project(
     project_dir: Path,
     *,
@@ -1371,45 +1537,90 @@ def prepare_v3_crossing_project(
     http_port: int,
     ws_port: int,
     restart_log: Path | None = None,
-) -> dict[str, Path]:
+    preserve_port_settings: bool = False,
+    next_version: str | None = None,
+    start_published_v3_server: bool = False,
+) -> dict[str, Path | None]:
     """Install exact final-v3 that will cross into this checkout's v4 via the capsule.
 
     The v3 tree is ``git archive v<from_version>``; its updater is patched only
     to trust the one-run key and to offer the locally built capsule instead of
-    a GitHub release, and its server start is disabled (the v4 editor starts
-    the frozen local runtime). The capsule is the bridge plus this checkout's
-    installer scripts and a signed bundle of this checkout's plugin, laid out
-    as ``script/v4-release build_migration_capsule`` lays it out. Returns the
-    live add-on, the extracted v3 add-on source, the work dir and the
-    capability dir.
+    a GitHub release. By default its server start is disabled (the v4 editor
+    starts the frozen local runtime); interactive release qualification can
+    retain the untouched v3 startup with ``start_published_v3_server``.
+
+    When ``next_version`` is supplied, the signed target tree itself advertises
+    a separately signed second bundle in ``res://self_update_smoke``. This is a
+    continuous two-hop fixture: nothing edits the installed add-on between
+    clicks. The capsule is laid out like ``script/v4-release
+    build_migration_capsule``. Returns the live add-on, extracted v3 source,
+    work directory, capability directory, and optional second bundle.
     """
+    validate_v3_chain_versions(target_version, next_version)
+    if start_published_v3_server:
+        require_linux_listener_pid_tool()
     project_dir.mkdir(parents=True, exist_ok=True)
     write_project_files(project_dir)
     work = project_dir / ".godot-ai-self-update-smoke"
     work.mkdir(exist_ok=True)
+    (work / ".gdignore").write_text("", encoding="utf-8")
     (work / "marker.txt").write_text("v3 crossing fixture\n", encoding="utf-8")
 
-    server_command, _runtime_source = prepare_local_server_runtime(
+    target_server, _runtime_source = prepare_local_server_runtime(
         work, "bridge-server", target_version
     )
+    if next_version is not None:
+        next_server, _ = prepare_local_server_runtime(work, "second-hop-server", next_version)
+        server_command = prepare_server_selector(
+            work,
+            project_dir / "addons" / "godot_ai" / "plugin.cfg",
+            {target_version: target_server, next_version: next_server},
+        )
+    else:
+        server_command = target_server
     private_key, public_key = prepare_smoke_signing_key(work)
     client_command = prepare_isolated_client_environment(
         project_dir, base_version=from_version, http_port=http_port, ws_port=ws_port
     )
     release_tree = work / "release-tree"
     shutil.copytree(PLUGIN_ROOT, release_tree, ignore=copy_ignore)
+    if next_version is not None:
+        second_tree = work / "second-hop-tree"
+        shutil.copytree(PLUGIN_ROOT, second_tree, ignore=copy_ignore)
+        patch_fixture_plugin(
+            second_tree,
+            version=next_version,
+            server_version=next_version,
+            http_port=http_port,
+            ws_port=ws_port,
+            force_local_update=False,
+            next_version=next_version,
+            server_command=server_command,
+            isolate_client_migration=True,
+            client_launch_command=client_command,
+            preserve_port_settings=preserve_port_settings,
+        )
+        patch_vnext_hot_reload_trigger(second_tree / "mcp_dock.gd")
+        patch_vnext_topology_change(second_tree)
+        second_bundle = project_dir / SMOKE_DIR
+        second_bundle.mkdir()
+        (second_bundle / ".gdignore").write_text("", encoding="utf-8")
+        create_signed_v4_bundle(second_tree, second_bundle, next_version, private_key, public_key)
     patch_fixture_plugin(
         release_tree,
         version=target_version,
         server_version=target_version,
         http_port=http_port,
         ws_port=ws_port,
-        force_local_update=False,
-        next_version=target_version,
+        force_local_update=next_version is not None,
+        next_version=next_version or target_version,
         server_command=server_command,
         isolate_client_migration=True,
         client_launch_command=client_command,
+        preserve_port_settings=preserve_port_settings,
     )
+    if next_version is not None:
+        patch_release_signing_key(release_tree / "utils" / "update_manager.gd", public_key)
     bundle = work / "release"
     bundle.mkdir()
     create_signed_v4_bundle(release_tree, bundle, target_version, private_key, public_key)
@@ -1493,15 +1704,16 @@ def prepare_v3_crossing_project(
     v3_source = extracted / "plugin/addons/godot_ai"
     live = project_dir / "addons" / "godot_ai"
     shutil.copytree(v3_source, live)
-    old_plugin = live / "plugin.gd"
-    old_plugin.write_text(
-        replace_function(
-            old_plugin.read_text(encoding="utf-8"),
-            "func _start_server() -> void:",
-            "func _start_server() -> void:\n\tpass",
-        ),
-        encoding="utf-8",
-    )
+    if not start_published_v3_server:
+        old_plugin = live / "plugin.gd"
+        old_plugin.write_text(
+            replace_function(
+                old_plugin.read_text(encoding="utf-8"),
+                "func _start_server() -> void:",
+                "func _start_server() -> void:\n\tpass",
+            ),
+            encoding="utf-8",
+        )
     old_manager = live / "utils" / "update_manager.gd"
     manager_text = old_manager.read_text(encoding="utf-8")
     manager_text = subn_once(
@@ -1566,6 +1778,7 @@ def prepare_v3_crossing_project(
         "v3_source": v3_source,
         "work": work,
         "capability_dir": fixture_environment_paths(project_dir)["capability_dir"],
+        "second_bundle": project_dir / SMOKE_DIR if next_version is not None else None,
     }
 
 
@@ -1610,21 +1823,19 @@ def print_v3_instructions(
         print("  3. This script verifies the restored tree, the log order and .ips files, then")
         print("     leaves the editor open for inspection.")
         print("")
-        print("Launch command:")
-        print(f"  {godot_bin} --editor --path {project_dir} --log-file {log_path}")
+        print_manual_launch(project_dir, godot_bin, log_path)
         print("")
         return
     print("Manual step:")
     print(f"  1. In the v{from_version} Godot AI dock, click Update.")
     print("  2. v3's own updater extracts the capsule; the bridge verifies, stages and swaps")
-    print(f"     the v4 tree, prints '{V3_BRIDGE_RESTART_LOG}' and restarts the editor.")
-    print(f"  3. The restarted v4 editor verifies the tree, prints '{SMOKE_MIGRATED_LOG}',")
+    print("     the v4 tree and reloads the plugin in the same editor process.")
+    print(f"  3. The v4 plugin verifies the tree, prints '{SMOKE_MIGRATED_LOG}',")
     print("     repins the isolated Codex entry and starts the local server.")
     print("  4. This script waits for that editor, checks disk state, /godot-ai/status and")
     print("     .ips files, then leaves the editor open for inspection.")
     print("")
-    print("Launch command:")
-    print(f"  {godot_bin} --editor --path {project_dir} --log-file {log_path}")
+    print_manual_launch(project_dir, godot_bin, log_path)
     print("")
 
 
@@ -1640,6 +1851,9 @@ def launch_and_verify_v3_crossing(
     godot_path = shutil.which(godot_bin) if os.sep not in godot_bin else godot_bin
     if godot_path is None or not Path(godot_path).exists():
         raise HarnessError(f"Godot executable not found: {godot_bin}")
+    original_ports = fixture_client_ports(project_dir, from_version)
+    if original_ports[0] != http_port:
+        raise HarnessError("Initial fixture client does not name the requested HTTP port")
     started = time.time()
     marker_dir = project_dir / ".godot-ai-self-update-smoke"
     child_environment = os.environ.copy()
@@ -1666,10 +1880,11 @@ def launch_and_verify_v3_crossing(
     drain = threading.Thread(target=_drain_editor_output, args=(proc.stdout, lines), daemon=True)
     drain.start()
     refusal = floor_forced_unmet()
-    while proc.poll() is None:
-        if refusal and _restored_final_v3_loaded(lines):
-            break
-        time.sleep(POST_UPDATE_STATUS_POLL_SECONDS)
+    if refusal:
+        while proc.poll() is None:
+            if _restored_final_v3_loaded(lines):
+                break
+            time.sleep(POST_UPDATE_STATUS_POLL_SECONDS)
     if refusal and proc.poll() is None:
         ## The refusal never restarts the editor: final v3 is restored and
         ## re-enabled in place, so verify while that editor stays open.
@@ -1678,27 +1893,34 @@ def launch_and_verify_v3_crossing(
         )
         print("The editor stays open with the restored final v3; close it when you are done.")
         return 0 if ok else 1
-    drain.join()
-    code = proc.wait()
-    if code != 0:
-        print(f"FAIL: Godot exited with code {code}")
+    if proc.poll() is not None:
+        drain.join()
+        print(f"FAIL: original Godot exited ({proc.returncode}); expected in-editor crossing")
         print_new_reports(baseline, started, Path(godot_path))
-        return code or 1
+        return 1
     if refusal:
         print("FAIL: the editor closed before the capsule restored final v3 (click Update)")
         return 1
-    if not any(V3_BRIDGE_RESTART_LOG in line for line in lines):
-        print("FAIL: the editor closed before the capsule swapped the v4 tree in (click Update)")
+    if not wait_for_in_editor_activation(proc, lines):
+        print("FAIL: the original editor did not complete capsule activation")
         return 1
-    restarted_lines = wait_for_restarted_editor(marker_dir / RESTARTED_EDITOR_LOG_NAME)
-    lines.extend(restarted_lines)
-    post_update_status = wait_for_live_status(
-        http_port,
-        target_version,
-        capability_dir=fixture_environment_paths(project_dir)["capability_dir"],
-        timeout=POST_UPDATE_STATUS_TIMEOUT_SECONDS,
-        poll=POST_UPDATE_STATUS_POLL_SECONDS,
-    )
+    post_update_status = None
+    try:
+        selected_ports = fixture_client_ports(project_dir, target_version)
+        if set(selected_ports) & set(original_ports):
+            raise HarnessError("Migrated fixture client still selects an original v3 port")
+        post_update_status = wait_for_live_status(
+            selected_ports[0],
+            target_version,
+            capability_dir=fixture_environment_paths(project_dir)["capability_dir"],
+            timeout=POST_UPDATE_STATUS_TIMEOUT_SECONDS,
+            poll=POST_UPDATE_STATUS_POLL_SECONDS,
+        )
+        if post_update_status and post_update_status.get("ws_port") != selected_ports[1]:
+            raise HarnessError("Authenticated backend WS port differs from migrated client")
+    except HarnessError as exc:
+        print(f"FAIL: {exc}")
+        post_update_status = None
     ok = verify_v3_crossing(
         project_dir,
         from_version,
@@ -1708,9 +1930,43 @@ def launch_and_verify_v3_crossing(
         lines,
         post_update_status=post_update_status,
         godot_path=Path(godot_path),
+        same_editor_pid=proc.pid,
     )
-    print("The restarted editor stays open for inspection; close it when you are done.")
+    if proc.poll() is not None:
+        print("FAIL: the original editor exited during verification")
+        ok = False
+    print("The original editor stays open for inspection; close it when you are done.")
     return 0 if ok else 1
+
+
+def fixture_client_ports(project_dir: Path, expected_version: str) -> tuple[int, int]:
+    """Read the actual isolated client entry without executing its fixture command."""
+    path = fixture_environment_paths(project_dir)["codex_home"] / "config.toml"
+    try:
+        with path.open("rb") as source:
+            raw = source.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ValueError("oversized fixture config")
+        entry = tomllib.loads(raw.decode("utf-8"))["mcp_servers"]["godot-ai"]
+        args = entry["args"]
+        if not isinstance(args, list) or len(args) != 8:
+            raise ValueError("unexpected fixture client argument shape")
+        if args[:5] != ["--from", f"godot-ai=={expected_version}", "godot-ai", "attach", "--port"]:
+            raise ValueError("fixture client has wrong version or command")
+        if args[6] != "--ws-port":
+            raise ValueError("fixture client has no WS selector")
+        values = (args[5], args[7])
+        if any(
+            not isinstance(value, str) or re.fullmatch(r"[0-9]{1,5}", value) is None
+            for value in values
+        ):
+            raise ValueError("invalid fixture port")
+        ports = (int(values[0]), int(values[1]))
+        if any(not 1024 <= port <= 65535 for port in ports) or ports[0] == ports[1]:
+            raise ValueError("invalid fixture port pair")
+        return ports
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise HarnessError(f"Cannot read migrated fixture client ports: {exc}") from exc
 
 
 def verify_v3_crossing(
@@ -1723,8 +1979,9 @@ def verify_v3_crossing(
     *,
     post_update_status: dict | None,
     godot_path: Path | None = None,
+    same_editor_pid: int | None = None,
 ) -> bool:
-    ok = True
+    ok = verify_script_diagnostics(lines)
     live = project_dir / "addons" / "godot_ai"
     installed = read_plugin_version(live / "plugin.cfg")
     if installed == target_version:
@@ -1733,12 +1990,16 @@ def verify_v3_crossing(
         print(f"FAIL: plugin version is {installed}, expected {target_version}")
         ok = False
 
+    activation_steps = (
+        (V3_BRIDGE_HANDOFF_LOG, IN_EDITOR_SWAP_LOG_SUFFIX)
+        if same_editor_pid is not None
+        else ("MCP | v3 bridge swapping in the verified canonical v4 tree", V3_BRIDGE_RESTART_LOG)
+    )
     expected_order = (
         V3_CLICK_LOG,
         "MCP | self-update release signature verified",
         "MCP | update runner disabling old plugin",
-        "MCP | v3 bridge swapping in the verified canonical v4 tree",
-        V3_BRIDGE_RESTART_LOG,
+        *activation_steps,
         SMOKE_MIGRATED_LOG,
         "MCP | plugin loaded",
     )
@@ -1754,7 +2015,10 @@ def verify_v3_crossing(
         print(f"FAIL: crossing log is missing or out of order at {missing!r}")
         ok = False
     else:
-        print("PASS: click, extract, swap, restart and client migration logged in order")
+        print("PASS: click, extract, swap, activation and client migration logged in order")
+    if same_editor_pid is not None and not smoke_in_editor_completed(lines, same_editor_pid):
+        print("FAIL: activation did not complete in the original editor PID")
+        ok = False
     if any("Failed to create an autoload" in line for line in lines):
         print("FAIL: an autoload failed to load during the crossing (#946)")
         ok = False
@@ -1781,8 +2045,6 @@ def verify_v3_crossing(
     leftovers = [
         name
         for name in (
-            "migration_bridge.gd",
-            "migration_coordinator.gd",
             "update_reload_runner.gd",
             "migration_payload",
         )
@@ -1792,7 +2054,7 @@ def verify_v3_crossing(
         print(f"FAIL: live tree still carries {leftovers}")
         ok = False
     else:
-        print("PASS: live tree is the canonical v4 tree (no bridge, runner or payload)")
+        print("PASS: live tree has no capsule payload or legacy update runner")
 
     codex_config = fixture_environment_paths(project_dir)["codex_home"] / "config.toml"
     config_text = codex_config.read_text(encoding="utf-8") if codex_config.is_file() else ""
@@ -1968,8 +2230,9 @@ def verify_post_run(
     post_update_status: dict | None,
     next_server_version: str,
     godot_path: Path | None = None,
+    same_editor_pid: int | None = None,
 ) -> bool:
-    ok = True
+    ok = verify_script_diagnostics(lines)
     installed_version = read_plugin_version(project_dir / "addons" / "godot_ai" / "plugin.cfg")
     if installed_version == next_version:
         print(f"PASS: plugin version advanced to {installed_version}")
@@ -1993,10 +2256,15 @@ def verify_post_run(
     else:
         print("PASS: vNext _exit_tree trigger did not run before the swap")
 
-    if smoke_restart_requested(lines) and any(SMOKE_MIGRATED_LOG in line for line in lines):
-        print("PASS: the editor restarted and the restarted editor completed client migration")
+    activated = (
+        smoke_in_editor_completed(lines, same_editor_pid)
+        if same_editor_pid is not None
+        else smoke_restart_requested(lines)
+    )
+    if activated and any(SMOKE_MIGRATED_LOG in line for line in lines):
+        print("PASS: expected editor activation and client migration completed")
     else:
-        print("FAIL: no swap-and-restart followed by client migration in the logs")
+        print("FAIL: expected editor activation or client migration is missing")
         ok = False
 
     if smoke_adopted_existing_server_before_update(lines):
@@ -2049,6 +2317,27 @@ def verify_post_run(
     return ok
 
 
+def verify_script_diagnostics(lines: list[str]) -> bool:
+    failures = [
+        line
+        for line in lines
+        if any(
+            marker in line
+            for marker in (
+                "SCRIPT ERROR",
+                "Parse Error",
+                "Compile Error",
+                "ERROR: Failed to load script",
+                "Failed to create an autoload",
+                "ERROR: Attempt to open script",
+            )
+        )
+    ]
+    for line in failures:
+        print(f"FAIL: editor script diagnostic: {line}")
+    return not failures
+
+
 def verify_lean_update_state(project_dir: Path, next_version: str) -> tuple[dict, Path]:
     """Check the on-disk state one successful update leaves (docs/self-update.md)."""
     project = project_dir.resolve(strict=True)
@@ -2088,13 +2377,38 @@ def smoke_restart_requested(lines: list[str]) -> bool:
     return any(smoke_swap_line(line) for line in lines)
 
 
+def smoke_in_editor_completed(lines: list[str], pid: int) -> bool:
+    return any(line.strip() == f"{IN_EDITOR_COMPLETED_LOG}{pid}" for line in lines)
+
+
+def wait_for_in_editor_activation(proc: subprocess.Popen, lines: list[str]) -> bool:
+    """Wait for the operator, then bound activation in the original child process."""
+    deadline = None
+    while proc.poll() is None:
+        snapshot = list(lines)
+        if deadline is None and any(
+            marker in line
+            for line in snapshot
+            for marker in (SMOKE_STAGED_LOG, V3_CLICK_LOG, V3_BRIDGE_HANDOFF_LOG)
+        ):
+            deadline = time.monotonic() + RESTARTED_EDITOR_TIMEOUT_SECONDS
+        if smoke_in_editor_completed(snapshot, proc.pid) and any(
+            SMOKE_MIGRATED_LOG in line for line in snapshot
+        ):
+            return True
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+        time.sleep(POST_UPDATE_STATUS_POLL_SECONDS)
+    return False
+
+
 def vnext_exit_tree_during_update(lines: list[str]) -> bool:
     """True when the vNext trigger ran in the update window (staged, not yet swapped)."""
     staged = False
     for line in lines:
         if SMOKE_STAGED_LOG in line:
             staged = True
-        if staged and smoke_swap_line(line):
+        if staged and (smoke_swap_line(line) or IN_EDITOR_SWAP_LOG_SUFFIX in line):
             return False
         if staged and SMOKE_TRIGGER_LOG in line:
             return True

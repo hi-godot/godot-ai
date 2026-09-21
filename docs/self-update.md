@@ -2,10 +2,25 @@
 
 Part of the Godot AI agent guide — see [AGENTS.md](../AGENTS.md) for the always-loaded rules.
 
-How the plugin updates itself, what that path defends against, and what it
-deliberately does not. This replaces the transaction-actor design: there is no
-separate update process, no journal, no repair mode, no editor leases, and no
-hot reload. An update is verify, stage, swap, restart, then verify again.
+How the plugin updates itself and what that path defends against. The current
+implementation verifies, stages, swaps, verifies again, and activates the new
+plugin inside the same editor. A source-free runner survives the replacement;
+there is no separate update process or resident helper.
+
+Windows verification covers a native-click HTTPS update and a published 3.2.5
+capsule crossing that retain the editor process, unsaved scene state, selection,
+and undo history. Both load the exact verified tree and serve authenticated
+project-pinned reads afterwards. A separate untouched 4.0.4 fixture verifies its
+first update through the legacy restart path. Local test keys and version
+substitutions exercise these paths; production release qualification still runs
+against the exact signed release artifacts on every supported OS.
+
+An untouched published 4.0.4 installation still uses its already-shipped
+restart path for its first update. Installing new files cannot change the old
+updater already executing that operation. Updates initiated by the new updater,
+and final-v3 updates through the new capsule, retain the editor
+process. Restart-based startup recovery remains available for an interrupted
+installation.
 
 ## Goals
 
@@ -15,8 +30,10 @@ hot reload. An update is verify, stage, swap, restart, then verify again.
   tree, and the old tree is retained until the next successful update.
 - No editor start depends on any external process. `uvx` runs the server, not
   the plugin.
-- The whole path is two small GDScript files, a verifier and an installer, a
-  maintainer can read in a sitting.
+- Preserve the edited scene instance, unsaved changes, selection, and undo/redo
+  history. Updating neither autosaves scenes nor restarts the editor.
+- Keep activation coordination separate from signature verification and the
+  existing installer; the runner carries only its own source and copied values.
 
 ## Trust and delivery
 
@@ -38,12 +55,18 @@ All steps run inside the editor, on the main thread except the download.
 
 1. **Check.** The dock polls the releases API; a candidate is a newer `4.x`
    release exposing the six-name asset set. Dev checkouts skip this. Clicking
-   Update asks first: the update saves the project, relaunches the editor,
-   and connected AI clients must be restarted afterwards.
+   Update asks for confirmation before installing in this editor. Files being
+   installed does not mean the server or AI client connection is ready; the dock
+   reports migration and connection work separately. Client refresh requirements
+   are described below.
 2. **Download** the three canonical assets into
    `user://godot_ai_update/download/`, enforcing the release-declared sizes and
    trusted asset URLs exactly as today.
-3. **Verify** (`McpReleaseVerifier`, pure, unit-testable):
+3. **Verify** (`McpReleaseVerifier`, pure, unit-testable). From here each
+   phase names itself in the dock ("Verifying signed update…", "Staging the
+   verified tree…", "Waiting for client workers…", "Activating verified
+   update…") and yields a frame before its main-thread work, so the dock
+   repaints instead of freezing on "Downloading…":
    - the manifest parses as canonical JSON with `schema_version` 1 and the
      fixed key set; the signature verifies over the manifest bytes with the
      embedded key (`Crypto.verify`, SHA-256, PKCS#1 v1.5, the same primitive
@@ -64,68 +87,108 @@ All steps run inside the editor, on the main thread except the download.
    `.gdignore` and a `.gitignore`. It lives beside the live tree on purpose:
    an atomic rename requires the same filesystem, and a project on one drive
    with user data on another must still swap atomically.
-5. **Quiesce.** Wait, bounded, until the dispatcher has no in-flight request,
-   then run the existing `prepare_for_update_reload()` server preparation.
-6. **Lock.** `res://addons/.godot_ai_update/lock.json` holds the editor's PID
-   and process fingerprint. A lock held by a live process that is not this
-   editor refuses the update; a lock from a dead process is replaced. The lock
-   covers download, stage and swap only: once the marker records the swap it
-   is released, and the marker itself refuses a second update until the
-   restarted editor has verified the tree.
-7. **Swap.** Rename the live tree to `.godot_ai_update/backup/<old version>/`,
+5. **Quiesce and hand off.** Wait, bounded, until the dispatcher has no
+   in-flight request and client workers have stopped, then run
+   `prepare_for_update_reload()`. The existing click-time lock at
+   `res://addons/.godot_ai_update/lock.json` identifies the editor by PID and
+   process fingerprint; another live owner refuses the update. Compile
+   `utils/update_activation_runner.gd` into a script without a resource path
+   and attach its node outside the plugin. Pass only the staged path and the
+   installer's record. The caller returns before the runner disables the old
+   plugin and drains deferred work. No suspended plugin callback crosses the
+   tree replacement.
+6. **Swap.** Request an old-tree filesystem scan and wait for its actual
+   `sources_changed` completion callback, bounded by a deadline. A generic
+   `filesystem_changed` notification is insufficient. Snapshot cached old script
+   references while their complete source tree still exists.
+   Rename the live tree to `.godot_ai_update/backup/<old version>/`,
    then rename the stage into place. Two renames, no file-by-file overlay.
    Write `.godot_ai_update/pending.json`: from and to versions, the manifest
-   SHA-256, the expected tree hash, the backup path, and the editor nonce.
-8. **Restart.** Persist the add-on in `editor_plugins/enabled` without enabling
-   it in the old process, then `EditorInterface.restart_editor(true)`. Updates
-   are interactive-only; headless and export launches never update. The one
-   exception is the `GODOT_AI_ALLOW_HEADLESS` override the plugin and the
-   capsule both honour, which exists so CI can drive these paths in a
-   headless editor and is never set for a real install.
-9. **Verify again, in the new process.** On start, if `pending.json` exists,
-   hash the live tree and compare it to the expected tree hash:
-   - equal: delete the marker's pending state, record success in the marker
-     (`status: success`, `from_version`, `to_version`, which the existing
-     stale-server recovery arm and the pin-only auto-repin gate already read),
-     repin owned client configuration once and record `clients_migrated` in
-     the marker, emit the `self_update` telemetry event, and continue normal
-     startup. A success marker that records its migration is the durable
-     record of the last update and is nothing pending on later starts;
-   - different: rename the live tree to `.godot_ai_update/quarantine/`, rename
-     the backup back into place, mark `status: rolled_back` with the reason,
-     and show it in the dock. If the backup is missing too, mark
-     `status: repair_required`, keep the plugin inactive, and show the exact
-     paths. Nothing is deleted automatically in either case.
-10. **Retain.** One successful update replaces the previous retained backup.
-    Backups are never deleted on a failure path.
-11. **Attached AI clients.** A client attached through `godot-ai attach`
-    during the update loses server A at the swap. Its bridge then does what
-    it always does without a backend: it spawns one, of the old version,
-    into the restart window. The restarted editor replaces a godot-ai server
-    at exactly the version it just updated from without asking; any other
-    conflict keeps the dock's explicit Restart Server authority. Every
-    replacement launches our server before killing the occupant; that server
-    waits for the port to free, binds and listens the instant it does, and
-    hands that very socket to its HTTP and WebSocket servers, so the port is
-    never free between the old backend's death and ours listening: a bridge
-    polling for a free port to spawn again never sees one. The
-    old bridge itself refuses the new backend as incompatible, so the dock
-    tells the user to restart AI clients that were connected during the
-    update; the repinned client configuration launches the new version.
+   SHA-256, expected tree hash, backup path, and editor nonce.
+7. **Verify again, before activation.** The runner calls the existing
+   installer's verification against the exact expected tree hash:
+   - equal: record success in the marker and proceed to activation;
+   - different: quarantine the replacement, restore the backup, and record
+     `rolled_back` with the reason;
+   - no provable usable tree: retain the evidence, leave the plugin inactive,
+     and report the recovery paths. Backups are not deleted on a failure.
+   The same verification remains available on the next editor start after an
+   interrupted update. The update lock is released before script discovery.
+8. **Refresh and enable.** Before another scan or frame yield, move the captured
+   old scripts to their actual
+   paths under the retained backup using `take_over_path()`. First verify that
+   the backup exactly matches the previous live tree and that no existing
+   retained generation occupies those paths. Existing undo callbacks keep their
+   old compiled code and typed state; canonical paths now load a fresh graph,
+   including fresh static variables. This does not reload new source into old
+   objects. Release installer/verifier references and request the new-tree scan.
+   Its actual `sources_changed` completion callback gates enabling the fresh
+   plugin; another scan started by an earlier listener cannot be skipped. Open user scenes/resources that serialize references to add-on
+   scripts are refused before replacement, so their next save cannot silently
+   point into a backup.
+   Enable the plugin, require its loaded version to match, and persist
+   `editor_plugins/enabled`. Scan, load, or persistence failures produce an
+   explicit activation failure rather than a success banner. The runner records
+   the outcome and original editor PID in `.godot_ai_update/activation.json`.
+9. **Migrate and reconnect.** The new plugin handles the verified update marker,
+   repins provably owned client entries, and records `clients_migrated` before
+   releasing normal server startup. Foreign or unprovable entries stay unchanged
+   and are reported for explicit Configure. A migration failure is not described
+   as a usable connection. The durable success marker is not a pending update on
+   subsequent starts. Backend ownership checks and the authenticated connection
+   are separate from successful file installation.
+10. **Retain.** Backups backing old compiled scripts remain available for the
+    lifetime of this editor, including across further in-editor updates. Normal
+    pruning resumes on a fresh editor start, when those undo references no
+    longer exist. Updates remain interactive-only; headless and export launches do not update.
+    `GODOT_AI_ALLOW_HEADLESS` exists only so CI can exercise the real path inside
+    an isolated headless editor.
+
+### Attached AI clients and endpoint migration
+
+A same-major update can temporarily lose its backend while the plugin reloads.
+Bridges from 4.0.4 onward can follow a compatible replacement of the same major;
+this does not promise compatibility for an older process merely because the
+plugin has been updated. Existing lifecycle replacement checks still require
+exact process identity and ownership authority. An unsigned status response or
+an occupied port grants no permission to terminate its owner. Ordinary starts
+and post-update probes allow an occupied listener up to three seconds to answer.
+
+A verified pre-v4 to v4 crossing selects a distinct free loopback HTTP/WS pair
+before capability paths, launch context, or client migration are fixed. The
+atomic `godot_ai/v4_endpoint_ports` override is reused by later updated editors;
+legacy port settings remain available to older plugins. Normal v4 updates
+without an override keep their existing custom ports. A malformed override
+blocks startup with an explicit endpoint retry; it does not silently fall back.
+
+The editor can therefore connect to v4 while an old v3 bridge still holds its
+server on the old ports. The migration neither kills that server nor treats its
+status as authenticated. The old bridge cannot authenticate to v4: reload the
+AI client's MCP configuration and reconnect once. An application relaunch is
+needed only when the host cannot reload that configuration. Repinning a global
+client entry also redirects it away from other projects still using old
+plugins; those projects need their own update or explicit endpoint configuration
+to join the new server. See [server-lifecycle.md](server-lifecycle.md#upgrading-from-a-pre-v4-installation).
 
 ## The v3-to-v4 capsule
 
 Final v3 installs update through their own signed-sidecar runner, which
 extracts a zip over the add-on and re-enables it. The capsule is that zip: a
-small bridge plugin plus the embedded canonical triple. The bridge runs steps 3
-to 8 with the same installer script shipped inside it, keeps the two fixes the
-crossing needed (removing v3's `game_helper` autoload before the swap, #946,
-and persisting the next-start enabled entry without loading v4 in the old
-process, #957), and restarts. The v4 plugin then runs step 9 as on any update.
+small bridge plugin plus the embedded canonical triple. The bridge verifies and
+stages that triple, removes only v3's matching `game_helper` autoload entry
+before the swap (#946), and acquires the existing process-identity lock. Its
+coordinator passes copied values to the same source-free activation runner and
+returns. The runner then disables the capsule, swaps, verifies, discovers the
+new scripts, enables v4, and persists enablement (#957) in the original editor.
+The coordinator's own source does not remain on a suspended stack through the
+swap. Canonical releases retain signed compatibility files at the former capsule
+paths so outstanding parser dependencies can still resolve; these inert shims
+are distinct from the capsule payload and its old update runner, which are absent
+from the canonical installation.
 
 The capsule also carries the final v3 add-on (`migration_payload/godot-ai-v3-plugin.zip`,
 re-packed from the `v3.2.5` tag). Pre-v4 updaters offer whatever release is
-latest and cannot know that v4 needs Godot 4.7, and they discard their
+latest and cannot know the new release's Godot version floor, and they discard their
 per-file backups once the overlay succeeds; on a Godot below the floor the
 bridge therefore puts that final v3 back and re-enables it instead of leaving
 a dead tree, and the user updates again after upgrading Godot. The fallback
@@ -149,8 +212,10 @@ still repins owned client entries to the installed version before serving.
 - Malformed archives: traversal, absolute paths, links, duplicate or
   case-colliding paths, oversized trees, extra or missing files.
 - A mixed-version live tree, from any interruption before the swap (nothing
-  was touched) or after it (the new-process verification restores the backup).
-- Stale in-memory scripts after a swap (every update restarts the editor).
+  was touched) or after it (exact-tree verification can restore the backup).
+- Stale in-memory scripts are an explicit activation acceptance boundary:
+  relocation separates old and new compiled graphs; real tests execute changed
+  dependencies and handlers, not just check a new version label.
 - A second editor on the same project starting an update concurrently (the
   lock).
 - A project whose client configs were configured elsewhere (the existing
@@ -165,7 +230,8 @@ still repins owned client entries to the installed version before serving.
   that is the whole guarantee.
 - Malicious code already running as the same user, or an administrator.
 - Two editors on the same project racing past the lock's process check.
-- The restart landing in a different Godot. On macOS the editor relaunches
+- On the already-published restart path, landing in a different Godot. On
+  macOS the editor relaunches
   through LaunchServices by bundle, and with several Godot copies installed
   that has been seen to start another copy once under test. The marker then
   stays `swapped`, an unsupported Godot says so instead of refusing blindly,
@@ -178,13 +244,14 @@ still repins owned client entries to the installed version before serving.
   archive and inventory rejections, stage hashing, marker states, rollback and
   repair decisions.
 - Four real-editor scenarios in `tests/integration/test_self_update_upgrade_paths.py`:
-  a signed v4-to-v4 update restarts into a working server; a final-v3 install
-  crosses the capsule; a tampered live tree after a swap is rolled back; the
+  a current-source signed update must retain the editor process and scene
+  state while loading changed code and serving authenticated, project-pinned
+  reads/writes; a final-v3 install crosses the capsule in the same editor; a tampered live tree after a swap is rolled back; the
   closed-editor installer's first start completes client migration. The
   capsule crossing is parametrized over the v3 versions the installed fleet
   runs; a pull request proves the two newest and the nightly run proves all
   of them. With the
-  capsule coordinator's restart handoff in
+  capsule coordinator's activation handoff in
   `tests/integration/test_migration_bridge_failures.py`, they run on Linux on
   every pull request (private HTTPS delivery) and on all three desktop OSes
   nightly (also local-file delivery on Linux/macOS), and the release
@@ -192,9 +259,9 @@ still repins owned client entries to the installed version before serving.
   on every OS before publication.
 - Interactive pass: `script/local-self-update-smoke` prepares a signed
   A-to-B project with a one-run key and opens it in a real editor. Click
-  Update in the dock; the harness waits for the editor the swap restarts
-  into, checks the marker, backup, live server and crash reports, and leaves
-  that editor open for inspection. `--from-v3-tag v3.2.4` does the same for
+  Update in the dock; the harness checks the expected activation mode (same
+  editor for the new updater, restart for an untouched old updater), marker,
+  backup, live server and crash reports, and leaves the editor open for inspection. `--from-v3-tag v3.2.4` does the same for
   the crossing: it installs that exact final-v3 tree with a locally built
   capsule, and you click Update in the v3 dock.
   With `GODOT_AI_TEST_GODOT_FLOOR=unmet` in the environment the same
@@ -202,19 +269,40 @@ still repins owned client entries to the installed version before serving.
   final v3 in place, and the harness verifies that restored tree rather than
   waiting for a restart.
 
-## Known limits (4.0.0)
+## Preparing a two-hop interactive fixture
 
-These are accepted for 4.0.0 after an independent review; each has a manual
-route and none has field incidence yet.
+Prepare both locally signed updates before opening the editor:
 
-- **A replacement tree that does not load cannot recover itself.** Recovery
-  runs inside the new tree's own `plugin.gd`, after signature, hash and
-  inventory checks passed. A signed release whose scripts fail to parse on the
-  user's Godot leaves the marker `swapped` with the previous tree intact under
-  `addons/.godot_ai_update/backup/<version>/`. Recovery is manual: run
-  `script/v4-release install` with a good release, or move the backup back
-  over `addons/godot_ai/`. A pre-swap load check or a bootstrap outside the
-  tree would remove this limit at the cost of another maintained component.
+```bash
+script/local-self-update-smoke --project-dir /tmp/godot-ai-two-hop \
+  --from-v3-tag v3.2.5 --target-version 4.0.5 --then-version 4.0.6 \
+  --start-published-v3-server --no-launch
+```
+
+The first signed v4 tree advertises the second signed package. No installed
+add-on files need to change between clicks. The published v3 server startup
+remains intact; the v4 backends are frozen local snapshots stamped with the
+test versions. Linux requires `lsof` or `ss` before preparation in this mode.
+
+This command prepares a fixture; it does not execute or certify both updates.
+Use the printed launch command, which runs an isolated child through a generated
+wrapper. A custom driver must use `godot_child_environment(project_dir)` as well.
+Use the two native dock update actions,
+and check process identity, scene/undo continuity, exact trees, and authenticated
+tool responses after each hop. The fixture refuses client configuration writes
+when its isolated Codex environment is missing or mismatched. Preserve screenshots
+and receipts, then close the editor and clean generated caches as described in
+[verification](verification.md).
+
+## Known limits
+
+- **A signed tree can still fail to parse or activate.** Signature and tree
+  hashes do not prove Godot compatibility. The independent runner can report
+  that activation failed and retain the backup; it does not establish that a
+  broken signed release can always roll itself back after a script-load failure.
+  Recovery remains manual when required: install a good release with
+  `script/v4-release install`, or restore the retained backup under
+  `addons/.godot_ai_update/backup/<version>/`.
 - **The two-rename swap has crash windows.** A crash between the renames
   leaves no live tree and no new marker; a crash after the second rename but
   before the marker leaves an unverified replacement. Both are seconds wide and

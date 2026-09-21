@@ -48,6 +48,7 @@ const MAX_PORT := 65535
 ## takes one or two probes, so this only bounds the worst case.
 const SUGGEST_PORT_MAX_PROBES := 64
 const SETTING_WS_PORT := "godot_ai/ws_port"
+const SETTING_V4_ENDPOINT_PORTS := "godot_ai/v4_endpoint_ports"
 const SETTING_STARTUP_TRACE := "godot_ai/log_startup_timing"
 const SETTING_KEEP_SERVER_ON_EXIT := "godot_ai/keep_server_on_exit"
 ## External cwd the user can set when an MCP client (Pi, code-server, …) reads
@@ -77,12 +78,83 @@ const _WINDOWS_STDIO_BOOTSTRAP := (
 
 ## Active HTTP port: user override (if in range) or `DEFAULT_HTTP_PORT`.
 static func http_port() -> int:
+	var override := v4_endpoint_ports_status()
+	if bool(override.present):
+		return int(override.get("http_port", 0))
 	return _read_port_setting(McpSettings.SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
 
 
 ## Active WebSocket port: user override (if in range) or `DEFAULT_WS_PORT`.
 static func ws_port() -> int:
+	var override := v4_endpoint_ports_status()
+	if bool(override.present):
+		return int(override.get("ws_port", 0))
 	return _read_port_setting(SETTING_WS_PORT, DEFAULT_WS_PORT)
+
+
+## An absent override preserves historical settings. A malformed present
+## override grants no endpoint; callers can surface its error before startup.
+static func v4_endpoint_ports_status() -> Dictionary:
+	var es := EditorInterface.get_editor_settings()
+	if es == null or not es.has_setting(SETTING_V4_ENDPOINT_PORTS):
+		return {"ok": true, "present": false}
+	var pair: Variant = es.get_setting(SETTING_V4_ENDPOINT_PORTS)
+	var invalid := {"ok": false, "present": true,
+		"error": "Invalid %s: set distinct integer http_port and ws_port values between %d and %d, or remove the override." % [SETTING_V4_ENDPOINT_PORTS, MIN_PORT, MAX_PORT]}
+	if not (pair is Dictionary) or pair.size() != 2:
+		return invalid
+	for key in ["http_port", "ws_port"]:
+		var value: Variant = pair.get(key)
+		if not (value is int or value is float) or not is_finite(float(value)):
+			return invalid
+		if float(value) < MIN_PORT or float(value) > MAX_PORT or float(value) != float(int(value)):
+			return invalid
+	if int(pair.http_port) == int(pair.ws_port):
+		return invalid
+	return {"ok": true, "present": true, "http_port": int(pair.http_port), "ws_port": int(pair.ws_port)}
+
+
+## Call only after a verified successful upgrade and the activation barrier.
+## This selects independent ports, not authority over the legacy backend.
+static func prepare_major_upgrade_endpoints(from_version: String, to_version: String) -> Dictionary:
+	var previous := McpServerVersionCheck.version_tuple(from_version)
+	var installed := McpServerVersionCheck.version_tuple(to_version)
+	if previous.is_empty() or installed.is_empty() or int(previous[0]) >= 4 or int(installed[0]) < 4:
+		return {"ok": true, "changed": false}
+	if OS.get_thread_caller_id() != OS.get_main_thread_id():
+		return {"ok": false, "error": "upgrade endpoint selection requires the main thread"}
+	var existing := v4_endpoint_ports_status()
+	if not bool(existing.ok) or bool(existing.present):
+		existing["changed"] = false
+		return existing
+	var es := EditorInterface.get_editor_settings()
+	if es == null:
+		return {"ok": false, "error": "EditorSettings is unavailable"}
+	var legacy_http := _read_port_setting(McpSettings.SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
+	var legacy_ws := _read_port_setting(SETTING_WS_PORT, DEFAULT_WS_PORT)
+	var selected: Array[int] = []
+	var candidate := legacy_http + 1 if legacy_http < MAX_PORT else MIN_PORT
+	candidate = WindowsPortReservation.suggest_non_excluded_port(candidate, MAX_PORT - candidate + 1, MAX_PORT)
+	var reserved_output := str(WindowsPortReservation._get_cached_excluded_output().get("text", ""))
+	for _probe in range(SUGGEST_PORT_MAX_PROBES):
+		candidate = WindowsPortReservation.suggest_non_excluded_port_from_output(reserved_output, candidate, MAX_PORT - candidate + 1, MAX_PORT)
+		if candidate < MIN_PORT or candidate > MAX_PORT:
+			break
+		if candidate not in [legacy_http, legacy_ws] and not selected.has(candidate) and PortResolver.can_bind_local_port(candidate) and not PortResolver.is_port_in_use(candidate):
+			selected.append(candidate)
+			if selected.size() == 2:
+				break
+		candidate += 1
+		if candidate > MAX_PORT:
+			candidate = MIN_PORT
+	if selected.size() != 2:
+		return {"ok": false, "error": "No independent HTTP/WebSocket port pair was available for this major upgrade."}
+	for port in selected:
+		if WindowsPortReservation.parse_excluded(reserved_output, port) or not PortResolver.can_bind_local_port(port) or PortResolver.is_port_in_use(port):
+			return {"ok": false, "error": "The selected upgrade port %d became unavailable; retry endpoint selection." % port}
+	var pair := {"http_port": selected[0], "ws_port": selected[1]}
+	es.set_setting(SETTING_V4_ENDPOINT_PORTS, pair)
+	return {"ok": true, "changed": true, "http_port": selected[0], "ws_port": selected[1]}
 
 
 static func http_url() -> String:
@@ -349,6 +421,17 @@ static func apply_endpoint_settings(changes: Dictionary) -> Dictionary:
 				if float(value) != float(port) or port < MIN_PORT or port > MAX_PORT:
 					return {"ok": false, "error": "HTTP port is outside the supported range"}
 				normalized[McpSettings.SETTING_HTTP_PORT] = port
+			"ws_port":
+				if not (value is int or value is float):
+					return {"ok": false, "error": "WebSocket port must be an integer"}
+				var ws_port_value := int(value)
+				if (
+					float(value) != float(ws_port_value)
+					or ws_port_value < MIN_PORT
+					or ws_port_value > MAX_PORT
+				):
+					return {"ok": false, "error": "WebSocket port is outside the supported range"}
+				normalized[SETTING_WS_PORT] = ws_port_value
 			"excluded_domains":
 				if not (value is String):
 					return {"ok": false, "error": "excluded domains must be text"}
@@ -366,6 +449,18 @@ static func apply_endpoint_settings(changes: Dictionary) -> Dictionary:
 				normalized[McpSettings.SETTING_ALLOW_HOSTS] = allowed
 			_:
 				return {"ok": false, "error": "unknown endpoint setting: %s" % key}
+	var next_http := int(normalized.get(McpSettings.SETTING_HTTP_PORT, http_port()))
+	var next_ws := int(normalized.get(SETTING_WS_PORT, ws_port()))
+	var override := v4_endpoint_ports_status()
+	var ports_changed := normalized.has(McpSettings.SETTING_HTTP_PORT) or normalized.has(SETTING_WS_PORT)
+	if bool(override.present) and ports_changed:
+		if next_http < MIN_PORT or next_http > MAX_PORT or next_ws < MIN_PORT or next_ws > MAX_PORT:
+			return {"ok": false, "error": "A complete valid HTTP/WebSocket pair is required to repair the v4 override."}
+		normalized.erase(McpSettings.SETTING_HTTP_PORT)
+		normalized.erase(SETTING_WS_PORT)
+		normalized[SETTING_V4_ENDPOINT_PORTS] = {"http_port": next_http, "ws_port": next_ws}
+	if next_http == next_ws and (ports_changed or not bool(override.present)):
+		return {"ok": false, "error": "HTTP and WebSocket ports must differ"}
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
 		return {"ok": false, "error": "EditorSettings is unavailable"}
@@ -1425,13 +1520,41 @@ static func _resolve_consoleless_python(
 			if int(probe.get("exit_code", -1)) == 0:
 				var python := str(probe.get("stdout", "")).strip_edges()
 				if not python.is_empty():
-					var managed_pythonw := python.get_base_dir().path_join("pythonw.exe")
-					if FileAccess.file_exists(managed_pythonw):
+					var managed_pythonw := _consoleless_python_for_interpreter(python)
+					if not managed_pythonw.is_empty():
 						return managed_pythonw
 
 	## A system Python GUI launcher is sufficient for the non-dev bootstrap;
 	## it does not import godot_ai itself.
 	return CliFinder.find(["pythonw.exe"])
+
+
+## uv can return a launcher in ~/.local/bin whose GUI interpreter lives in
+## the managed Python installation. Ask that interpreter for its base path.
+## The optional result keeps tests independent of installed executables.
+static func _consoleless_python_for_interpreter(
+	python: String, probe_result: Dictionary = {}
+) -> String:
+	if not python.is_absolute_path() or not FileAccess.file_exists(python):
+		return ""
+	var sibling := python.get_base_dir().path_join("pythonw.exe")
+	if FileAccess.file_exists(sibling):
+		return sibling
+	var probe := probe_result
+	if probe.is_empty():
+		probe = McpCliExec.run(
+			python, ["-I", "-c", "import sys; print(getattr(sys, '_base_executable', sys.executable))"],
+			_DISCOVERY_TIMEOUT_MS, false
+		)
+	if int(probe.get("exit_code", -1)) != 0 or not probe.get("stdout") is String:
+		return ""
+	var base_python := str(probe["stdout"]).strip_edges()
+	if base_python.contains("\n") or base_python.contains("\r"):
+		return ""
+	if not base_python.is_absolute_path() or not FileAccess.file_exists(base_python):
+		return ""
+	var base_pythonw := base_python.get_base_dir().path_join("pythonw.exe")
+	return base_pythonw if FileAccess.file_exists(base_pythonw) else ""
 
 
 static func _system_version_from_probe(probe: Dictionary) -> Dictionary:

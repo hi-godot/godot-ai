@@ -2,7 +2,10 @@
 
 import copy
 import json
+import os
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,6 +41,15 @@ class Process:
 
     def num_handles(self):
         return self.handles
+
+
+REAL_WINDOWS_EXIT_REPORT = resources._windows_process_has_exited
+
+
+@pytest.fixture(autouse=True)
+def no_kernel_exit_report(monkeypatch):
+    """Fake psutil processes have no kernel behind them; pin the Windows probe."""
+    monkeypatch.setattr(resources, "_windows_process_has_exited", lambda pid: False)
 
 
 @pytest.fixture
@@ -93,6 +105,35 @@ def test_dead_or_zombie_is_not_a_successful_sample(process, status):
         resources.bind_process(100)
     with pytest.raises(resources.ResourceError, match="dead or a zombie"):
         resources.sample_process(resources.ProcessBinding(100, 123.5))
+
+
+@pytest.mark.parametrize("os_name", ["nt", "posix"])
+def test_kernel_exit_report_outranks_psutil_only_on_windows(process, monkeypatch, os_name):
+    """An exited child that psutil still answers for is dead on Windows."""
+    monkeypatch.setattr(resources.os, "name", os_name)
+    monkeypatch.setattr(resources, "_windows_process_has_exited", lambda pid: True)
+    if os_name == "nt":
+        with pytest.raises(resources.ResourceError, match="dead or a zombie"):
+            resources.bind_process(100)
+        with pytest.raises(resources.ResourceError, match="dead or a zombie"):
+            resources.sample_process(resources.ProcessBinding(100, 123.5))
+    else:
+        assert resources.sample_process(resources.bind_process(100))["threads"] == 3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows kernel exit codes")
+def test_windows_exit_report_marks_a_still_open_child_dead(process, monkeypatch):
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait(timeout=30)
+    # The Popen still holds the process handle, so the pid cannot be reused.
+    assert REAL_WINDOWS_EXIT_REPORT(child.pid) is True
+    assert REAL_WINDOWS_EXIT_REPORT(os.getpid()) is False
+    assert REAL_WINDOWS_EXIT_REPORT(0) is False
+    monkeypatch.setattr(resources, "_windows_process_has_exited", REAL_WINDOWS_EXIT_REPORT)
+    with pytest.raises(resources.ResourceError, match="dead or a zombie"):
+        resources.sample_process(resources.ProcessBinding(child.pid, 123.5))
+    binding = resources.bind_process(os.getpid())
+    assert resources.sample_process(binding)["pid"] == os.getpid()
 
 
 @pytest.mark.parametrize("when", ["before", "during"])

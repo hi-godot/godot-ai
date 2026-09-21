@@ -501,6 +501,32 @@ def test_install_rollback_on_a_fresh_project_leaves_no_live_tree(release, tmp_pa
     )
 
 
+def test_process_liveness_needs_no_third_party_module():
+    assert v4_release._process_is_live(os.getpid())
+    finished = subprocess.Popen([sys.executable, "-c", "pass"])
+    finished.wait()
+    assert not v4_release._process_is_live(finished.pid)
+    assert not v4_release._process_is_live(0)
+    assert "import psutil" not in Path(v4_release.__file__).read_text(encoding="utf-8")
+
+
+def test_install_over_a_v4_tree_still_replaces_owned_mismatches(release, tmp_path):
+    """A hand-run recovery may repin every owned entry, whatever the live version."""
+    project = _project(tmp_path)
+    live = project / "addons/godot_ai"
+    config = live / "plugin.cfg"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace('version="3.2.4"', 'version="4.0.1"'),
+        encoding="utf-8",
+    )
+
+    assert v4_release.main(_install_args(release, project)) == 0
+
+    marker = _marker(project)
+    assert marker["from_version"] == "4.0.1"
+    assert marker["replace_owned_mismatches"] is True
+
+
 def test_install_refuses_a_lock_held_by_another_live_process(release, tmp_path):
     project = _project(tmp_path)
     update = project / "addons/.godot_ai_update"
@@ -620,3 +646,45 @@ def test_verify_signature_falls_back_to_openssl_without_cryptography(release, tr
     verify._verify_signature(release.raw, release.signature.read_bytes(), trusted.public)
     with pytest.raises(verify.ReleaseError, match="verification failed"):
         verify._verify_signature(release.raw + b"x", release.signature.read_bytes(), trusted.public)
+
+
+def test_release_verify_loads_without_the_godot_ai_package(tmp_path):
+    """``script/v4-release`` loads this file standalone on a runner that has
+    only the interpreter; ``-I -S`` hides the editable install the same way."""
+    module_path = str(Path(verify.__file__).resolve())
+    target = str(tmp_path / "standalone")
+    probe = "\n".join(
+        [
+            "import importlib.util, sys",
+            "from pathlib import Path",
+            f"spec = importlib.util.spec_from_file_location('standalone_verify', {module_path!r})",
+            "module = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(module)",
+            "loaded = sorted(name for name in sys.modules if name.startswith('godot_ai'))",
+            "assert not loaded, loaded",
+            f"module.private_mkdir(Path({target!r}))",
+            "print('standalone-ok')",
+        ]
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", probe], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "standalone-ok"
+    assert (tmp_path / "standalone").is_dir()
+
+
+def test_standalone_private_mkdir_matches_the_transport_rule(tmp_path, monkeypatch) -> None:
+    """Both forced branches, not just the host's: no mode on Windows (#988), 0o700 elsewhere."""
+    modes: list[int] = []
+    real_mkdir = Path.mkdir
+
+    def record(self, mode=0o777, parents=False, exist_ok=False):
+        modes.append(mode)
+        return real_mkdir(self, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", record)
+    verify.private_mkdir(tmp_path / "windows", windows=True)
+    verify.private_mkdir(tmp_path / "posix", windows=False)
+    assert modes == [0o777, 0o700]
+    assert (tmp_path / "windows").is_dir() and (tmp_path / "posix").is_dir()

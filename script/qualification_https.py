@@ -186,7 +186,7 @@ def private_release_origin(
                 pass  # Bad TLS, a timeout or a disconnected client grants no access.
             self.close_connection = True
 
-    class Server(HTTPServer):
+    class Server(support.LoopbackBind, HTTPServer):
         request_queue_size = 8
 
         def get_request(self):

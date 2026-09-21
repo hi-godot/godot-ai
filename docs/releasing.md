@@ -34,7 +34,12 @@ those exact bytes:
 
 `complete-qualification` requires every one of those rows to be present,
 passed, and bound to the same candidate pair; the runtime row's required case
-set is exactly `exact-a-to-b-hot-update`. The full contract is in the
+set is exactly `exact-a-to-b-hot-update`, and that case runs with a real
+`godot-ai attach` bridge, pinned to A and resolved from the retained index,
+attached through the whole update: the driver clicks Update only once the
+bridge has listed the session A serves, and the case passes only once the
+same bridge process has listed the session B serves (the row's
+`attached_bridge` evidence). The full contract is in the
 [verification plan](architecture-simplification-verification-plan.md); the
 [PR #949 follow-up](v4-release-review-followup.md) records the development
 evidence behind it.
@@ -62,7 +67,15 @@ Python-side signature check runs through the OpenSSL command line there; with
 the `cryptography` package present (the dev extra) the same check uses it.
 
 After the qualification run's `Require complete release evidence` job is
-green, dispatch `release.yml`. Select **patch**, **minor**, or **major**, and
+green, run `release-validation.yml` in **predecessor** mode with that
+`qualification_run_id` and the previous published version. Its six OS/Python
+rows install the published predecessor and update to the exact signed A bytes,
+with the same attached bridge across the update. This is required for 4.1.0;
+the A-to-B qualification row does not substitute for the public-to-A hop.
+Require `Require complete supplemental release evidence` to pass and retain
+the `v4-predecessor-attestation` artifact before promotion.
+
+Then dispatch `release.yml`. Select **patch**, **minor**, or **major**, and
 provide the previous published version and the qualification run ID. The
 `verify-approval` job checks the run's provenance before downloading anything,
 then rebuilds the expected release record from the downloaded candidates and
@@ -93,8 +106,16 @@ upload, a pre-existing GitHub tag/release must also match the approved source
 and asset inventory. A partial matching draft release can resume; mismatches
 fail without overwriting tags or clobbering assets. The GitHub job verifies
 public PyPI bytes again before publishing and re-downloads all six public
-assets afterward. This receipt does not yet replace the required cross-platform
-public dependency re-resolution and immutable post-publication attestation.
+assets afterward.
+
+After successful promotion, run `release-validation.yml` in **public** mode,
+with the same qualification run and the successful `publication_run_id`.
+It re-downloads the public distributions and six assets, checks their approved
+digests, resolves fresh wheel and sdist installs on all three OSes with Python
+3.11 and 3.14, and verifies each resolved public dependency's bytes. The final
+job binds every row to A and the publication receipt. Retain the immutable
+`v4-public-attestation` Actions artifact and its digest; it has a 90-day
+retention window. The release is complete only after that job passes.
 
 The old `bump-and-release.yml` remains retired. Version changes are reviewed
 source changes: prepare A with the chosen next semantic version and B as its
@@ -136,16 +157,21 @@ list, the body carries the two links alone and the operator edits the notes by
 hand; notes are mutable and are not a trust anchor, so this is never a reason
 to refuse publication.
 
-Publishing the draft emits GitHub's `release: published` event, which runs
-`discord-changelog.yml`. That workflow posts the release name, URL, and notes
-to the Discord `#changelog` channel through the `DISCORD_CHANGELOG_WEBHOOK`
-repository secret, silently (no push notifications), and fails red when the
-post fails so a broken webhook is noticed. The v3 line posted from inside its
-release workflow; the v4 publishing jobs deliberately run nothing but the
-promotion, so the post moved to its own workflow. Dispatch it by hand with a
-`tag` input to re-post a release or to backfill one published before the
-workflow existed. The workflow file is read from the tagged commit, so v3 tags
-never trigger it.
+A successful promotion run starts `discord-changelog.yml` through its
+`workflow_run` trigger. That workflow downloads the promotion's
+`v4-publication-receipt` artifact, reads the released tag from it, and posts
+the release name, URL, and notes to the Discord `#changelog` channel through
+the `DISCORD_CHANGELOG_WEBHOOK` repository secret, silently (no push
+notifications). It fails red when the post fails so a broken webhook is
+noticed. A failed or cancelled promotion published nothing and is skipped.
+
+The workflow also listens for GitHub's `release: published` event, but the
+promotion publishes the draft with the workflow token, and GitHub never starts
+a workflow from an event the workflow token raised. That trigger only fires
+for a draft flipped live by hand. The v3 line posted from inside its release
+workflow; the v4 publishing jobs deliberately run nothing but the promotion,
+so the post lives in its own workflow. Dispatch it by hand with a `tag` input
+to re-post a release or to backfill one that neither trigger covered.
 
 ### Operator setup before candidate signing
 

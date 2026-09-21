@@ -948,12 +948,15 @@ func _clear_debugger_error_trees() -> int:
 
 
 func reload_plugin(_params: Dictionary) -> Dictionary:
+	var work := PluginReload.reserve_reload()
+	if work == 0:
+		return ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "A plugin reload is already pending.")
 	_log_buffer.log("reload_plugin requested, reloading next frame")
 	## Persist a pending plugin_reload telemetry event *before* the
 	## disable kills the live WebSocket. The re-enabled plugin's
 	## _enter_tree flushes via `_telemetry.flush_pending_plugin_reload()`.
 	Telemetry.record_pending_plugin_reload("mcp_tool")
-	_do_reload_plugin.call_deferred(ScriptWork.begin("reload_plugin"))
+	_do_reload_plugin.call_deferred(work)
 	return {"data": {"status": "reloading", "message": "Plugin reload initiated"}}
 
 

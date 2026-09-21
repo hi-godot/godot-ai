@@ -11,11 +11,13 @@ import argparse
 import json
 import os
 import platform
+import queue
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -41,6 +43,16 @@ UPDATE_STATE = "addons/.godot_ai_update"
 # but not the --headless shorthand (Godot 4.7). The update restarts the editor,
 # and the restarted editor must stay headless on a display-less runner.
 HEADLESS_EDITOR_ARGUMENTS = ("--display-driver", "headless", "--audio-driver", "Dummy")
+## Gate files the attached bridge writes into the project for the driver:
+## the first after it has served candidate A, so Update is clicked with a
+## client attached; the second after the same bridge process has listed the
+## editor session served by candidate B and closed, so the driver may quit.
+BRIDGE_ATTACHED_FILE = "_bridge_attached.done"
+BRIDGE_SERVED_B_FILE = "_bridge_served_b.done"
+BRIDGE_ATTACH_TIMEOUT_SECONDS = 180.0
+BRIDGE_CALL_TIMEOUT_SECONDS = 60.0
+## A stop must finish one 1 s poll slice plus the close's own process waits.
+BRIDGE_STOP_TIMEOUT_SECONDS = 50.0
 
 
 def current_python_version() -> str:
@@ -334,7 +346,10 @@ func _configure(node: Node) -> void:
         encoding="utf-8",
     )
     (project / "_qualification_driver.gd").write_text(
-        _DRIVER.replace("@VERSION_A@", version_a).replace("@VERSION_B@", version_b),
+        _DRIVER.replace("@VERSION_A@", version_a)
+        .replace("@VERSION_B@", version_b)
+        .replace("@BRIDGE_ATTACHED@", BRIDGE_ATTACHED_FILE)
+        .replace("@BRIDGE_SERVED_B@", BRIDGE_SERVED_B_FILE),
         encoding="utf-8",
     )
 
@@ -349,6 +364,7 @@ const DEADLINE_MS := 300000
 const PROGRESS_PATH := "res://runtime-progress.json"
 var deadline := 0
 var started := false
+var b_live := false
 var old_instance := ""
 
 func _ready() -> void:
@@ -368,7 +384,10 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
     if Time.get_ticks_msec() >= deadline:
-        _finish(41, {"error": "runtime qualification timed out"})
+        if b_live:
+            _finish(44, {"error": "the attached bridge never served candidate B"})
+        else:
+            _finish(41, {"error": "runtime qualification timed out"})
         return
     var plugin := _find_plugin()
     if plugin == null:
@@ -381,6 +400,8 @@ func _process(_delta: float) -> void:
             return
         if not _client_pin(VERSION_A):
             _finish(42, {"error": "candidate A client pin missing"})
+            return
+        if not FileAccess.file_exists("res://@BRIDGE_ATTACHED@"):
             return
         started = true
         var progress := FileAccess.open(PROGRESS_PATH, FileAccess.WRITE)
@@ -405,9 +426,13 @@ func _process(_delta: float) -> void:
         or not _client_pin(VERSION_B)
     ):
         return
+    b_live = true
+    if not FileAccess.file_exists("res://@BRIDGE_SERVED_B@"):
+        return
     _finish(0, {
         "status": "passed", "from_version": VERSION_A, "to_version": VERSION_B,
         "old_instance": old_instance, "new_instance": instance,
+        "attached_bridge_served_b": true,
     })
 
 func _finish(code: int, report: Dictionary) -> void:
@@ -485,6 +510,236 @@ func _capability() -> Dictionary:
     var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
     return parsed if parsed is Dictionary else {}
 """
+
+
+class AttachedBridge:
+    """A real ``godot-ai attach`` bridge, attached through the whole update.
+
+    The bridge is the published package pinned to candidate A, resolved from
+    the retained index exactly as a client entry written for A would run it.
+    It speaks MCP over stdio itself (newline-delimited JSON-RPC; the runner
+    has no MCP client library), lists the editor session before the update
+    so the driver may click Update with a client attached, keeps calling
+    through the swap and the editor restart, and passes only when the same
+    bridge process lists a session served by candidate B. That is the
+    contract #1024 gives users: a plugin update within a major version needs
+    no client relaunch.
+    """
+
+    def __init__(
+        self,
+        command: list[str],
+        environment: dict[str, str],
+        project: Path,
+        capability_dir: Path,
+        version_a: str,
+        version_b: str,
+        log_path: Path,
+    ) -> None:
+        self.command = command
+        self.environment = environment
+        self.project = project
+        self.capability_dir = capability_dir
+        self.version_a = version_a
+        self.version_b = version_b
+        self.log_path = log_path
+        self.ok_before_update = 0
+        self.served_b = False
+        self.errors: list[str] = []
+        self.fault = ""
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="attached-bridge", daemon=True)
+        self._lines: queue.Queue[str | None] = queue.Queue()
+        self._next_id = 0
+        self._process: subprocess.Popen[bytes] | None = None
+
+    def __enter__(self) -> AttachedBridge:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        """Stop the bridge and prove it stopped: the row reads the bridge log,
+        scans the project and waits for the ports right after this, so a
+        thread that outlived its budget must not keep a process alive."""
+        self._stop.set()
+        self._thread.join(timeout=BRIDGE_STOP_TIMEOUT_SECONDS)
+        if self._thread.is_alive():
+            process = self._process
+            if process is not None and process.poll() is None:
+                process.kill()
+            self._thread.join(timeout=15)
+            self.fault = self.fault or "attached bridge did not stop within its budget"
+
+    def report(self) -> dict[str, Any]:
+        return {
+            "pin": self.version_a,
+            "ok_before_update": self.ok_before_update,
+            "served_b": self.served_b,
+            "errors": self.errors[-5:],
+            "fault": self.fault,
+        }
+
+    def _run(self) -> None:
+        try:
+            self._attach_and_follow()
+        except Exception as exc:  # surfaced by the row after the run
+            self.fault = f"{type(exc).__name__}: {exc}"
+
+    def _attach_and_follow(self) -> None:
+        deadline = time.monotonic() + BRIDGE_ATTACH_TIMEOUT_SECONDS
+        record = self.capability_dir / f"http-{HTTP_PORT}.json"
+        while not record.is_file():
+            if self._stop.is_set() or time.monotonic() > deadline:
+                raise RuntimeError("candidate A never published its capability record")
+            time.sleep(0.25)
+        with self.log_path.open("ab") as log:
+            process = subprocess.Popen(
+                self.command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=log,
+                env=self.environment,
+                cwd=str(self.project.parent),
+            )
+            self._process = process
+            reader = threading.Thread(target=self._read, args=(process,), daemon=True)
+            reader.start()
+            try:
+                self._handshake(process)
+                self._follow(process)
+            finally:
+                self._close(process)
+
+    def _read(self, process: subprocess.Popen[bytes]) -> None:
+        assert process.stdout is not None
+        for raw in process.stdout:
+            self._lines.put(raw.decode("utf-8", errors="replace"))
+        self._lines.put(None)
+
+    def _send(self, process: subprocess.Popen[bytes], message: dict[str, Any]) -> None:
+        assert process.stdin is not None
+        process.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
+        process.stdin.flush()
+
+    def _request(
+        self, process: subprocess.Popen[bytes], method: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        self._next_id += 1
+        request_id = self._next_id
+        self._send(
+            process, {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        )
+        deadline = time.monotonic() + BRIDGE_CALL_TIMEOUT_SECONDS
+        while True:
+            ## Poll in short slices so a stop request ends a call promptly
+            ## instead of waiting out the full call budget.
+            support.require(not self._stop.is_set(), "attached bridge was stopped")
+            remaining = deadline - time.monotonic()
+            support.require(remaining > 0, f"attached bridge did not answer {method}")
+            try:
+                line = self._lines.get(timeout=min(1.0, remaining))
+            except queue.Empty:
+                continue
+            support.require(line is not None, "attached bridge closed its output")
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if message.get("id") == request_id:
+                return message
+
+    def _handshake(self, process: subprocess.Popen[bytes]) -> None:
+        response = self._request(
+            process,
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "godot-ai-qualification", "version": "1"},
+            },
+        )
+        support.require("result" in response, f"attached bridge refused initialize: {response}")
+        self._send(process, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    def _sessions(self, process: subprocess.Popen[bytes]) -> list[dict[str, Any]] | str:
+        response = self._request(
+            process, "tools/call", {"name": "session_manage", "arguments": {"op": "list"}}
+        )
+        if "error" in response:
+            return json.dumps(response["error"])[:300]
+        result = response.get("result", {})
+        texts = [
+            item.get("text", "") for item in result.get("content", []) if isinstance(item, dict)
+        ]
+        if result.get("isError"):
+            return (" ".join(texts) or "tool error")[:300]
+        payload: Any = result.get("structuredContent")
+        if payload is None:
+            try:
+                payload = json.loads(texts[0]) if texts else None
+            except json.JSONDecodeError:
+                payload = None
+        if not isinstance(payload, dict):
+            return f"unexpected session_manage payload: {str(result)[:200]}"
+        sessions = payload.get("sessions", [])
+        return [session for session in sessions if isinstance(session, dict)]
+
+    def _follow(self, process: subprocess.Popen[bytes]) -> None:
+        attached = self.project / BRIDGE_ATTACHED_FILE
+        while not self._stop.is_set():
+            sessions = self._sessions(process)
+            if isinstance(sessions, str):
+                self.errors.append(sessions)
+            else:
+                versions = {
+                    (str(s.get("plugin_version", "")), str(s.get("server_version", "")))
+                    for s in sessions
+                }
+                if (self.version_a, self.version_a) in versions and not attached.exists():
+                    attached.write_text("attached\n", encoding="utf-8")
+                if attached.exists() and not self.served_b:
+                    self.ok_before_update += 1
+                if (self.version_b, self.version_b) in versions:
+                    self.served_b = True
+                    return
+            time.sleep(0.5)
+
+    def _close(self, process: subprocess.Popen[bytes]) -> None:
+        """Close the client side first so the bridge releases its lease, then
+        tell the driver the same bridge served B; the editor may quit now."""
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+        if self.served_b:
+            (self.project / BRIDGE_SERVED_B_FILE).write_text("served\n", encoding="utf-8")
+
+
+def _bridge_command(uvx: str, version: str) -> list[str]:
+    """The exact launch a client entry written for ``version`` performs."""
+    return [
+        uvx,
+        "--link-mode",
+        "copy",
+        "--from",
+        f"godot-ai=={version}",
+        "godot-ai",
+        "attach",
+        "--port",
+        str(HTTP_PORT),
+        "--ws-port",
+        str(WS_PORT),
+        "--disable-telemetry",
+    ]
 
 
 def _manifest_tree(candidate: Path) -> dict[str, dict[str, Any]]:
@@ -707,24 +962,50 @@ def exact_a_to_b(
                     }
                 )
                 print(f"Running the A-to-B update in Godot {godot_version}", flush=True)
-                completed = subprocess.run(
-                    _editor_command(executable, project),
-                    cwd=work,
-                    env=environment,
-                    capture_output=True,
-                    timeout=TIMEOUT_SECONDS,
-                    check=False,
+                bridge_log = work / "attached-bridge.log"
+                bridge = AttachedBridge(
+                    _bridge_command(uvx, records["a"]["version"]),
+                    environment,
+                    project,
+                    _capability_directory(environment),
+                    records["a"]["version"],
+                    records["b"]["version"],
+                    bridge_log,
                 )
+                with bridge:
+                    completed = subprocess.run(
+                        _editor_command(executable, project),
+                        cwd=work,
+                        env=environment,
+                        capture_output=True,
+                        timeout=TIMEOUT_SECONDS,
+                        check=False,
+                    )
+                    _write_secret_free_log(
+                        output / "godot.log",
+                        completed.stdout + completed.stderr,
+                        (release.token, index),
+                    )
+                    support.require(completed.returncode == 0, "real Godot A-to-B update failed")
+                    # The swap restarts the editor; the process above exits and
+                    # the restarted editor finishes the case once the attached
+                    # bridge has listed the session candidate B serves.
+                    print("Waiting for the restarted editor to report candidate B", flush=True)
+                    _wait_for_runtime_result(project / "runtime-result.json", TIMEOUT_SECONDS)
                 _write_secret_free_log(
-                    output / "godot.log",
-                    completed.stdout + completed.stderr,
+                    output / "attached-bridge.log",
+                    bridge_log.read_bytes() if bridge_log.is_file() else b"",
                     (release.token, index),
                 )
-                support.require(completed.returncode == 0, "real Godot A-to-B update failed")
-                # The swap restarts the editor; the process above exits and
-                # the restarted editor finishes the case and writes the result.
-                print("Waiting for the restarted editor to report candidate B", flush=True)
-                _wait_for_runtime_result(project / "runtime-result.json", TIMEOUT_SECONDS)
+                support.require(not bridge.fault, f"attached bridge failed: {bridge.fault}")
+                support.require(
+                    bridge.ok_before_update >= 1,
+                    "the attached bridge never served candidate A before the update",
+                )
+                support.require(
+                    bridge.served_b,
+                    f"the attached bridge never served candidate B: {bridge.errors[-3:]}",
+                )
                 support.require(
                     release.downloads
                     == [
@@ -742,6 +1023,10 @@ def exact_a_to_b(
         print("Verifying update evidence and private-data cleanup", flush=True)
         result = _read_runtime_result(project)
         support.require(result.get("status") == "passed", "runtime driver did not pass")
+        support.require(
+            result.get("attached_bridge_served_b") is True,
+            "runtime driver finished without the attached bridge serving B",
+        )
         live = project / "addons/godot_ai"
         live_tree = support.inventory(live)
         support.require(live_tree == _manifest_tree(candidates / "b"), "live tree is not exact B")
@@ -768,6 +1053,7 @@ def exact_a_to_b(
             "index_artifacts_requested": sorted(set(index_requests)),
             "live_tree": live_tree,
             "backend_stopped": True,
+            "attached_bridge": bridge.report(),
             **update,
         }
 

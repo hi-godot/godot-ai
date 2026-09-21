@@ -26,6 +26,8 @@ var _had_http_port_setting := false
 var _saved_http_port: Variant = null
 var _had_ws_port_setting := false
 var _saved_ws_port: Variant = null
+var _had_v4_endpoint_ports := false
+var _saved_v4_endpoint_ports: Variant = null
 ## Same reason as the ports: these tests drive godot_ai/mcp_client_scope
 ## through its valid and invalid values and must not leave the editor
 ## registering at a scope the user never chose.
@@ -69,6 +71,11 @@ func suite_setup(_ctx: Dictionary) -> void:
 		_had_ws_port_setting = es.has_setting(McpClientConfigurator.SETTING_WS_PORT)
 		if _had_ws_port_setting:
 			_saved_ws_port = es.get_setting(McpClientConfigurator.SETTING_WS_PORT)
+		_had_v4_endpoint_ports = es.has_setting(McpClientConfigurator.SETTING_V4_ENDPOINT_PORTS)
+		if _had_v4_endpoint_ports:
+			_saved_v4_endpoint_ports = es.get_setting(McpClientConfigurator.SETTING_V4_ENDPOINT_PORTS)
+			if _saved_v4_endpoint_ports is Dictionary or _saved_v4_endpoint_ports is Array:
+				_saved_v4_endpoint_ports = _saved_v4_endpoint_ports.duplicate(true)
 		_had_client_scope_setting = es.has_setting(McpSettings.SETTING_CLIENT_SCOPE)
 		if _had_client_scope_setting:
 			_saved_client_scope = es.get_setting(McpSettings.SETTING_CLIENT_SCOPE)
@@ -273,6 +280,23 @@ func test_kimi_code_client_json_descriptor() -> void:
 	assert_eq(client.server_key_path.size(), 1)
 	assert_eq(String(client.server_key_path[0]), "mcpServers")
 	assert_eq(client.entry_extra_fields.get("transport"), "http")
+
+
+func test_opencode_client_declares_json_then_jsonc_merge_tiers() -> void:
+	var client := McpClientRegistry.get_by_id("opencode")
+	assert_true(client != null, "OpenCode descriptor must be registered")
+	if client == null:
+		return
+	var merge_templates: Dictionary = client.get("config_merge_path_templates")
+	assert_false(merge_templates.is_empty(), "OpenCode must declare its merge tiers (#1011)")
+	var merge_key := McpPathTemplate.platform_key(merge_templates)
+	assert_false(merge_key.is_empty(), "OpenCode merge tiers must support this platform")
+	if not merge_key.is_empty():
+		var merge_paths: PackedStringArray = merge_templates[merge_key]
+		assert_eq(merge_paths.size(), 2)
+		if merge_paths.size() == 2:
+			assert_true(String(merge_paths[0]).ends_with("/opencode.json"))
+			assert_true(String(merge_paths[1]).ends_with("/opencode.jsonc"), "jsonc is the winning tier")
 
 
 func test_pi_client_json_descriptor() -> void:
@@ -4147,6 +4171,46 @@ func test_claude_desktop_migration_omits_empty_env() -> void:
 	assert_false(entry.has("env"), "an env object emptied by migration must be omitted")
 
 
+func test_consoleless_python_keeps_direct_sibling_without_probe() -> void:
+	var directory := _scratch_dir.path_join("direct_python")
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory))
+	var python := ProjectSettings.globalize_path(directory.path_join("python.exe"))
+	var pythonw := ProjectSettings.globalize_path(directory.path_join("pythonw.exe"))
+	_write_text(python, "fixture interpreter")
+	_write_text(pythonw, "fixture GUI interpreter")
+	assert_eq(McpClientConfigurator._consoleless_python_for_interpreter(
+		python, {"exit_code": 1, "stdout": ""}
+	), pythonw, "an installed sibling needs no subprocess")
+
+
+func test_consoleless_python_resolves_uv_launcher_base_interpreter() -> void:
+	var directory := _scratch_dir.path_join("managed_python")
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory))
+	var launcher := ProjectSettings.globalize_path(_scratch_dir.path_join("python3.14.exe"))
+	var python := ProjectSettings.globalize_path(directory.path_join("python.exe"))
+	var pythonw := ProjectSettings.globalize_path(directory.path_join("pythonw.exe"))
+	_write_text(launcher, "fixture uv launcher")
+	_write_text(python, "fixture base interpreter")
+	_write_text(pythonw, "fixture GUI interpreter")
+	assert_eq(McpClientConfigurator._consoleless_python_for_interpreter(
+		launcher, {"exit_code": 0, "stdout": python + "\r\n"}
+	), pythonw, "a launcher without a sibling resolves the installed GUI interpreter")
+	for invalid in [
+		{"exit_code": 1, "stdout": python},
+		{"exit_code": 0, "stdout": "relative/python.exe"},
+		{"exit_code": 0, "stdout": python + "\nextra output"},
+		{"exit_code": 0, "stdout": python + ".missing"},
+		{"exit_code": 0, "stdout": 42},
+	]:
+		assert_eq(McpClientConfigurator._consoleless_python_for_interpreter(
+			launcher, invalid
+		), "", "failed or malformed interpreter discovery must not produce a launch")
+	DirAccess.remove_absolute(pythonw)
+	assert_eq(McpClientConfigurator._consoleless_python_for_interpreter(
+		launcher, {"exit_code": 0, "stdout": python}
+	), "", "a missing GUI interpreter must keep discovery unavailable")
+
+
 func test_claude_desktop_missing_launch_is_error_without_write() -> void:
 	var path := _scratch_dir.path_join("claude_attach_missing_launch.json")
 	_remove_if_exists(path)
@@ -5583,6 +5647,7 @@ func _clear_port_settings() -> void:
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
 		return
+	es.erase(McpClientConfigurator.SETTING_V4_ENDPOINT_PORTS)
 	es.set_setting(McpSettings.SETTING_HTTP_PORT, McpClientConfigurator.DEFAULT_HTTP_PORT)
 	es.set_setting(McpClientConfigurator.SETTING_WS_PORT, McpClientConfigurator.DEFAULT_WS_PORT)
 
@@ -5599,6 +5664,13 @@ func _restore_port_settings() -> void:
 		es.set_setting(McpClientConfigurator.SETTING_WS_PORT, _saved_ws_port)
 	elif es.has_setting(McpClientConfigurator.SETTING_WS_PORT):
 		es.erase(McpClientConfigurator.SETTING_WS_PORT)
+	if _had_v4_endpoint_ports:
+		var saved: Variant = _saved_v4_endpoint_ports
+		if saved is Dictionary or saved is Array:
+			saved = saved.duplicate(true)
+		es.set_setting(McpClientConfigurator.SETTING_V4_ENDPOINT_PORTS, saved)
+	else:
+		es.erase(McpClientConfigurator.SETTING_V4_ENDPOINT_PORTS)
 	_restore_client_scope()
 
 
@@ -6447,3 +6519,28 @@ func test_codebuddy_descriptor_and_stdio_entry() -> void:
 	assert_false(entry.has("url"))
 	assert_false(entry.has("headers"))
 	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://unused", launch))
+
+
+func test_toml_crlf_reconfigure_and_remove_keep_complete_newlines() -> void:
+	var path := _scratch_dir.path_join("crlf_lines.toml")
+	var client := _make_test_toml_client(path)
+	var source := "[mcp_servers.godot-ai]\r\nurl = \"old\"\r\nenabled = false\r\n"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(source)
+	file.close()
+	assert_eq(McpTomlStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp").get("status"), "ok")
+	var written := FileAccess.get_file_as_bytes(path).get_string_from_utf8()
+	assert_true(written.ends_with("\n"), "reconfigured CRLF file must not end in bare CR")
+	assert_true(written.contains("enabled = false\r\n"), "preserved final assignment keeps CRLF")
+	file = FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(written + "[other]\r\nkeep = true\r\n")
+	file.close()
+	assert_eq(McpTomlStrategy.remove(client, "godot-ai").get("status"), "ok")
+	written = FileAccess.get_file_as_bytes(path).get_string_from_utf8()
+	assert_true(written.ends_with("\n"), "remove keeps a complete final newline")
+	assert_true(written.contains("keep = true\r\n"), "foreign final assignment stays intact")
+	file = FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(source)
+	file.close()
+	assert_eq(McpTomlStrategy.remove(client, "godot-ai").get("status"), "ok")
+	assert_eq(FileAccess.get_file_as_bytes(path).size(), 0, "removing the only section keeps an empty file")

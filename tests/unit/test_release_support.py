@@ -8,6 +8,7 @@ import io
 import json
 import re
 import shutil
+import socket
 import tarfile
 import zipfile
 from pathlib import Path
@@ -1192,3 +1193,26 @@ def test_capsule_carries_what_the_installer_preloads(tmp_path, signing_key, monk
     source = _commit_and_retag(repo, "drop transitive dependency")
     with pytest.raises(v4_release.ReleaseError, match="lock_inner.gd"):
         _build_set(repo, tmp_path / "without", key, source)
+
+
+def test_loopback_bind_never_resolves_the_bind_host(monkeypatch) -> None:
+    """HTTPServer.server_bind reverse-resolves 127.0.0.1; on the macOS runners
+    that stalls ~35 s per process (the 4.0.4 qualification's macOS 3.14 row)."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    def forbidden(_host: str) -> str:
+        raise AssertionError("server_bind must not call socket.getfqdn")
+
+    monkeypatch.setattr(socket, "getfqdn", forbidden)
+
+    class Server(support.LoopbackBind, HTTPServer):
+        pass
+
+    server = Server(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    try:
+        assert server.server_name == "127.0.0.1"
+        assert server.server_port == server.server_address[1] > 0
+    finally:
+        server.server_close()
+    with pytest.raises(AssertionError):
+        HTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)

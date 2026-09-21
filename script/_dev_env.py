@@ -90,12 +90,25 @@ def worktree_src(worktree: Path | None = None) -> Path:
 def find_venv_python(worktree: Path | None = None) -> Path | None:
     """The checkout's venv interpreter, or ``None`` if it isn't a real file.
 
-    ``is_file()`` (not ``exists()``) so a directory sitting at the interpreter
-    path is treated as "no venv" rather than handed to ``execv()``, which would
-    crash with an OSError instead of cleanly falling through.
+    A worktree that carries its own ``.venv`` (``script/setup-dev`` creates
+    one) wins over the main checkout's: the two can sit on different
+    branches, and a script re-executed under the main checkout's interpreter
+    would silently run that branch's ``godot_ai`` against this worktree's
+    tests. ``is_file()`` (not ``exists()``) so a directory sitting at the
+    interpreter path is treated as "no venv" rather than handed to
+    ``execv()``, which would crash with an OSError instead of cleanly falling
+    through.
     """
-    candidate = venv_python(root_repo(worktree) / ".venv")
-    return candidate if candidate.is_file() else None
+    wt = worktree or worktree_root()
+    for base in (wt, root_repo(wt)):
+        candidate = venv_python(base / ".venv")
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
 
 
 def reexec_into_venv(*, guard_env: str, opt_out_env: str | None = None) -> None:
@@ -120,6 +133,14 @@ def reexec_into_venv(*, guard_env: str, opt_out_env: str | None = None) -> None:
     except OSError:
         return
     os.environ[guard_env] = "1"
+    if _is_windows():
+        ## Windows has no exec: ``os.execv`` starts the new interpreter as a
+        ## separate process and returns control to the caller, which exits 0
+        ## at once. Anyone capturing the script (a test, CI, a shell ``&&``)
+        ## then sees exit 0 and empty output whatever the script did. Run the
+        ## child and forward its exit code instead.
+        completed = subprocess.run([str(target), *sys.argv], check=False)
+        sys.exit(completed.returncode)
     os.execv(str(target), [str(target), *sys.argv])
 
 

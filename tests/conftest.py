@@ -78,17 +78,50 @@ def allocate_free_ports(count: int) -> list[int]:
     "4001 session id already registered". All sockets stay open until every
     port is allocated so the OS can't hand the same port out twice (a caller
     that needs both an HTTP and a WS port must get two distinct values).
-    The ports are free at allocation time; the caller is expected to bind
-    them promptly.
+    Session claims prevent another worker from selecting a released port
+    while a test deliberately stops and restarts its backend. They do not
+    reserve ports against unrelated processes outside this test suite.
     """
     probes = [socket.socket(socket.AF_INET, socket.SOCK_STREAM) for _ in range(count)]
     try:
-        for probe in probes:
-            probe.bind(("127.0.0.1", 0))
+        claim_root = os.environ.get("GODOT_AI_TEST_PORT_CLAIMS")
+        for index in range(count):
+            for _attempt in range(1000):
+                probe = probes[index]
+                probe.bind(("127.0.0.1", 0))
+                if claim_root is None:
+                    break
+                try:
+                    (Path(claim_root) / str(probe.getsockname()[1])).touch(exist_ok=False)
+                except FileExistsError:
+                    probe.close()
+                    probes[index] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                else:
+                    break
+            else:
+                raise RuntimeError("Could not allocate an unclaimed test port")
         return [probe.getsockname()[1] for probe in probes]
     finally:
         for probe in probes:
             probe.close()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _claim_test_ports(tmp_path_factory, request):
+    root = tmp_path_factory.getbasetemp()
+    if hasattr(request.config, "workerinput"):
+        root = root.parent
+    claims = root / "port-claims"
+    claims.mkdir(exist_ok=True)
+    previous = os.environ.get("GODOT_AI_TEST_PORT_CLAIMS")
+    os.environ["GODOT_AI_TEST_PORT_CLAIMS"] = str(claims)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("GODOT_AI_TEST_PORT_CLAIMS", None)
+        else:
+            os.environ["GODOT_AI_TEST_PORT_CLAIMS"] = previous
 
 
 def allocate_free_port() -> int:

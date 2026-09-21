@@ -6,7 +6,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tests.integration._self_update_fixture import godot_bin_or_skip, run_godot_editor
+
+## Needs a real Godot editor (GODOT_BIN); skipped without one and excluded
+## from the iteration loop by `pytest -m "not editor"`.
+pytestmark = pytest.mark.editor
 
 ROOT = Path(__file__).resolve().parents[2]
 

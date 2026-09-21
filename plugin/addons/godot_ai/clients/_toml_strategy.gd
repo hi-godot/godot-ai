@@ -51,7 +51,7 @@ static func configure(
 		if not output_fresh.is_empty() and not output_fresh[-1].strip_edges().is_empty():
 			output_fresh.append("")
 		output_fresh.append_array(new_lines)
-		if not McpAtomicWrite.write(path, "\n".join(output_fresh)):
+		if not McpAtomicWrite.write(path, _join_lines(output_fresh)):
 			return {"status": "error", "message": "Cannot write to %s" % path}
 		return {"status": "ok", "message": McpClient.configured_message(client, server_url)}
 
@@ -97,7 +97,7 @@ static func configure(
 	output.append_array(_slice(lines, int(section["end"]), lines.size()))
 	output = _rewrite_legacy_descendant_headers(output, client)
 
-	if not McpAtomicWrite.write(path, "\n".join(output)):
+	if not McpAtomicWrite.write(path, _join_lines(output)):
 		return {"status": "error", "message": "Cannot write to %s" % path}
 	return {"status": "ok", "message": McpClient.configured_message(client, server_url)}
 
@@ -220,7 +220,7 @@ static func remove(client: McpClient, _server_name: String) -> Dictionary:
 		output.append(lines[i])
 		i += 1
 
-	if not McpAtomicWrite.write(path, "\n".join(output)):
+	if not McpAtomicWrite.write(path, _join_lines(output)):
 		return {"status": "error", "message": "Cannot write to %s" % path}
 	return {"status": "ok", "message": "%s configuration removed" % client.display_name}
 
@@ -612,6 +612,11 @@ static func _read_or_init(path: String) -> Dictionary:
 	var text := f.get_as_text()
 	f.close()
 	return {"ok": true, "data": text}
+
+
+static func _join_lines(lines: Array[String]) -> String:
+	var joined := "\n".join(lines)
+	return joined if joined.is_empty() or joined.ends_with("\n") else joined + "\n"
 
 
 static func _split_lines(content: String) -> Array[String]:

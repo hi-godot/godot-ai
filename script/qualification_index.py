@@ -118,7 +118,10 @@ def retained_index(packages: Path, dependencies: list[dict]):
             if not head_only:
                 self.wfile.write(payload)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    class Server(support.LoopbackBind, ThreadingHTTPServer):
+        pass
+
+    server = Server(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

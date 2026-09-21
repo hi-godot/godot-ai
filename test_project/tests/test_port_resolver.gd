@@ -126,11 +126,60 @@ func test_read_pid_file_round_trips_value() -> void:
 	assert_eq(McpPortResolver.read_pid_file(), 0)
 
 
-func test_windows_powershell_candidates_prefers_system32_path() -> void:
-	## System32 must come first so a hijacked PATH can't intercept.
+func test_windows_powershell_candidates_prefers_installed_path_and_preserves_fallbacks() -> void:
+	var saved := {}
+	for key in ["ProgramW6432", "ProgramFiles"]:
+		saved[key] = {"present": OS.has_environment(key), "value": OS.get_environment(key)}
+		OS.unset_environment(key)
+	var absent := McpPortResolver.windows_powershell_candidates()
+	var root := "user://_test_pwsh_candidates"
+	var native := ProjectSettings.globalize_path(root + "/native")
+	var x86 := ProjectSettings.globalize_path(root + "/x86")
+	for path in [native, x86]:
+		DirAccess.make_dir_recursive_absolute(path.path_join("PowerShell/7"))
+		var file := FileAccess.open(path.path_join("PowerShell/7/pwsh.exe"), FileAccess.WRITE)
+		file.close()
+	OS.set_environment("ProgramW6432", native)
+	OS.set_environment("ProgramFiles", x86)
 	var candidates := McpPortResolver.windows_powershell_candidates()
-	assert_true(candidates.size() >= 3)
-	assert_true(candidates[0].ends_with("powershell.exe"))
+	OS.set_environment("ProgramFiles", native)
+	var duplicate := McpPortResolver.windows_powershell_candidates()
+	OS.set_environment("ProgramW6432", "")
+	OS.set_environment("ProgramFiles", "")
+	var empty := McpPortResolver.windows_powershell_candidates()
+	for key in saved:
+		if saved[key].present:
+			OS.set_environment(key, saved[key].value)
+		else:
+			OS.unset_environment(key)
+	for path in [native, x86]:
+		DirAccess.remove_absolute(path.path_join("PowerShell/7/pwsh.exe"))
+		DirAccess.remove_absolute(path.path_join("PowerShell/7"))
+		DirAccess.remove_absolute(path.path_join("PowerShell"))
+		DirAccess.remove_absolute(path)
+	DirAccess.remove_absolute(root)
+	assert_eq(empty, absent, "empty environment cannot add a relative executable")
+	assert_eq(candidates.slice(0, 2), [native.path_join("PowerShell/7/pwsh.exe"), x86.path_join("PowerShell/7/pwsh.exe")])
+	assert_eq(candidates.slice(2), absent, "all previous fallbacks remain")
+	assert_eq(duplicate.size(), absent.size() + 1, "the same installation occurs once")
+	assert_eq(absent.slice(-2), ["powershell.exe", "pwsh.exe"])
+
+
+func test_windows_failed_powershell7_query_uses_existing_powershell5_fallback() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows PowerShell execution boundary")
+		return
+	var candidates := McpPortResolver.windows_powershell_candidates()
+	if not candidates[0].ends_with("/PowerShell/7/pwsh.exe"):
+		skip("Optional PowerShell 7 is not installed at the configured ProgramFiles path")
+		return
+	var output: Array = []
+	var exit_code := McpPortResolver.execute_windows_powershell(
+		"if ($PSVersionTable.PSVersion.Major -ge 7) { exit 7 }; $PSVersionTable.PSVersion.Major", output
+	)
+	assert_eq(exit_code, 0, "nonzero PS7 exit must continue to the existing shell fallback")
+	assert_eq(str(output[0]).strip_edges() if not output.is_empty() else "", "5",
+		"the fallback must actually run Windows PowerShell 5")
 
 
 func test_netstat_parse_is_locale_independent() -> void:
@@ -279,3 +328,213 @@ func test_find_all_pids_sees_live_listener_via_netstat_windows() -> void:
 	holder.stop()
 	assert_true(pids.has(OS.get_process_id()), "the editor's own listener should be reported")
 	assert_false(counters.has("powershell"), "netstat found the listener; PowerShell must not run")
+
+
+# ----- command-line brand ----------------------------------------------
+
+func test_brand_ignores_paths_the_plugin_chose_itself() -> void:
+	## The pid-file and startup-report values live under user:// and carry our
+	## name; a foreign command must not pass the brand because of them.
+	var unbranded := (
+		"C:/tools/python.exe -I C:/scratch/selector.py --transport streamable-http "
+		+ "--pid-file C:/u/godot_ai_server.pid --startup-report C:/u/godot_ai_server_startup.json"
+	)
+	assert_false(McpPortResolver.commandline_is_godot_ai_server(unbranded))
+	var branded := (
+		"C:/tools/python.exe -m godot_ai --transport streamable-http "
+		+ "--pid-file C:/u/godot_ai_server.pid --startup-report C:/u/godot_ai_server_startup.json"
+	)
+	assert_true(McpPortResolver.commandline_is_godot_ai_server(branded))
+	assert_true(McpPortResolver.commandline_is_godot_ai_server(
+		"/opt/venv/bin/godot-ai --transport streamable-http --startup-report=/tmp/r.json"
+	))
+	assert_false(McpPortResolver.commandline_is_godot_ai_server("python -m something --transport x"))
+
+
+func test_kill_grant_capture_names_the_check_that_refused() -> void:
+	var diagnostics: Array = []
+	assert_true(McpPortResolver.capture_process_kill_grant(0, true, diagnostics).is_empty())
+	assert_eq(diagnostics, ["invalid_pid"])
+	diagnostics.clear()
+	## The editor's own pid is refused before any probe runs.
+	assert_true(McpPortResolver.capture_process_kill_grant(OS.get_process_id(), true, diagnostics).is_empty())
+	assert_eq(diagnostics, ["invalid_pid"])
+	diagnostics.clear()
+	## An implausible pid is not alive.
+	assert_true(McpPortResolver.capture_process_kill_grant(2147480000, true, diagnostics).is_empty())
+	assert_eq(diagnostics, ["not_alive"])
+
+
+func _snapshot_rows() -> Array:
+	var command := "python -m godot_ai --transport streamable-http"
+	return [
+		{"pid": 4242, "parent_pid": 4241, "identity": "09/09/2026 12:00:00|" + command, "commandline": command},
+		{"pid": 4241, "parent_pid": 0, "identity": "09/09/2026 11:59:59|launcher", "commandline": "launcher"},
+	]
+
+
+func test_process_snapshot_preserves_fingerprint_brand_and_lineage() -> void:
+	var rows := _snapshot_rows()
+	var snapshot := McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 4242)
+	assert_eq(snapshot.size(), 2)
+	assert_true(McpPortResolver.pid_alive(4242, snapshot))
+	assert_eq(McpPortResolver.process_parent(4242, snapshot), 4241)
+	assert_eq(McpPortResolver.process_commandline(4242, snapshot), rows[0].commandline)
+	assert_eq(McpPortResolver.process_fingerprint(4242, snapshot), ("4242|" + str(rows[0].identity)).sha256_text())
+	assert_true(McpPortResolver.pid_cmdline_is_godot_ai(4242, snapshot))
+	assert_true(McpPortResolver.process_descends_from(4242, 4241, snapshot))
+	assert_true(McpPortResolver.process_descends_from(4242, 4242, snapshot))
+	assert_false(McpPortResolver.process_descends_from(4242, 9999, snapshot))
+
+
+func test_process_snapshot_changed_identity_brand_and_parent_do_not_preserve_proof() -> void:
+	var rows := _snapshot_rows()
+	var original := McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 4242)
+	rows[0].identity = "09/09/2026 12:01:00|" + str(rows[0].commandline)
+	var reused := McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 4242)
+	assert_ne(McpPortResolver.process_fingerprint(4242, original), McpPortResolver.process_fingerprint(4242, reused))
+	rows[0].commandline = "python -m unrelated --transport streamable-http"
+	rows[0].identity = "09/09/2026 12:01:00|" + str(rows[0].commandline)
+	var unbranded := McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 4242)
+	assert_false(McpPortResolver.pid_cmdline_is_godot_ai(4242, unbranded))
+	rows[0].parent_pid = 9999
+	rows.resize(1)
+	var moved := McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 4242)
+	assert_false(McpPortResolver.process_descends_from(4242, 4241, moved))
+	assert_false(McpPortResolver.process_descends_from(4242, 9999, moved), "an omitted ancestor is not proof")
+
+
+func test_process_snapshot_rejects_missing_malformed_and_tampered_records() -> void:
+	for raw in ["{}", "null", "not json", JSON.stringify([{"pid": 4242}])]:
+		assert_true(McpPortResolver.capture_failed(McpPortResolver.parse_process_snapshot(raw, 4242)))
+	var rows := _snapshot_rows()
+	assert_true(McpPortResolver.capture_failed(McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 5555)))
+	rows[0].commandline = "changed without changing fingerprint identity"
+	assert_true(McpPortResolver.capture_failed(McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 4242)))
+	rows = _snapshot_rows()
+	rows[1].pid = 5555
+	assert_true(McpPortResolver.capture_failed(McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 4242)))
+	rows = _snapshot_rows()
+	rows[1].parent_pid = 4242
+	assert_true(McpPortResolver.capture_failed(McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 4242)), "a cycle truncated by the collector is still invalid")
+	rows.resize(1)
+	rows[0].parent_pid = 4242
+	assert_true(McpPortResolver.capture_failed(McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 4242)), "self-parent cycles are invalid")
+	for invalid in [{}, [], {4242: {"pid": 4242}}]:
+		assert_false(McpPortResolver.pid_alive(OS.get_process_id(), invalid), "explicit empty snapshots never query the live editor")
+		assert_eq(McpPortResolver.process_fingerprint(OS.get_process_id(), invalid), "")
+		assert_false(McpPortResolver.pid_cmdline_is_godot_ai(4242, invalid))
+		assert_false(McpPortResolver.process_descends_from(4242, 4242, invalid))
+
+
+func test_process_snapshot_fallback_keeps_start_time_identity_without_inventing_brand() -> void:
+	var snapshot := McpPortResolver.parse_process_snapshot(JSON.stringify([
+		{"pid": 4242, "parent_pid": 0, "identity": "134019180000000000", "commandline": ""},
+	]), 4242)
+	assert_eq(McpPortResolver.process_fingerprint(4242, snapshot), "4242|134019180000000000".sha256_text())
+	assert_false(McpPortResolver.pid_cmdline_is_godot_ai(4242, snapshot))
+	assert_false(McpPortResolver.process_descends_from(4242, 4241, snapshot))
+
+
+func test_process_snapshot_keeps_the_sixteen_process_lineage_limit() -> void:
+	var rows: Array = []
+	for index in range(16):
+		rows.append({"pid": 5000 + index, "parent_pid": 5001 + index, "identity": "time|launcher", "commandline": "launcher"})
+	var snapshot := McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 5000)
+	assert_eq(snapshot.size(), 16)
+	assert_true(McpPortResolver.process_descends_from(5000, 5015, snapshot))
+	assert_false(McpPortResolver.process_descends_from(5000, 5016, snapshot))
+	rows.append({"pid": 5016, "parent_pid": 0, "identity": "time|launcher", "commandline": "launcher"})
+	assert_true(McpPortResolver.capture_failed(McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 5000)))
+
+
+func test_windows_process_snapshot_matches_live_editor_fingerprint() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows process snapshot boundary")
+		return
+	var pid := OS.get_process_id()
+	var snapshot: Variant = McpPortResolver.capture_process_snapshot(pid)
+	var fingerprint := McpPortResolver.process_fingerprint(pid, snapshot)
+	assert_false(fingerprint.is_empty(), "the editor must have a captured process identity")
+	assert_eq(fingerprint, McpPortResolver.process_fingerprint(pid), "batched identity must match existing grant representation")
+
+
+func test_process_snapshot_pair_preserves_both_independent_identities() -> void:
+	var rows := _snapshot_rows()
+	var first := JSON.stringify(rows)
+	rows[0].identity = "09/09/2026 12:01:00|" + str(rows[0].commandline)
+	var final := JSON.stringify(rows)
+	var pair := McpPortResolver._parse_process_snapshot_pair(JSON.stringify([first, final]), 4242)
+	assert_eq(pair[0], McpPortResolver.parse_process_snapshot(first, 4242))
+	assert_eq(pair[1], McpPortResolver.parse_process_snapshot(final, 4242))
+	assert_eq(McpPortResolver.process_fingerprint(4242, pair[0]), ("4242|09/09/2026 12:00:00|" + str(rows[0].commandline)).sha256_text())
+	assert_eq(McpPortResolver.process_fingerprint(4242, pair[1]), ("4242|" + str(rows[0].identity)).sha256_text())
+
+
+func test_process_snapshot_pair_rejects_invalid_envelopes_and_members() -> void:
+	var valid := JSON.stringify(_snapshot_rows())
+	for raw in ["{}", "[]", JSON.stringify([valid]), JSON.stringify([valid, valid, valid]), JSON.stringify([{}, valid]), " ".repeat(4 * 1024 * 1024 + 17)]:
+		assert_eq(McpPortResolver._parse_process_snapshot_pair(raw, 4242), [{"capture_error": true}, {"capture_error": true}])
+	assert_eq(McpPortResolver._parse_process_snapshot_pair(JSON.stringify([valid, valid]), 9999), [{"capture_error": true}, {"capture_error": true}])
+	for invalid in ["{}", JSON.stringify([{"pid": 4242}]), " ".repeat(1024 * 1024 + 1)]:
+		var pair := McpPortResolver._parse_process_snapshot_pair(JSON.stringify([valid, invalid]), 4242)
+		assert_eq(McpPortResolver.process_commandline(4242, pair[0]), str(_snapshot_rows()[0].commandline))
+		assert_true(McpPortResolver.capture_failed(pair[1]), "an invalid final member cannot reuse the first snapshot")
+		assert_eq(McpPortResolver.process_fingerprint(4242, pair[1]), "")
+		pair = McpPortResolver._parse_process_snapshot_pair(JSON.stringify([invalid, valid]), 4242)
+		assert_true(McpPortResolver.capture_failed(pair[0]))
+		assert_eq(McpPortResolver.process_commandline(4242, pair[1]), str(_snapshot_rows()[0].commandline))
+
+
+func test_process_snapshot_pair_accepts_escaped_members_near_the_inner_limit() -> void:
+	var command := String.chr(34).repeat(250000)
+	var inner := JSON.stringify([{"pid": 4242, "parent_pid": 0, "identity": "time|" + command, "commandline": command}])
+	var outer := JSON.stringify([inner, inner])
+	assert_true(inner.length() <= 1024 * 1024)
+	assert_true(outer.length() > 2 * 1024 * 1024, "escaping expands two valid inner snapshots beyond the old outer limit")
+	var pair := McpPortResolver._parse_process_snapshot_pair(outer, 4242)
+	assert_eq(McpPortResolver.process_commandline(4242, pair[0]), command)
+	assert_eq(McpPortResolver.process_commandline(4242, pair[1]), command)
+
+
+func test_listener_tool_preflight_is_inert_outside_linux() -> void:
+	if OS.get_name() == "Linux":
+		skip("Isolated Linux PATH cases run in the integration fixture")
+		return
+	assert_eq(McpPortResolver.listener_tools_problem(), "")
+
+
+func test_process_capture_distinguishes_absence_from_unavailable_evidence() -> void:
+	var absent := McpPortResolver.parse_process_snapshot("[]", 4242)
+	assert_eq(absent, {})
+	assert_false(McpPortResolver.capture_failed(absent))
+	for raw in ["", "null", "not JSON", "{}", "[{bad", JSON.stringify([{"pid": 4242}])]:
+		var failed := McpPortResolver.parse_process_snapshot(raw, 4242)
+		assert_true(McpPortResolver.capture_failed(failed), raw)
+		assert_false(McpPortResolver.pid_alive(OS.get_process_id(), failed))
+		assert_eq(McpPortResolver.process_fingerprint(OS.get_process_id(), failed), "")
+		assert_false(McpPortResolver.pid_cmdline_is_godot_ai(OS.get_process_id(), failed))
+		assert_false(McpPortResolver.process_descends_from(OS.get_process_id(), OS.get_process_id(), failed))
+	var mixed := McpPortResolver.parse_process_snapshot(JSON.stringify(_snapshot_rows()), 4242)
+	mixed["capture_error"] = true
+	assert_eq(McpPortResolver.process_fingerprint(4242, mixed), "", "failure cannot carry usable rows")
+
+
+func test_windows_capture_distinguishes_get_process_not_found_and_permission_error() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows PowerShell process collector")
+		return
+	for category in ["ObjectNotFound", "PermissionDenied"]:
+		var output: Array = []
+		var script := (
+			"function Get-CimInstance { throw 'CIM unavailable' }; "
+			+ "function Get-Process { [CmdletBinding()]param($Id); Write-Error -Message 'unavailable' -Category %s -ErrorAction Stop }; "
+		) % category + McpPortResolver._windows_process_snapshot_script(4242)
+		assert_eq(McpPortResolver.execute_windows_powershell(script, output), 0)
+		assert_false(output.is_empty())
+		var captured := McpPortResolver.parse_process_snapshot(str(output[0]), 4242)
+		assert_eq(McpPortResolver.capture_failed(captured), category == "PermissionDenied", category)
+		assert_false(McpPortResolver.pid_alive(4242, captured))
+	var diagnostics: Array = []
+	assert_eq(McpPortResolver.capture_process_kill_grant(2147483000, false, diagnostics), {})
+	assert_eq(diagnostics, ["not_alive"], "a successfully observed absent PID is distinct from query failure")

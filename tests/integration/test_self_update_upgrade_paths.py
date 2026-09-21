@@ -1,15 +1,15 @@
 """Real-editor scenarios for the lean self-updater (docs/self-update.md).
 
 Each scenario drives the production entry points inside a real editor and
-proves the state one update leaves behind: a signed v4-to-v4 update restarts
-into a working server, the final-v3 capsule crosses into v4, a tampered live
-tree after a swap is rolled back, and the closed-editor installer's first
-start completes client migration.
+proves the state one update leaves behind: a signed current-source update reloads in the same editor
+with preserved scene state and a working server. The final-v3 capsule crosses into
+v4, a tampered tree is rolled back, and the closed-editor installer completes migration.
 """
 
 from __future__ import annotations
 
 import asyncio
+import configparser
 import contextlib
 import hashlib
 import json
@@ -18,6 +18,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,10 @@ from tests.integration._self_update_fixture import (
     write_refused_swap_driver,
 )
 
+## Needs a real Godot editor (GODOT_BIN); skipped without one and excluded
+## from the iteration loop by `pytest -m "not editor"`.
+pytestmark = pytest.mark.editor
+
 
 def _tree_bytes(root: Path) -> dict[str, bytes]:
     return {
@@ -91,12 +96,23 @@ def _isolated_environment(isolated: Path) -> tuple[dict[str, str], Path]:
         "HOME": str(home),
         "USERPROFILE": str(home),
     }
+    ## The editor's own settings (`godot_ai/*` included) live under
+    ## %APPDATA%\Godot on Windows and $XDG_CONFIG_HOME/godot elsewhere; give
+    ## the fixture editor its own so a developer's global settings (a port, MCP
+    ## logging switched off in the dock) cannot change what the row observes.
+    ## macOS derives its path from HOME, which is already isolated above.
     if os.name == "nt":
         local_app_data = isolated / "local-app-data"
         local_app_data.mkdir(exist_ok=True)
         environment["LOCALAPPDATA"] = str(local_app_data)
+        app_data = isolated / "app-data"
+        app_data.mkdir(exist_ok=True)
+        environment["APPDATA"] = str(app_data)
         capability_dir = local_app_data / "godot-ai" / "capabilities"
     else:
+        config_home = isolated / "xdg-config"
+        config_home.mkdir(exist_ok=True)
+        environment["XDG_CONFIG_HOME"] = str(config_home)
         capability_dir = isolated / "capabilities"
         environment[CAPABILITY_DIR_ENV] = str(capability_dir)
     return environment, capability_dir
@@ -275,9 +291,9 @@ def _first_start_after_closed_install(
         allow_headless=True,
         timeout=240,
         environment=environment,
-        live_probe=lambda: _authenticated_tool_probe(
-            http_port,
-            capability_dir,
+        live_probe=lambda: _selected_endpoint_tool_probe(
+            project, CLEAN_MAJOR_STATUS_FILE, capability_dir,
+            legacy_ports=(http_port, ws_port), migrated=not fresh, expected_version=target_version,
             resource_path="res://_test_clean_major_probe.txt",
             content="clean major authenticated write\n",
         ),
@@ -287,7 +303,7 @@ def _first_start_after_closed_install(
 
     assert_no_update_parse_errors(log)
     (project / "_test_first_start.log").write_text(log, encoding="utf-8")
-    config_text = (isolated / "codex" / "config.toml").read_text(encoding="utf-8")
+    config_text = _read_client_toml(isolated / "codex" / "config.toml")
     if foreign_entry:
         _assert_ordered(
             log,
@@ -322,25 +338,69 @@ def _first_start_after_closed_install(
     return project, marker
 
 
+def _read_client_toml(path: Path) -> str:
+    # Text-mode newline conversion would hide a writer's lone trailing CR.
+    text = path.read_bytes().decode("utf-8")
+    tomllib.loads(text)
+    return text
+
+
+def _selected_endpoint_tool_probe(
+    project: Path, status_file: str, capability_dir: Path, *,
+    legacy_ports: tuple[int, int], migrated: bool, expected_version: str,
+    resource_path: str, content: str,
+) -> None:
+    receipt = json.loads((project / status_file).read_text(encoding="utf-8"))
+    endpoint = receipt["_test_endpoint"]
+    ports = (endpoint["http_port"], endpoint["ws_port"])
+    assert all(type(port) is int and 1024 <= port <= 65535 for port in ports), endpoint
+    assert ports[0] != ports[1], endpoint
+    assert Path(endpoint["project_path"]).resolve() == project.resolve(), endpoint
+    if migrated:
+        assert set(ports).isdisjoint(legacy_ports), (ports, legacy_ports)
+    else:
+        assert ports == legacy_ports, (ports, legacy_ports)
+    assert receipt["server_version"] == expected_version, receipt
+    assert receipt["ws_port"] == ports[1], receipt
+    _authenticated_tool_probe(
+        ports[0], capability_dir, expected_project=project,
+        expected_instance=receipt["instance_id"], resource_path=resource_path, content=content,
+    )
+
+
 def _authenticated_tool_probe(
     http_port: int,
     capability_dir: Path,
     *,
     resource_path: str = "res://_test_authenticated_tool_probe.txt",
     content: str = "signed self-update authenticated write\n",
+    expected_project: Path | None = None,
+    expected_instance: str | None = None,
 ) -> None:
     async def run() -> None:
         record = read_capabilities(http_port, capability_dir)
         assert record is not None
+        if expected_instance is not None:
+            assert record.instance_nonce == expected_instance, (
+                "probe must retain the driver's authenticated instance"
+            )
         transport = StreamableHttpTransport(
             f"http://127.0.0.1:{http_port}/mcp",
             headers={"Authorization": f"Bearer {record.http}"},
         )
         async with Client(transport, timeout=10, init_timeout=10) as client:
             deadline = asyncio.get_running_loop().time() + 90
+            routing = {}
             while True:
                 sessions = await client.call_tool("session_manage", {"op": "list", "params": {}})
-                if int(sessions.data.get("count", 0)) > 0:
+                if expected_project is not None:
+                    matches = [row for row in sessions.data.get("sessions", [])
+                               if Path(row["project_path"]).resolve() == expected_project.resolve()]
+                    assert len(matches) <= 1, "fixture project must have one editor session"
+                    if matches:
+                        routing = {"session_id": matches[0]["session_id"]}
+                        break
+                elif int(sessions.data.get("count", 0)) > 0:
                     break
                 if asyncio.get_running_loop().time() >= deadline:
                     raise AssertionError("editor session stayed unavailable")
@@ -348,7 +408,7 @@ def _authenticated_tool_probe(
                 # WebSocket reconnect and authenticated handshake are pending.
                 await asyncio.sleep(0.2)
             while True:
-                state = await client.call_tool("editor_state", {}, raise_on_error=False)
+                state = await client.call_tool("editor_state", routing, raise_on_error=False)
                 if not state.is_error:
                     break
                 if asyncio.get_running_loop().time() >= deadline:
@@ -357,6 +417,7 @@ def _authenticated_tool_probe(
             written = await client.call_tool(
                 "filesystem_manage",
                 {
+                    **routing,
                     "op": "write_text",
                     "params": {
                         "path": resource_path,
@@ -368,6 +429,7 @@ def _authenticated_tool_probe(
             reread = await client.call_tool(
                 "filesystem_manage",
                 {
+                    **routing,
                     "op": "read_text",
                     "params": {"path": resource_path},
                 },
@@ -408,12 +470,13 @@ def signed_update_delivery(request):
         yield configure
 
 
-def test_signed_update_restarts_into_matching_live_server(
+def test_signed_update_loads_matching_live_server_in_same_editor(
     tmp_path: Path,
     signed_update_delivery,
 ) -> None:
-    """Click Update on A; the editor swaps, restarts, repins, and serves B."""
+    """Click Update on A; the same editor loads B and preserves editing state."""
     godot_bin = godot_bin_or_skip()
+    visible = os.environ.get("GODOT_AI_VISIBLE_SELF_UPDATE") == "1"
     smoke = load_smoke_script()
     project = tmp_path / "signed-self-update"
     http_port, ws_port = allocate_free_ports(2)
@@ -434,9 +497,9 @@ def test_signed_update_restarts_into_matching_live_server(
         base_version=base_version,
         next_version=next_version,
         agent_gate=True,
+        native_update=visible,
     )
     base_addon = project / "addons" / "godot_ai"
-    patch_restart_diagnostics(base_addon, project / RESTARTED_EDITOR_LOG)
     isolated = project / ".self-update-integration"
     environment, capability_dir = _isolated_environment(isolated)
     codex_home = Path(environment["CODEX_HOME"])
@@ -446,6 +509,30 @@ def test_signed_update_restarts_into_matching_live_server(
         version=base_version,
         reload_before_quit=True,
     )
+
+    if visible:
+        # Match the native compatibility-rendered fixture that exposed the crash.
+        project_settings = project / "project.godot"
+        text = project_settings.read_text(encoding="utf-8")
+        assert "[rendering]" not in text
+        project_settings.write_text(
+            text + '\n[rendering]\nrenderer/rendering_method="gl_compatibility"\n'
+            'renderer/rendering_method.mobile="gl_compatibility"\n',
+            encoding="utf-8",
+        )
+
+    parsed_project = configparser.ConfigParser(interpolation=None)
+    parsed_project.read_string(
+        "[__project__]\n" + (project / "project.godot").read_text(encoding="utf-8")
+    )
+    assert parsed_project["autoload"]["_SelfUpdateRunnerDriver"] == (
+        '"*res://_test_runner_driver.gd"'
+    )
+    assert parsed_project["autoload"]["_SelfUpdateClientPrep"] == (
+        '"*res://_test_configure_client.gd"'
+    )
+    if visible:
+        assert parsed_project["rendering"]["renderer/rendering_method"] == '"gl_compatibility"'
 
     delivery = signed_update_delivery(project, next_version, environment)
     prep_environment = dict(environment)
@@ -467,25 +554,36 @@ def test_signed_update_restarts_into_matching_live_server(
     assert (
         "SELF_UPDATE_TEST | ordinary reload restored backend and persisted enablement" in prep_log
     )
-    assert f"godot-ai=={base_version}" in (codex_home / "config.toml").read_text(encoding="utf-8")
+    assert f"godot-ai=={base_version}" in _read_client_toml(codex_home / "config.toml")
     remove_configure_client_driver(project)
 
     # An agent stays attached through the whole update, exactly as a user's
     # AI client would be. Its bridge loses server A, spawns a backend of the
-    # old version into the restart window, and the restarted editor must
+    # old version during the plugin reload, and the new plugin must
     # replace that backend on its own rather than ask the user to.
     with AttachedAgent(
         project, http_port, ws_port, capability_dir=capability_dir, environment=environment
     ) as agent:
+        def probe_updated_editor() -> None:
+            _selected_endpoint_tool_probe(
+                project, POST_UPDATE_STATUS_FILE, capability_dir,
+                legacy_ports=(http_port, ws_port), migrated=False,
+                expected_version=next_version,
+                resource_path="res://_test_authenticated_tool_probe.txt",
+                content="signed self-update authenticated write\n",
+            )
+            agent.wait_for_post_update(next_version)
+
         try:
             log = run_godot_editor(
                 project,
                 godot_bin,
-                allow_headless=True,
-                timeout=240,
+                allow_headless=not visible,
+                headless=not visible,
+                timeout=360 if visible else 240,
                 environment=environment,
-                live_probe=lambda: _authenticated_tool_probe(http_port, capability_dir),
-                restart_completion_file=POST_UPDATE_COMPLETE_FILE,
+                live_probe=probe_updated_editor,
+                require_same_editor=True,
             )
         except AssertionError as exc:
             raise AssertionError(
@@ -493,33 +591,33 @@ def test_signed_update_restarts_into_matching_live_server(
             ) from exc
     assert not agent.fault, agent.fault
     assert agent.ok >= 1, agent.errors
-    # What the old bridge reports afterwards varies with timing (a refused
-    # incompatible backend, a lost lease, a backend without an editor); the
-    # contract is only that the editor came back live on its own, above.
+    assert agent.post_update["version"] == next_version
+    assert agent.post_update["session_id"]
+    # The original stdio bridge must recover as well as the separate HTTP probe.
     print(f"attached agent: ok={agent.ok} errors={len(agent.errors)} last={agent.errors[-1:]}")
-    # Whether the bridge's spawned backend takes the port before the editor's
-    # probe, between its probe and its launch, or not at all is a race; the
-    # editor recovers from each on its own (the ordered markers and the live
-    # probe below are the contract). Say which path this run took.
-    replaced_line = (
-        f"MCP | replacing the v{base_version} server left on port {http_port} by the update"
-    )
-    restarted_log = log[log.index("SELF_UPDATE_HARNESS | replacement editor log:") :]
-    started_at = restarted_log.index("MCP | started server (PID ")
-    blocks_before_start = [
-        line.split("MCP | server start blocked: ", 1)[1]
-        for line in restarted_log[:started_at].splitlines()
-        if "MCP | server start blocked: " in line
-    ]
-    initial_log = log[: log.index("SELF_UPDATE_HARNESS | replacement editor log:")]
-    print(f"server A: {'stopped' if 'MCP | stopped server' in initial_log else 'detached (lease)'}")
-    print(f"replacement: {'needed' if replaced_line in restarted_log else 'not needed'}")
-    print(f"blocks before the start: {blocks_before_start}")
-    assert f"MCP | AI clients attached before the update must restart to use v{next_version}" in log
+    ## From 4.0.4 on the attached bridge follows the new server (same major);
+    ## an older bridge needs a new MCP connection using the updated configuration.
+    base_tuple = tuple(int(part) for part in base_version.split(".")[:3])
+    if base_tuple >= (4, 0, 4):
+        expected_client_line = (
+            f"MCP | AI clients using v{base_version} can reconnect to v{next_version}; "
+            "relaunch clients still using older versions"
+        )
+    else:
+        expected_client_line = (
+            "MCP | Refresh the Godot AI MCP connection and reload its configuration once "
+            f"to use v{next_version}; relaunch the AI app if it cannot reload the configuration"
+        )
+    assert expected_client_line in log
 
     initial_editor, restarted_editor = read_editor_receipts(project)
-    assert initial_editor["pid"] != restarted_editor["pid"], (initial_editor, restarted_editor)
-    assert initial_editor["display"] == restarted_editor["display"] == "headless"
+    assert initial_editor["pid"] == restarted_editor["pid"], (initial_editor, restarted_editor)
+    assert initial_editor["display"] == restarted_editor["display"]
+    assert (initial_editor["display"] == "headless") is (not visible)
+    assert (project / POST_UPDATE_COMPLETE_FILE).is_file()
+    assert ("SELF_UPDATE_TEST | loaded topology, dirty scene, selection and undo/redo preserved"
+            in log)
+    assert f"MCP | update activation completed in editor PID {initial_editor['pid']}" in log
     assert_no_update_parse_errors(log)
     _assert_ordered(
         log,
@@ -527,24 +625,27 @@ def test_signed_update_restarts_into_matching_live_server(
             "SELF_UPDATE_TEST | pre-update instance_id=",
             f"SELF_UPDATE_TEST | configured Codex command pin={base_version}",
             "SELF_UPDATE_TEST | requesting canonical signed install",
-            # The local bundle is staged before the swap; the HTTPS observer is
-            # connected after the plugin's activation listener, which runs the
-            # whole swap synchronously, so its line lands after the restart
-            # announcement. Whether A is stopped or merely detached before the
-            # swap depends on the attached agent holding a lease at that
-            # instant; the restarted editor replaces either occupant.
+            # The local bundle is staged before the swap. The HTTPS observer is
+            # connected after the plugin's activation listener, but activation
+            # names each phase in the dock and yields a frame before verifying,
+            # staging and quiescing, so the observer's line lands before the
+            # activation announcement. Whether A is stopped or merely detached
+            # before the swap depends on the attached agent holding a lease at
+            # that instant; the new plugin replaces either occupant.
             *(
                 [
-                    f"MCP | update to {next_version} swapped in; restarting the editor",
                     "SELF_UPDATE_TEST | HTTPS canonical triple downloaded",
+                    f"MCP | update to {next_version} swapped in; "
+                    "reloading the plugin in this editor",
                 ]
                 if delivery is not None
                 else [
                     smoke.SMOKE_STAGED_LOG,
-                    f"MCP | update to {next_version} swapped in; restarting the editor",
+                    f"MCP | update to {next_version} swapped in; "
+                    "reloading the plugin in this editor",
                 ]
             ),
-            # Everything below runs in the restarted editor process. The driver
+            # Everything below runs in the same editor process. The driver
             # sees the new server answer /godot-ai/status before the plugin
             # logs the handshake that follows the spawn.
             "MCP | client migration completed",
@@ -559,7 +660,7 @@ def test_signed_update_restarts_into_matching_live_server(
     assert read_plugin_version(base_addon / "plugin.cfg") == next_version
     assert (base_addon / "utils" / "self_update_smoke_child.gd").is_file()
     assert (base_addon / "utils" / "self_update_smoke_child.gd.uid").is_file()
-    client_config = (codex_home / "config.toml").read_text(encoding="utf-8")
+    client_config = _read_client_toml(codex_home / "config.toml")
     assert f"godot-ai=={next_version}" in client_config
     assert f"godot-ai=={base_version}" not in client_config
     assert (project / "_test_authenticated_tool_probe.txt").read_text(encoding="utf-8") == (
@@ -673,6 +774,8 @@ const DEADLINE_MSEC := 180000
 var _deadline := 0
 var _migration_ready := false
 var _clicked := false
+var _scene_state: Dictionary = {{}}
+var _old_plugin_id := 0
 
 
 func _ready() -> void:
@@ -680,7 +783,11 @@ func _ready() -> void:
 \t\tqueue_free()
 \t\treturn
 \tvar restarted := FileAccess.file_exists(INITIAL_RECEIPT)
-\tvar receipt_path := RESTARTED_RECEIPT if restarted else INITIAL_RECEIPT
+\tif restarted:
+\t\tpush_error("V3_BRIDGE_TEST | migration unexpectedly restarted the editor")
+\t\tget_tree().quit(44)
+\t\treturn
+\tvar receipt_path := INITIAL_RECEIPT
 \tvar receipt := FileAccess.open(receipt_path, FileAccess.WRITE)
 \tif receipt == null:
 \t\tget_tree().quit(43)
@@ -705,6 +812,15 @@ func _process(_delta: float) -> void:
 \t\tvar dock: Variant = old_plugin.get("_dock")
 \t\tif dock == null or not dock.has_method("_on_update_pressed"):
 \t\t\treturn
+\t\tif EditorInterface.get_edited_scene_root() == null:
+\t\t\tEditorInterface.open_scene_from_path("res://empty.tscn")
+\t\t\treturn
+\t\t_old_plugin_id = old_plugin.get_instance_id()
+\t\t_scene_state = DriverSupport.capture_scene_state(old_plugin)
+\t\tif _scene_state.is_empty():
+\t\t\tpush_error("V3_BRIDGE_TEST | could not capture scene continuity state")
+\t\t\tget_tree().quit(46)
+\t\t\treturn
 \t\tdock.call("_on_update_pressed")
 \t\t_clicked = true
 \t\treturn
@@ -720,11 +836,28 @@ func _process(_delta: float) -> void:
 \tvar plugin := DriverSupport.find_godot_ai_plugin()
 \tif plugin == null or not bool(plugin.call("has_managed_server")):
 \t\treturn
+\tif (plugin.get_instance_id() == _old_plugin_id
+\t\t\tor str(plugin.get("_loaded_plugin_version")) != TARGET_VERSION):
+\t\treturn
 \tif not DriverSupport.client_config_has_pin(TARGET_VERSION):
 \t\treturn
-\tvar status := DriverSupport.fetch_status(HTTP_PORT)
+\tvar status := DriverSupport.fetch_selected_status(plugin)
 \tif str(status.get("server_version", "")) != TARGET_VERSION:
 \t\treturn
+\tvar continuity_error := DriverSupport.verify_scene_state(plugin, _scene_state)
+\tif not continuity_error.is_empty():
+\t\tpush_error("V3_BRIDGE_TEST | " + continuity_error)
+\t\tget_tree().quit(45)
+\t\treturn
+\tvar receipt := FileAccess.open(RESTARTED_RECEIPT, FileAccess.WRITE)
+\tif receipt == null:
+\t\tget_tree().quit(43)
+\t\treturn
+\treceipt.store_string(JSON.stringify({{
+\t\t"pid": OS.get_process_id(), "display": DisplayServer.get_name(),
+\t}}))
+\treceipt.close()
+\tprint("V3_BRIDGE_TEST | dirty scene, selection and undo/redo preserved")
 \tvar file := FileAccess.open(STATUS_PATH, FileAccess.WRITE)
 \tif file == null:
 \t\tget_tree().quit(42)
@@ -745,26 +878,30 @@ func _process(_delta: float) -> void:
         allow_headless=True,
         timeout=360 if os.name == "nt" else 240,
         environment=environment,
-        live_probe=lambda: _authenticated_tool_probe(
-            http_port,
-            capability_dir,
+        require_same_editor=True,
+        live_probe=lambda: _selected_endpoint_tool_probe(
+            project, POST_UPDATE_STATUS_FILE, capability_dir,
+            legacy_ports=(http_port, ws_port), migrated=True, expected_version=target_version,
             resource_path="res://_test_v3_bridge_probe.txt",
             content="v3 bridge authenticated write\n",
         ),
-        restart_completion_file=POST_UPDATE_COMPLETE_FILE,
     )
 
     initial_editor, restarted_editor = read_editor_receipts(project)
-    assert initial_editor["pid"] != restarted_editor["pid"], (initial_editor, restarted_editor)
+    assert initial_editor["pid"] == restarted_editor["pid"], (initial_editor, restarted_editor)
     assert initial_editor["display"] == restarted_editor["display"] == "headless", (
         initial_editor,
         restarted_editor,
     )
+    assert (project / POST_UPDATE_COMPLETE_FILE).is_file()
+    assert "V3_BRIDGE_TEST | dirty scene, selection and undo/redo preserved" in log
+    assert f"MCP | update activation completed in editor PID {initial_editor['pid']}" in log
     assert "Failed to create an autoload" not in log, log
-    disable = log.find("MCP | v3 bridge disabling transition plugin")
+    disable = log.find("MCP | update runner disabling old plugin")
     assert disable >= 0, log
     for pattern in (
-        "SCRIPT ERROR: Parse Error",
+        "SCRIPT ERROR:",
+        "ERROR: Attempt to open script",
         "ERROR: Failed to load script",
         "Could not resolve script",
     ):
@@ -777,10 +914,9 @@ func _process(_delta: float) -> void:
             "MCP | update runner disabling old plugin",
             "MCP | v3 bridge verifying and staging the signed v4 tree",
             "MCP | v3 bridge activating canonical v4 tree",
-            "MCP | v3 bridge disabling transition plugin",
-            "MCP | v3 bridge swapping in the verified canonical v4 tree",
-            "MCP | v3 bridge restarting editor into canonical v4 tree",
-            # Everything below runs in the restarted editor on the v4 tree.
+            "MCP | v3 bridge handing verified tree to in-editor activation",
+            f"MCP | update to {target_version} swapped in; reloading the plugin in this editor",
+            # The original editor now runs the loaded v4 plugin.
             "MCP | client migration completed",
             "V3_BRIDGE_TEST | v4 server and client pin ready",
             "V3_BRIDGE_TEST | authenticated tool probe completed",
@@ -789,9 +925,11 @@ func _process(_delta: float) -> void:
     assert read_plugin_version(live / "plugin.cfg") == target_version
     assert not (live / "migration_payload").exists()
     assert not (live / "update_reload_runner.gd").exists()
-    assert not (live / "migration_bridge.gd").exists()
+    # Signed canonical compatibility shims are intentional; capsule payload is not.
+    for shim in ("migration_bridge.gd", "migration_coordinator.gd", "migration_fallback.gd"):
+        assert (live / shim).read_bytes() == (PLUGIN_ROOT / shim).read_bytes()
     codex_home = smoke.fixture_environment_paths(project)["codex_home"]
-    config_text = (codex_home / "config.toml").read_text(encoding="utf-8")
+    config_text = _read_client_toml(codex_home / "config.toml")
     assert f"godot-ai=={target_version}" in config_text
     assert f"godot-ai=={from_version}" not in config_text
     marker, backup = smoke.verify_lean_update_state(project, target_version)
@@ -1021,7 +1159,8 @@ func _process(_delta: float) -> void:
     )
     restored_at = log.index("MCP | v3 bridge restored Godot AI v3.2.5")
     for pattern in (
-        "SCRIPT ERROR: Parse Error",
+        "SCRIPT ERROR:",
+        "ERROR: Attempt to open script",
         "ERROR: Failed to load script",
         "Could not resolve script",
     ):
@@ -1093,9 +1232,9 @@ def test_refused_swap_restores_the_old_runtime(tmp_path: Path) -> None:
         log,
         (
             "REFUSED_SWAP_TEST | clicked Update with a backup collision in place",
-            "update swap refused: swap: backup already exists",
             "MCP | plugin unloaded",
             "MCP | plugin loaded",
+            "MCP | Update swap failed: swap: backup already exists",
             "REFUSED_SWAP_TEST | old runtime serves again after the refused swap",
             "REFUSED_SWAP_TEST | authenticated tool probe completed after the refused swap",
         ),

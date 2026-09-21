@@ -361,3 +361,47 @@ func _private_record_in(directory: String) -> String:
 func _remove_private_record_in(directory: String) -> void:
 	DirAccess.remove_absolute(directory.path_join("http-8122.json"))
 	DirAccess.remove_absolute(directory)
+
+
+func test_directory_write_problem_is_empty_for_a_writable_directory() -> void:
+	var directory := _scratch_dir.path_join("writable")
+	assert_eq(McpTransportCapability.directory_write_problem_for(directory), "")
+	assert_true(DirAccess.dir_exists_absolute(directory), "the probe creates the directory")
+	assert_eq(DirAccess.get_files_at(directory).size(), 0, "the probe file is removed")
+	DirAccess.remove_absolute(directory)
+
+
+func test_directory_write_problem_names_the_directory_and_the_repair() -> void:
+	## A regular file where the directory must go fails creation on every OS,
+	## standing in for the Administrators-owned directory of #988.
+	var blocker := _scratch_dir.path_join("godot-ai")
+	var file := FileAccess.open(blocker, FileAccess.WRITE)
+	file.store_string("x")
+	file.close()
+	var directory := blocker.path_join("capabilities")
+	var problem := McpTransportCapability.directory_write_problem_for(directory)
+	assert_true(problem.contains(directory), "names the directory: %s" % problem)
+	assert_false(problem.contains("Remove-Item"), "never suggests deleting a named ancestor")
+	assert_true(problem.contains("permissions"), "explains how to restore access")
+	assert_true(problem.contains("elevated"), "explains the cause: %s" % problem)
+	DirAccess.remove_absolute(blocker)
+
+
+func test_windows_repair_hint_preserves_path_and_detail_without_deletion_advice() -> void:
+	for directory in [
+		"C:/workspace/godot-ai/.worktrees/project/custom/runtime",
+		"C:/custom/runtime",
+		"C:/Users/user/AppData/Local/godot-ai/capabilities",
+	]:
+		var problem := McpTransportCapability.windows_repair_hint(directory, "permission-detail")
+		assert_true(problem.contains(directory), "names the actual inaccessible directory")
+		assert_true(problem.contains("permission-detail"), "retains the underlying error detail")
+		assert_true(problem.contains("permissions"), "offers directory-specific access guidance")
+		assert_false(problem.contains("Remove-Item"), "managed, repository and custom paths are non-destructive")
+
+
+func test_directory_write_problem_is_windows_only() -> void:
+	if OS.get_name() == "Windows":
+		skip("POSIX leaves capability directory creation to the server")
+		return
+	assert_eq(McpTransportCapability.directory_write_problem(8122), "")

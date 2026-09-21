@@ -11,10 +11,12 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 ## Shape type defaults: Box for 3D, Rectangle for 2D.
 
 var _undo_redo: EditorUndoRedoManager
+var _connection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 const _SHAPE_3D_CLASSES := {
@@ -29,6 +31,445 @@ const _SHAPE_2D_CLASSES := {
 	"circle": "CircleShape2D",
 	"capsule": "CapsuleShape2D",
 }
+
+const _GENERATED_BODY_CLASSES := {
+	"static": "StaticBody3D",
+	"area": "Area3D",
+}
+const _GENERATE_DIRECT_MAX_PATHS := 16
+const _GENERATE_MAX_PATHS := 1024
+## One deferred request may spend this long across editor frames. The Python
+## handler's timeout is this plus its transport margin (a source-shape test
+## keeps the two together).
+const _GENERATE_DEFERRED_TIMEOUT_MS := 30000
+## Wall-clock budget one editor frame gives the job, the same order as the
+## dispatcher's own tick budget: a 1024-path request neither stalls the editor
+## nor waits out hundreds of near-empty frames.
+const _GENERATE_FRAME_BUDGET_USEC := 4000
+const _GENERATE_COLLIDER_SUFFIX := "Collider"
+const _GENERATE_SCALE_EPSILON := 0.0001
+
+
+## Accept either the short form ("box") or the matching Godot class name
+## ("BoxShape3D") — every other tool in the server takes class names, and
+## resource_get_info(type="Shape3D") surfaces concrete_subclasses by class.
+## Returns "" when neither form matches.
+static func _normalize_shape_type(type_map: Dictionary, requested: String) -> String:
+	if type_map.has(requested):
+		return requested
+	for short_form in type_map:
+		if type_map[short_form] == requested:
+			return short_form
+	return ""
+
+
+## Generates sibling physics bodies and collision shapes for MeshInstance3D
+## nodes. Every path and option is validated before the first mutation, and a
+## deferred request re-validates each mesh again when it is applied, so a
+## scene edited during the window can only fail the whole request, never
+## leave a partially generated batch.
+func generate(params: Dictionary) -> Dictionary:
+	var validated := _validate_generate_request(params)
+	if validated.has("error"):
+		return validated
+
+	var request_id: String = params.get("_request_id", "")
+	if _connection != null and not request_id.is_empty():
+		var job := _generate_job(validated, _undo_redo, _connection, request_id)
+		_drive_generate_job(job, _connection)
+		return {
+			"_deferred": true,
+			"_deferred_timeout_ms": _GENERATE_DEFERRED_TIMEOUT_MS,
+		}
+
+	## `dispatch_direct()` strips the request id, so batch_execute and unit-test
+	## callers cannot yield across frames. Keep that compatibility path bounded;
+	## larger requests must use the normal MCP command and its deferred reply.
+	var path_count: int = validated.paths.size()
+	if path_count > _GENERATE_DIRECT_MAX_PATHS:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			(
+				"physics_shape_generate received %d paths; inside batch_execute at most %d are "
+				+ "supported — call resource_manage(op='physics_shape_generate') directly for larger batches"
+			) % [path_count, _GENERATE_DIRECT_MAX_PATHS],
+		)
+	var job := _generate_job(validated, _undo_redo, null, "")
+	while not _generate_step(job, -1):
+		pass
+	return job.result
+
+
+## Validate the request shape and options first (no scene needed), then the
+## edited scene. Nothing here touches a node.
+static func _validate_generate_request(params: Dictionary) -> Dictionary:
+	var requested_shape := String(params.get("shape_type", "box"))
+	var shape_type := _normalize_shape_type(_SHAPE_3D_CLASSES, requested_shape)
+	if shape_type.is_empty():
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Invalid shape_type '%s'. Valid: %s" % [requested_shape, ", ".join(_SHAPE_3D_CLASSES.keys())]
+		)
+	var body_type := String(params.get("body_type", "static"))
+	if not _GENERATED_BODY_CLASSES.has(body_type):
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Invalid body_type '%s'. Valid: %s" % [body_type, ", ".join(_GENERATED_BODY_CLASSES.keys())]
+		)
+
+	var raw_paths: Variant = params.get("paths", [])
+	if not raw_paths is Array:
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"paths must be an array of MeshInstance3D scene paths, got %s" % type_string(typeof(raw_paths)),
+		)
+	if raw_paths.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: paths")
+	if raw_paths.size() > _GENERATE_MAX_PATHS:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"paths supports at most %d entries per request, got %d" % [_GENERATE_MAX_PATHS, raw_paths.size()],
+		)
+	var paths: Array[String] = []
+	var seen := {}
+	for index in raw_paths.size():
+		var raw_path: Variant = raw_paths[index]
+		if not raw_path is String:
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
+				"paths[%d] must be a MeshInstance3D scene path string, got %s"
+				% [index, type_string(typeof(raw_path))],
+			)
+		if seen.has(raw_path):
+			return ErrorCodes.make(
+				ErrorCodes.VALUE_OUT_OF_RANGE,
+				"paths lists %s twice (entries %d and %d); each mesh gets one collider"
+				% [raw_path, int(seen[raw_path]), index],
+			)
+		seen[raw_path] = index
+		paths.append(raw_path)
+
+	var scene_check := McpScenePath.require_edited_scene(params.get("scene_file", ""))
+	if scene_check.has("error"):
+		return scene_check
+	return {
+		"data": true,
+		"scene_root": scene_check.node,
+		"scene_file": params.get("scene_file", ""),
+		"shape_type": shape_type,
+		"body_type": body_type,
+		"paths": paths,
+	}
+
+
+## Resolve one mesh and capture everything the apply step must find unchanged.
+static func _plan_generate_mesh(
+	mesh_path: String, scene_file: String, scene_root: Node, shape_type: String
+) -> Dictionary:
+	var resolved := McpNodeValidator.resolve_or_error(mesh_path, "paths", scene_file)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	if node == scene_root:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"%s is the scene root — a sibling body needs a parent inside the scene" % mesh_path
+		)
+	if not node is MeshInstance3D:
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Node at %s is %s — must be MeshInstance3D" % [mesh_path, node.get_class()]
+		)
+	var mesh := node as MeshInstance3D
+	var parent := mesh.get_parent()
+	if parent == null:
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			"MeshInstance3D at %s has no parent — cannot create a sibling body" % mesh_path
+		)
+	if mesh.mesh == null:
+		return ErrorCodes.make(
+			ErrorCodes.RESOURCE_NOT_FOUND,
+			"MeshInstance3D at %s has no mesh resource — there are no bounds to fit" % mesh_path
+		)
+	var collider_name := mesh.name + _GENERATE_COLLIDER_SUFFIX
+	var existing := parent.get_node_or_null(NodePath(collider_name))
+	if existing != null:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"MeshInstance3D at %s already has a collider sibling at %s — remove or rename it first"
+			% [mesh_path, McpScenePath.from_node(existing, scene_root)]
+		)
+	## A sibling in parent space inherits the parent chain's scale exactly like
+	## the mesh does, so its box matches the visual; but Godot cannot scale a
+	## sphere, capsule or cylinder non-uniformly (the warning it prints is a
+	## deformed collider). A top-level mesh ignores its parent's transform.
+	if not mesh.top_level and shape_type != "box" and parent is Node3D:
+		var parent_scale: Vector3 = (parent as Node3D).global_transform.basis.get_scale()
+		var spread := absf(parent_scale.x - parent_scale.y)
+		spread = maxf(spread, absf(parent_scale.y - parent_scale.z))
+		if spread > _GENERATE_SCALE_EPSILON * maxf(1.0, parent_scale.length()):
+			return ErrorCodes.make(
+				ErrorCodes.VALUE_OUT_OF_RANGE,
+				(
+					"MeshInstance3D at %s sits under a parent chain scaled %s; a %s collider "
+					+ "cannot be scaled non-uniformly — use shape_type 'box' or reparent the mesh"
+				) % [mesh_path, parent_scale, shape_type]
+			)
+	var source_transform := mesh.global_transform if mesh.top_level else mesh.transform
+	var body_transform := Transform3D(
+		Basis(source_transform.basis.get_rotation_quaternion()),
+		source_transform.origin,
+	)
+	var mesh_to_body := body_transform.affine_inverse() * source_transform
+	var bounds: AABB = mesh_to_body * mesh.get_aabb()
+	if bounds.size.x <= 0.0 or bounds.size.y <= 0.0 or bounds.size.z <= 0.0:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"MeshInstance3D at %s has empty bounds %s — nothing to fit" % [mesh_path, bounds]
+		)
+	return {"plan": {
+		"mesh": mesh,
+		"mesh_path": mesh_path,
+		"parent": parent,
+		"collider_name": collider_name,
+		"top_level": mesh.top_level,
+		"source_transform": source_transform,
+		"body_transform": body_transform,
+		"bounds": bounds,
+	}}
+
+
+## Why a plan captured earlier no longer describes the scene, or "" when it
+## still does. Checked again right before each body is added, so a deferred
+## request can never apply plan-time state to a mesh that moved, was
+## reparented, lost its mesh, gained a collider, or went away meanwhile.
+static func _plan_stale_reason(plan: Dictionary) -> String:
+	var mesh: MeshInstance3D = plan.mesh
+	## A node taken out of the tree and queued to free is still a valid
+	## instance for the rest of the frame; not being in the tree is what
+	## "removed" means here.
+	if not is_instance_valid(mesh) or not mesh.is_inside_tree():
+		return "was removed"
+	var parent: Node = plan.parent
+	if not is_instance_valid(parent) or mesh.get_parent() != parent:
+		return "was reparented"
+	if mesh.top_level != bool(plan.top_level):
+		return "changed its top_level setting"
+	var source_transform := mesh.global_transform if mesh.top_level else mesh.transform
+	if not source_transform.is_equal_approx(plan.source_transform):
+		return "moved"
+	if mesh.mesh == null:
+		return "lost its mesh resource"
+	if parent.get_node_or_null(NodePath(str(plan.collider_name))) != null:
+		return "gained a collider sibling"
+	return ""
+
+
+## Build one detached body/collision pair from a prevalidated mesh plan.
+static func _create_generated_entry(
+	plan: Dictionary, shape_type: String, body_type: String
+) -> Dictionary:
+	var mesh: MeshInstance3D = plan.mesh
+	var body: CollisionObject3D = ClassDB.instantiate(_GENERATED_BODY_CLASSES[body_type])
+	body.name = str(plan.collider_name)
+	body.top_level = bool(plan.top_level)
+	body.transform = plan.body_transform
+	var collision := CollisionShape3D.new()
+	collision.name = "CollisionShape3D"
+	var bounds: AABB = plan.bounds
+	collision.position = bounds.get_center()
+	var shape: Shape3D = ClassDB.instantiate(_SHAPE_3D_CLASSES[shape_type])
+	_apply_shape_size(shape, shape_type, {"aabb": bounds}, true)
+	collision.shape = shape
+	body.add_child(collision)
+	return {
+		"mesh": mesh,
+		"parent": plan.parent,
+		"body": body,
+		"collision": collision,
+	}
+
+
+## Record all generated nodes as one undo action, optionally executing it.
+static func _commit_generated_action(
+	created_nodes: Array[Dictionary],
+	scene_root: Node,
+	undo_redo: EditorUndoRedoManager,
+	execute: bool,
+) -> void:
+	undo_redo.create_action("MCP: Generate physics shapes for %d mesh(es)" % created_nodes.size())
+	for entry in created_nodes:
+		var parent: Node = entry.parent
+		var body: CollisionObject3D = entry.body
+		var collision: CollisionShape3D = entry.collision
+		undo_redo.add_do_method(parent, "add_child", body, true)
+		undo_redo.add_do_method(body, "set_owner", scene_root)
+		undo_redo.add_do_method(collision, "set_owner", scene_root)
+		undo_redo.add_do_reference(body)
+		undo_redo.add_undo_method(parent, "remove_child", body)
+	undo_redo.commit_action(execute)
+
+
+## Build the public response after every body is present in the edited scene.
+static func _generated_response(
+	created_nodes: Array[Dictionary], scene_root: Node, shape_type: String, body_type: String
+) -> Dictionary:
+	var created: Array[Dictionary] = []
+	for entry in created_nodes:
+		created.append({
+			"mesh_path": McpScenePath.from_node(entry.mesh, scene_root),
+			"body_path": McpScenePath.from_node(entry.body, scene_root),
+			"shape_path": McpScenePath.from_node(entry.collision, scene_root),
+			"shape_type": shape_type,
+			"body_type": body_type,
+		})
+	return {"data": {"created": created, "undoable": true}}
+
+
+## The whole request as a value the frame loop (or a test) advances with
+## `_generate_step`. Phase "plan" resolves and measures every path; phase
+## "apply" re-validates each plan and adds its body immediately; the last
+## step records one undo action and fills `result`.
+static func _generate_job(
+	validated: Dictionary, undo_redo: EditorUndoRedoManager, connection, request_id: String
+) -> Dictionary:
+	return {
+		"validated": validated,
+		"undo_redo": undo_redo,
+		"connection": connection,
+		"request_id": request_id,
+		"phase": "plan",
+		"index": 0,
+		"plans": [],
+		"created": [],
+		"result": {},
+		"started_ms": Time.get_ticks_msec(),
+	}
+
+
+## Advance the job for at most `budget_usec` of wall-clock time (0 does one
+## item, a negative budget runs to completion). Returns true once `job.result`
+## holds the reply, or once the request was abandoned (empty result).
+static func _generate_step(job: Dictionary, budget_usec: int) -> bool:
+	if str(job.phase) == "done":
+		return true
+	var validated: Dictionary = job.validated
+	var connection = job.connection
+	if connection != null:
+		if not _deferred_request_pending(connection, str(job.request_id)):
+			## The dispatcher gave up on this request (timeout, client gone):
+			## nothing may be left behind and nothing can be answered.
+			_generate_rollback(job)
+			job.phase = "done"
+			return true
+		if Time.get_ticks_msec() - int(job.started_ms) > _GENERATE_DEFERRED_TIMEOUT_MS:
+			return _generate_fail(job, ErrorCodes.make(
+				ErrorCodes.DEFERRED_TIMEOUT,
+				"physics_shape_generate exceeded its %d ms budget" % _GENERATE_DEFERRED_TIMEOUT_MS,
+			))
+	var scene_root: Node = validated.scene_root
+	if not is_instance_valid(scene_root) or EditorInterface.get_edited_scene_root() != scene_root:
+		return _generate_fail(job, ErrorCodes.make(
+			ErrorCodes.EDITED_SCENE_MISMATCH,
+			"The edited scene changed while physics shapes were generated",
+		))
+	## The budget is checked before each item after the first, so every step
+	## makes progress and a phase that just finished its last item moves on.
+	var frame_start := Time.get_ticks_usec()
+	var work := 0
+	var paths: Array = validated.paths
+	while str(job.phase) == "plan":
+		if int(job.index) >= paths.size():
+			job.phase = "apply"
+			job.index = 0
+			break
+		if work > 0 and budget_usec >= 0 and Time.get_ticks_usec() - frame_start >= budget_usec:
+			return false
+		var planned := _plan_generate_mesh(
+			str(paths[int(job.index)]), str(validated.scene_file), scene_root, str(validated.shape_type)
+		)
+		if planned.has("error"):
+			return _generate_fail(job, planned)
+		job.plans.append(planned.plan)
+		job.index = int(job.index) + 1
+		work += 1
+	var plans: Array = job.plans
+	while str(job.phase) == "apply" and int(job.index) < plans.size():
+		if work > 0 and budget_usec >= 0 and Time.get_ticks_usec() - frame_start >= budget_usec:
+			return false
+		var plan: Dictionary = plans[int(job.index)]
+		var stale := _plan_stale_reason(plan)
+		if not stale.is_empty():
+			var code: String = ErrorCodes.NODE_NOT_FOUND if stale == "was removed" else ErrorCodes.EDITED_SCENE_MISMATCH
+			return _generate_fail(job, ErrorCodes.make(
+				code,
+				"MeshInstance3D at %s %s while physics shapes were generated; nothing was changed"
+				% [str(plan.mesh_path), stale],
+			))
+		var entry := _create_generated_entry(plan, str(validated.shape_type), str(validated.body_type))
+		var parent: Node = plan.parent
+		parent.add_child(entry.body, true)
+		entry.body.set_owner(scene_root)
+		entry.collision.set_owner(scene_root)
+		job.created.append(entry)
+		job.index = int(job.index) + 1
+		work += 1
+	## The nodes are already in the scene, so commit with execute=false: one
+	## atomic undo/redo action without replaying every mutation now.
+	var created: Array[Dictionary] = []
+	created.assign(job.created)
+	_commit_generated_action(created, scene_root, job.undo_redo, false)
+	job.result = _generated_response(
+		created, scene_root, str(validated.shape_type), str(validated.body_type)
+	)
+	job.phase = "done"
+	return true
+
+
+static func _generate_fail(job: Dictionary, error: Dictionary) -> bool:
+	_generate_rollback(job)
+	job.result = error
+	job.phase = "done"
+	return true
+
+
+## Remove and free every body this job added; none is in an undo action yet.
+static func _generate_rollback(job: Dictionary) -> void:
+	for entry in job.created:
+		var body: Node = entry.body
+		if not is_instance_valid(body):
+			continue
+		var parent := body.get_parent()
+		if parent != null:
+			parent.remove_child(body)
+		body.free()
+	job.created.clear()
+
+
+## Check that the connection and deferred dispatcher entry are both live.
+static func _deferred_request_pending(connection, request_id: String) -> bool:
+	if not is_instance_valid(connection):
+		return false
+	var dispatcher = connection.dispatcher
+	return dispatcher == null or dispatcher.has_pending_deferred_response(request_id)
+
+
+## Drive a deferred job one editor frame at a time and reply when it ends.
+## `send_deferred_response` itself drops a reply whose request is gone.
+static func _drive_generate_job(job: Dictionary, connection) -> void:
+	if not is_instance_valid(connection):
+		return
+	var tree: SceneTree = connection.get_tree()
+	if tree == null:
+		return
+	## The first yield lets the dispatcher register the deferred request before
+	## any validation error or successful result can be sent.
+	await tree.process_frame
+	while is_instance_valid(connection) and not _generate_step(job, _GENERATE_FRAME_BUDGET_USEC):
+		await tree.process_frame
+	if is_instance_valid(connection) and not job.result.is_empty():
+		connection.send_deferred_response(str(job.request_id), job.result)
 
 
 func autofit(params: Dictionary) -> Dictionary:
@@ -63,23 +504,16 @@ func autofit(params: Dictionary) -> Dictionary:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
 				"source_path: %s" % McpScenePath.format_node_error(source_path, scene_root))
 
-	var shape_type: String = params.get("shape_type", "box" if is_3d else "rectangle")
+	var requested_shape: String = params.get("shape_type", "box" if is_3d else "rectangle")
 	var type_map := _SHAPE_3D_CLASSES if is_3d else _SHAPE_2D_CLASSES
-	# Accept either the short form ("box") or the matching Godot class name
-	# ("BoxShape3D") — every other tool in the server takes class names, and
-	# resource_get_info(type="Shape3D") surfaces concrete_subclasses by class.
-	if not type_map.has(shape_type):
-		for short_form in type_map:
-			if type_map[short_form] == shape_type:
-				shape_type = short_form
-				break
-	if not type_map.has(shape_type):
+	var shape_type := _normalize_shape_type(type_map, requested_shape)
+	if shape_type.is_empty():
 		var valid_pairs: Array[String] = []
 		for short_form in type_map:
 			valid_pairs.append("%s (%s)" % [short_form, type_map[short_form]])
 		return ErrorCodes.make(
 			ErrorCodes.VALUE_OUT_OF_RANGE,
-			"Invalid shape_type '%s' for %s. Valid: %s" % [shape_type, node.get_class(), ", ".join(valid_pairs)]
+			"Invalid shape_type '%s' for %s. Valid: %s" % [requested_shape, node.get_class(), ", ".join(valid_pairs)]
 		)
 	var shape_class: String = type_map[shape_type]
 
@@ -219,12 +653,12 @@ static func _measure_bounds(source: Node, is_3d: bool) -> Dictionary:
 	if is_3d:
 		if source is VisualInstance3D:
 			var aabb: AABB = (source as VisualInstance3D).get_aabb()
-			# get_aabb() is local-space; pre-multiply by the source's scale
-			# so the collider tracks what you actually see in the viewport.
+			# get_aabb() is local-space; apply the source's scale so the
+			# collider tracks what you actually see in the viewport. Going
+			# through the transform keeps a mirrored (negative) scale a
+			# positive size, which BoxShape3D would otherwise reject.
 			var scale_3d: Vector3 = (source as Node3D).transform.basis.get_scale()
-			aabb.position = aabb.position * scale_3d
-			aabb.size = aabb.size * scale_3d
-			return {"aabb": aabb}
+			return {"aabb": Transform3D(Basis.from_scale(scale_3d), Vector3.ZERO) * aabb}
 		return {"error": ErrorCodes.make(
 			ErrorCodes.WRONG_TYPE,
 			"Source %s has no measurable 3D bounds (must be VisualInstance3D subclass)" % source.get_class()

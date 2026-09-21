@@ -41,11 +41,13 @@ def test_find_venv_python_present(monkeypatch, tmp_path):
     exe = _dev_env.venv_python(tmp_path / ".venv")
     exe.parent.mkdir(parents=True)
     exe.write_text("")
+    monkeypatch.setattr(_dev_env, "worktree_root", lambda start=None: tmp_path)
     monkeypatch.setattr(_dev_env, "root_repo", lambda worktree=None: tmp_path)
     assert _dev_env.find_venv_python() == exe
 
 
 def test_find_venv_python_absent(monkeypatch, tmp_path):
+    monkeypatch.setattr(_dev_env, "worktree_root", lambda start=None: tmp_path)
     monkeypatch.setattr(_dev_env, "root_repo", lambda worktree=None: tmp_path)
     assert _dev_env.find_venv_python() is None
 
@@ -55,6 +57,7 @@ def test_find_venv_python_rejects_directory(monkeypatch, tmp_path):
     # handed to execv() — is_file() guards that (exists() would not).
     exe = _dev_env.venv_python(tmp_path / ".venv")
     exe.mkdir(parents=True)
+    monkeypatch.setattr(_dev_env, "worktree_root", lambda start=None: tmp_path)
     monkeypatch.setattr(_dev_env, "root_repo", lambda worktree=None: tmp_path)
     assert _dev_env.find_venv_python() is None
 
@@ -200,8 +203,57 @@ def test_reexec_noop_when_already_in_venv(monkeypatch):
     assert calls == []
 
 
+def test_find_venv_python_prefers_the_worktree_venv(monkeypatch, tmp_path):
+    """A worktree with its own .venv must not re-exec into the main checkout's."""
+    worktree = tmp_path / "worktree"
+    root = tmp_path / "root"
+    for base in (worktree, root):
+        exe = _dev_env.venv_python(base / ".venv")
+        exe.parent.mkdir(parents=True)
+        exe.write_text("")
+    monkeypatch.setattr(_dev_env, "worktree_root", lambda start=None: worktree)
+    monkeypatch.setattr(_dev_env, "root_repo", lambda worktree=None: root)
+    assert _dev_env.find_venv_python() == _dev_env.venv_python(worktree / ".venv")
+    _dev_env.venv_python(worktree / ".venv").unlink()
+    assert _dev_env.find_venv_python() == _dev_env.venv_python(root / ".venv")
+
+
+def test_reexec_on_windows_runs_the_child_and_forwards_its_exit_code(monkeypatch, tmp_path):
+    """Windows has no exec: os.execv returns and the parent exits 0, losing the code."""
+    monkeypatch.delenv("GUARD_NT", raising=False)
+    monkeypatch.setattr(_dev_env, "_is_windows", lambda: True)
+    fake_python = tmp_path / "python.exe"
+    fake_python.write_text("")
+    monkeypatch.setattr(_dev_env, "find_venv_python", lambda worktree=None: fake_python)
+    monkeypatch.setattr(_dev_env.sys, "argv", ["script/stormtest.py", "--flag"])
+    monkeypatch.setattr(
+        _dev_env.os, "execv", lambda *a: pytest.fail("execv must not be used on Windows")
+    )
+    captured = {}
+
+    def fake_run(args, check):
+        captured["args"] = args
+        captured["check"] = check
+
+        class Completed:
+            returncode = 7
+
+        return Completed()
+
+    monkeypatch.setattr(_dev_env.subprocess, "run", fake_run)
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            _dev_env.reexec_into_venv(guard_env="GUARD_NT")
+    finally:
+        monkeypatch.delenv("GUARD_NT", raising=False)
+    assert exc_info.value.code == 7
+    assert captured["args"] == [str(fake_python), "script/stormtest.py", "--flag"]
+    assert captured["check"] is False
+
+
 def test_reexec_execs_into_venv(monkeypatch, tmp_path):
     monkeypatch.delenv("GUARD_V", raising=False)
+    monkeypatch.setattr(_dev_env, "_is_windows", lambda: False)
     fake_python = tmp_path / "python"
     fake_python.write_text("")
     monkeypatch.setattr(_dev_env, "find_venv_python", lambda worktree=None: fake_python)

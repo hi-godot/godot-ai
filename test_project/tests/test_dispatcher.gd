@@ -4,6 +4,16 @@ extends McpTestSuite
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.gd")
 const ScriptWork := preload("res://addons/godot_ai/utils/script_work.gd")
+const PluginReload := preload("res://addons/godot_ai/utils/plugin_reload.gd")
+
+class _ReloadFilesystem extends RefCounted:
+	signal filesystem_changed
+	var scans := 0
+	func scan() -> void:
+		scans += 1
+
+class _ReloadDeadline extends RefCounted:
+	signal timeout
 
 ## Tests for McpDispatcher — specifically the crash-detection guardrail
 ## that catches handlers returning malformed results (null, empty dict,
@@ -313,6 +323,81 @@ func test_tick_suppresses_deferred_response_and_threads_request_id() -> void:
 
 
 # ----- envelope-level readiness stamp (server-side stale-cache self-heal) -----
+
+
+func test_nested_tick_cannot_repeat_or_reorder_queued_commands() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	var calls: Array[String] = []
+	var nested: Array[Dictionary] = []
+	d.register("pumps_editor", func(_p):
+		calls.append("first")
+		if calls.size() == 1:
+			d.enqueue({"request_id": "third", "command": "later", "params": {"value": "third"}})
+			nested.assign(d.tick(100.0))
+		return {"data": {"value": "first"}}
+	)
+	d.register("later", func(p):
+		calls.append(p.value)
+		return {"data": {"value": p.value}}
+	)
+	d.enqueue({"request_id": "first", "command": "pumps_editor", "params": {}})
+	d.enqueue({"request_id": "second", "command": "later", "params": {"value": "second"}})
+	var responses := d.tick(100.0)
+	assert_eq(nested.size(), 0, "a reentered tick must not dispatch or emit responses")
+	assert_eq(calls, ["first", "second", "third"], "queued commands execute once in order")
+	var returned_ids: Array[String] = []
+	var returned_values: Array[String] = []
+	for response in responses:
+		returned_ids.append(response.request_id)
+		returned_values.append(response.data.value)
+	assert_eq(returned_ids, ["first", "second", "third"])
+	assert_eq(returned_values, ["first", "second", "third"])
+	d.enqueue({"request_id": "fourth", "command": "later", "params": {"value": "fourth"}})
+	responses = d.tick(100.0)
+	assert_eq(responses.size(), 1, "the outer tick releases the guard for later frames")
+	assert_eq(responses[0].data.value, "fourth")
+	assert_eq(d.tick(100.0).size(), 0, "all commands are consumed")
+	d.release_after_teardown()  # Break the handler's captured dispatcher reference.
+
+
+func test_reload_reservation_holds_later_commands_until_scan_timeout() -> void:
+	var d := _make_dispatcher()
+	d.mcp_logging = false
+	var work := [0]
+	var calls: Array[String] = []
+	d.register("reserve_reload", func(_p):
+		work[0] = PluginReload.reserve_reload()
+		calls.append("reload")
+		return {"data": {"status": "reloading"}}
+	)
+	d.register("write_after_reload", func(_p):
+		calls.append("write")
+		return {"data": {"written": true}}
+	)
+	d.enqueue({"request_id": "reload", "command": "reserve_reload", "params": {}})
+	d.enqueue({"request_id": "write", "command": "write_after_reload", "params": {}})
+	var responses := d.tick(100.0)
+	assert_eq(responses.size(), 1, "reload response still returns before the deferred scan")
+	assert_eq(responses[0].request_id, "reload")
+	assert_eq(calls, ["reload"], "no later handler starts in the reservation frame")
+	assert_eq(d.tick(100.0).size(), 0, "later frames remain gated before scan starts")
+	assert_eq(PluginReload.reserve_reload(), 0, "a duplicate cannot replace the reservation")
+	var filesystem := _ReloadFilesystem.new()
+	var timer := _ReloadDeadline.new()
+	PluginReload._start_scan(filesystem, timer, work[0])
+	assert_eq(filesystem.scans, 1)
+	assert_eq(d.tick(100.0).size(), 0, "an unfinished scan retains the gate")
+	timer.timeout.emit()
+	assert_false(PluginReload.is_reload_pending(), "timeout releases the reservation")
+	assert_false(ScriptWork._active.has(work[0]), "timeout settles the same work entry")
+	PluginReload._finish_scan(work[0], false)  # A late completion cannot restart the reload.
+	responses = d.tick(100.0)
+	assert_eq(calls, ["reload", "write"], "timeout resumes the untouched queued command once")
+	assert_eq(responses.size(), 1)
+	assert_eq(responses[0].request_id, "write")
+	assert_true(responses[0].data.written)
+	d.release_after_teardown()
 
 
 func test_tick_stamps_envelope_readiness_on_success_response() -> void:

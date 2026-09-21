@@ -44,9 +44,50 @@ class ProcessBinding:
             raise ResourceError("process creation time must be positive and finite")
 
 
+def _windows_process_has_exited(pid: int) -> bool:
+    """True when the Windows kernel already reports an exit code for ``pid``.
+
+    psutil proves a Windows process alive by opening it and reading its
+    creation time. A process that has exited while its parent still holds the
+    handle keeps its pid, its creation time and, on some hosts, its
+    system-table entry, so it can pass every psutil check with a thread count
+    right after the parent's own wait returned. GetExitCodeProcess is the
+    kernel's answer and is settled from the moment that wait released the
+    parent. A process this account cannot open, or one Windows reports as
+    still active, is left to psutil's own outcome; a process that chose exit
+    code 259 (STILL_ACTIVE) reads as running to Windows itself.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    if pid <= 0:
+        return False
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    process_query_limited_information = 0x1000
+    still_active = 259
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value != still_active
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _process(pid: int):
     process = psutil.Process(pid)
     if process.status() in (psutil.STATUS_DEAD, psutil.STATUS_ZOMBIE):
+        raise ResourceError("requested process is dead or a zombie")
+    # psutil never reports a dead Windows process by status; ask the kernel.
+    if os.name == "nt" and _windows_process_has_exited(pid):
         raise ResourceError("requested process is dead or a zombie")
     return process
 

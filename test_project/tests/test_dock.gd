@@ -510,6 +510,94 @@ class _RepinRecordingOwner extends ClientJobOwnerScript:
 		}
 
 
+func test_active_startup_stays_amber_with_blocked_transport_after_grace() -> void:
+	_dock._build_ui()
+	_dock._startup_grace_until_msec = 0
+	_dock._post_update_server_pending = false
+	var manager := McpServerLifecycleManager.new()
+	manager.configure({"automatic_effects": false})
+	manager.start_server()
+	_dock.present_lifecycle_snapshot(manager.get_status_dict())
+	_dock.present_transport_snapshot({"connected": false, "status": {"phase": "blocked"}})
+	_dock._update_status()
+	assert_eq(_dock._status_label.text, "Starting server…")
+	assert_eq(_dock._status_icon.color, McpDockScript.COLOR_AMBER)
+	assert_true(manager.is_connection_blocked(), "startup presentation grants no transport authority")
+	manager._block("launch_gone", "The server exited")
+	_dock.present_lifecycle_snapshot(manager.get_status_dict())
+	_dock._update_status()
+	assert_true(_dock._status_label.text.begins_with("Server exited"), _dock._status_label.text)
+	assert_eq(_dock._status_icon.color, Color.RED)
+
+
+func test_post_update_window_reads_as_finishing_not_blocked() -> void:
+	_dock._build_ui()
+	## Restarted editor after an update: lifecycle dormant, transport blocked.
+	_dock.present_lifecycle_snapshot({"state": McpServerState.UNINITIALIZED})
+	_dock.present_transport_snapshot({"connected": false, "status": {"phase": "blocked"}})
+	_dock.present_update_state({
+		"install_in_flight": true,
+		"status_text": "Migrating client configuration…",
+		"banner_visible": true,
+		"post_update_action": "",
+	})
+	_dock._update_status()
+	assert_eq(_dock._status_label.text, "Finishing update — starting server…")
+	_dock.present_update_state({
+		"install_in_flight": false,
+		"status_text": "Godot AI installed",
+		"post_update_action": "",
+		"outcome": "success",
+	})
+	_dock._update_status()
+	assert_eq(_dock._status_label.text, "Finishing update — starting server…")
+	## A real failure still wins over the friendly phase text.
+	_dock.present_lifecycle_snapshot({
+		"state": McpServerState.FOREIGN_PORT, "conflict_port": 8000, "message": "",
+	})
+	_dock._update_status()
+	assert_eq(_dock._status_label.text, "Port 8000 held by another process")
+	## Once connected the window is over and stays over.
+	_dock.present_lifecycle_snapshot({"state": McpServerState.READY})
+	_dock.present_transport_snapshot({"connected": true, "status": {"phase": "connected"}})
+	_dock._update_status()
+	assert_true(_dock._status_label.text.begins_with("Server connected"), _dock._status_label.text)
+	_dock.present_transport_snapshot({"connected": false, "status": {"phase": "blocked"}})
+	_dock._update_status()
+	assert_eq(_dock._status_label.text, "Connection blocked")
+	## A refused migration barrier is a real block.
+	_dock._post_update_server_pending = true
+	_dock.present_update_state({"post_update_action": "retry", "label_text": "blocked"})
+	_dock._update_status()
+	assert_eq(_dock._status_label.text, "Connection blocked")
+	_dock._post_update_server_pending = false
+
+
+func test_failed_update_ends_the_finishing_window() -> void:
+	_dock._build_ui()
+	_dock.present_lifecycle_snapshot({"state": McpServerState.UNINITIALIZED})
+	_dock.present_transport_snapshot({"connected": false, "status": {"phase": "blocked"}})
+	_dock.present_update_state({
+		"install_in_flight": true,
+		"status_text": "Verifying…",
+		"banner_visible": true,
+		"post_update_action": "",
+	})
+	_dock._update_status()
+	assert_eq(_dock._status_label.text, "Finishing update — starting server…")
+	## `_fail_update`: no swap happened, the previous version is live, and
+	## nothing is starting, so the transport status is the truth again.
+	_dock.present_update_state({
+		"install_in_flight": false,
+		"status_text": "Update failed — previous version restored",
+		"button_disabled": false,
+	})
+	assert_false(_dock._post_update_server_pending)
+	assert_eq(_dock._status_label.text, "Connection blocked")
+	_dock._update_status()
+	assert_eq(_dock._status_label.text, "Connection blocked")
+
+
 func test_configure_all_dispatches_while_incompatible() -> void:
 	## The write path must run while INCOMPATIBLE — Configure writes an
 	## explicit url + live plugin version and does not need a healthy occupant.
@@ -669,20 +757,79 @@ func test_post_update_retry_button_emits_barrier_action_instead_of_a_second_upda
 	dock.free()
 
 
-func test_update_asks_before_saving_and_relaunching() -> void:
-	## A dock outside a scene tree has no dialog to show and proceeds directly
-	## (the test above); the confirmation itself is what a click really does.
-	var text := McpDockScript.update_confirm_text("4.1.0")
-	assert_true(text.contains("save your project"), text)
-	assert_true(text.contains("relaunch the editor"), text)
-	assert_true(text.contains("Godot AI v4.1.0"), text)
-	assert_true(text.contains("AI clients connected right now must be restarted"), text)
-	assert_true(McpDockScript.update_confirm_text("").contains("the new Godot AI"))
+func test_update_confirmation_preserves_editor_and_names_client_compatibility() -> void:
+	var text := McpDockScript.update_confirm_text("4.1.0", "4.0.4")
+	assert_eq(text, "Update to Godot AI v4.1.0? Unsaved changes are kept.\n\nRestart AI clients older than v4.0.4.")
+	for versions in [["4.0.3", "4.1.0"], ["4.1.0", "5.0.0"], ["", "4.1.0"], ["4.0.4", ""]]:
+		text = McpDockScript.update_confirm_text(versions[1], versions[0])
+		assert_true(text.ends_with("Restart your AI client after updating."), text)
+	assert_true(McpDockScript.update_confirm_text("", "4.0.4").contains("the new Godot AI"))
+
+
+func test_update_dialog_defers_until_confirmation() -> void:
 	var dock := McpDockScript.new()
+	dock._build_ui()
 	var update_calls := [0]
 	dock.update_requested.connect(func() -> void: update_calls[0] += 1)
-	dock._on_update_confirmed()
+	assert_eq(dock._update_confirm.get_ok_button().text, "Update plugin")
+	assert_eq(dock._update_confirm.get_cancel_button().text, "Later")
+	dock._update_confirm.canceled.emit()
+	assert_eq(update_calls[0], 0, "Later must leave the update unrequested")
+	dock._update_confirm.confirmed.emit()
 	assert_eq(update_calls[0], 1, "confirming is what requests the update")
+	dock.free()
+
+
+func test_teardown_preserves_native_progress_dialog_from_owned_windows() -> void:
+	var root := EditorInterface.get_base_control().get_tree().root
+	var dialogs := root.find_children("*", "ProgressDialog", true, false)
+	assert_eq(dialogs.size(), 1, "the live editor must have one shared native progress dialog")
+	if dialogs.size() != 1:
+		return
+	var progress: Node = dialogs[0]
+	assert_true(progress.is_class("ProgressDialog"), "the fixture must borrow the native editor object")
+	if bool(progress.call("is_visible")):
+		skip("the editor is currently using its shared progress dialog")
+		return
+	var progress_id := progress.get_instance_id()
+	for host_property in ["_update_confirm", "_tools_close_confirm"]:
+		var dock := McpDockScript.new()
+		dock.hide()
+		root.add_child(dock)
+		dock.set_process(false)
+		var host: Window = dock.get(host_property)
+		var owned_ids := [
+			dock._update_confirm.get_instance_id(),
+			dock._tools_close_confirm.get_instance_id(),
+			dock._clients_window.get_instance_id(),
+		]
+		progress.reparent(host)
+		var adopted := progress.get_parent() == host
+		dock.release_editor_progress_dialog()
+		var released := progress.get_parent() == root
+		dock.release_editor_progress_dialog()
+		var repeated_release := progress.get_parent() == root
+		## Rescue independently of the implementation before freeing the fixture,
+		## so a failed assertion cannot destroy the editor's shared native object.
+		if progress.get_parent() != root:
+			progress.reparent(root)
+		dock.free()
+		assert_true(adopted, "%s must reproduce the stranded parent" % host_property)
+		assert_true(released, "%s must release progress before dock destruction" % host_property)
+		assert_true(repeated_release, "releasing twice must be harmless")
+		assert_true(is_instance_id_valid(progress_id), "the same native object must survive teardown")
+		assert_eq(progress.get_instance_id(), progress_id)
+		assert_eq(progress.get_parent(), root)
+		for owned_id in owned_ids:
+			assert_false(is_instance_id_valid(owned_id), "plugin-owned windows must still be destroyed")
+
+
+func test_release_editor_progress_dialog_outside_tree_is_harmless() -> void:
+	var dock := McpDockScript.new()
+	dock._build_ui()
+	var confirmation := dock._update_confirm
+	dock.release_editor_progress_dialog()
+	assert_eq(confirmation.get_parent(), dock, "off-tree cleanup must leave owned UI intact")
 	dock.free()
 
 
@@ -872,7 +1019,10 @@ func test_update_status_text_never_replaces_the_button_action() -> void:
 	## and the button only enables or disables.
 	_dock._build_ui()
 	_dock.present_update_check({"version": "4.0.3", "label_text": "Update available: v4.0.3"})
-	for status in ["Downloading…", "Update preparation failed", "Activating verified update…"]:
+	for status in [
+		"Downloading…", "Verifying signed update…", "Staging the verified tree…",
+		"Waiting for client workers…", "Update preparation failed", "Activating verified update…",
+	]:
 		_dock.present_update_state({
 			"install_in_flight": true, "status_text": status, "button_disabled": true,
 		})
@@ -887,14 +1037,14 @@ func test_update_status_text_never_replaces_the_button_action() -> void:
 
 
 func test_new_update_candidate_rearms_the_button_after_a_completed_update() -> void:
-	## The restarted editor after an update shows "Update complete" with the
+	## The restarted editor after an update shows "Godot AI installed" with the
 	## button disabled. A newer release found later in that same session (the
 	## fleet's 4.0.0 -> 4.0.2 morning) must be installable without another
 	## editor restart.
 	_dock._build_ui()
 	_dock.present_update_state({
 		"install_in_flight": false,
-		"status_text": "Update complete",
+		"status_text": "Godot AI installed",
 		"button_disabled": true,
 		"label_text": "Restart AI clients that were connected during the update so they use v4.0.2.",
 		"banner_visible": true,
@@ -902,7 +1052,9 @@ func test_new_update_candidate_rearms_the_button_after_a_completed_update() -> v
 		"outcome": "success",
 	})
 	assert_true(_dock._update_btn.disabled)
-	assert_eq(_dock._update_label.get_theme_color("font_color"), Color.GREEN)
+	assert_true(_dock._update_label.has_theme_color_override("font_color"))
+	assert_eq(_dock._update_label.get_theme_color("font_color"), McpDockScript._UPDATE_LABEL_COLOR,
+		"installed files do not prove clients have reconnected")
 	_dock.present_update_check({"version": "4.0.3", "label_text": "Update available: v4.0.3"})
 	assert_false(_dock._update_btn.disabled)
 	assert_eq(_dock._update_btn.text, "Update")
@@ -1705,23 +1857,28 @@ func test_incompatible_server_body_uses_actionable_message() -> void:
 	assert_contains(body, "change both HTTP and WS ports")
 
 
-func test_incompatible_server_hides_http_only_port_picker() -> void:
-	## Incompatible godot-ai servers commonly hold both HTTP and WS ports.
-	## The quick picker only changes HTTP, so showing it here advertises a
-	## partial recovery path that can leave the editor disconnected.
+func test_foreign_incompatible_server_offers_both_port_picker() -> void:
 	_dock._build_ui()
 	_dock._update_crash_panel({
 		"state": McpServerState.INCOMPATIBLE,
 		"message": "Port 8000 is occupied by godot-ai server v1.2.10",
 	})
 	assert_true(_dock._crash_panel.visible, "diagnostic panel still shows")
-	assert_false(_dock._port_picker_panel.visible, "HTTP-only picker must stay hidden")
+	assert_true(_dock._port_picker_panel.visible, "both-port picker must offer a safe escape")
+	assert_false(_dock._crash_restart_btn.visible, "unproven ownership must not offer restart")
+	var spy := _SettingsApplySpy.new()
+	_dock.settings_apply_requested.connect(spy.on_apply)
+	_dock._port_picker_panel._spinbox.value = 23001
+	_dock._port_picker_panel._ws_spinbox.value = 23002
+	_dock._port_picker_panel._on_apply_pressed()
+	assert_eq(spy.captured, [{"changes": {"http_port": 23001, "ws_port": 23002}, "reload": true}])
+	_dock.settings_apply_requested.disconnect(spy.on_apply)
 
 
 func test_foreign_incompatible_body_names_concrete_free_ports() -> void:
 	## Issue #607 cheap version: the foreign-occupant crash body should hand
 	## the user concrete free ports (reservation-aware on Windows) and point
-	## them at Editor Settings + the client reconfigure, instead of leaving
+	## them at the two-port picker + client reconfigure, instead of leaving
 	## them to hunt for a port themselves. Names BOTH http and ws: this branch
 	## also fires for an incompatible godot-ai server that commonly holds both
 	## ports, so suggesting only http would leave the new server unable to
@@ -1737,10 +1894,9 @@ func test_foreign_incompatible_body_names_concrete_free_ports() -> void:
 		"foreign-occupant body must name a concrete free HTTP port")
 	assert_contains(body, "%d (WS)" % free_ws,
 		"foreign-occupant body must name a concrete free WS port")
-	assert_contains(body, "godot_ai/http_port",
-		"foreign-occupant body must point at the HTTP Editor Setting to change")
-	assert_contains(body, "godot_ai/ws_port",
-		"foreign-occupant body must point at the WS Editor Setting too")
+	assert_contains(body, "Apply + Reload", "guidance must point at the effective-pair picker")
+	assert_contains(body, "Configure", "clients need the new pair after reload")
+	assert_false(body.contains("godot_ai/http_port"), "legacy keys may be shadowed by a v4 pair")
 
 
 func test_recoverable_incompatible_body_keeps_restart_copy() -> void:
@@ -1794,6 +1950,8 @@ func test_recoverable_incompatible_hides_docs_link_button() -> void:
 	})
 	assert_false(_dock._crash_docs_btn.visible,
 		"recoverable case keeps Restart Server, not the docs link")
+	assert_false(_dock._port_picker_panel.visible, "owned recovery retains its restart path")
+	assert_true(_dock._crash_restart_btn.visible, "proven-owned server can be restarted")
 
 
 # --- Signal-emit contracts on the audit-v2 #360 extracted subpanels ---
@@ -1804,9 +1962,9 @@ func test_recoverable_incompatible_hides_docs_link_button() -> void:
 ## lambdas with closure-captured locals don't reliably evaluate the body
 ## under the test runner, so a typed receiver is the safe form.
 class _PortApplySpy:
-	var captured: Array[int] = []
-	func on_apply(new_port: int) -> void:
-		captured.append(new_port)
+	var captured: Array = []
+	func on_apply(new_http_port: int, new_ws_port: int) -> void:
+		captured.append([new_http_port, new_ws_port])
 
 
 class _LogToggleSpy:
@@ -1833,9 +1991,14 @@ func test_port_picker_panel_emits_apply_requested_for_in_range_port() -> void:
 	var spy := _PortApplySpy.new()
 	panel.port_apply_requested.connect(spy.on_apply)
 	panel._spinbox.value = 9000
+	panel._ws_spinbox.value = 9501
 	panel._on_apply_pressed()
-	assert_eq(spy.captured.size(), 1, "in-range port must emit exactly once")
-	assert_eq(spy.captured[0], 9000, "emitted port must match the spinbox value")
+	assert_eq(spy.captured.size(), 1, "in-range ports must emit exactly once")
+	assert_eq(spy.captured[0], [9000, 9501], "emitted ports must match both spinboxes")
+	## Equal ports can never bind together; the panel refuses them itself.
+	panel._ws_spinbox.value = 9000
+	panel._on_apply_pressed()
+	assert_eq(spy.captured.size(), 1, "equal HTTP and WebSocket ports must not emit")
 	panel.free()
 
 
@@ -1859,11 +2022,48 @@ func test_port_picker_panel_skips_emit_for_out_of_range_port() -> void:
 	panel.free()
 
 
+func test_port_picker_seeds_only_the_contested_port() -> void:
+	## The server binds HTTP and WebSocket together. Moving only the HTTP port
+	## onto a free number left the launch dying on the WebSocket port the old
+	## server still held; the picker now moves whichever port is contested or
+	## in use and keeps the other so client entries stay valid where they can.
+	var panel := PortPickerPanelScript.new()
+	panel.setup()
+	var http := McpClientConfigurator.http_port()
+	var ws := McpClientConfigurator.ws_port()
+	panel.port_in_use_probe = func(port: int) -> bool: return port == ws
+	panel.seed_suggested_ports(0)
+	assert_eq(int(panel._spinbox.value), http, "a free HTTP port keeps its value")
+	assert_true(int(panel._ws_spinbox.value) != ws, "a held WebSocket port gets a suggestion")
+	assert_true(int(panel._ws_spinbox.value) != int(panel._spinbox.value))
+	panel.port_in_use_probe = func(_port: int) -> bool: return false
+	panel.seed_suggested_ports(http)
+	assert_true(int(panel._spinbox.value) != http, "the diagnosed conflict port moves")
+	assert_eq(int(panel._ws_spinbox.value), ws, "a free WebSocket port keeps its value")
+	panel.free()
+
+
+func test_websocket_port_conflict_shows_the_picker_and_names_the_setting() -> void:
+	## The lifecycle now refuses to launch onto a held WebSocket port and names
+	## `godot_ai/ws_port`; the picker can move that port, so it is offered.
+	_dock._build_ui()
+	_dock._port_picker_panel.port_in_use_probe = func(_port: int) -> bool: return false
+	var ws := McpClientConfigurator.ws_port()
+	_dock._update_crash_panel({
+		"state": McpServerState.FOREIGN_PORT,
+		"conflict_port": ws,
+		"message": "WebSocket port %d is already in use by another process. Set `godot_ai/ws_port` in Editor Settings." % ws,
+	})
+	assert_true(_dock._crash_panel.visible, "diagnostic panel shows")
+	assert_true(_dock._port_picker_panel.visible, "the picker moves both ports, so a WS conflict offers it")
+	assert_true(_dock._crash_output.get_parsed_text().contains("godot_ai/ws_port"), _dock._crash_output.get_parsed_text())
+
+
 func test_dock_emits_copied_endpoint_setting_intents_without_persisting() -> void:
 	var dock := McpDockScript.new()
 	var spy := _SettingsApplySpy.new()
 	dock.settings_apply_requested.connect(spy.on_apply)
-	dock._on_port_apply_requested(23000)
+	dock._on_port_apply_requested(23000, 23500)
 	dock._tools_pending_excluded = PackedStringArray(["audio"])
 	dock._telemetry_pending_enabled = false
 	dock._on_tools_apply()
@@ -1872,7 +2072,7 @@ func test_dock_emits_copied_endpoint_setting_intents_without_persisting() -> voi
 	dock._allow_hosts_edit.text = "10.0.0.5"
 	dock._on_allow_hosts_apply()
 	assert_eq(spy.captured.size(), 3)
-	assert_eq(spy.captured[0], {"changes": {"http_port": 23000}, "reload": true})
+	assert_eq(spy.captured[0], {"changes": {"http_port": 23000, "ws_port": 23500}, "reload": true})
 	assert_eq(str(spy.captured[1].changes.excluded_domains), "audio")
 	assert_false(bool(spy.captured[1].changes.telemetry_enabled))
 	assert_eq(str(spy.captured[2].changes.allow_hosts), "10.0.0.5")

@@ -39,6 +39,7 @@ extends RefCounted
 
 const DEFAULT_TIMEOUT_MS := 8000
 const _POLL_INTERVAL_MS := 50
+const _QUICK_EXIT_WINDOW_MS := 250
 const _KILL_GRACE_MS := 500
 const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
 const UvResolution := preload("res://addons/godot_ai/utils/uv_resolution_policy.gd")
@@ -101,11 +102,24 @@ static func _run_piped(
 	if pid <= 0:
 		_close_pipes(stdio, stderr_pipe)
 		return _spawn_failed_result()
-	var kill_grant := PortResolver.capture_process_kill_grant(pid)
-
 	var deadline := Time.get_ticks_msec() + maxi(timeout_ms, _POLL_INTERVAL_MS)
+	var kill_grant: Dictionary = {}
+	## Most discovery commands finish within a few polls. Do not spend Windows
+	## identity-query time capturing kill authority for an already-exited child.
+	## This short window shares the command deadline and observes cancellation;
+	## a child still running afterward needs the same exact grant as before.
+	var quick_deadline := mini(deadline, Time.get_ticks_msec() + _QUICK_EXIT_WINDOW_MS)
+	var cancellation_requested := false
+	while OS.is_process_running(pid) and Time.get_ticks_msec() < quick_deadline:
+		if cancel_check.is_valid() and bool(cancel_check.call()):
+			cancellation_requested = true
+			break
+		OS.delay_msec(mini(_POLL_INTERVAL_MS, maxi(0, quick_deadline - Time.get_ticks_msec())))
+	if OS.is_process_running(pid):
+		kill_grant = PortResolver.capture_process_kill_grant(pid)
+
 	while OS.is_process_running(pid):
-		var cancelled := cancel_check.is_valid() and bool(cancel_check.call())
+		var cancelled := cancellation_requested or (cancel_check.is_valid() and bool(cancel_check.call()))
 		if cancelled or Time.get_ticks_msec() >= deadline:
 			## Kill before draining: a pipe read can block while the launcher or
 			## one of its descendants still owns the write end. Windows taskkill

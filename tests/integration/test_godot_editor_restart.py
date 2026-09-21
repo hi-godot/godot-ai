@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tests.integration._self_update_fixture import godot_bin_or_skip, run_godot_editor
+
+## Needs a real Godot editor (GODOT_BIN); skipped without one and excluded
+## from the iteration loop by `pytest -m "not editor"`.
+pytestmark = pytest.mark.editor
 
 
 def test_headless_editor_restart_preserves_display_driver(tmp_path: Path) -> None:

@@ -4,7 +4,7 @@ extends EditorPlugin
 ## Temporary v3-compatible entry point delivered through the signed legacy
 ## updater asset. It owns presentation only. Verification and staging run in
 ## the detached bridge node; the value-only coordinator survives this plugin
-## being disabled and performs the swap and restart.
+## handing off to the shared in-editor activation runner.
 
 const MigrationBridge := preload("res://addons/godot_ai/migration_bridge.gd")
 const MigrationCoordinator := preload("res://addons/godot_ai/migration_coordinator.gd")

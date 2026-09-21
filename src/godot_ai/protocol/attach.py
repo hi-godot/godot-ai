@@ -42,7 +42,7 @@ async def tool_catalog_hash(server: FastMCP[Any]) -> str:
     """Return a stable SHA-256 of the effective MCP tool schemas.
 
     The hash is diagnostic-only in attach protocol v1. Adoption gates on the
-    exact package version, attach protocol, ports, and excluded domains. That
+    package major version, attach protocol, ports, and excluded domains. That
     keeps the bridge from trusting a hash reported by the process it is
     validating while still making schema drift observable in diagnostics.
     """
