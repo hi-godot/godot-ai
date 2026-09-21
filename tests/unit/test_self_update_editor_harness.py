@@ -249,7 +249,7 @@ async def test_persistent_receipt_denial_fails_at_original_deadline(monkeypatch,
     with pytest.raises(AssertionError, match=expected) as failure:
         await agent._poll()
     assert "private" not in str(failure.value)
-    assert attempts == [0, 61, 122]
+    assert attempts == [0, 61]
     assert entered == []
 
 
@@ -325,4 +325,80 @@ async def test_receipt_timeout_reports_nonce_mismatch_without_secrets(
     assert stale_nonce not in message
     assert nonce not in message
     assert now[0] == 122
+    assert entered == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("elapsed", [120, 122])
+async def test_expired_receipt_wait_does_no_more_io(monkeypatch, receipt_agent, elapsed):
+    agent, _nonce, entered = receipt_agent
+    now = [0.0]
+    discoveries = []
+    reads = []
+
+    def discover(*_args):
+        discoveries.append(now[0])
+        return None
+
+    def read(_path, **_kwargs):
+        reads.append(now[0])
+        raise PermissionError(13, "sensitive receipt path")
+
+    async def sleep(_seconds):
+        now[0] += elapsed
+
+    monkeypatch.setattr(fixture, "read_capabilities", discover)
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(fixture.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fixture.asyncio, "sleep", sleep)
+    with pytest.raises(AssertionError, match=r"PermissionError \(errno=13\)") as failure:
+        await agent._poll()
+    assert discoveries == [0]
+    assert reads == [0]
+    assert "sensitive" not in str(failure.value)
+    assert entered == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slow_operation", ["discovery", "receipt"])
+async def test_late_matching_receipt_cannot_start_client(
+    monkeypatch, receipt_agent, slow_operation,
+):
+    agent, nonce, entered = receipt_agent
+    now = [0.0]
+    discoveries = []
+    reads = []
+
+    def discover(*_args):
+        discoveries.append(now[0])
+        if slow_operation == "discovery":
+            now[0] = 120
+        return CapabilityRecord("h" * 64, "a" * 64, nonce)
+
+    def read(_path, **_kwargs):
+        reads.append(now[0])
+        now[0] = 120
+        return nonce
+
+    monkeypatch.setattr(fixture, "read_capabilities", discover)
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(fixture.time, "monotonic", lambda: now[0])
+    with pytest.raises(AssertionError, match="never published matching capabilities") as failure:
+        await agent._poll()
+    assert discoveries == [0]
+    assert reads == ([] if slow_operation == "discovery" else [0])
+    assert "nonce mismatched" not in str(failure.value)
+    assert entered == []
+
+
+@pytest.mark.asyncio
+async def test_stopped_receipt_wait_does_no_io(monkeypatch, receipt_agent):
+    agent, _nonce, entered = receipt_agent
+    agent._stop.set()
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("stopped receipt wait must not discover or read")
+    monkeypatch.setattr(fixture, "read_capabilities", unexpected)
+    monkeypatch.setattr(Path, "read_text", unexpected)
+    with pytest.raises(AssertionError, match="never published matching capabilities"):
+        await agent._poll()
     assert entered == []

@@ -16,6 +16,8 @@ const SERVER_STARTUP_REPORT := "user://godot_ai_server_startup.json"
 const WindowsPortReservation := preload("res://addons/godot_ai/utils/windows_port_reservation.gd")
 static var _process_spawn_mutex := Mutex.new()
 
+enum PortOccupancy { UNKNOWN, FREE, OCCUPIED }
+
 
 ## Serialize plugin-owned subprocess creation across the brief process-global
 ## environment override used for server capabilities. Callers must keep this
@@ -51,18 +53,11 @@ static func can_bind_local_port(port: int) -> bool:
 	return false
 
 
-## True when `port` is bound on 127.0.0.1. Probes via TCPServer first,
-## falls back to OS scraping. Callers that want per-scraper trace
-## counters should call `is_port_in_use_via_scrape` with a trace hook
-## after their own `can_bind_local_port` probe.
+## Windows permits a loopback bind beside a wildcard listener. Use the OS
+## listener table, and treat failed queries as unavailable rather than free.
 static func is_port_in_use(port: int) -> bool:
-	if can_bind_local_port(port):
-		## On POSIX, an IPv6 wildcard listener can coexist with a
-		## successful 127.0.0.1 bind probe. Confirm with lsof so startup
-		## sees the same listener set that shutdown/recovery would see.
-		if OS.get_name() != "Windows":
-			return is_port_in_use_via_scrape(port)
-		return false
+	if OS.get_name() == "Windows":
+		return windows_port_occupancy(port) != PortOccupancy.FREE
 	return is_port_in_use_via_scrape(port)
 
 
@@ -73,21 +68,7 @@ static func is_port_in_use(port: int) -> bool:
 static func is_port_in_use_via_scrape(port: int, trace: Callable = Callable()) -> bool:
 	var output: Array = []
 	if OS.get_name() == "Windows":
-		_trace(trace, "netstat")
-		var exit_code := OS.execute("netstat", ["-ano"], output, true)
-		if exit_code == 0 and output.size() > 0:
-			var stdout := str(output[0])
-			if parse_windows_netstat_listening(stdout, port):
-				return true
-			## A healthy dump with no listener row IS the answer — don't
-			## pay the ~1.2s powershell.exe spawn to confirm "not in use"
-			## (see find_all_pids_on_port for the cost rationale).
-			if windows_netstat_dump_parseable(stdout):
-				return false
-		## Fallback: netstat can be absent or unparseable on
-		## stripped/locale-odd Windows installs.
-		_trace(trace, "powershell")
-		return not find_listener_pids_windows(port).is_empty()
+		return windows_port_occupancy(port, windows_listener_snapshot(trace)) != PortOccupancy.FREE
 	_trace(trace, "lsof")
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
 	if exit_code == 0 and output.size() > 0 and not output[0].strip_edges().is_empty():
@@ -102,8 +83,89 @@ static func is_port_in_use_via_scrape(port: int, trace: Callable = Callable()) -
 	)
 
 
+## One snapshot per selection operation avoids a subprocess for every candidate.
+## Unknown observations never prove a port free. This is not ownership evidence.
+static func windows_listener_snapshot(trace: Callable = Callable()) -> Dictionary:
+	var output: Array = []
+	_trace(trace, "netstat")
+	var code := OS.execute("netstat", ["-ano"], output, true)
+	var snapshot := windows_snapshot_from_netstat(code, output)
+	if snapshot.known:
+		return snapshot
+	_trace(trace, "powershell")
+	output.clear()
+	var script := "$ErrorActionPreference='Stop'; try { $listeners = @(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.State -eq 'Listen' } | Select-Object LocalPort,OwningProcess); ConvertTo-Json -Compress -Depth 3 -InputObject @{ listeners = $listeners }; exit 0 } catch { exit 1 }"
+	code = execute_windows_powershell(script, output)
+	return windows_snapshot_from_powershell(code, output)
+
+
+static func windows_port_occupancy(port: int, snapshot: Dictionary = {}) -> PortOccupancy:
+	if snapshot.is_empty():
+		snapshot = windows_listener_snapshot()
+	if not snapshot.known:
+		return PortOccupancy.UNKNOWN
+	return PortOccupancy.OCCUPIED if snapshot.listeners.has(port) else PortOccupancy.FREE
+
+
+static func windows_snapshot_from_netstat(exit_code: int, output: Array) -> Dictionary:
+	var unknown := {"known": false, "listeners": {}}
+	if exit_code != 0 or output.is_empty():
+		return unknown
+	var listeners := {}
+	var saw_tcp := false
+	for line in str(output[0]).split("\n"):
+		var fields := split_on_whitespace(line.strip_edges())
+		if fields.is_empty() or fields[0].to_upper() != "TCP":
+			continue
+		if fields.size() < 5 or not fields[1].contains(":") or not fields[2].contains(":"):
+			return unknown
+		var port_text := fields[1].get_slice(":", fields[1].get_slice_count(":") - 1)
+		var remote_port_text := fields[2].get_slice(":", fields[2].get_slice_count(":") - 1)
+		var pid_text := fields[fields.size() - 1]
+		if not port_text.is_valid_int() or not remote_port_text.is_valid_int() or not pid_text.is_valid_int():
+			return unknown
+		var port := int(port_text)
+		var pid := int(pid_text)
+		if port < 1 or port > 65535 or pid < 0 or pid > 4294967295 or int(remote_port_text) < 0 or int(remote_port_text) > 65535:
+			return unknown
+		saw_tcp = true
+		## Windows localizes the state column, but listeners keep a wildcard foreign port.
+		if fields[2].ends_with(":0"):
+			_record_windows_listener(listeners, port, pid)
+	return {"known": true, "listeners": listeners} if saw_tcp else unknown
+
+
+static func windows_snapshot_from_powershell(exit_code: int, output: Array) -> Dictionary:
+	var unknown := {"known": false, "listeners": {}}
+	if exit_code != 0 or output.is_empty():
+		return unknown
+	var parsed: Variant = JSON.parse_string(str(output[0]))
+	if not (parsed is Dictionary) or not (parsed.get("listeners") is Array):
+		return unknown
+	var listeners := {}
+	for row in parsed.listeners:
+		if not (row is Dictionary):
+			return unknown
+		var port: Variant = row.get("LocalPort")
+		var pid: Variant = row.get("OwningProcess")
+		if not (port is int or port is float) or not is_finite(float(port)) or float(port) != floor(float(port)) or port < 1 or port > 65535:
+			return unknown
+		if not (pid is int or pid is float) or not is_finite(float(pid)) or float(pid) != floor(float(pid)) or pid < 0 or pid > 4294967295:
+			return unknown
+		_record_windows_listener(listeners, int(port), int(pid))
+	return {"known": true, "listeners": listeners}
+
+
+static func _record_windows_listener(listeners: Dictionary, port: int, pid: int) -> void:
+	if not listeners.has(port):
+		listeners[port] = []
+	## PID 0 still occupies the port, but cannot identify a process we may stop.
+	if pid > 0 and not listeners[port].has(pid):
+		listeners[port].append(pid)
+
+
 ## Return the PID currently listening on the given TCP port, or 0 if
-## the port is free. Thin convenience wrapper around `find_all_pids_on_port`
+## no positive listener PID could be observed. Thin wrapper around `find_all_pids_on_port`
 ## — the per-OS scraping logic lives in one place.
 static func find_pid_on_port(port: int, trace: Callable = Callable()) -> int:
 	var pids := find_all_pids_on_port(port, trace)
@@ -119,28 +181,14 @@ static func find_pid_on_port(port: int, trace: Callable = Callable()) -> int:
 ## can keep its cold-start trace accurate. The Windows path may fall
 ## through netstat → PowerShell, and a wrapping caller can't see which
 ## scraper actually ran without the hook.
-static func find_all_pids_on_port(port: int, trace: Callable = Callable()) -> Array[int]:
+static func find_all_pids_on_port(port: int, trace: Callable = Callable(), snapshot: Dictionary = {}) -> Array[int]:
 	if OS.get_name() == "Windows":
-		var output: Array = []
-		_trace(trace, "netstat")
-		var exit_code := OS.execute("netstat", ["-ano"], output, true)
-		if exit_code == 0 and not output.is_empty():
-			var stdout := str(output[0])
-			var netstat_pids := parse_windows_netstat_pids(stdout, port)
-			if not netstat_pids.is_empty():
-				return netstat_pids
-			## An empty per-port parse from a healthy dump IS the answer
-			## ("no listener"). Confirming it through the PowerShell probe
-			## costs a powershell.exe spawn (~1.2s measured) against ~30ms
-			## for the netstat scrape — two such confirmations dominated a
-			## ~7s Windows startup walk. Only fall through when the dump
-			## itself is unusable (netstat absent, or so format-odd that
-			## zero TCP rows parse).
-			if windows_netstat_dump_parseable(stdout):
-				var no_listeners: Array[int] = []
-				return no_listeners
-		_trace(trace, "powershell")
-		return find_listener_pids_windows(port)
+		if snapshot.is_empty():
+			snapshot = windows_listener_snapshot(trace)
+		var pids: Array[int] = []
+		if snapshot.known:
+			pids.assign(snapshot.listeners.get(port, []))
+		return pids
 	var output: Array = []
 	_trace(trace, "lsof")
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
@@ -162,17 +210,6 @@ static func find_all_pids_on_port(port: int, trace: Callable = Callable()) -> Ar
 static func _trace(trace: Callable, counter: String) -> void:
 	if trace.is_valid():
 		trace.call(counter)
-
-
-static func find_listener_pids_windows(port: int) -> Array[int]:
-	var script := (
-		"Get-NetTCPConnection -LocalPort %d -State Listen "
-		+ "-ErrorAction SilentlyContinue | "
-		+ "Select-Object -ExpandProperty OwningProcess"
-	) % port
-	var output: Array = []
-	var exit_code := execute_windows_powershell(script, output)
-	return windows_listener_pids_from_execute_result(exit_code, output)
 
 
 static func execute_windows_powershell(script: String, output: Array) -> int:
@@ -203,17 +240,6 @@ static func windows_powershell_candidates() -> Array[String]:
 	candidates.append("powershell.exe")
 	candidates.append("pwsh.exe")
 	return candidates
-
-
-static func windows_listener_pids_from_execute_result(exit_code: int, output: Array) -> Array[int]:
-	var empty: Array[int] = []
-	if exit_code == 0 and not output.is_empty():
-		return parse_pid_lines(str(output[0]))
-	return empty
-
-
-static func windows_listener_execute_result_in_use(exit_code: int, output: Array) -> bool:
-	return not windows_listener_pids_from_execute_result(exit_code, output).is_empty()
 
 
 ## Pure parser for `lsof -ti` output — newline-separated decimal PIDs.
@@ -257,7 +283,7 @@ static func parse_pid_lines(raw: String) -> Array[int]:
 
 
 ## Parse a Windows `netstat -ano` dump and return PIDs of rows whose
-## local address ends with `:port` AND state is `LISTENING`. Substring
+## local address ends with `:port` and foreign port is zero. Substring
 ## matching the whole dump is wrong: a remote address containing
 ## `:port` would false-positive against an unrelated ESTABLISHED row.
 static func parse_windows_netstat_pid(stdout: String, port: int) -> int:
@@ -266,54 +292,15 @@ static func parse_windows_netstat_pid(stdout: String, port: int) -> int:
 
 
 static func parse_windows_netstat_pids(stdout: String, port: int) -> Array[int]:
+	var snapshot := windows_snapshot_from_netstat(0, [stdout])
 	var pids: Array[int] = []
-	var port_suffix := ":%d" % port
-	for line in stdout.split("\n"):
-		var s := line.strip_edges()
-		if s.is_empty():
-			continue
-		var fields := split_on_whitespace(s)
-		if fields.size() < 5:  # proto, local, remote, state, pid
-			continue
-		## Locale-independent listener signal (mirrors script/_dev_env.py):
-		## the state column is localized ("LISTENING"/"ABHÖREN"/"ÉCOUTE"...),
-		## but a listener's FOREIGN address is always the wildcard ":0".
-		if not fields[2].ends_with(":0"):
-			continue
-		if not fields[1].ends_with(port_suffix):
-			continue
-		var pid_str := fields[fields.size() - 1]
-		if pid_str.is_valid_int():
-			var pid := int(pid_str)
-			if pid > 0 and not pids.has(pid):
-				pids.append(pid)
+	if snapshot.known:
+		pids.assign(snapshot.listeners.get(port, []))
 	return pids
 
 
-static func parse_windows_netstat_listening(stdout: String, port: int) -> bool:
-	return parse_windows_netstat_pid(stdout, port) > 0
-
-
-## True when `stdout` looks like a healthy `netstat -ano` dump: at least
-## one row parses as a TCP connection (proto column literally "TCP", an
-## address containing ":", an integer PID in the last column). Locale-
-## independent — protocol names are never localized, unlike the state
-## column. Gates whether an empty per-port parse can be trusted as "no
-## listener": a live Windows host always carries TCP rows (svchost/RPC
-## listen on 135 at minimum), so a dump with zero parseable rows means
-## netstat itself is absent/broken and the PowerShell fallback must run.
 static func windows_netstat_dump_parseable(stdout: String) -> bool:
-	for line in stdout.split("\n"):
-		var fields := split_on_whitespace(line.strip_edges())
-		if fields.size() < 5:
-			continue
-		if fields[0].to_upper() != "TCP":
-			continue
-		if fields[1].find(":") < 0:
-			continue
-		if fields[fields.size() - 1].is_valid_int():
-			return true
-	return false
+	return bool(windows_snapshot_from_netstat(0, [stdout]).known)
 
 
 ## `String.split(" ", false)` only splits on single spaces; netstat
@@ -727,13 +714,17 @@ static func kill_exact_processes(
 
 ## Poll until the given port is no longer bound, or the timeout elapses.
 ## Used after `OS.kill` so we don't race the port-in-use check on rebind.
-static func wait_for_port_free(port: int, timeout_s: float) -> void:
+static func wait_for_port_free(port: int, timeout_s: float) -> PortOccupancy:
 	var deadline := Time.get_ticks_msec() + int(timeout_s * 1000.0)
-	while is_port_in_use(port):
+	while true:
+		var occupancy := windows_port_occupancy(port) if OS.get_name() == "Windows" else (PortOccupancy.OCCUPIED if is_port_in_use(port) else PortOccupancy.FREE)
+		if occupancy != PortOccupancy.OCCUPIED:
+			return occupancy
 		if Time.get_ticks_msec() >= deadline:
 			push_warning("MCP | port %d still in use after %.1fs — proceeding anyway" % [port, timeout_s])
-			return
+			return occupancy
 		OS.delay_msec(100)
+	return PortOccupancy.UNKNOWN
 
 
 ## Choose a non-Windows-reserved WS port. Returns `configured` when free;

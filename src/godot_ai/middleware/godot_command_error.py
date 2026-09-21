@@ -17,9 +17,9 @@ class GodotCommandErrorToolResult(ToolResult):
     def to_mcp_result(self) -> CallToolResult:
         return CallToolResult(
             content=self.content,
-            structuredContent=self.structured_content,
-            isError=True,
-            _meta=self.meta,  # type: ignore[call-arg]  # Pydantic alias for meta
+            structured_content=self.structured_content,
+            is_error=True,
+            meta=self.meta,
         )
 
 

@@ -2032,12 +2032,12 @@ func test_port_picker_seeds_only_the_contested_port() -> void:
 	var http := McpClientConfigurator.http_port()
 	var ws := McpClientConfigurator.ws_port()
 	panel.port_in_use_probe = func(port: int) -> bool: return port == ws
-	panel.seed_suggested_ports(0)
+	panel.seed_suggested_ports(0, {"known": true, "listeners": {ws: [42]}})
 	assert_eq(int(panel._spinbox.value), http, "a free HTTP port keeps its value")
 	assert_true(int(panel._ws_spinbox.value) != ws, "a held WebSocket port gets a suggestion")
 	assert_true(int(panel._ws_spinbox.value) != int(panel._spinbox.value))
 	panel.port_in_use_probe = func(_port: int) -> bool: return false
-	panel.seed_suggested_ports(http)
+	panel.seed_suggested_ports(http, {"known": true, "listeners": {}})
 	assert_true(int(panel._spinbox.value) != http, "the diagnosed conflict port moves")
 	assert_eq(int(panel._ws_spinbox.value), ws, "a free WebSocket port keeps its value")
 	panel.free()
@@ -2717,4 +2717,84 @@ func test_unsupported_remote_access_heading_does_not_claim_server_exited() -> vo
 	assert_true(dock._crash_reload_btn.visible)
 	assert_eq(dock._status_label.text, "Unsupported remote access configuration")
 	assert_eq(dock._status_icon.color, Color.RED)
+	dock.free()
+
+
+func test_endpoint_loss_status_distinguishes_pending_exhausted_and_connected() -> void:
+	var dock := McpDockScript.new()
+	dock._build_ui()
+	dock._startup_grace_until_msec = 0
+	dock._post_update_server_pending = false
+	var manager := McpServerLifecycleManager.new()
+	manager.configure({"automatic_effects": false})
+	manager.start_server()
+	manager._episode["state"] = McpServerLifecycleManager.READY
+	manager._endpoint_recovery_attempts = McpServerLifecycleManager.ENDPOINT_RECOVERY_DELAYS_SECONDS.size() - 1
+	manager.snapshot_changed.connect(dock.present_lifecycle_snapshot)
+	dock.present_transport_snapshot({"connected": false, "status": {"phase": "blocked"}})
+	manager.transport_lost("Only the editor socket closed.")
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Connection lost; reconnecting...")
+	assert_eq(dock._status_icon.color, McpDockScript.COLOR_AMBER)
+	assert_contains(dock._crash_output.get_parsed_text(), "Only the editor socket closed.")
+	assert_true(manager.recover_lost_endpoint(int(manager.get_status_dict().episode_id)))
+	manager._episode["state"] = McpServerLifecycleManager.READY
+	manager.transport_lost("Only the editor socket closed again.")
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Connection lost")
+	assert_eq(dock._status_icon.color, Color.RED)
+	assert_contains(dock._crash_output.get_parsed_text(), "gave up after 5 attempts")
+	dock.present_lifecycle_snapshot({"state": McpServerState.READY})
+	dock.present_transport_snapshot({"connected": true, "status": {"phase": "connected"}})
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Server connected")
+	assert_eq(dock._status_icon.color, Color.GREEN)
+	assert_false(dock._crash_panel.visible)
+	dock.free()
+
+
+func test_observed_process_exit_retains_elapsed_diagnostic() -> void:
+	var dock := McpDockScript.new()
+	dock._build_ui()
+	dock.present_lifecycle_snapshot({
+		"state": McpServerState.CRASHED, "reason": "launch_gone", "exit_ms": 1234,
+		"message": "The server process exited.",
+	})
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Server exited after 1.2s")
+	assert_eq(dock._status_icon.color, Color.RED)
+	assert_eq(dock._crash_output.get_parsed_text(), "The server process exited.")
+	dock.free()
+
+
+func test_unknown_port_discovery_keeps_picker_values_and_explains_failure() -> void:
+	if OS.get_name() != "Windows":
+		skip("Windows occupancy query failure")
+		return
+	var panel := PortPickerPanelScript.new()
+	panel.setup()
+	panel.port_in_use_probe = func(_port: int) -> bool: return true
+	var http := McpClientConfigurator.http_port()
+	var ws := McpClientConfigurator.ws_port()
+	panel.seed_suggested_ports(http, {"known": false, "listeners": {}})
+	assert_eq(int(panel._spinbox.value), http)
+	assert_eq(int(panel._ws_spinbox.value), ws)
+	assert_contains(panel._spinbox.tooltip_text, "unavailable")
+	assert_contains(panel._ws_spinbox.tooltip_text, "unavailable")
+	panel.free()
+
+
+func test_unknown_port_discovery_names_the_failure_in_status_and_panel() -> void:
+	var dock := McpDockScript.new()
+	dock._build_ui()
+	dock.present_lifecycle_snapshot({
+		"state": McpServerState.FOREIGN_PORT,
+		"episode_reason": "port_occupancy_unknown",
+		"message": "Windows could not query listening ports; retry when port discovery is available.",
+	})
+	dock._update_status()
+	assert_eq(dock._status_label.text, "Windows port discovery unavailable")
+	assert_true(dock._port_picker_panel.visible)
+	assert_contains(dock._crash_output.get_parsed_text(), "Windows could not query listening ports")
+	assert_false(dock._crash_output.get_parsed_text().contains("occupied by another process"))
 	dock.free()

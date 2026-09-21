@@ -978,3 +978,39 @@ func test_unsupported_restart_clears_prior_authority_before_refusal() -> void:
 	assert_true(manager.is_connection_blocked())
 	assert_eq(manager.get_status_dict().state, McpServerState.UNSUPPORTED_CONFIG)
 	assert_true(effects.is_empty(), "unsupported restart must not probe or spawn")
+
+
+func test_endpoint_recovery_snapshot_is_coherent_at_publication() -> void:
+	var manager := _manager()
+	_complete_adoption(manager)
+	manager._endpoint_recovery_attempts = Lifecycle.ENDPOINT_RECOVERY_DELAYS_SECONDS.size() - 1
+	var snapshots: Array[Dictionary] = []
+	manager.snapshot_changed.connect(func(snapshot: Dictionary): snapshots.append(snapshot))
+	manager.transport_lost("socket closed")
+	assert_eq(snapshots.size(), 1)
+	assert_eq(snapshots[0].reason, "endpoint_lost")
+	assert_true(snapshots[0].recovery_pending, "the final scheduled retry is still pending")
+	assert_eq(int(snapshots[0].recovery_attempt), 5)
+	assert_true(manager.recover_lost_endpoint(int(snapshots[0].episode_id)))
+	assert_false(manager.get_status_dict().recovery_pending)
+	assert_true(manager.complete_effect(manager.episode_snapshot().id, Lifecycle.PROBE, {
+		"outcome": "compatible", "version": VERSION, "transport": _transport(),
+	}))
+	assert_eq(manager.get_status_dict().reason, "")
+	snapshots.clear()
+	manager.transport_lost("socket closed again")
+	assert_eq(snapshots.size(), 1)
+	assert_eq(snapshots[0].reason, "endpoint_lost")
+	assert_false(snapshots[0].recovery_pending, "exhaustion must not advertise a sixth retry")
+	assert_false(manager.recover_lost_endpoint(int(snapshots[0].episode_id)))
+
+
+func test_superseded_endpoint_recovery_snapshot_is_not_pending() -> void:
+	var manager := _manager()
+	_complete_adoption(manager)
+	manager.transport_lost("socket closed")
+	var old_episode := int(manager.get_status_dict().episode_id)
+	manager.detach_server()
+	assert_false(manager.get_status_dict().recovery_pending)
+	assert_false(manager.recover_lost_endpoint(old_episode))
+	assert_eq(manager.get_status_dict().episode_state, Lifecycle.DORMANT)

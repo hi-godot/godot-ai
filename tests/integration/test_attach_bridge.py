@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
@@ -21,7 +21,7 @@ from fastmcp.client.transports import StdioTransport
 from godot_ai import __version__
 from godot_ai.attach.ensure import BackendStatus, probe_backend
 from godot_ai.attach.lease import LeaseClient
-from godot_ai.attach.proxy import create_attach_proxy
+from godot_ai.attach.proxy import _http_client_factory, create_attach_proxy
 from godot_ai.orphan_reaper import (
     BOOT_GRACE_ENV,
     IDLE_GRACE_ENV,
@@ -298,6 +298,61 @@ async def test_cold_start_discovers_tools_and_explains_how_to_open_editor(
             await _wait_port_closed(http_port)
     if failure is not None:
         raise failure.with_traceback(failure.__traceback__)
+
+
+@pytest.mark.parametrize("status", [307, 308])
+async def test_downstream_redirect_never_replays_or_forwards_capability(status: int) -> None:
+    requests: list[bytes] = []
+    handlers: set[asyncio.Task] = set()
+
+    async def redirect(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.current_task()
+        handlers.add(task)
+        try:
+            request = await reader.readuntil(b"\r\n\r\n")
+            requests.append(request)
+            length = next(
+                int(line.split(b":", 1)[1])
+                for line in request.split(b"\r\n")
+                if line.lower().startswith(b"content-length:")
+            )
+            await reader.readexactly(length)
+            writer.write(
+                (
+                    f"HTTP/1.1 {status} Redirect\r\n"
+                    "Location: /second-dispatch\r\nContent-Length: 0\r\n"
+                    "Connection: close\r\n\r\n"
+                ).encode()
+            )
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            handlers.discard(task)
+
+    server = await asyncio.start_server(redirect, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        async with server, _http_client_factory(lambda: "c" * 32, follow_redirects=True) as client:
+            response = await client.post(
+                f"http://127.0.0.1:{port}/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "mutation", "arguments": {}},
+                },
+            )
+            assert response.status_code == status
+            assert response.headers["location"] == "/second-dispatch"
+            assert not response.history
+    finally:
+        if handlers:
+            await asyncio.gather(*handlers)
+    assert len(requests) == 1
+    assert requests[0].startswith(b"POST /mcp ")
+    assert b"Authorization: Bearer " + b"c" * 32 in requests[0]
+    assert all(b"/second-dispatch" not in request for request in requests)
 
 
 async def test_slow_downstream_tool_has_no_bridge_read_deadline(tmp_path: Path) -> None:

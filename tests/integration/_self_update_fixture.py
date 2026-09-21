@@ -628,23 +628,28 @@ class AttachedAgent:
         last_receipt_error = ""
         nonce_mismatch_seen = False
         while True:
-            pre_receipt = self.project_dir / PRE_INSTANCE_ID_FILE
-            capability = read_capabilities(self.http_port, capability_dir)
-            try:
-                expected_nonce = pre_receipt.read_text(encoding="utf-8").strip()
-            except (FileNotFoundError, PermissionError) as exc:
-                expected_nonce = ""
-                last_receipt_error = f"{type(exc).__name__} (errno={exc.errno})"
-            if capability is not None and expected_nonce == capability.instance_nonce:
-                break
-            if capability is not None and expected_nonce:
-                nonce_mismatch_seen = True
-            if self._stop.is_set() or time.monotonic() > deadline:
+            if self._stop.is_set() or time.monotonic() >= deadline:
                 detail = (f"; last pre-instance receipt read: {last_receipt_error}"
                           if last_receipt_error else "")
                 if nonce_mismatch_seen:
                     detail += "; capability seen but pre-instance nonce mismatched"
                 raise AssertionError("server A never published matching capabilities" + detail)
+            pre_receipt = self.project_dir / PRE_INSTANCE_ID_FILE
+            capability = read_capabilities(self.http_port, capability_dir)
+            if self._stop.is_set() or time.monotonic() >= deadline:
+                continue
+            try:
+                expected_nonce = pre_receipt.read_text(encoding="utf-8").strip()
+            except (FileNotFoundError, PermissionError) as exc:
+                expected_nonce = ""
+                last_receipt_error = f"{type(exc).__name__} (errno={exc.errno})"
+            if (capability is not None and expected_nonce
+                    and expected_nonce != capability.instance_nonce):
+                nonce_mismatch_seen = True
+            if self._stop.is_set() or time.monotonic() >= deadline:
+                continue
+            if capability is not None and expected_nonce == capability.instance_nonce:
+                break
             await asyncio.sleep(0.25)
         transport = StdioTransport(
             command=sys.executable,
