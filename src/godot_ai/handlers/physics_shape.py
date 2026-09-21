@@ -20,7 +20,11 @@ async def physics_shape_generate(
     reparent_mesh: bool = False,
     scene_file: str = "",
 ) -> dict:
-    """Generate sibling physics bodies and shapes for 3D meshes."""
+    """Generate sibling physics bodies and shapes for 3D meshes.
+
+    ``reparent_mesh`` is forwarded only when True; the plugin defaults it on for
+    the dynamic ``rigid``/``character`` body types, which must own their visual.
+    """
     await require_writable_async(runtime)
     params: dict = {
         "paths": paths,

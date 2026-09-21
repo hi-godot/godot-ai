@@ -63,12 +63,15 @@ Ops:
         duplicate path, or a scene-root mesh is refused before anything is
         written. shape_type: box | sphere | capsule | cylinder | convex |
         trimesh (or the class name). convex/trimesh derive the shape from the
-        mesh's own triangles, with the mesh scale baked into the shape;
-        trimesh needs a static or area body, and a non-uniformly scaled parent
-        chain refuses every type except box. body_type: static | area | rigid
-        | character. reparent_mesh=True moves the mesh under the generated
-        body (Body → [MeshInstance3D, CollisionShape3D]) while preserving its
-        world transform; the reported mesh_path is then the post-move path.
+        mesh's own triangles, with the mesh scale baked into the shape, and are
+        limited to 10000 triangles per mesh (the hull build runs synchronously
+        inside one editor-frame item); trimesh needs a static or area body, and
+        a non-uniformly scaled parent chain refuses every type except box.
+        body_type: static | area | rigid | character. rigid/character always
+        wrap the mesh under the generated body (a detached dynamic body would
+        fall away from the stationary visual); reparent_mesh=True does the same
+        for static/area while preserving the mesh's world transform, and the
+        reported mesh_path is then the post-move path.
         scene_file pins the request to that edited scene. Up to 1024 paths are
         processed in bounded work across editor frames; inside batch_execute
         at most 16. The bulk write is one undo action.

@@ -55,6 +55,9 @@ const _GENERATED_BODY_CLASSES := {
 ## A ConcavePolygonShape3D only simulates on a static body or an area; a
 ## moving body needs a convex or primitive shape.
 const _GENERATE_CONCAVE_BODIES := ["static", "area"]
+## Dynamic bodies move, so they must own the visual: as a sibling collider the
+## body falls or slides away from the stationary mesh (issue #1053 review).
+const _GENERATE_DYNAMIC_BODIES := ["rigid", "character"]
 const _GENERATE_DIRECT_MAX_PATHS := 16
 const _GENERATE_MAX_PATHS := 1024
 ## One deferred request may spend this long across editor frames. The Python
@@ -71,6 +74,14 @@ const _GENERATE_SCALE_EPSILON := 0.0001
 ## centered CapsuleMesh reports a ~1.2e-07 Y center). Components below this
 ## snap to zero so generated transforms stay clean.
 const _GENERATE_SNAP_EPSILON := 0.000001
+## Hull/concave generation runs synchronously inside one item: the frame budget
+## is only checked between items, and one `create_convex_shape()` plus the
+## vertex loops in `_fit_mesh_shape` cannot be split. Measured on Godot 4.7.2
+## (Windows, headless): a 10k-triangle mesh costs ~4.9 ms to extract faces plus
+## ~7.9 ms convex / ~11.6 ms trimesh, about one 60 Hz frame; 50k triangles
+## already reach ~28 ms plus ~99 ms trimesh. The cap bounds a single item's
+## synchronous work there; larger meshes are refused with their triangle count.
+const _GENERATE_HULL_MAX_TRIANGLES := 10000
 
 
 ## Accept either the short form ("box") or the matching Godot class name
@@ -147,7 +158,25 @@ static func _validate_generate_request(params: Dictionary) -> Dictionary:
 				+ "simulates on a StaticBody3D or Area3D; use shape_type 'convex' or a primitive"
 			) % body_type
 		)
-	var reparent_mesh := bool(params.get("reparent_mesh", false))
+	## A dynamic body must own its visual mesh. Default the wrap on for
+	## rigid/character and refuse an explicit opt-out: a detached dynamic body
+	## moves away from the stationary mesh. static/area keep the published
+	## sibling default (`false`).
+	var dynamic_body := _GENERATE_DYNAMIC_BODIES.has(body_type)
+	var reparent_mesh := dynamic_body
+	if params.has("reparent_mesh"):
+		if not params["reparent_mesh"] is bool:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "reparent_mesh must be a boolean")
+		reparent_mesh = params["reparent_mesh"]
+		if dynamic_body and not reparent_mesh:
+			return ErrorCodes.make(
+				ErrorCodes.VALUE_OUT_OF_RANGE,
+				(
+					"body_type '%s' must own its visual mesh — a detached dynamic body "
+					+ "moves away from the stationary mesh. Pass reparent_mesh=true, or use "
+					+ "body_type 'static' or 'area' for a sibling collider"
+				) % body_type
+			)
 
 	var raw_paths: Variant = params.get("paths", [])
 	if not raw_paths is Array:
@@ -227,12 +256,26 @@ static func _plan_generate_mesh(
 		)
 	## Hull and concave shapes are derived from the mesh's triangles, so a
 	## faceless mesh (PointMesh, an empty ArrayMesh) fails the whole request
-	## here instead of returning a null shape from the engine mid-batch.
-	if (shape_type == "convex" or shape_type == "trimesh") and mesh.mesh.get_faces().is_empty():
-		return ErrorCodes.make(
-			ErrorCodes.VALUE_OUT_OF_RANGE,
-			"MeshInstance3D at %s has a mesh with no faces — a %s shape needs triangles" % [mesh_path, shape_type]
-		)
+	## here instead of returning a null shape from the engine mid-batch. The
+	## same pass measures the triangle count: one hull build and its vertex
+	## loops run synchronously inside a single item, so an oversized mesh is
+	## refused before that work starts.
+	if shape_type == "convex" or shape_type == "trimesh":
+		var faces := mesh.mesh.get_faces()
+		if faces.is_empty():
+			return ErrorCodes.make(
+				ErrorCodes.VALUE_OUT_OF_RANGE,
+				"MeshInstance3D at %s has a mesh with no faces — a %s shape needs triangles" % [mesh_path, shape_type]
+			)
+		var triangle_count := faces.size() / 3
+		if triangle_count > _GENERATE_HULL_MAX_TRIANGLES:
+			return ErrorCodes.make(
+				ErrorCodes.VALUE_OUT_OF_RANGE,
+				(
+					"MeshInstance3D at %s has %d triangles; %s shape generation is limited to "
+					+ "%d triangles per mesh because the hull is built synchronously on the editor frame"
+				) % [mesh_path, triangle_count, shape_type, _GENERATE_HULL_MAX_TRIANGLES]
+			)
 	var collider_name := mesh.name + _GENERATE_COLLIDER_SUFFIX
 	var existing := parent.get_node_or_null(NodePath(collider_name))
 	if existing != null:
@@ -435,7 +478,13 @@ static func _applied_stale_reason(created_nodes: Array[Dictionary]) -> String:
 		if not is_instance_valid(mesh) or not mesh.is_inside_tree():
 			return "%s was removed" % str(entry.mesh_path)
 		var parent = entry.parent
-		if not is_instance_valid(parent) or mesh.get_parent() != parent:
+		if not is_instance_valid(parent):
+			return "%s was reparented" % str(entry.mesh_path)
+		## A wrapped mesh is expected under the generated body, not under the
+		## parent captured at plan time. Keep the conditional untyped: a typed
+		## assignment raises on a freed body before the validity check.
+		var mesh_parent = entry.body if bool(entry.get("reparent_mesh", false)) else parent
+		if not is_instance_valid(mesh_parent) or mesh.get_parent() != mesh_parent:
 			return "%s was reparented" % str(entry.mesh_path)
 		var body = entry.body
 		if not is_instance_valid(body) or not body.is_inside_tree():

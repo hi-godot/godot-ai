@@ -26,15 +26,21 @@ Regression coverage exercises the real driver through partial creation and synch
   any mutation. `trimesh` is refused for `rigid` and `character` bodies — a
   concave shape only simulates on a static body or an area — and both hull
   types are refused under a non-uniformly scaled parent chain, like the round
-  primitives.
+  primitives. Hull/concave work runs synchronously inside one item, so the
+  triangle count is measured during planning: a mesh above 10,000 triangles is
+  refused with its count (a 10k-triangle mesh measured about one 60 Hz frame
+  on Godot 4.7.2).
 - `body_type`: `static | area | rigid | character`.
-- `reparent_mesh` (default `false`): when true the mesh moves under the
-  generated body — `Body → [MeshInstance3D, CollisionShape3D]` — with its world
-  transform preserved, so moving the body moves the visual. Undo restores the
-  mesh's original parent, sibling index, transform and owner, and a failed
-  batch restores any mesh it had already wrapped. `top_level` meshes are
-  refused because their transform ignores the parent chain. In this mode the
-  response's `mesh_path` is the post-move path
+- `reparent_mesh` (default `false`; `rigid`/`character` default to `true`):
+  when true the mesh moves under the generated body —
+  `Body → [MeshInstance3D, CollisionShape3D]` — with its world transform
+  preserved, so moving the body moves the visual. Dynamic bodies must own
+  their visual: an explicit `reparent_mesh=false` with `rigid`/`character` is
+  refused because a detached dynamic body falls or slides away from the
+  stationary mesh. Undo restores the mesh's original parent, sibling index,
+  transform and owner, and a failed batch restores any mesh it had already
+  wrapped. `top_level` meshes are refused because their transform ignores the
+  parent chain. In this mode the response's `mesh_path` is the post-move path
   (`/Parent/<Mesh>Collider/<Mesh>`).
 
 Small generated collision offsets below `1e-6` snap to zero, so a centered

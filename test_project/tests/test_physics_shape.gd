@@ -646,6 +646,28 @@ func _points_aabb(points: PackedVector3Array) -> AABB:
 	return aabb
 
 
+## A wavy triangle-grid ArrayMesh with exactly `triangles` faces, for the hull
+## triangle-bound regression. Preallocated and generated in one pass so an
+## over-cap mesh stays cheap to build.
+func _grid_mesh(triangles: int) -> ArrayMesh:
+	var vertices := PackedVector3Array()
+	vertices.resize(triangles * 3)
+	var index := 0
+	for i in triangles:
+		var x := float(i % 200)
+		var y := float(i / 200)
+		vertices[index] = Vector3(x, sin(x * 0.5) * cos(y * 0.5) * 0.5, y)
+		vertices[index + 1] = Vector3(x + 1.0, sin((x + 1.0) * 0.5) * cos(y * 0.5) * 0.5, y)
+		vertices[index + 2] = Vector3(x, sin(x * 0.5) * cos((y + 1.0) * 0.5) * 0.5, y + 1.0)
+		index += 3
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
 ## Signed volume of a triangle soup: one winding gives a positive result, its
 ## mirror a negative one. Comparing two generations of the same mesh avoids
 ## hard-coding Godot's winding convention in the assertion.
@@ -890,6 +912,9 @@ func test_generate_degenerate_hull_frees_detached_nodes() -> void:
 
 
 func test_generate_supports_rigid_and_character_bodies() -> void:
+	## A dynamic body must own its visual: the default wraps the mesh under the
+	## generated body, so the physics step that moves the body carries the mesh
+	## (a detached sibling body falls away from the stationary visual).
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		skip("No scene root")
@@ -899,6 +924,7 @@ func test_generate_supports_rigid_and_character_bodies() -> void:
 		var mesh := _add_generate_mesh("GenerateBody%s" % body_type.capitalize(), Vector3(2, 1, 3))
 		mesh.rotation_degrees = Vector3(0, 30, 0)
 		mesh.position = Vector3(1, 2, 3)
+		var world_before := mesh.global_transform
 		var result := _handler.generate({
 			"paths": [McpScenePath.from_node(mesh, scene_root)],
 			"body_type": body_type,
@@ -907,13 +933,60 @@ func test_generate_supports_rigid_and_character_bodies() -> void:
 		assert_eq(result.data.created[0].body_type, body_type)
 		var nodes := _generated_nodes(result, scene_root)
 		assert_eq(nodes.body.get_class(), cases[body_type])
-		assert_eq(nodes.body.transform.origin, mesh.transform.origin)
+		assert_eq(mesh.get_parent(), nodes.body, "a dynamic body must wrap its mesh by default")
+		assert_true(
+			mesh.global_transform.is_equal_approx(world_before),
+			"wrapping must preserve the mesh's world transform"
+		)
 		assert_true(
 			nodes.body.transform.basis.get_scale().is_equal_approx(Vector3.ONE),
 			"the generated body must not copy mesh scale"
 		)
+		## Move the body the way a physics step would: the visual must follow.
+		nodes.body.global_position += Vector3(0, -2.75, 0)
+		assert_true(
+			mesh.global_transform.origin.is_equal_approx(world_before.origin + Vector3(0, -2.75, 0)),
+			"body motion must carry the wrapped mesh"
+		)
+		assert_true(editor_undo(_undo_redo), "undo should succeed")
+		assert_true(
+			mesh.global_transform.is_equal_approx(world_before),
+			"undo must restore the unwrapped layout"
+		)
+		assert_true(mesh.get_parent() != nodes.body)
 		_remove_node(nodes.body)
 		_remove_node(mesh)
+
+
+func test_generate_rejects_detached_dynamic_bodies() -> void:
+	## An explicit reparent_mesh=false would leave a rigid/character body to
+	## fall away from the stationary mesh; static/area keep the published
+	## sibling default.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var mesh := _add_generate_mesh("GenerateDetachedDynamic", Vector3.ONE)
+	var path := McpScenePath.from_node(mesh, scene_root)
+	for body_type in ["rigid", "character"]:
+		var result := _handler.generate({
+			"paths": [path], "body_type": body_type, "reparent_mesh": false,
+		})
+		assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+		assert_contains(result.error.message, "own its visual mesh")
+		assert_true(_find_named_child(scene_root, "GenerateDetachedDynamicCollider") == null)
+	## A non-boolean flag is a type error, not a truthy coercion.
+	var bad_type := _handler.generate({"paths": [path], "reparent_mesh": "false"})
+	assert_is_error(bad_type, ErrorCodes.WRONG_TYPE)
+	assert_contains(bad_type.error.message, "reparent_mesh")
+	## static/area still default to a detached sibling collider.
+	var static_ok := _handler.generate({"paths": [path]})
+	assert_has_key(static_ok, "data")
+	var body := _find_named_child(scene_root, "GenerateDetachedDynamicCollider")
+	assert_true(body != null)
+	assert_eq(mesh.get_parent(), scene_root, "a static sibling must not wrap the mesh")
+	_remove_node(body)
+	_remove_node(mesh)
 
 
 func test_generate_rejects_trimesh_for_moving_bodies() -> void:
@@ -970,6 +1043,33 @@ func test_generate_faceless_mesh_fails_the_whole_batch() -> void:
 	assert_true(_find_named_child(scene_root, "GenerateBatchGoodCollider") == null)
 	_remove_node(good)
 	_remove_node(faceless)
+
+
+func test_generate_rejects_meshes_over_the_hull_triangle_bound() -> void:
+	## Hull/concave work runs synchronously inside one item, so the triangle
+	## count is measured during planning and an oversized mesh is refused
+	## before any hull build or vertex loop starts.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var cap: int = PhysicsShapeHandler._GENERATE_HULL_MAX_TRIANGLES
+	var over := _add_generate_mesh_with_mesh("GenerateHullOver", _grid_mesh(cap + 1))
+	var path := McpScenePath.from_node(over, scene_root)
+	for shape_type in ["convex", "trimesh"]:
+		var result := _handler.generate({"paths": [path], "shape_type": shape_type})
+		assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+		assert_contains(result.error.message, str(cap))
+		assert_true(_find_named_child(scene_root, "GenerateHullOverCollider") == null)
+	_remove_node(over)
+	## A mesh at the bound still generates.
+	var under := _add_generate_mesh_with_mesh("GenerateHullUnder", _grid_mesh(cap))
+	var ok := _handler.generate({
+		"paths": [McpScenePath.from_node(under, scene_root)], "shape_type": "convex",
+	})
+	assert_has_key(ok, "data", str(ok.get("error", {})))
+	_remove_node(_find_named_child(scene_root, "GenerateHullUnderCollider"))
+	_remove_node(under)
 
 
 func test_generate_rejects_reparent_for_top_level_mesh() -> void:
