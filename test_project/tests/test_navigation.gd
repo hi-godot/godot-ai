@@ -283,6 +283,7 @@ func test_bake_does_not_step_before_the_dispatcher_registers() -> void:
 	var region := _make_region("3d", "NavBakeOrdering") as NavigationRegion3D
 	assert_true(region != null, "fixture must exist")
 	_add_child_node(region, _make_box_mesh(Vector3(20, 1, 20)), "Floor")
+	var original_mesh: Resource = region.navigation_mesh
 	var connection := _RecordingConnection.new()
 	var handler := NavigationHandler.new(_undo_redo, connection)
 	var deferred := handler.bake({
@@ -297,6 +298,38 @@ func test_bake_does_not_step_before_the_dispatcher_registers() -> void:
 	)
 	assert_true(NavigationHandler._active_bakes.is_empty(),
 		"the null-tree driver must release the reservation")
+	assert_eq(region.navigation_mesh, original_mesh,
+		"a driver that cannot run must restore the pre-bake resource")
+	_remove_node(region)
+
+
+func test_bake_driver_with_a_freed_connection_restores_the_prebake_resource() -> void:
+	## Defensive branch: the driver may find its connection freed before it
+	## starts. `_begin_bake` has already installed the working duplicate and no
+	## undo action owns it yet, so the pre-bake resource must come back before
+	## the reservation is released. Driven directly because `bake`'s own null
+	## check refuses a freed connection before a job can be built.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var region := _make_region("3d", "NavBakeFreedConn") as NavigationRegion3D
+	assert_true(region != null, "fixture must exist")
+	_add_child_node(region, _make_box_mesh(Vector3(20, 1, 20)), "Floor")
+	var prepared := NavigationHandler._begin_bake(region, "3d")
+	assert_false(prepared.is_empty(), "bake setup must produce before/working resources")
+	var connection := _FreedConnection.new()
+	var job := NavigationHandler._bake_job(
+		region, "3d", scene_root, prepared.before, prepared.working,
+		_undo_redo, connection, "rid-freed-connection", false
+	)
+	NavigationHandler._active_bakes[region.get_instance_id()] = "rid-freed-connection"
+	connection.free()
+	NavigationHandler._drive_bake_job(job)
+	assert_eq(region.navigation_mesh, prepared.before,
+		"a driver with a freed connection must restore the pre-bake resource")
+	assert_true(NavigationHandler._active_bakes.is_empty(),
+		"the freed-connection driver must release the reservation")
 	_remove_node(region)
 
 
@@ -665,6 +698,14 @@ class _GoneConnection:
 
 	func _init() -> void:
 		dispatcher = _GoneDispatcher.new()
+
+
+## A connection freed before the driver started. `Node` (not RefCounted) so the
+## test can free it while the job still holds a reference to it.
+class _FreedConnection:
+	extends Node
+
+	var dispatcher = null
 
 
 class _RecordingDispatcher:

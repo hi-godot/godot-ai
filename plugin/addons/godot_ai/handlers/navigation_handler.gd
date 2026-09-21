@@ -372,10 +372,16 @@ static func _bake_restore(job: Dictionary) -> void:
 static func _drive_bake_job(job: Dictionary) -> void:
 	var connection = job.connection
 	if not is_instance_valid(connection):
+		## `_begin_bake` already replaced the region's resource with the working
+		## duplicate and no undo action owns it yet, so a driver that cannot run
+		## must put the pre-bake resource back (ownership-guarded) before
+		## releasing the region for another bake.
+		_bake_restore(job)
 		_release_bake(job)
 		return
 	var tree: SceneTree = connection.get_tree()
 	if tree == null:
+		_bake_restore(job)
 		_release_bake(job)
 		return
 	var work := ScriptWork.begin("navigation_bake")

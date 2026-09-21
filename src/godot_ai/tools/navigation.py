@@ -34,7 +34,7 @@ Ops:
         none — per-region write.
   • path_get(from_point, to_point, dimension="3d", optimize=True,
               navigation_layers=1, region_path="", force_sync=False)
-        Query a path between two world points ({x,y[,z]} or [x,y[,z]}).
+        Query a path between two world points ({x,y[,z]} or [x,y[,z]]).
         region_path selects the NavigationRegion3D/2D whose map to query;
         when omitted the edited scene root's world map is used — the op never
         guesses a scene's "first" region. Read-only: force_sync=False
