@@ -62,6 +62,12 @@ static func _configure_merged(
 	var launch_error := command_launch_error(client, launch)
 	if not launch_error.is_empty():
 		return {"status": "error", "message": launch_error}
+	## A matched `config_scope_globs` directory (omp named profiles) means the
+	## user scope may live elsewhere for the running client; writing the
+	## default tiers would false-succeed (#1085).
+	var scope_error := _scope_ambiguity_error(client)
+	if not scope_error.is_empty():
+		return {"status": "error", "message": scope_error}
 	var project := _load_project_definitions(client, server_name, project_roots)
 	if not project.get("ok", false):
 		return {"status": "error", "message": str(project.get("error", "Cannot inspect project config tiers"))}
@@ -80,11 +86,16 @@ static func _configure_merged(
 		var holder := _walk_path(config, select_server_key_path(config, client))
 		if holder is Dictionary and holder.has(server_name):
 			target_index = index
+			## First-definition-wins clients keep the earliest defining tier;
+			## later tiers are dead, so updating one of those changes nothing.
+			if _first_wins(client):
+				break
 	var tier: Dictionary = tiers[target_index]
 	var config: Dictionary = tier["data"]
 	var holder := _ensure_path(config, select_server_key_path(config, client))
 	var existing: Variant = holder.get(server_name, null)
 	holder[server_name] = build_entry(client, server_url, existing, launch)
+	_scrub_denylist(client, config, server_name)
 	var path := str(tier["path"])
 	# F5: refuse to re-serialize a tier whose parsed integers above 2^53 would
 	# lose precision. The same check guards the simple `configure` path.
@@ -156,6 +167,9 @@ static func _check_status_merged(
 	launch: Dictionary,
 	project_roots: PackedStringArray,
 ) -> Dictionary:
+	var scope_error := _scope_ambiguity_error(client)
+	if not scope_error.is_empty():
+		return {"status": McpClient.Status.ERROR, "error_msg": scope_error}
 	var allow_comments := _status_allows_comments(client)
 	var loaded := _load_merge_tiers(client, allow_comments)
 	if not loaded.get("ok", false):
@@ -166,25 +180,31 @@ static func _check_status_merged(
 		var holder := _walk_path(config, select_server_key_path(config, client))
 		if holder is Dictionary and holder.has(server_name):
 			effective = holder[server_name]
+			## First-definition-wins: the earliest defining tier is the one the
+			## client actually reads; stop instead of overwriting with a dead one.
+			if _first_wins(client):
+				break
 	var project := _load_project_definitions(client, server_name, project_roots, allow_comments)
 	if not project.get("ok", false):
 		return {"status": McpClient.Status.ERROR, "error_msg": str(project.get("error", "Cannot inspect project config tiers"))}
 	var project_tiers: Array = project.get("tiers", [])
 	if not project_tiers.is_empty():
-		# Last-definition-wins mirrors the global-tier fold above and how
-		# pi-codemode-mcp merges project tiers on disk. Earlier tiers are dead
-		# once a later one defines the same server, so an early-stale entry
-		# doesn't make Pi's effective config drift (codex-review finding F2).
-		# Pass `[latest]` to `_project_override_message` so the error names only
-		# the file the user actually has to edit.
-		var latest: Dictionary = project_tiers[project_tiers.size() - 1]
-		var details := _entry_status_details(client, latest["entry"], server_url, launch)
+		# The project tier that drives the client's effective config: the
+		# latest for last-wins clients (pi-codemode-mcp merges project tiers
+		# that way; earlier tiers are dead once a later one defines the same
+		# server — codex-review finding F2), the earliest for first-wins
+		# clients (omp reads `.omp/mcp.json` before `.omp/.mcp.json`). Pass
+		# `[effective_tier]` to `_project_override_message` so the error names
+		# only the file the user actually has to edit.
+		var effective_index := 0 if _first_wins(client) else project_tiers.size() - 1
+		var effective_tier: Dictionary = project_tiers[effective_index]
+		var details := _entry_status_details(client, effective_tier["entry"], server_url, launch)
 		if details.get("status") != McpClient.Status.CONFIGURED:
 			## Keep `owned` from the effective entry: the post-update migration
 			## decides from it whether this mismatch is ours to repin.
 			var mismatch := details.duplicate()
 			mismatch["status"] = McpClient.Status.CONFIGURED_MISMATCH
-			mismatch["error_msg"] = _project_override_message([latest], "update or remove", client.display_name, server_name)
+			mismatch["error_msg"] = _project_override_message([effective_tier], "update or remove", client.display_name, server_name)
 			return mismatch
 		return {"status": McpClient.Status.CONFIGURED, "error_msg": ""}
 	if effective == null:
@@ -247,6 +267,12 @@ static func remove(
 static func _remove_merged(
 	client: McpClient, server_name: String, project_roots: PackedStringArray
 ) -> Dictionary:
+	## Scope ambiguity (omp named profiles) blocks Remove too: clearing the
+	## default files while a profile reads its own would report a success the
+	## running client never observes (#1085).
+	var scope_error := _scope_ambiguity_error(client)
+	if not scope_error.is_empty():
+		return {"status": "error", "message": scope_error}
 	var project := _load_project_definitions(client, server_name, project_roots)
 	if not project.get("ok", false):
 		return {"status": "error", "message": str(project.get("error", "Cannot inspect project config tiers"))}
@@ -633,6 +659,46 @@ static func _uses_merge_tiers(client: McpClient) -> bool:
 	var templates = client.get("config_merge_path_templates")
 	return templates is Dictionary and not templates.is_empty()
 
+## True when the client resolves duplicate definitions first-wins (see
+## `McpClient.config_merge_first_wins`). Dynamic get keeps a mixed-snapshot
+## self-update parse-safe against an older McpClient base (#398/#736).
+static func _first_wins(client: McpClient) -> bool:
+	return bool(client.get("config_merge_first_wins"))
+
+
+## Fail-closed gate for clients whose user scope can be relocated by something
+## the editor cannot observe (omp named profiles). Any directory matching a
+## declared `config_scope_globs` template means the effective destination is
+## ambiguous; returns the actionable error, "" when the scope is unambiguous.
+static func _scope_ambiguity_error(client: McpClient) -> String:
+	var globs: Variant = client.get("config_scope_globs")
+	if not (globs is PackedStringArray):
+		return ""
+	var found := PackedStringArray()
+	for template in globs:
+		for candidate in McpPathTemplate.expand_path_candidates(String(template)):
+			if DirAccess.dir_exists_absolute(candidate) and not found.has(candidate):
+				found.append(candidate)
+	if found.is_empty():
+		return ""
+	return (
+		"%s named profiles found at %s. A named profile reads only its own agent config and the active profile is chosen per %s launch, so this editor cannot resolve the effective destination; edit the entry manually."
+		% [client.display_name, ", ".join(found), client.display_name]
+	)
+
+
+## Remove `server_name` from the denylist array of the config being written
+## (`McpClient.config_denylist_key`, omp `disabledServers`), so the freshly
+## configured entry cannot stay hidden by a stale override — the client's own
+## writer drops the conflicting denylist name the same way. Other names and
+## unknown shapes are preserved untouched.
+static func _scrub_denylist(client: McpClient, config: Dictionary, server_name: String) -> void:
+	var key: Variant = client.get("config_denylist_key")
+	if not (key is String) or String(key).is_empty():
+		return
+	var denylist: Variant = config.get(String(key), null)
+	if denylist is Array:
+		(denylist as Array).erase(server_name)
 
 ## Resolve the global config tiers in the client's documented merge order.
 static func _merge_paths(client: McpClient) -> PackedStringArray:
@@ -765,11 +831,12 @@ static func _write_transaction(writes: Array[Dictionary]) -> Dictionary:
 ## land on the file that actually drives Pi's effective config.
 ##
 ## Resolution order (codex round 3, F-3-4):
-##   1. Latest project tier containing the entry — F2 last-wins means the
-##      latest of `.pi/mcp.json` and `.mcp.json` wins (matches `_check_status_merged`).
-##   2. Latest global tier containing the entry — already iterated in
-##      merge order, last-iterated-wins (same loop pattern as
-##      `manual_target_details` lines 660-665).
+##   1. The project tier that wins the client's fold — the latest of
+##      `.pi/mcp.json` and `.mcp.json` for last-wins clients, the earliest
+##      for first-wins clients (matches `_check_status_merged`).
+##   2. The global tier that wins the client's fold — for last-wins clients
+##      the last-iterated match, for first-wins clients the first match
+##      (tiers arrive in the client's read order).
 ##   3. "" when no tier has the entry — caller decides what fallback
 ##      (`path_template`) to use.
 ##
@@ -789,24 +856,28 @@ static func authoritative_tier_path(
 		return ""
 	var project_tiers: Array = project.get("tiers", [])
 	if not project_tiers.is_empty():
-		# F2 last-wins: latest project tier is authoritative. When there are
-		# multiple project tiers, the user-visible status is driven by the
-		# latest, so the Open/Reveal buttons should send them there too.
-		var latest: Dictionary = project_tiers[project_tiers.size() - 1]
-		return str(latest.get("path", ""))
+		# The project tier that drives the user-visible status (F2: latest for
+		# last-wins clients, earliest for first-wins ones), so the Open/Reveal
+		# buttons send the user to the file they actually have to edit.
+		var effective_index := 0 if _first_wins(client) else project_tiers.size() - 1
+		var effective_tier: Dictionary = project_tiers[effective_index]
+		return str(effective_tier.get("path", ""))
 	var loaded := _load_merge_tiers(client, allow_comments)
 	if not bool(loaded.get("ok", false)):
 		return ""
 	var tiers: Array = loaded.get("tiers", [])
-	# Iterate in priority order, overwrite `selected_path` each time we
-	# find a tier containing the entry. With Pi's merge path order
-	# [mcp.json, .mcp.json] this leaves the higher-precedence `.mcp.json`.
+	# Iterate in the client's read order. Last-wins clients overwrite
+	# `selected_path` on every match (Pi's [mcp.json, .mcp.json] order then
+	# leaves the higher-precedence `.mcp.json`); first-wins clients stop at
+	# the first match, which is the file the client actually reads.
 	var selected_path: String = ""
 	for tier in tiers:
 		var data: Dictionary = tier.get("data", {})
 		var holder: Variant = _walk_path(data, select_server_key_path(data, client))
 		if holder is Dictionary and holder.has(server_name):
 			selected_path = str(tier.get("path", ""))
+			if _first_wins(client):
+				break
 	return selected_path
 
 
@@ -845,6 +916,10 @@ static func manual_target_details(
 			var holder := _walk_path(config, select_server_key_path(config, client))
 			if holder is Dictionary and holder.has(server_name):
 				selected = tier
+				## First-wins clients read the earliest defining tier; later
+				## matches are dead and must not redirect the manual flow.
+				if _first_wins(client):
+					break
 		if selected != null:
 			var config: Dictionary = selected["data"]
 			return {

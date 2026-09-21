@@ -141,6 +141,17 @@ Per-strategy command rendering (`CommandShape` docs in `_base.gd`):
   rollback on partial failure. Because project tiers are relative to Pi's own
   working directory, the dock identifies plausible overrides but fails closed
   with the exact path instead of mutating an inferred project root.
+  Oh My Pi keeps the *first* definition instead of the last
+  (`config_merge_first_wins`): its tiers are declared in omp's read order
+  — user `mcp.json` before `.mcp.json` — so Configure updates the file
+  that already owns the server, a fresh entry lands on the primary
+  `mcp.json`, and a compatibility entry's user state is never shadowed.
+  Because the active omp profile relocates the user scope per launch,
+  `config_scope_globs` (`~/.omp/profiles/*`) makes Configure and Remove
+  fail closed while any named profile exists, and Configure scrubs the
+  server name from omp's top-level `disabledServers` array
+  (`config_denylist_key`) so a stale override cannot keep the entry
+  hidden.
 
 - **DSH** — DeepSeek Harness (dsh) has no `mcp` CLI verb. MCP servers register
   as `@deepseek-ai/dsh-mcp-client` plugin entries in the HOME patch layer
@@ -377,24 +388,35 @@ shown by Configure.
 ### Oh My Pi
 
 Oh My Pi (`omp`) uses a typeless `command`/`args`/`env` entry under
-`mcpServers`. The default-profile destination is `~/.omp/agent/mcp.json`
-(`%USERPROFILE%/.omp/agent/mcp.json` on Windows).
+`mcpServers`. omp keeps the *first* definition of a duplicated server, so the
+tiers are declared in omp's read order and every fold is first-wins: the
+default-profile destination is `~/.omp/agent/mcp.json`
+(`%USERPROFILE%/.omp/agent/mcp.json` on Windows), read before
+`~/.omp/agent/.mcp.json`.
 
-This descriptor is **manual-only**: Configure and Remove return instructions
-without changing files. A new primary entry would shadow a same-named entry
-in `~/.omp/agent/.mcp.json` or root `mcp.json`/`.mcp.json`, potentially losing
-its `enabled`, `timeout`, `env`, or other user settings. Preserve those settings
-when moving an existing entry. Project `.omp/mcp.json` takes precedence over
-`.omp/.mcp.json`, followed by the active profile's user files; duplicate names
-are not merged.
+Configure updates the file that already owns the entry — a compatibility
+entry in `~/.omp/agent/.mcp.json` is edited in place with its `enabled`,
+`timeout` (including `0`, which disables it), and `env` preserved, instead of
+being shadowed by a new primary definition. A fresh entry is only created when
+no tier defines the server, and it lands on the primary `mcp.json` (omp itself
+never writes the compatibility files). Project `.omp/mcp.json` precedes
+`.omp/.mcp.json` and overrides the user files; duplicate names are not merged,
+so Configure fails closed with the exact project path instead of mutating an
+inferred project root. Configure also removes the server's name from a stale
+top-level `disabledServers` array in the file it writes, mirroring omp's own
+writer, so a configured entry cannot stay hidden.
 
-The displayed path and status describe the default profile. `PI_CONFIG_DIR`,
-`PI_CODING_AGENT_DIR`, `OMP_PROFILE`/`PI_PROFILE`, and `omp --profile` can select
-another destination. Confirm the active profile's file before applying the
-manual entry; Godot does not discover the running client's profile.
+The active profile is chosen per client launch (`omp --profile`,
+`OMP_PROFILE`/`PI_PROFILE`) and is not persisted where the editor can read it,
+and `~/.omp/profiles/<name>/agent/mcp.json` relocates the user scope entirely.
+While any named profile directory exists, Configure and Remove fail closed
+with the matched paths and the status row reports the ambiguity — the
+default-profile files describe only the default profile. `PI_CONFIG_DIR` and
+`PI_CODING_AGENT_DIR` can relocate the root as well; on those setups edit the
+entry manually.
 
 The suggested fresh entry sets `timeout: 300000` milliseconds because omp's
-30-second default can interrupt long Godot calls. Preserve an existing timeout
-(including `0`, which disables it) and disabled state. `OMP_MCP_TIMEOUT_MS` takes
-precedence over this per-server value. See the [upstream MCP configuration
+30-second default can interrupt long Godot calls; an existing timeout is
+preserved on reconfigure. `OMP_MCP_TIMEOUT_MS` takes precedence over this
+per-server value. See the [upstream MCP configuration
 guide](https://github.com/can1357/oh-my-pi/blob/main/docs/mcp-config.md).
