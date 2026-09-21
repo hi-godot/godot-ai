@@ -262,6 +262,11 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
+      - name: Client mutation queue regression
+        shell: bash
+        timeout-minutes: 3
+        run: GODOT_BIN=godot pytest -v -s tests/integration/test_client_mutation_queue.py
+
       - name: Windows ordinary-start client regression
         if: matrix.os == 'windows-latest'
         shell: bash
@@ -291,6 +296,7 @@ jobs:
             tests/integration/test_linux_listener_tools.py \
             tests/integration/test_self_update_status_driver.py \
             tests/integration/test_self_update_receipt.py \
+            tests/integration/test_post_update_handoff.py \
             tests/integration/test_self_update_upgrade_paths.py \
             tests/integration/test_qualification_https.py \
             tests/integration/test_plugin_reload_persistence.py \

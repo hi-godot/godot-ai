@@ -545,6 +545,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dock.name = "Godot AI"
 	_dock.update_requested.connect(_on_dock_update_requested)
 	_dock.client_action_requested.connect(_on_dock_client_action_requested)
+	_dock.client_action_cancel_requested.connect(_on_dock_client_action_cancel_requested)
 	_dock.client_status_refresh_requested.connect(_on_dock_client_status_refresh_requested)
 	_dock.status_snapshot_requested.connect(_on_dock_status_snapshot_requested)
 	_dock.live_server_probe_requested.connect(_on_dock_live_server_probe_requested)
@@ -638,6 +639,14 @@ func _on_dock_client_action_requested(client_id: String, action: String) -> void
 	if _client_jobs == null:
 		return
 	if not _client_jobs.request_action(client_id, action) and _dock != null:
+		_dock.present_client_work_snapshot(_client_jobs.snapshot())
+
+
+func _on_dock_client_action_cancel_requested(client_id: String) -> void:
+	if _client_jobs == null:
+		return
+	_client_jobs.cancel_pending_action(client_id)
+	if _dock != null:
 		_dock.present_client_work_snapshot(_client_jobs.snapshot())
 
 

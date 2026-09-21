@@ -212,7 +212,7 @@ def test_client_owner_persists_unproven_mutation_and_blocks_update_quiescence() 
 
     assert "Engine.get_meta(MUTATION_UNPROVEN_META" in init
     assert "Engine.set_meta(" in mark
-    assert "_mutation_termination_unproven.has(client_id)" in request
+    assert "not _mutation_termination_unproven.is_empty()" in request
     assert "MutationLock.recovery_message()" in request
     assert finalize.index("_record_unproven_action_result(") < finalize.index(
         "_action_threads.erase("
@@ -248,20 +248,20 @@ def test_dock_dispatches_configure_and_remove_to_worker_thread() -> None:
     assert "Thread.new()" in owner_source
     assert "func _poll_actions(" in owner_source
     assert "_client_jobs.request_action(" in plugin_source
-    # The two button handlers should NOT call McpClientConfigurator
-    # directly — that would re-introduce the main-thread block. They
-    # forward to the dispatcher.
     on_configure = get_func_block(
         dock_source, "func _on_configure_client(client_id: String) -> void:"
     )
-    on_remove = get_func_block(dock_source, "func _on_remove_client(client_id: String) -> void:")
+    on_button = get_func_block(
+        dock_source,
+        "func _on_client_action_button_pressed(client_id: String, action: String) -> void:",
+    )
     assert "_dispatch_client_action(" in on_configure
-    assert "_dispatch_client_action(" in on_remove
+    assert "_dispatch_client_action(" in on_button
     assert "McpClientConfigurator.configure(" not in on_configure, (
         "Configure handler must dispatch to a worker, not call the "
         "configurator inline (issue #239)."
     )
-    assert "McpClientConfigurator.remove(" not in on_remove, (
+    assert "McpClientConfigurator.remove(" not in on_button, (
         "Remove handler must dispatch to a worker, not call the configurator inline (issue #239)."
     )
 
