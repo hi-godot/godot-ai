@@ -6549,6 +6549,10 @@ func test_toml_crlf_reconfigure_and_remove_keep_complete_newlines() -> void:
 func test_zcode_descriptor_and_stdio_entry() -> void:
 	var c := McpClientRegistry.get_by_id("zcode")
 	assert_true(c != null, "ZCode must be registered")
+	assert_false(
+		c.automatic_config_edits,
+		"ZCode must stay manual-only: a native write would shadow ~/.agents/mcp.json",
+	)
 	assert_eq(c.display_name, "ZCode")
 	assert_eq(c.config_type, "json")
 	assert_eq(c.path_template.get("unix"), "~/.zcode/cli/config.json")
@@ -6619,3 +6623,50 @@ func test_manual_command_names_nested_server_map_path() -> void:
 	var manual := McpManualCommand.build(client, "godot-ai", "http://unused", path, _test_attach_launch())
 	assert_contains(manual, "mcp.servers")
 	assert_false(manual.contains('add under "mcp":'), "a nested map must not be named by its first segment")
+
+
+func test_zcode_configure_is_manual_only_and_preserves_the_agents_fallback() -> void:
+	## ZCode skips a scope's ~/.agents/mcp.json entirely once a native .zcode
+	## server exists, so an automatic write could silently disable the other
+	## servers there. ZCode is manual-only: Configure and Remove return
+	## instructions and never create or modify the native file.
+	var client := McpClientRegistry.get_by_id("zcode")
+	var saved_paths: Dictionary = client.path_template.duplicate(true)
+	var native_path := _scratch_dir.path_join("zcode_manual/cli/config.json")
+	var fallback_path := _scratch_dir.path_join("zcode_manual/agents/mcp.json")
+	var fallback_body := '{\n\t"mcpServers": {\n\t\t"other": {"command": "other-mcp"}\n\t}\n}\n'
+	_write_text(fallback_path, fallback_body)
+	## Redirect the write target so a regression that drops the manual-only gate
+	## edits scratch space instead of the developer's real ~/.zcode config.
+	client.path_template = {
+		"darwin": native_path, "linux": native_path, "windows": native_path, "unix": native_path,
+	}
+
+	var configured := McpClientConfigurator.configure("zcode", "http://127.0.0.1:8000/mcp")
+	var removed := McpClientConfigurator.remove("zcode", "http://127.0.0.1:8000/mcp")
+	var native_exists := FileAccess.file_exists(native_path)
+	var fallback_after := FileAccess.get_file_as_string(fallback_path)
+
+	## An existing empty native map must be left alone too, not seeded.
+	_write_text(native_path, '{\n\t"mcp": {\n\t\t"servers": {}\n\t}\n}\n')
+	var empty_native_body := FileAccess.get_file_as_string(native_path)
+	var configured_again := McpClientConfigurator.configure("zcode", "http://127.0.0.1:8000/mcp")
+	var empty_native_after := FileAccess.get_file_as_string(native_path)
+
+	client.path_template = saved_paths
+	_remove_if_exists(native_path)
+	_remove_if_exists(fallback_path)
+
+	assert_eq(configured.get("status"), "error")
+	assert_contains(str(configured.get("message", "")), "manual edit")
+	assert_eq(removed.get("status"), "error")
+	assert_contains(str(removed.get("message", "")), "manual edit")
+	assert_false(native_exists, "manual-only Configure must not create the native .zcode config")
+	assert_eq(fallback_after, fallback_body, "the .agents fallback must stay byte-for-byte intact")
+	var parsed: Variant = JSON.parse_string(fallback_after)
+	assert_true(
+		parsed is Dictionary and parsed["mcpServers"].has("other"),
+		"the fallback's other server stays effective while no native config exists",
+	)
+	assert_eq(configured_again.get("status"), "error")
+	assert_eq(empty_native_after, empty_native_body, "an existing empty native map must not be seeded")

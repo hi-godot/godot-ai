@@ -10,15 +10,21 @@ extends McpClient
 ## working third-party integrations write - it also repins a stale
 ## `type: "http"` left on a hand-added remote entry. `enable` (singular) is
 ## ZCode's documented user-state key (absence means enabled), so it is
-## preserved rather than written. Adding any `.zcode` server makes ZCode skip
-## `~/.agents/mcp.json` entirely (documented `.zcode`-first rule), which is why
-## this writes the native config rather than the `.agents` fallback.
+## preserved rather than written.
+##
+## Manual-only: adding any `.zcode` server makes ZCode skip `~/.agents/mcp.json`
+## for that scope entirely (documented `.zcode`-first rule, no merging). An
+## automatic write could therefore silently disable every server a user keeps in
+## the fallback, so Configure and Remove only render the manual entry; moving
+## those entries into the native file stays the user's explicit choice.
 
 
 func _init() -> void:
 	id = "zcode"
 	display_name = "ZCode"
 	config_type = "json"
+	## A native write would shadow `~/.agents/mcp.json`; see the class comment.
+	automatic_config_edits = false
 	path_template = {
 		"unix": "~/.zcode/cli/config.json",
 		"windows": "$USERPROFILE/.zcode/cli/config.json",
