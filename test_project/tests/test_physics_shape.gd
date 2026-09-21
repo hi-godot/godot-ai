@@ -1,7 +1,10 @@
 @tool
 extends McpTestSuite
 
+signal generate_driver_frame
+
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const ScriptWork := preload("res://addons/godot_ai/utils/script_work.gd")
 
 const PhysicsShapeHandler := preload("res://addons/godot_ai/handlers/physics_shape_handler.gd")
 
@@ -17,7 +20,16 @@ func suite_name() -> String:
 
 func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.get("undo_redo")
+	if _undo_redo != null:
+		_undo_redo.clear_history()
 	_handler = PhysicsShapeHandler.new(_undo_redo)
+
+
+func teardown() -> void:
+	## Generated bodies are committed as editor actions. Release each test's
+	## history so a later undo cannot resurrect a collider removed by cleanup.
+	if _undo_redo != null:
+		_undo_redo.clear_history()
 
 
 # ----- helpers -----
@@ -933,6 +945,14 @@ class _GoneDispatcher:
 		return false
 
 
+class _LateRegistrationDispatcher:
+	extends RefCounted
+	var registered := false
+
+	func has_pending_deferred_response(_request_id: String) -> bool:
+		return registered
+
+
 func _generate_job_for(paths: Array, connection = null) -> Dictionary:
 	var validated := PhysicsShapeHandler._validate_generate_request({"paths": paths})
 	assert_has_key(validated, "data")
@@ -1104,6 +1124,71 @@ func test_generate_job_revalidates_each_mesh_when_it_is_applied() -> void:
 	connection.free()
 
 
+func test_generate_job_frees_a_planned_mesh_without_script_errors() -> void:
+	## A mesh freed (not merely removed) between planning and applying must be
+	## reported through the stale check. Assigning it to a typed local first
+	## raises "invalid previously freed instance" and never reaches the check.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var kept := _add_generate_mesh("GenerateFreedMeshKept", Vector3.ONE)
+	var doomed := _add_generate_mesh("GenerateFreedMeshDoomed", Vector3.ONE)
+	var connection := _CapturingConnection.new()
+	var job := _generate_job_for([
+		McpScenePath.from_node(kept, scene_root), McpScenePath.from_node(doomed, scene_root),
+	], connection)
+	PhysicsShapeHandler._generate_step(job, 0)
+	PhysicsShapeHandler._generate_step(job, 0)
+	assert_eq(str(job.phase), "apply")
+	scene_root.remove_child(doomed)
+	doomed.free()
+	assert_false(PhysicsShapeHandler._generate_step(job, 0), "apply the untouched mesh")
+	assert_true(_find_named_child(scene_root, "GenerateFreedMeshKeptCollider") != null)
+	assert_true(PhysicsShapeHandler._generate_step(job, 0), "the freed mesh fails the request")
+	assert_is_error(job.result, ErrorCodes.NODE_NOT_FOUND)
+	assert_contains(job.result.error.message, "was removed")
+	assert_true(_find_named_child(scene_root, "GenerateFreedMeshKeptCollider") == null, "rolled back")
+	_remove_node(kept)
+	connection.free()
+
+
+func test_generate_job_frees_a_planned_parent_without_script_errors() -> void:
+	## The captured parent can be freed while the mesh survives because it was
+	## reparented away. The stale check must report the reparent, not raise on
+	## the typed parent local.
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var wrapper := Node3D.new()
+	wrapper.name = "GenerateFreedParent"
+	scene_root.add_child(wrapper)
+	wrapper.set_owner(scene_root)
+	var mesh := MeshInstance3D.new()
+	mesh.name = "GenerateFreedParentMesh"
+	var box := BoxMesh.new()
+	box.size = Vector3.ONE
+	mesh.mesh = box
+	wrapper.add_child(mesh)
+	mesh.set_owner(scene_root)
+	var connection := _CapturingConnection.new()
+	var job := _generate_job_for([McpScenePath.from_node(mesh, scene_root)], connection)
+	PhysicsShapeHandler._generate_step(job, 0)
+	assert_eq(str(job.phase), "apply")
+	wrapper.remove_child(mesh)
+	scene_root.add_child(mesh)
+	mesh.set_owner(scene_root)
+	scene_root.remove_child(wrapper)
+	wrapper.free()
+	assert_true(PhysicsShapeHandler._generate_step(job, 0), "the freed parent fails the request")
+	assert_is_error(job.result, ErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_contains(job.result.error.message, "reparented")
+	assert_true(_find_named_child(scene_root, "GenerateFreedParentMeshCollider") == null)
+	_remove_node(mesh)
+	connection.free()
+
+
 func test_generate_job_abandoned_by_the_dispatcher_leaves_nothing_behind() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
@@ -1139,3 +1224,265 @@ func test_generate_bounds_direct_and_total_batch_sizes() -> void:
 	var oversized_result := _handler.generate({"paths": oversized_paths})
 	assert_is_error(oversized_result, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(oversized_result.error.message, "at most")
+
+
+func test_generate_driver_disconnect_rolls_back_and_releases_script_work() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var first := _add_generate_mesh("DriverDisconnectA", Vector3.ONE)
+	var second := _add_generate_mesh("DriverDisconnectB", Vector3.ONE)
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	var job := _generate_job_for([McpScenePath.from_node(first, root), McpScenePath.from_node(second, root)], connection)
+	PhysicsShapeHandler._generate_step(job, 0)
+	PhysicsShapeHandler._generate_step(job, 0)
+	assert_false(PhysicsShapeHandler._generate_step(job, 0))
+	assert_eq(job.created.size(), 1, "disconnect must interrupt actual partial mutation")
+	PhysicsShapeHandler._drive_generate_job(job, connection, generate_driver_frame)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 1, "worker is tracked before the first yield")
+	root.remove_child(connection)
+	connection.free()
+	## The rollback waits for the next driven frame: running it from the
+	## connection's tree_exiting would call remove_child() on a parent that is
+	## still removing children, then free a still parented body, corrupting the
+	## scene tree.
+	assert_eq(job.created.size(), 1, "nothing is rolled back before the next frame")
+	generate_driver_frame.emit()
+	assert_eq(job.phase, "done")
+	assert_eq(job.created.size(), 0)
+	assert_true(job.result.is_empty())
+	assert_true(_find_named_child(root, "DriverDisconnectACollider") == null)
+	assert_true(_find_named_child(root, "DriverDisconnectBCollider") == null)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
+	_remove_node(first)
+	_remove_node(second)
+
+
+func test_generate_driver_abandonment_and_success_release_script_work() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var first := _add_generate_mesh("DriverLifecycleA", Vector3.ONE)
+	var second := _add_generate_mesh("DriverLifecycleB", Vector3.ONE)
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	var paths := [McpScenePath.from_node(first, root), McpScenePath.from_node(second, root)]
+	var abandoned := _generate_job_for(paths, connection)
+	PhysicsShapeHandler._generate_step(abandoned, 0)
+	PhysicsShapeHandler._generate_step(abandoned, 0)
+	assert_false(PhysicsShapeHandler._generate_step(abandoned, 0))
+	assert_eq(abandoned.created.size(), 1)
+	connection.dispatcher = _GoneDispatcher.new()
+	PhysicsShapeHandler._drive_generate_job(abandoned, connection, generate_driver_frame)
+	assert_eq(
+		ScriptWork.active_count("physics_shape_generate"), 1,
+		"the abandoned-request check runs after the dispatcher's registration window"
+	)
+	generate_driver_frame.emit()
+	assert_true(abandoned.result.is_empty())
+	assert_eq(abandoned.created.size(), 0)
+	assert_eq(connection.captured.size(), 0)
+	assert_true(_find_named_child(root, "DriverLifecycleACollider") == null)
+	assert_true(_find_named_child(root, "DriverLifecycleBCollider") == null)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
+	connection.dispatcher = null
+	var success := _generate_job_for(paths, connection)
+	PhysicsShapeHandler._drive_generate_job(success, connection, generate_driver_frame)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 1)
+	for _frame in range(10):
+		if ScriptWork.active_count("physics_shape_generate") == 0:
+			break
+		generate_driver_frame.emit()
+	assert_eq(connection.captured.size(), 1)
+	assert_eq(connection.captured[0].payload.data.created.size(), 2)
+	assert_eq(success.result.data.created.size(), 2)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
+	var body_a := _find_named_child(root, "DriverLifecycleACollider")
+	var body_b := _find_named_child(root, "DriverLifecycleBCollider")
+	assert_true(body_a != null and body_b != null)
+	assert_true(editor_undo(_undo_redo))
+	assert_true(body_a.get_parent() == null and body_b.get_parent() == null)
+	assert_true(editor_redo(_undo_redo))
+	assert_eq(body_a.get_parent(), root)
+	assert_eq(body_b.get_parent(), root)
+	_remove_node(body_a)
+	_remove_node(body_b)
+	_remove_node(first)
+	_remove_node(second)
+	connection.free()
+
+
+func test_generate_driver_waits_for_dispatcher_registration_before_first_frame() -> void:
+	## The real dispatcher registers the deferred request only after the handler
+	## returns its sentinel. A pending check before the first yield would cancel
+	## every real call; the job must survive that window and reply once the
+	## registration lands.
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var mesh := _add_generate_mesh("DriverLateRegistration", Vector3.ONE)
+	var dispatcher := _LateRegistrationDispatcher.new()
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	connection.dispatcher = dispatcher
+	var job := _generate_job_for([McpScenePath.from_node(mesh, root)], connection)
+	PhysicsShapeHandler._drive_generate_job(job, connection, generate_driver_frame)
+	assert_eq(
+		ScriptWork.active_count("physics_shape_generate"), 1,
+		"the job must not cancel before the dispatcher registers the request"
+	)
+	dispatcher.registered = true
+	for _frame in range(10):
+		if not connection.captured.is_empty():
+			break
+		generate_driver_frame.emit()
+	assert_eq(connection.captured.size(), 1, "the job must reply once registration lands")
+	assert_eq(connection.captured[0].payload.data.created.size(), 1)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0)
+	var body := _find_named_child(root, "DriverLateRegistrationCollider")
+	assert_true(body != null)
+	_remove_node(body)
+	_remove_node(mesh)
+	connection.dispatcher = null
+	root.remove_child(connection)
+	connection.free()
+
+
+func test_generate_driver_early_exit_preserves_committed_results() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var detached_mesh := _add_generate_mesh("DriverDetachedCommitted", Vector3.ONE)
+	var detached_connection := _CapturingConnection.new()
+	var detached_job := _generate_job_for([
+		McpScenePath.from_node(detached_mesh, root),
+	], detached_connection)
+	assert_true(PhysicsShapeHandler._generate_step(detached_job, -1))
+	assert_true(detached_job.committed)
+	PhysicsShapeHandler._drive_generate_job(detached_job, detached_connection)
+	var detached_body := _find_named_child(root, "DriverDetachedCommittedCollider")
+	assert_true(detached_body != null, "a detached reply target must not undo committed work")
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0, "detached early exit releases ScriptWork")
+
+	var freed_mesh := _add_generate_mesh("DriverFreedCommitted", Vector3.ONE)
+	var freed_connection := _CapturingConnection.new()
+	root.add_child(freed_connection)
+	freed_connection.set_process(false)
+	var freed_job := _generate_job_for([
+		McpScenePath.from_node(freed_mesh, root),
+	], freed_connection)
+	assert_true(PhysicsShapeHandler._generate_step(freed_job, -1))
+	assert_true(freed_job.committed)
+	root.remove_child(freed_connection)
+	freed_connection.free()
+	PhysicsShapeHandler._drive_generate_job(freed_job, freed_connection)
+	var freed_body := _find_named_child(root, "DriverFreedCommittedCollider")
+	assert_true(freed_body != null, "a lost reply target must not undo committed work")
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0, "invalid-connection early exit releases ScriptWork")
+
+	_remove_node(detached_body)
+	_remove_node(freed_body)
+	_remove_node(detached_mesh)
+	_remove_node(freed_mesh)
+	detached_connection.free()
+
+
+func test_generate_driver_frees_the_scene_root_and_releases_the_lease() -> void:
+	## A scene root freed while the job is in flight must fail and answer on
+	## the next driven frame. Before the validity check, the typed assignment
+	## errored every frame and the lease was held until the dispatcher timeout.
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var mesh := _add_generate_mesh("DriverFreedSceneRoot", Vector3.ONE)
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	var validated := PhysicsShapeHandler._validate_generate_request({
+		"paths": [McpScenePath.from_node(mesh, root)],
+	})
+	assert_has_key(validated, "data")
+	var doomed_root := Node3D.new()
+	doomed_root.name = "DriverFreedSceneRootStandin"
+	doomed_root.free()
+	validated["scene_root"] = doomed_root
+	var job := PhysicsShapeHandler._generate_job(validated, _undo_redo, connection, "rid-generate")
+	PhysicsShapeHandler._drive_generate_job(job, connection, generate_driver_frame)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 1, "worker is tracked before the first yield")
+	generate_driver_frame.emit()
+	assert_eq(str(job.phase), "done")
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0, "a freed scene root must release the lease")
+	assert_is_error(job.result, ErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_eq(connection.captured.size(), 1, "the stale scene must be answered, not left to the timeout")
+	_remove_node(mesh)
+	connection.free()
+
+
+func test_generate_driver_rolls_back_survivors_when_an_applied_parent_is_freed() -> void:
+	## Plan two meshes, apply the first collider, free that item's parent, then
+	## resume the second item. Finalization used to error on the freed entry,
+	## record committed=true with an empty result and leave the second collider
+	## behind; the request must instead fail cleanly, roll the survivor back and
+	## release its work receipt.
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var first_parent := Node3D.new()
+	first_parent.name = "GenerateAppliedParentA"
+	root.add_child(first_parent)
+	first_parent.set_owner(root)
+	var second_parent := Node3D.new()
+	second_parent.name = "GenerateAppliedParentB"
+	root.add_child(second_parent)
+	second_parent.set_owner(root)
+	var first := MeshInstance3D.new()
+	first.name = "GenerateAppliedA"
+	var first_box := BoxMesh.new()
+	first_box.size = Vector3.ONE
+	first.mesh = first_box
+	first_parent.add_child(first)
+	first.set_owner(root)
+	var second := MeshInstance3D.new()
+	second.name = "GenerateAppliedB"
+	var second_box := BoxMesh.new()
+	second_box.size = Vector3.ONE
+	second.mesh = second_box
+	second_parent.add_child(second)
+	second.set_owner(root)
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	var job := _generate_job_for([
+		McpScenePath.from_node(first, root), McpScenePath.from_node(second, root),
+	], connection)
+	PhysicsShapeHandler._generate_step(job, 0)
+	PhysicsShapeHandler._generate_step(job, 0)
+	assert_false(PhysicsShapeHandler._generate_step(job, 0), "apply the first collider")
+	assert_eq(job.created.size(), 1)
+	PhysicsShapeHandler._drive_generate_job(job, connection, generate_driver_frame)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 1, "worker is tracked before the first yield")
+	root.remove_child(first_parent)
+	first_parent.free()
+	generate_driver_frame.emit()
+	assert_eq(str(job.phase), "done")
+	assert_false(job.committed, "a failed finalization must not claim the batch is committed")
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0, "the receipt is released")
+	assert_eq(connection.captured.size(), 1, "the failure is answered once")
+	assert_is_error(connection.captured[0].payload, ErrorCodes.NODE_NOT_FOUND)
+	assert_true(job.result.has("error"))
+	assert_true(_find_named_child(second_parent, "GenerateAppliedBCollider") == null,
+		"the surviving body is rolled back")
+	assert_true(_find_named_child(root, "GenerateAppliedBCollider") == null)
+	_remove_node(second_parent)
+	root.remove_child(connection)
+	connection.free()

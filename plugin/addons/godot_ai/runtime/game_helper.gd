@@ -343,7 +343,7 @@ func _capture_and_reply(
 		_reply_error(request_id, "Captured an empty image from game viewport")
 		return
 
-	var encoded: Dictionary = ScreenshotEncode.downscale_and_encode(image, max_resolution)
+	var encoded: Dictionary = ScreenshotEncode.downscale_and_encode(image, max_resolution, viewport.use_hdr_2d)
 	var frames_drawn := Engine.get_frames_drawn()
 	var stale := frames_drawn <= frames_at_request
 

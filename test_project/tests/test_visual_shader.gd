@@ -827,3 +827,28 @@ func test_varying_from_text_matches_the_exact_property_name() -> void:
 	assert_eq(Handler._varying_from_text(text, "glow_bar"), "1,2")
 	assert_eq(Handler._varying_from_text('varyings/glow_bar = "1,2"', "glow"), "")
 	assert_eq(Handler._varying_from_text('"varyings/glow" = "0,3"', "glow"), "0,3")
+
+func test_edit_graph_remove_connected_node_then_reconnect() -> void:
+	var request := _request("edit_remove_reconnect")
+	var created := _handler.create_graph(request)
+	assert_has_key(created, "data", str(created))
+	if not created.has("data"):
+		return
+	var edited := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "remove_node", "stage": "fragment", "id": 2},
+			{"op": "add_node", "stage": "fragment", "id": "replacement", "type": "VisualShaderNodeColorConstant", "params": {"constant": {"r": 0, "g": 0, "b": 1, "a": 1}}},
+			{"op": "connect", "stage": "fragment", "from_node": "replacement", "from_port": 0, "to_node": "output", "to_port": 0},
+		],
+	})
+	assert_has_key(edited, "data", str(edited))
+	if not edited.has("data"):
+		return
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	var edges := shader.get_node_connections(VisualShader.TYPE_FRAGMENT)
+	assert_eq(edges.size(), 1)
+	assert_eq(int(edges[0].from_node), int(edited.data.added[0].node_id))
+	assert_eq(int(edges[0].to_node), 0)
+	assert_eq(int(edges[0].to_port), 0)
+	assert_eq(shader.get_node(VisualShader.TYPE_FRAGMENT, int(edges[0].from_node)).get("constant"), Color.BLUE)

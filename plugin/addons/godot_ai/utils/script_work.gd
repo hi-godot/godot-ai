@@ -20,6 +20,12 @@ static func finish(id: int) -> void:
 	_active.erase(id)
 
 
+static func active_count(label: String = "") -> int:
+	if label.is_empty():
+		return _active.size()
+	return _active.values().count(label)
+
+
 static func quiescence() -> Dictionary:
 	if not _active.is_empty():
 		return {

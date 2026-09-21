@@ -347,6 +347,8 @@ func _apply_edit(
 			if node_id.value < 2:
 				return _invalid("cannot remove the built-in output node")
 			shader.remove_node(stage.value, node_id.value)
+			inputs.clear()
+			inputs.merge(_collect_inputs(shader, mode))
 			return {}
 		"replace_node":
 			var stage := _edit_stage(operation, mode)

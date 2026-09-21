@@ -49,6 +49,7 @@ See umbrella #343, finding #1 (audit-v2).
 from __future__ import annotations
 
 import ipaddress
+import sys
 from collections.abc import Iterable, Sequence
 from http import HTTPStatus
 from typing import Any
@@ -120,7 +121,9 @@ def parse_allow_hosts(values: Iterable[str]) -> list[IPNetwork]:
     return networks
 
 
-def bind_host_for_networks(networks: Sequence[IPNetwork] | None) -> str | None:
+def bind_host_for_networks(
+    networks: Sequence[IPNetwork] | None, *, platform: str = sys.platform,
+) -> str | None:
     """HTTP bind address that exposes the transport to ``networks`` (issue #421).
 
     Returns ``None`` when no networks are named so the caller keeps its
@@ -137,12 +140,19 @@ def bind_host_for_networks(networks: Sequence[IPNetwork] | None) -> str | None:
     ranges won't be reachable over IPv6). That's the safe default — LAN MCP is
     overwhelmingly IPv4, and IPv4 reachability is preserved everywhere. A
     dual-stack / separate-listener setup for mixed allowlists can come later
-    if needed.
+    if needed. Windows rejects IPv6-only lists because the editor and attach
+    bridge still require IPv4 loopback.
     """
     if not networks:
         return None
     if any(isinstance(net, ipaddress.IPv4Network) for net in networks):
         return "0.0.0.0"  # noqa: S104 — opt-in; the guard still gates every request
+    if platform == "win32":
+        raise ValueError(
+            "IPv6-only --allow-host is unsupported on Windows: the editor and attach "
+            "bridge require IPv4 loopback. Use an IPv4 allowlist or disable remote "
+            "access by removing --allow-host. Full IPv6 support is tracked in #1072."
+        )
     return "::"  # noqa: S104 — allowlist is IPv6-only, no IPv4 to serve
 
 

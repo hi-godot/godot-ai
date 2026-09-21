@@ -183,3 +183,16 @@ func test_signed_and_empty_prefixes_rejected() -> void:
 	assert_false(McpAllowHosts.token_is_valid("10.0.0.0/-1"))
 	assert_false(McpAllowHosts.token_is_valid("10.0.0.0/"))
 	assert_true(McpAllowHosts.token_is_valid("10.0.0.0/8"))
+
+
+func test_configuration_error_rejects_windows_ipv6_only() -> void:
+	for value in ["fd00::/8", " ::1, fd00::/8 ", "::ffff:127.0.0.1"]:
+		var error := McpAllowHosts.configuration_error(value, "Windows")
+		assert_true(error.contains("IPv6-only"), error)
+		assert_true(error.contains("IPv4 allowlist"), error)
+		assert_true(error.contains("clear Allow remote hosts"), error)
+	for platform in ["Windows", "Linux", "macOS"]:
+		for value in ["", " , ", "192.168.1.0/24", "fd00::/8, 192.168.1.0/24"]:
+			assert_eq(McpAllowHosts.configuration_error(value, platform), "")
+	assert_eq(McpAllowHosts.configuration_error("fd00::/8", "Linux"), "")
+	assert_true(McpAllowHosts.configuration_error("garbage", "Windows").contains("Invalid entries"))

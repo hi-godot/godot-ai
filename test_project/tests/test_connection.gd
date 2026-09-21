@@ -334,6 +334,54 @@ func test_transport_revocation_disconnects_and_prevents_queued_dispatch() -> voi
 	conn.free()
 
 
+func test_peer_inbound_buffer_is_full_size_before_connecting() -> void:
+	## Regression for #1056: wslay reads `inbound_buffer_size` once,
+	## when the client handshake completes, so the buffer must already be at
+	## the 4 MiB command ceiling BEFORE `connect_to_url`. The old code dialed
+	## at the 8 KiB pre-auth ceiling and "raised" it after the server proof —
+	## a no-op — so every command frame over 8 KiB closed the socket with 1009.
+	var peer := WebSocketPeer.new()
+	McpConnection._configure_peer_buffers(peer)
+	assert_eq(peer.inbound_buffer_size, McpConnection.OUTBOUND_BUFFER_LIMIT_BYTES,
+		"inbound buffer must be the full command ceiling before connecting")
+	assert_eq(peer.outbound_buffer_size, McpConnection.OUTBOUND_BUFFER_LIMIT_BYTES)
+	assert_eq(peer.max_queued_packets, McpConnection.MAX_QUEUED_PACKETS)
+	assert_true(peer.inbound_buffer_size > McpConnection.MAX_HANDSHAKE_FRAME_BYTES,
+		"a realistic script_create payload must fit; the pre-auth ceiling is enforced in _handle_message, not by the buffer")
+
+	## The same must hold for the fresh peer a reconnect creates.
+	var conn := McpConnection.new()
+	conn.log_buffer = McpLogBuffer.new()
+	conn.auth_token = _TEST_CAPABILITY
+	conn.ws_port = 1
+	conn._attempt_reconnect()
+	assert_eq(conn._peer.inbound_buffer_size, McpConnection.OUTBOUND_BUFFER_LIMIT_BYTES,
+		"reconnect must configure the new peer's inbound buffer before dialing")
+	conn.disconnect_from_server("test cleanup")
+	conn.free()
+
+
+func test_command_buffer_does_not_relax_handshake_message_limit() -> void:
+	var ack := JSON.stringify({
+		"type": "handshake_ack", "protocol_version": 2, "server_version": "4.0.0",
+	})
+	for size in [8192, 8193]:
+		var conn := McpConnection.new()
+		conn.log_buffer = McpLogBuffer.new()
+		McpConnection._configure_peer_buffers(conn._peer)
+		conn._server_verified = true
+		conn._auth_response_sent = true
+		conn._challenged_server_version = "4.0.0"
+		var message := ack + " ".repeat(size - ack.to_utf8_buffer().size())
+		assert_eq(message.to_utf8_buffer().size(), size)
+		conn._handle_message(message)
+		assert_eq(conn._handshake_complete, size == 8192)
+		assert_eq(conn.server_version, "4.0.0" if size == 8192 else "")
+		if size == 8193:
+			assert_contains(str(conn.log_buffer.get_recent(1)), "handshake frame too large")
+		conn.free()
+
+
 func test_send_event_reports_unsent_when_disconnected() -> void:
 	var conn := McpConnection.new()
 	assert_false(

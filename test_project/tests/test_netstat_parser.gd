@@ -31,7 +31,7 @@ func test_returns_every_unique_listener() -> void:
 func test_ignores_remote_port_substrings_and_non_listeners() -> void:
 	var sample := (
 		"TCP 127.0.0.1:7070 127.0.0.1:8000 ESTABLISHED 1\n"
-		+ "TCP 0.0.0.0:80001 0.0.0.0:0 LISTENING 2\n"
+		+ "TCP 0.0.0.0:18000 0.0.0.0:0 LISTENING 2\n"
 		+ "TCP 0.0.0.0:8000 0.0.0.0:0 LISTENING 3\n"
 	)
 	assert_eq(McpPortResolver.parse_windows_netstat_pid(sample, 8000), 3)
@@ -56,12 +56,10 @@ func test_whitespace_and_pid_line_parsers_are_strict() -> void:
 	)
 
 
-func test_powershell_result_requires_successful_nonempty_pid_output() -> void:
-	assert_eq(
-		McpPortResolver.windows_listener_pids_from_execute_result(
-			0, ["19088\r\n40064\r\n19088\r\n"]
-		),
-		[19088, 40064],
-	)
-	assert_false(McpPortResolver.windows_listener_execute_result_in_use(0, [""]))
-	assert_false(McpPortResolver.windows_listener_execute_result_in_use(1, ["19088"]))
+func test_powershell_snapshot_retains_occupancy_without_a_killable_pid() -> void:
+	var snapshot := McpPortResolver.windows_snapshot_from_powershell(0, [
+		'{"listeners":[{"LocalPort":8000,"OwningProcess":0},{"LocalPort":8001,"OwningProcess":42}]}'
+	])
+	assert_true(snapshot.known)
+	assert_eq(snapshot.listeners, {8000: [], 8001: [42]})
+	assert_eq(McpPortResolver.windows_port_occupancy(8000, snapshot), McpPortResolver.PortOccupancy.OCCUPIED)
