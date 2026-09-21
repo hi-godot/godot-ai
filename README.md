@@ -60,7 +60,8 @@ every detected client. If the client does not notice the new configuration,
 restart that client.
 
 Supported clients include **Claude Code**, **Claude Desktop**, **Codex**,
-**Antigravity**, **Hermes Agent**, **DeepSeek Harness**, **Cursor**, and **VS Code**.
+**Antigravity**, **Hermes Agent**, **DeepSeek Harness**, **Cursor**,
+**VS Code**, and **Oh My Pi**.
 The dock lists all supported clients and provides a **Run this manually**
 fallback where needed.
 

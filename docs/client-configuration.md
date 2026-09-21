@@ -127,8 +127,8 @@ Per-strategy command rendering (`CommandShape` docs in `_base.gd`):
   (Codex, Grok).
 - **YAML** — FLAT with flow-style `args` (Hermes); `url`/`headers` are the
   legacy keys there because Hermes infers transport from key presence.
-- **JSON, typeless** — Antigravity, Pi Agent: FLAT `command`/`args`/`env`
-  with no `type` discriminator; transport is inferred from key presence
+- **JSON, typeless** — Antigravity, Pi Agent, Oh My Pi: FLAT `command`/`args`/
+  `env` with no `type` discriminator; transport is inferred from key presence
   (`command` vs `url`), so `url`, `headers`, and any leftover `type` key
   from a previous http-era entry join `command_legacy_keys` and are
   scrubbed on reconfigure.
@@ -373,3 +373,25 @@ would therefore silently disable every server a user keeps in that fallback, so
 Godot AI never writes the native file. Move those entries into
 `~/.zcode/cli/config.json` first if both are needed, then add the Godot AI entry
 shown by Configure.
+
+### Oh My Pi
+
+Oh My Pi (`omp`) reads MCP servers from `~/.omp/agent/mcp.json`
+(`%USERPROFILE%/.omp/agent/mcp.json` on Windows) under the standard
+`mcpServers` map ([project](https://github.com/can1357/oh-my-pi)). Entries
+are flat `command`/`args`/`env` with no `type` discriminator: stdio is the
+default when `type` is omitted, and omp rejects an entry that carries both
+`command` and `url`, so reconfigure scrubs `url`, `headers`, and any leftover
+`type` from an http-era entry. `enabled` and `timeout` (milliseconds) are
+omp's documented user-state fields; Configure seeds a 300-second `timeout` on
+a fresh entry — omp's 30-second default undercuts `test_run`'s 300-second
+server budget — and preserves both across reconfigure.
+
+omp consults project `.omp/mcp.json` then `.omp/.mcp.json` before the user
+file, and the first definition of a name wins, so a project entry overrides
+the user file. The dock fails closed with the exact path instead of writing a
+shadowed entry. `~/.omp/agent/.mcp.json` and root `mcp.json`/`.mcp.json` are
+compatibility reads omp never writes; a godot-ai entry there is shadowed by
+the primary-file write. `PI_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, and named
+profiles can relocate the omp user root; users on a relocated root should
+follow the manual instructions instead of Configure.

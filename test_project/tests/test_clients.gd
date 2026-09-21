@@ -99,7 +99,7 @@ func test_registry_loads_all_clients() -> void:
 		"Every registered client script must load; got %d of %d" % [ids.size(), McpClientRegistry._CLIENT_SCRIPT_PATHS.size()]
 	)
 	# Each existing client must remain registered for behaviour parity.
-	for required in ["claude_code", "claude_desktop", "codex", "grok", "antigravity", "zoo_code", "hermes", "pi", "deepseek_harness", "codebuddy"]:
+	for required in ["claude_code", "claude_desktop", "codex", "grok", "antigravity", "zoo_code", "hermes", "pi", "deepseek_harness", "codebuddy", "omp"]:
 		assert_true(McpClientRegistry.has_id(required), "Missing client: %s" % required)
 
 
@@ -6670,3 +6670,52 @@ func test_zcode_configure_is_manual_only_and_preserves_the_agents_fallback() -> 
 	)
 	assert_eq(configured_again.get("status"), "error")
 	assert_eq(empty_native_after, empty_native_body, "an existing empty native map must not be seeded")
+
+
+func test_omp_descriptor_and_stdio_entry() -> void:
+	## Oh My Pi reads ~/.omp/agent/mcp.json as typeless FLAT stdio with a
+	## first-definition-wins merge. Pin the shape so a future revert to a
+	## typed or URL entry fails here instead of at Configure time, and pin
+	## the project-tier order that keeps the strategy's last-wins fold on
+	## omp's actual project winner (.omp/mcp.json).
+	var c := McpClientRegistry.get_by_id("omp")
+	assert_true(c != null, "Oh My Pi must be registered")
+	assert_eq(c.display_name, "Oh My Pi")
+	assert_eq(c.config_type, "json")
+	assert_eq(c.path_template.get("unix"), "~/.omp/agent/mcp.json")
+	assert_eq(c.path_template.get("windows"), "$USERPROFILE/.omp/agent/mcp.json")
+	assert_eq(c.server_key_path, PackedStringArray(["mcpServers"]))
+	assert_true(c.detect_paths.has("~/.omp/agent"), "omp install signal is ~/.omp/agent")
+	assert_eq(
+		c.get("config_merge_project_paths"),
+		PackedStringArray([".omp/.mcp.json", ".omp/mcp.json"]),
+		"omp project tiers must fold last-wins onto .omp/mcp.json",
+	)
+	assert_true(
+		c.command_transport_key.is_empty(),
+		"omp stdio entries must remain typeless",
+	)
+	var launch := _test_attach_launch()
+	var fresh := McpJsonStrategy.build_entry(c, "http://unused", {}, launch)
+	assert_eq(fresh.get("command"), launch.get("command"))
+	assert_eq(fresh.get("args"), launch.get("args"))
+	assert_false(fresh.has("type"), "generated stdio entry must omit `type`")
+	assert_eq(fresh.get("enabled"), true, "fresh entry seeds `enabled`")
+	assert_eq(fresh.get("timeout"), 300000, "fresh entry seeds a 300s request timeout")
+	var entry := McpJsonStrategy.build_entry(c, "http://unused", {
+		"type": "http",
+		"url": "http://old",
+		"headers": {"Authorization": "old"},
+		"env": {"USER_SENTINEL": "preserved"},
+		"enabled": false,
+		"timeout": 600000,
+	}, launch)
+	assert_eq(entry.get("command"), launch.get("command"))
+	assert_eq(entry.get("args"), launch.get("args"))
+	assert_eq(entry.get("env", {}).get("USER_SENTINEL"), "preserved")
+	assert_eq(entry.get("enabled"), false, "`enabled` is omp user-state and must survive")
+	assert_eq(entry.get("timeout"), 600000, "`timeout` is omp user-state and must survive")
+	assert_false(entry.has("type"), "a leftover `type` must be scrubbed")
+	assert_false(entry.has("url"))
+	assert_false(entry.has("headers"))
+	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://unused", launch))
