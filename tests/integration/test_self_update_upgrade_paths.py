@@ -1272,6 +1272,29 @@ def test_tampered_tree_after_swap_is_rolled_back_and_restarted(tmp_path: Path) -
     )
     write_post_restart_driver(project, http_port=http_port, expected_version=base_version)
     live = project / "addons" / "godot_ai"
+    expected_failure = (
+        "EXPECTED TEST FAILURE | disposable rollback test deliberately mismatches the "
+        "tree hash; the following raw error is expected"
+    )
+    plugin_file = live / "plugin.gd"
+    plugin_text = plugin_file.read_text(encoding="utf-8")
+    error_line = (
+        '\tpush_error("MCP | update to %s failed; the previous version is live: %s" '
+        '% [to_version, error])'
+    )
+    assert plugin_text.count(error_line) == 1, "rollback diagnostic anchor changed"
+    plugin_file.write_text(
+        plugin_text.replace(error_line, f"\tprint({json.dumps(expected_failure)})\n{error_line}"),
+        encoding="utf-8",
+    )
+    project_file = project / "project.godot"
+    project_text = project_file.read_text(encoding="utf-8")
+    name_line = 'config/name="Godot AI Self Update Smoke"'
+    assert project_text.count(name_line) == 1, "fixture project name anchor changed"
+    project_file.write_text(
+        project_text.replace(name_line, 'config/name="EXPECTED FAILURE - rollback test"'),
+        encoding="utf-8",
+    )
     patch_restart_diagnostics(live, project / RESTARTED_EDITOR_LOG)
     environment, capability_dir = _isolated_environment(project / ".self-update-integration")
 
@@ -1323,7 +1346,9 @@ def test_tampered_tree_after_swap_is_rolled_back_and_restarted(tmp_path: Path) -
         (
             f"MCP | update to {next_version} failed and the previous version was restored",
             # The restarted editor runs the restored tree and reports the outcome.
-            f"MCP | update to {next_version} failed; the previous version is live",
+            expected_failure,
+            f"MCP | update to {next_version} failed; the previous version is live: live tree hash",
+            f"does not match the expected {marker['expected_tree_sha256']}",
             "MCP | plugin loaded",
             f"POST_RESTART_TEST | live server ready at version {base_version}",
             "POST_RESTART_TEST | authenticated tool probe completed",
