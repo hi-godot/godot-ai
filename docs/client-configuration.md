@@ -147,11 +147,12 @@ Per-strategy command rendering (`CommandShape` docs in `_base.gd`):
   that already owns the server, a fresh entry lands on the primary
   `mcp.json`, and a compatibility entry's user state is never shadowed.
   Because the active omp profile relocates the user scope per launch,
-  `config_scope_globs` (`~/.omp/profiles/*`) makes Configure and Remove
-  fail closed while any named profile exists, and Configure scrubs the
-  server name from omp's top-level `disabledServers` array
-  (`config_denylist_key`) so a stale override cannot keep the entry
-  hidden.
+  `config_scope_globs` (`~/.omp/profiles/*`) and `config_relocating_env_vars`
+  (PI_CONFIG_DIR, PI_CODING_AGENT_DIR) make Configure and Remove fail closed
+  while either is detectable, and a server named in the primary file's
+  `disabledServers` array (`config_denylist_key`) — omp's own
+  `/mcp disable` state — is refused with manual guidance instead of
+  overwritten.
 
 - **DSH** — DeepSeek Harness (dsh) has no `mcp` CLI verb. MCP servers register
   as `@deepseek-ai/dsh-mcp-client` plugin entries in the HOME patch layer
@@ -402,9 +403,10 @@ no tier defines the server, and it lands on the primary `mcp.json` (omp itself
 never writes the compatibility files). Project `.omp/mcp.json` precedes
 `.omp/.mcp.json` and overrides the user files; duplicate names are not merged,
 so Configure fails closed with the exact project path instead of mutating an
-inferred project root. Configure also removes the server's name from a stale
-top-level `disabledServers` array in the file it writes, mirroring omp's own
-writer, so a configured entry cannot stay hidden.
+inferred project root. The primary file's top-level `disabledServers` array is
+omp's own `/mcp disable` state and is never edited: Configure refuses with
+manual guidance while it names the server, and the status row reports the
+conflict instead of a green entry.
 
 The active profile is chosen per client launch (`omp --profile`,
 `OMP_PROFILE`/`PI_PROFILE`) and is not persisted where the editor can read it,
@@ -412,8 +414,9 @@ and `~/.omp/profiles/<name>/agent/mcp.json` relocates the user scope entirely.
 While any named profile directory exists, Configure and Remove fail closed
 with the matched paths and the status row reports the ambiguity — the
 default-profile files describe only the default profile. `PI_CONFIG_DIR` and
-`PI_CODING_AGENT_DIR` can relocate the root as well; on those setups edit the
-entry manually.
+`PI_CODING_AGENT_DIR` relocate the root the same way and are visible to the
+editor process, so any set value makes Configure and Remove fail closed naming
+the variable; on other relocated setups edit the entry manually.
 
 The suggested fresh entry sets `timeout: 300000` milliseconds because omp's
 30-second default can interrupt long Godot calls; an existing timeout is

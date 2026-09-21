@@ -6701,6 +6701,11 @@ func test_omp_descriptor_and_stdio_entry() -> void:
 		"named profiles relocate the omp user scope",
 	)
 	assert_eq(c.get("config_denylist_key"), "disabledServers")
+	assert_eq(
+		c.get("config_relocating_env_vars"),
+		PackedStringArray(["PI_CONFIG_DIR", "PI_CODING_AGENT_DIR"]),
+		"env-relocated omp scopes are refused, not guessed",
+	)
 	assert_true(
 		c.command_transport_key.is_empty(),
 		"omp stdio entries must remain typeless",
@@ -6745,7 +6750,7 @@ func test_omp_configure_updates_effective_entry_first_wins() -> void:
 	var base := _scratch_dir.path_join("omp_auto/agent")
 	var primary := base.path_join("mcp.json")
 	var compatibility := base.path_join(".mcp.json")
-	var body := '{"mcpServers":{"godot-ai":{"command":"existing","enabled":false,"timeout":0,"env":{"SENTINEL":"keep"}},"other":{"command":"other"}}}'
+	var body := '{"mcpServers":{"godot-ai":{"command":"existing","enabled":true,"timeout":0,"env":{"SENTINEL":"keep"}},"other":{"command":"other"}}}'
 	_write_text(compatibility, body)
 	client.path_template = {"unix": primary, "windows": primary}
 	client.config_merge_path_templates = {
@@ -6783,7 +6788,7 @@ func test_omp_configure_updates_effective_entry_first_wins() -> void:
 	assert_true(updated_servers.has("other"), "unrelated servers survive")
 	var updated_entry: Dictionary = updated_servers.get("godot-ai", {})
 	assert_eq(updated_entry.get("command"), launch.get("command"), "the effective entry is updated in place")
-	assert_eq(updated_entry.get("enabled"), false, "the effective entry's `enabled` survives")
+	assert_eq(updated_entry.get("enabled"), true, "the effective entry's `enabled` survives")
 	assert_eq(updated_entry.get("timeout"), 0, "the effective entry's `timeout` survives")
 	assert_eq(updated_entry.get("env", {}).get("SENTINEL"), "keep", "the effective entry's env survives")
 	assert_eq(
@@ -6867,19 +6872,81 @@ func test_omp_named_profiles_fail_configure_and_remove_closed() -> void:
 	assert_eq(compatibility_after, body, "ambiguous Configure/Remove leaves the compatibility file byte-identical")
 
 
-func test_omp_configure_scrubs_disabled_servers_override() -> void:
-	## omp hides a server named in top-level `disabledServers` whatever the
-	## entry itself says, so a Configure that left a stale denylist name
-	## behind would report success while the server stays hidden. Configure
-	## scrubs the name from the file it writes — other names survive.
+func test_omp_configure_refuses_primary_denylist_conflict() -> void:
+	## `disabledServers` in the primary file is omp's own `/mcp disable`
+	## state and omp reads it regardless of which tier defines the entry.
+	## Configure refuses with manual guidance (preserving both files) instead
+	## of writing an entry the client immediately hides; status names the
+	## conflict; Remove clears definitions but preserves the denylist.
 	var client := McpClientRegistry.get_by_id("omp")
 	var saved_paths: Dictionary = client.path_template.duplicate(true)
 	var saved_merge: Dictionary = client.config_merge_path_templates.duplicate(true)
 	var saved_project: PackedStringArray = client.config_merge_project_paths
 	var saved_globs: PackedStringArray = client.config_scope_globs
 	var primary := _scratch_dir.path_join("omp_deny/agent/mcp.json")
-	var body := '{"disabledServers":["godot-ai","another"],"mcpServers":{"other":{"command":"other"}}}'
-	_write_text(primary, body)
+	var compatibility := _scratch_dir.path_join("omp_deny/agent/.mcp.json")
+	var primary_body := '{"disabledServers":["godot-ai","another"],"mcpServers":{"other":{"command":"other"}}}'
+	var compatibility_body := '{"mcpServers":{"godot-ai":{"command":"existing","enabled":true,"timeout":0}}}'
+	_write_text(primary, primary_body)
+	_write_text(compatibility, compatibility_body)
+	client.path_template = {"unix": primary, "windows": primary}
+	client.config_merge_path_templates = {
+		"unix": PackedStringArray([primary, compatibility]),
+		"windows": PackedStringArray([primary, compatibility]),
+	}
+	client.config_merge_project_paths = PackedStringArray()
+	client.config_scope_globs = PackedStringArray()
+	var launch := _test_attach_launch()
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", launch)
+	var primary_during := FileAccess.get_file_as_string(primary)
+	var compatibility_during := FileAccess.get_file_as_string(compatibility)
+	var status := McpJsonStrategy.check_status_details(client, "godot-ai", "http://unused", launch)
+	var removed := McpJsonStrategy.remove(client, "godot-ai")
+	var primary_after := FileAccess.get_file_as_string(primary)
+	var compatibility_after := FileAccess.get_file_as_string(compatibility)
+	var status_after := McpJsonStrategy.check_status_details(client, "godot-ai", "http://unused", launch)
+	client.path_template = saved_paths
+	client.config_merge_path_templates = saved_merge
+	client.config_merge_project_paths = saved_project
+	client.config_scope_globs = saved_globs
+	_remove_if_exists(primary)
+	_remove_if_exists(compatibility)
+	assert_eq(configured.get("status"), "error", "a denylisted server must not be configured")
+	assert_contains(str(configured.get("message", "")), "disabled by disabledServers")
+	assert_contains(str(configured.get("message", "")), primary)
+	assert_eq(primary_during, primary_body, "Configure preserves the primary file")
+	assert_eq(compatibility_during, compatibility_body, "Configure preserves the defining file")
+	assert_eq(
+		status.get("status"),
+		McpClient.Status.CONFIGURED_MISMATCH,
+		"status must not report configured while the denylist hides the entry",
+	)
+	assert_contains(str(status.get("error_msg", "")), "disabled by disabledServers")
+	assert_eq(removed.get("status"), "ok", str(removed.get("message", "")))
+	assert_eq(primary_after, primary_body, "Remove preserves the denylist untouched")
+	var removed_servers: Dictionary = (JSON.parse_string(compatibility_after) as Dictionary).get("mcpServers", {})
+	assert_false(removed_servers.has("godot-ai"), "Remove clears the definition")
+	assert_true(removed_servers.has("other") or not compatibility_body.contains("other"), "unrelated servers survive")
+	assert_eq(
+		status_after.get("status"),
+		McpClient.Status.NOT_CONFIGURED,
+		"with the definition gone the inert denylist name reports not-configured",
+	)
+
+
+func test_omp_relocation_env_vars_fail_closed() -> void:
+	## PI_CONFIG_DIR/PI_CODING_AGENT_DIR move the omp config home somewhere
+	## the declared templates never cover. Any set value must fail Configure
+	## and Remove closed naming the variable instead of creating a default
+	## file the running client never reads. Uses a synthetic variable so the
+	## test cannot collide with a real relocated setup.
+	var client := McpClientRegistry.get_by_id("omp")
+	var saved_paths: Dictionary = client.path_template.duplicate(true)
+	var saved_merge: Dictionary = client.config_merge_path_templates.duplicate(true)
+	var saved_project: PackedStringArray = client.config_merge_project_paths
+	var saved_globs: PackedStringArray = client.config_scope_globs
+	var saved_env_vars: PackedStringArray = client.get("config_relocating_env_vars")
+	var primary := _scratch_dir.path_join("omp_env/agent/mcp.json")
 	client.path_template = {"unix": primary, "windows": primary}
 	client.config_merge_path_templates = {
 		"unix": PackedStringArray([primary]),
@@ -6887,23 +6954,25 @@ func test_omp_configure_scrubs_disabled_servers_override() -> void:
 	}
 	client.config_merge_project_paths = PackedStringArray()
 	client.config_scope_globs = PackedStringArray()
-	var launch := _test_attach_launch()
-	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", launch)
-	var primary_after := FileAccess.get_file_as_string(primary)
+	client.set("config_relocating_env_vars", PackedStringArray(["GODOT_AI_TEST_OMP_RELOC"]))
+	var saved_value := OS.get_environment("GODOT_AI_TEST_OMP_RELOC")
+	OS.set_environment("GODOT_AI_TEST_OMP_RELOC", _scratch_dir.path_join("relocated-omp"))
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", _test_attach_launch())
+	var removed := McpJsonStrategy.remove(client, "godot-ai")
+	var status := McpJsonStrategy.check_status_details(client, "godot-ai", "http://unused", _test_attach_launch())
+	var created := FileAccess.file_exists(primary)
+	OS.set_environment("GODOT_AI_TEST_OMP_RELOC", saved_value)
+	var configured_after := McpJsonStrategy.configure(client, "godot-ai", "http://unused", _test_attach_launch())
+	client.set("config_relocating_env_vars", saved_env_vars)
 	client.path_template = saved_paths
 	client.config_merge_path_templates = saved_merge
 	client.config_merge_project_paths = saved_project
 	client.config_scope_globs = saved_globs
 	_remove_if_exists(primary)
-	assert_eq(configured.get("status"), "ok", str(configured.get("message", "")))
-	var parsed: Variant = JSON.parse_string(primary_after)
-	assert_true(parsed is Dictionary)
-	var denylist: Variant = (parsed as Dictionary).get("disabledServers", [])
-	assert_false(
-		(denylist as Array).has("godot-ai"),
-		"a stale denylist name must not keep the configured entry hidden",
-	)
-	assert_true((denylist as Array).has("another"), "denylist names of other servers survive")
-	var servers: Dictionary = (parsed as Dictionary).get("mcpServers", {})
-	assert_eq(servers.get("godot-ai", {}).get("command"), launch.get("command"))
-	assert_true(servers.has("other"))
+	assert_eq(configured.get("status"), "error", "a relocation variable must block Configure")
+	assert_contains(str(configured.get("message", "")), "GODOT_AI_TEST_OMP_RELOC is set")
+	assert_eq(removed.get("status"), "error", "a relocation variable must block Remove")
+	assert_eq(status.get("status"), McpClient.Status.ERROR, "status reports the ambiguity")
+	assert_contains(str(status.get("error_msg", "")), "GODOT_AI_TEST_OMP_RELOC")
+	assert_false(created, "no default file is created while the scope is relocated")
+	assert_eq(configured_after.get("status"), "ok", str(configured_after.get("message", "")))

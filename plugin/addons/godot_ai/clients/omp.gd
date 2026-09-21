@@ -12,11 +12,13 @@ extends McpClient
 ## a fresh entry is created only on tiers[0].
 ##
 ## The user scope can be relocated per launch (`omp --profile`,
-## OMP_PROFILE/PI_PROFILE). `config_scope_globs` fails Configure/Remove
-## closed while any named profile exists, because the active profile is
-## chosen at client launch and is not persisted anywhere the editor can
-## read — status reports the ambiguity instead of green-lighting the
-## default file.
+## OMP_PROFILE/PI_PROFILE) or via environment (`PI_CONFIG_DIR`,
+## `PI_CODING_AGENT_DIR`). `config_scope_globs` and
+## `config_relocating_env_vars` fail Configure/Remove closed while either is
+## detectable, because the effective scope is chosen outside the editor —
+## status reports the ambiguity instead of green-lighting the default file.
+## `disabledServers` in the primary file is omp's own `/mcp disable` state:
+## Configure refuses while it names the server and never edits the list.
 
 
 func _init() -> void:
@@ -44,9 +46,13 @@ func _init() -> void:
 	config_merge_project_paths = PackedStringArray([".omp/mcp.json", ".omp/.mcp.json"])
 	config_merge_first_wins = true
 	config_scope_globs = PackedStringArray(["~/.omp/profiles/*"])
-	## A stale `disabledServers` name hides the server whatever the entry
-	## says; Configure scrubs it from the file it writes, like omp's own
-	## writer. Other names are preserved.
+	## PI_CONFIG_DIR and PI_CODING_AGENT_DIR relocate the omp config home
+	## the same way a named profile does, and the editor can see them: any
+	## set value fails Configure/Remove closed naming the variable.
+	config_relocating_env_vars = PackedStringArray(["PI_CONFIG_DIR", "PI_CODING_AGENT_DIR"])
+	## `disabledServers` is what omp's own `/mcp disable` writes; the plugin
+	## never edits it. Configure refuses while the primary file denylists
+	## the server; status names the conflict; Remove preserves the list.
 	config_denylist_key = "disabledServers"
 	server_key_path = PackedStringArray(["mcpServers"])
 	command_shape = McpClient.CommandShape.FLAT

@@ -123,13 +123,24 @@ var config_merge_first_wins: bool = false
 ## status reports the ambiguity instead of green-lighting the default file.
 var config_scope_globs: PackedStringArray = PackedStringArray()
 
-## Top-level array key in the config file that hides a server by name whatever
-## the entry itself says (omp: `disabledServers`). Configure removes the
-## server name from that array in the file it writes — mirroring the client's
-## own writer, which drops the conflicting denylist name — so a Configure
-## result cannot stay silently suppressed by a stale override. Empty means
-## the client's format has no such key.
+## Top-level array key that hides a server by name whatever the entry says
+## (omp: `disabledServers`), read by the client only from the active
+## user-scope PRIMARY file — the first declared merge tier — regardless of
+## which tier defines the entry. The plugin NEVER writes that array: it is
+## the client's own disable state (omp `/mcp disable`). Configure refuses
+## with manual guidance when the primary denylist names the server,
+## preserving every file, and status reports CONFIGURED_MISMATCH naming the
+## conflict. Remove clears definitions but preserves the denylist (a name
+## without a definition is inert). Empty means the client has no such key.
 var config_denylist_key: String = ""
+
+## Environment variables whose set, non-empty value relocates the client's
+## config home to a path the declared templates do not cover (omp:
+## PI_CONFIG_DIR, PI_CODING_AGENT_DIR). Unlike a named profile these are
+## often visible to the editor process itself, so the strategy reads them
+## directly: any match makes Configure and Remove fail closed with the
+## variable name and value, and status reports the ambiguity.
+var config_relocating_env_vars: PackedStringArray = PackedStringArray()
 
 ## De-duplicate persistent path-ambiguity warnings across recurring status
 ## refreshes. The actionable message still returns on every resolution; only

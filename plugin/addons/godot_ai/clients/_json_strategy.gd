@@ -80,6 +80,12 @@ static func _configure_merged(
 	var tiers: Array = loaded.get("tiers", [])
 	if tiers.is_empty():
 		return {"status": "error", "message": "Could not resolve config path for %s on this OS" % client.display_name}
+	## A primary denylist name is the client's own disable state (`/mcp
+	## disable`); writing an entry the client immediately hides would
+	## false-succeed. Refuse with manual guidance, preserving every file.
+	var denylist_error := _denylist_refusal_error(client, tiers, server_name)
+	if not denylist_error.is_empty():
+		return {"status": "error", "message": denylist_error}
 	var target_index := 0
 	for index in range(tiers.size()):
 		var config: Dictionary = tiers[index]["data"]
@@ -95,7 +101,6 @@ static func _configure_merged(
 	var holder := _ensure_path(config, select_server_key_path(config, client))
 	var existing: Variant = holder.get(server_name, null)
 	holder[server_name] = build_entry(client, server_url, existing, launch)
-	_scrub_denylist(client, config, server_name)
 	var path := str(tier["path"])
 	# F5: refuse to re-serialize a tier whose parsed integers above 2^53 would
 	# lose precision. The same check guards the simple `configure` path.
@@ -198,6 +203,11 @@ static func _check_status_merged(
 		# only the file the user actually has to edit.
 		var effective_index := 0 if _first_wins(client) else project_tiers.size() - 1
 		var effective_tier: Dictionary = project_tiers[effective_index]
+		## The denylist hides the entry whatever the tier and whatever the
+		## entry says, so the suppression check dominates both branches.
+		var suppressed := _denylist_suppressed_error(client, loaded.get("tiers", []), server_name)
+		if not suppressed.is_empty():
+			return {"status": McpClient.Status.CONFIGURED_MISMATCH, "error_msg": suppressed}
 		var details := _entry_status_details(client, effective_tier["entry"], server_url, launch)
 		if details.get("status") != McpClient.Status.CONFIGURED:
 			## Keep `owned` from the effective entry: the post-update migration
@@ -209,7 +219,18 @@ static func _check_status_merged(
 		return {"status": McpClient.Status.CONFIGURED, "error_msg": ""}
 	if effective == null:
 		return {"status": McpClient.Status.NOT_CONFIGURED, "error_msg": ""}
-	return _entry_status_details(client, effective, server_url, launch)
+	var details := _entry_status_details(client, effective, server_url, launch)
+	## omp reads the primary denylist independently of which tier owns the
+	## entry; a matching name hides any source entry, so name the conflict
+	## instead of a green row or a bare mismatch (#1085). Duplicate keeps
+	## `owned` for the post-update migration.
+	var suppressed := _denylist_suppressed_error(client, loaded.get("tiers", []), server_name)
+	if not suppressed.is_empty():
+		var result := details.duplicate()
+		result["status"] = McpClient.Status.CONFIGURED_MISMATCH
+		result["error_msg"] = suppressed
+		return result
+	return details
 
 
 static func _entry_status_details(
@@ -667,38 +688,82 @@ static func _first_wins(client: McpClient) -> bool:
 
 
 ## Fail-closed gate for clients whose user scope can be relocated by something
-## the editor cannot observe (omp named profiles). Any directory matching a
-## declared `config_scope_globs` template means the effective destination is
-## ambiguous; returns the actionable error, "" when the scope is unambiguous.
+## the editor cannot observe. Two ambiguity sources: directories matching a
+## declared `config_scope_globs` template (omp named profiles — the active
+## profile is chosen per client launch), and set relocation environment
+## variables (`config_relocating_env_vars`, omp PI_CONFIG_DIR /
+## PI_CODING_AGENT_DIR) that point the scope outside the declared templates.
+## Returns the actionable error, "" when the scope is unambiguous.
 static func _scope_ambiguity_error(client: McpClient) -> String:
+	var reasons := PackedStringArray()
 	var globs: Variant = client.get("config_scope_globs")
-	if not (globs is PackedStringArray):
-		return ""
-	var found := PackedStringArray()
-	for template in globs:
-		for candidate in McpPathTemplate.expand_path_candidates(String(template)):
-			if DirAccess.dir_exists_absolute(candidate) and not found.has(candidate):
-				found.append(candidate)
-	if found.is_empty():
+	if globs is PackedStringArray:
+		var found := PackedStringArray()
+		for template in globs:
+			for candidate in McpPathTemplate.expand_path_candidates(String(template)):
+				if DirAccess.dir_exists_absolute(candidate) and not found.has(candidate):
+					found.append(candidate)
+		if not found.is_empty():
+			reasons.append("named profiles found at %s" % ", ".join(found))
+	var env_vars: Variant = client.get("config_relocating_env_vars")
+	if env_vars is PackedStringArray:
+		for var_name in env_vars:
+			var value := OS.get_environment(String(var_name)).strip_edges()
+			if not value.is_empty():
+				reasons.append("%s is set to %s" % [var_name, value])
+	if reasons.is_empty():
 		return ""
 	return (
-		"%s named profiles found at %s. A named profile reads only its own agent config and the active profile is chosen per %s launch, so this editor cannot resolve the effective destination; edit the entry manually."
-		% [client.display_name, ", ".join(found), client.display_name]
+		"%s config destination is ambiguous: %s. The effective user scope is chosen outside the editor, so this editor cannot resolve the destination; edit the entry manually."
+		% [client.display_name, "; ".join(reasons)]
 	)
 
 
-## Remove `server_name` from the denylist array of the config being written
-## (`McpClient.config_denylist_key`, omp `disabledServers`), so the freshly
-## configured entry cannot stay hidden by a stale override — the client's own
-## writer drops the conflicting denylist name the same way. Other names and
-## unknown shapes are preserved untouched.
-static func _scrub_denylist(client: McpClient, config: Dictionary, server_name: String) -> void:
+## The client reads its denylist (`McpClient.config_denylist_key`, omp
+## `disabledServers`) only from the active user-scope PRIMARY file — tiers[0]
+## in declared read order — independently of which tier defines the entry; a
+## denylisted name hides any source entry. The plugin never writes that array:
+## it is the client's own disable state. Returns {"path", "key"} when the
+## primary denylists `server_name`, {} otherwise (missing primary or key,
+## non-array shapes, no match).
+static func _primary_denylist_hit(client: McpClient, tiers: Array, server_name: String) -> Dictionary:
 	var key: Variant = client.get("config_denylist_key")
-	if not (key is String) or String(key).is_empty():
-		return
-	var denylist: Variant = config.get(String(key), null)
-	if denylist is Array:
-		(denylist as Array).erase(server_name)
+	if not (key is String) or String(key).is_empty() or tiers.is_empty():
+		return {}
+	var primary: Dictionary = tiers[0]["data"]
+	var denylist: Variant = primary.get(String(key), null)
+	if denylist is Array and (denylist as Array).has(server_name):
+		return {"path": str(tiers[0]["path"]), "key": String(key)}
+	return {}
+
+
+## Configure-time refusal: a denylist name is an explicit user disable in the
+## client (omp `/mcp disable`); re-adding the entry would report success while
+## the client keeps hiding it. Fail closed with manual guidance and preserve
+## every file (#1085). The post-update repin calls Configure too, so it
+## inherits this refusal and can never override the user's choice.
+static func _denylist_refusal_error(client: McpClient, tiers: Array, server_name: String) -> String:
+	var hit := _primary_denylist_hit(client, tiers, server_name)
+	if hit.is_empty():
+		return ""
+	return (
+		"%s is disabled by %s in %s. That list is what %s's own disable command writes; re-enable the server in %s (or remove the name by hand) instead of reconfiguring from the editor."
+		% [server_name, hit["key"], hit["path"], client.display_name, client.display_name]
+	)
+
+
+## Status-time downgrade: the entry exists and matches, but the primary
+## file's denylist hides it from the running client — name the conflict
+## instead of reporting a green row (#1085).
+static func _denylist_suppressed_error(client: McpClient, tiers: Array, server_name: String) -> String:
+	var hit := _primary_denylist_hit(client, tiers, server_name)
+	if hit.is_empty():
+		return ""
+	return "%s is disabled by %s in %s; re-enable it in %s." % [
+		server_name, hit["key"], hit["path"], client.display_name
+	]
+
+
 
 ## Resolve the global config tiers in the client's documented merge order.
 static func _merge_paths(client: McpClient) -> PackedStringArray:
