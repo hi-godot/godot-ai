@@ -166,7 +166,7 @@ These are the tools that move the project from "functional prototype" toward "re
 - `shader.*` — still pending; today shaders are authored via `filesystem_write_text` + `material_set_shader_param`
 - `physics.*` helpers — `physics_shape_autofit` op (under `resource_manage`) derives a Shape2D/Shape3D from a target node's bounds; layer/mask/body helpers still pending
 - light `tilemap.*` — shipped (#622): `tilemap_manage` (set_cell / set_cells_rect / clear / get_cells) + `tileset_manage` (atlas tiles / atlas image)
-- light `navigation.*` — shipped: `navigation_manage` (`region_create` / `mesh_configure` / `bake` / `path_get`)
+- light `navigation.*` — shipped: `navigation_manage` (`bake` / `path_get`)
 
 These matter, but they should come after the project can already run, inspect, and safely iterate.
 

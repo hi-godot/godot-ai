@@ -524,8 +524,6 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("gridmap_clear", "gridmap", &"clear_layer")
 	_dispatcher.register_lazy("gridmap_get_used_cells", "gridmap", &"get_used_cells")
 	_dispatcher.register_lazy("gridmap_list_library_items", "gridmap", &"list_library_items")
-	_dispatcher.register_lazy("navigation_region_create", "navigation", &"region_create")
-	_dispatcher.register_lazy("navigation_mesh_configure", "navigation", &"mesh_configure")
 	_dispatcher.register_lazy("navigation_bake", "navigation", &"bake")
 	_dispatcher.register_lazy("navigation_path_get", "navigation", &"path_get")
 	_dispatcher.register_lazy("csg_create", "csg", &"create")

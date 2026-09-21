@@ -2712,34 +2712,6 @@ class TestPhysicsShapeGenerateTool:
 
 
 class TestNavigationManageTool:
-    async def test_region_create_dispatches(self, mcp_stack):
-        client, plugin = mcp_stack
-
-        async def respond():
-            cmd = await plugin.recv_command()
-            assert cmd["command"] == "navigation_region_create"
-            assert cmd["params"] == {"parent_path": "/Main", "dimension": "3d"}
-            await plugin.send_response(
-                cmd["request_id"],
-                {
-                    "path": "/Main/NavigationRegion3D",
-                    "parent_path": "/Main",
-                    "class": "NavigationRegion3D",
-                    "dimension": "3d",
-                    "mesh_class": "NavigationMesh",
-                    "undoable": True,
-                },
-            )
-
-        task = asyncio.create_task(respond())
-        result = await client.call_tool(
-            "navigation_manage",
-            {"op": "region_create", "params": {"parent_path": "/Main"}},
-        )
-        await task
-        assert result.data["class"] == "NavigationRegion3D"
-        assert result.data["undoable"] is True
-
     async def test_bake_dispatches_deferred_command(self, mcp_stack):
         """bake forwards the region path and force_sync and reports the settled shape."""
         client, plugin = mcp_stack

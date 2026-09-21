@@ -5867,47 +5867,6 @@ async def test_audio_player_create_blocks_when_not_writable():
     assert "audio_player_create" not in sent
 
 
-async def test_navigation_region_create_handler():
-    """Defaults keep the payload minimal; explicit values pass through."""
-    client = StubClient()
-    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await navigation_handlers.navigation_region_create(runtime)
-    assert client.calls[-1]["command"] == "navigation_region_create"
-    assert client.calls[-1]["params"] == {"parent_path": "", "dimension": "3d"}
-    await navigation_handlers.navigation_region_create(
-        runtime, parent_path="/Main", dimension="2d", name="Nav2D", scene_file="res://main.tscn"
-    )
-    assert client.calls[-1]["params"] == {
-        "parent_path": "/Main",
-        "dimension": "2d",
-        "name": "Nav2D",
-        "scene_file": "res://main.tscn",
-    }
-
-
-async def test_navigation_configure_handlers_forward_flat_properties():
-    """Configure ops forward flat params and keep the explicit path."""
-    client = StubClient()
-    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    await navigation_handlers.navigation_mesh_configure(
-        runtime, path="/Main/Region", agent_radius=0.75, cell_size=0.5
-    )
-    assert client.calls[-1]["command"] == "navigation_mesh_configure"
-    assert client.calls[-1]["params"] == {
-        "agent_radius": 0.75,
-        "cell_size": 0.5,
-        "path": "/Main/Region",
-    }
-    await navigation_handlers.navigation_mesh_configure(
-        runtime, path="/Main/Region", cell_size=0.25, scene_file="res://main.tscn"
-    )
-    assert client.calls[-1]["params"] == {
-        "cell_size": 0.25,
-        "path": "/Main/Region",
-        "scene_file": "res://main.tscn",
-    }
-
-
 async def test_navigation_bake_and_path_get_handlers():
     """Bake claims the deferred budget; path_get forwards the explicit map params."""
     client = StubClient()
@@ -5966,7 +5925,7 @@ async def test_navigation_bake_and_path_get_handlers():
     }
 
 
-async def test_navigation_region_create_requires_writable():
+async def test_navigation_bake_requires_writable():
     from godot_ai.godot_client.client import GodotCommandError
     from godot_ai.sessions.registry import Session
 
@@ -5983,4 +5942,4 @@ async def test_navigation_region_create_requires_writable():
     registry.register(session)
     runtime = DirectRuntime(registry=registry, client=client)
     with pytest.raises(GodotCommandError):
-        await navigation_handlers.navigation_region_create(runtime, parent_path="/Main")
+        await navigation_handlers.navigation_bake(runtime, path="/Main/Region")

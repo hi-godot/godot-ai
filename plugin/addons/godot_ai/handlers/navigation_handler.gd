@@ -4,8 +4,8 @@ extends "res://addons/godot_ai/handlers/command_handler.gd"
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializer.gd")
 
-## Navigation authoring for 2D and 3D: regions + navmesh/polygon configuration
-## and baking, and path queries on an explicitly selected map.
+## Navigation authoring for 2D and 3D: baking a region's navmesh/polygon and
+## path queries on an explicitly selected map.
 ##
 ## Every op is dimension-aware — the same params serve NavigationRegion3D /
 ## NavigationMesh and their 2D counterparts, selected by `dimension` ("3d"
@@ -22,44 +22,17 @@ const _CLASSES := {
 	},
 }
 
-## Curated settable vocabulary per dimension. Class applicability is still
-## checked against the object's own property list, so a 2D-only name on a 3D
-## resource reports PROPERTY_NOT_ON_CLASS rather than being silently stored.
-const _MESH_PROPERTIES := {
-	"3d": [
-		"agent_radius", "agent_height", "agent_max_climb", "agent_max_slope",
-		"cell_size", "cell_height", "border_size",
-		"region_min_size", "region_merge_size",
-		"edge_max_length", "edge_max_error",
-		"detail_sample_distance", "detail_sample_max_error",
-		"geometry_collision_mask", "vertices_per_polygon",
-		"geometry_parsed_geometry_type", "geometry_source_geometry_mode",
-		"geometry_source_group_name",
-	],
-	"2d": [
-		"agent_radius", "cell_size", "border_size",
-		"parsed_collision_mask", "parsed_geometry_type",
-		"source_geometry_mode", "source_geometry_group_name",
-	],
-}
-
-## Enum-by-name maps for the source-geometry selectors (identical values in
-## both dimensions).
-const _PARSED_GEOMETRY_TYPES := {
-	"mesh_instances": 0,
-	"static_colliders": 1,
-	"both": 2,
-}
-const _SOURCE_GEOMETRY_MODES := {
-	"root_children": 0,
-	"groups_with_children": 1,
-	"groups_explicit": 2,
-}
-
 ## One deferred bake may spend this long across editor frames. The Python
 ## handler's timeout is this plus its transport margin (a source-shape test
 ## keeps the two together).
 const _BAKE_DEFERRED_TIMEOUT_MS := 30000
+
+## In-flight bakes keyed by region instance id. `bake()` reserves its region
+## before the first yield so a second call in the same frame cannot start a
+## second bake on a region Godot is already baking (the engine logs
+## "NavigationMesh is already baking" and the two jobs split the result).
+## Every terminal path releases the reservation.
+static var _active_bakes: Dictionary = {}
 
 var _undo_redo: EditorUndoRedoManager
 var _connection
@@ -71,124 +44,6 @@ func _init(undo_redo: EditorUndoRedoManager, connection = null) -> void:
 
 
 # ============================================================================
-# navigation_region_create
-# ============================================================================
-
-## Create a NavigationRegion2D/3D with a fresh NavigationPolygon/NavigationMesh
-## attached, as one undo action.
-func region_create(params: Dictionary) -> Dictionary:
-	var dimension_result := _resolve_dimension(params)
-	if dimension_result.has("error"):
-		return dimension_result
-	var dimension: String = dimension_result.dimension
-
-	var scene_check := McpNodeValidator.require_scene_or_error(params.get("scene_file", ""))
-	if scene_check.has("error"):
-		return scene_check
-	var scene_root: Node = scene_check.scene_root
-	var parent_result := _resolve_parent(params.get("parent_path", ""), scene_root)
-	if parent_result.has("error"):
-		return parent_result
-	var parent: Node = parent_result.parent
-
-	var region := ClassDB.instantiate(str(_CLASSES[dimension].region))
-	if region == null:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
-			"Failed to instantiate %s" % _CLASSES[dimension].region)
-	var node_name: String = params.get("name", "")
-	region.name = node_name if not node_name.is_empty() else str(_CLASSES[dimension].region)
-
-	var mesh := ClassDB.instantiate(str(_CLASSES[dimension].mesh))
-	if mesh == null:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
-			"Failed to instantiate %s" % _CLASSES[dimension].mesh)
-	if dimension == "3d":
-		region.navigation_mesh = mesh
-	else:
-		region.navigation_polygon = mesh
-
-	_undo_redo.create_action("MCP: Create %s '%s'" % [_CLASSES[dimension].region, region.name])
-	_undo_redo.add_do_method(parent, "add_child", region, true)
-	_undo_redo.add_do_method(region, "set_owner", scene_root)
-	_undo_redo.add_do_reference(region)
-	_undo_redo.add_do_reference(mesh)
-	_undo_redo.add_undo_method(parent, "remove_child", region)
-	_undo_redo.commit_action()
-
-	return {
-		"data": {
-			"path": McpScenePath.from_node(region, scene_root),
-			"parent_path": McpScenePath.from_node(parent, scene_root),
-			"class": region.get_class(),
-			"dimension": dimension,
-			"mesh_class": mesh.get_class(),
-			"undoable": true,
-		}
-	}
-
-
-# ============================================================================
-# navigation_mesh_configure
-# ============================================================================
-
-## Set navigation mesh / polygon parameters in one undo action.
-func mesh_configure(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_region(params)
-	if resolved.has("error"):
-		return resolved
-	var region: Node = resolved.node
-	var dimension: String = resolved.dimension
-	var mesh: Resource = _get_region_mesh(region, dimension)
-	if mesh == null:
-		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
-			"%s has no %s resource" % [resolved.path, _CLASSES[dimension].mesh])
-
-	var applied := {}
-	var previous := {}
-	for key in params:
-		if key == "path" or key == "scene_file" or key.begins_with("_"):
-			continue
-		if not (_MESH_PROPERTIES[dimension] as Array).has(key):
-			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
-				"Unknown mesh property '%s'. Settable: %s" % [key, ", ".join(_MESH_PROPERTIES[dimension])])
-		var prop_type := _property_type(mesh, key)
-		if prop_type == TYPE_NIL:
-			return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS,
-				"%s has no '%s' property (class %s)" % [resolved.path, key, mesh.get_class()])
-		var coerced := _coerce_mesh_value(params[key], prop_type, key)
-		if coerced.has("error"):
-			return coerced
-		applied[key] = coerced.ok
-		previous[key] = mesh.get(key)
-
-	if applied.is_empty():
-		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM,
-			"Provide at least one property to set. Settable: %s" % ", ".join(_MESH_PROPERTIES[dimension]))
-
-	_undo_redo.create_action("MCP: Configure navigation mesh on %s" % region.name)
-	for key in applied:
-		_undo_redo.add_do_property(mesh, key, applied[key])
-		_undo_redo.add_undo_property(mesh, key, previous[key])
-	_undo_redo.commit_action()
-
-	var applied_out := {}
-	var previous_out := {}
-	for key in applied:
-		applied_out[key] = VariantSerializer.serialize(applied[key])
-		previous_out[key] = VariantSerializer.serialize(previous[key])
-
-	return {
-		"data": {
-			"path": resolved.path,
-			"mesh_class": mesh.get_class(),
-			"applied": applied_out,
-			"previous": previous_out,
-			"undoable": true,
-		}
-	}
-
-
-# ============================================================================
 # navigation_bake
 # ============================================================================
 
@@ -196,9 +51,10 @@ func mesh_configure(params: Dictionary) -> Dictionary:
 ## between the retained pre-bake and baked resources.
 ##
 ## The bake runs on the region's own background thread (`bake_navigation_mesh(true)`);
-## Godot still parses the source geometry on the main thread, but the Recast
-## bake itself never blocks it. The op replies out-of-band (deferred) and is
-## bounded by `_BAKE_DEFERRED_TIMEOUT_MS` with per-frame cancellation checks.
+## Godot still parses the source geometry synchronously inside that call (an
+## engine requirement that cannot be preempted), and the measured duration is
+## reported as `parse_ms`. The op replies out-of-band (deferred) and is bounded
+## by `_BAKE_DEFERRED_TIMEOUT_MS` with per-frame cancellation checks.
 ## Undo restores the exact pre-bake resource; redo restores the exact baked
 ## resource instead of re-baking current geometry.
 func bake(params: Dictionary) -> Dictionary:
@@ -211,7 +67,7 @@ func bake(params: Dictionary) -> Dictionary:
 	if before == null:
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
 			"%s has no %s resource" % [resolved.path, _CLASSES[dimension].mesh])
-	if bool(region.call("is_baking")):
+	if _active_bakes.has(region.get_instance_id()) or bool(region.call("is_baking")):
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"%s is already baking a navigation mesh" % resolved.path)
 
@@ -233,6 +89,11 @@ func bake(params: Dictionary) -> Dictionary:
 		region, dimension, resolved.scene_root, prepared.before, prepared.working,
 		_undo_redo, _connection, request_id, force_sync
 	)
+	## Reserve the region before the driver yields: the region's own
+	## `is_baking()` only flips once the first step calls bake_*, which happens
+	## after a frame, so without this a second request in the same frame would
+	## start a second bake on the same mesh.
+	_active_bakes[region.get_instance_id()] = request_id
 	## No step here: the dispatcher registers the deferred request only after
 	## this handler returns the sentinel, and `_bake_step`'s first pending
 	## check would otherwise see the request as expired and abandon the job.
@@ -337,6 +198,7 @@ static func _bake_job(
 ) -> Dictionary:
 	return {
 		"region": region,
+		"region_id": region.get_instance_id(),
 		"dimension": dimension,
 		"scene_root": scene_root,
 		"before": before,
@@ -348,8 +210,15 @@ static func _bake_job(
 		"phase": "start",
 		"started_ms": Time.get_ticks_msec(),
 		"deadline_ms": _BAKE_DEFERRED_TIMEOUT_MS,
+		"parse_ms": 0,
 		"result": {},
 	}
+
+
+## Drop this job's reservation so the region can bake again. Every terminal
+## path (commit, abort, abandonment, or a driver that never starts) calls it.
+static func _release_bake(job: Dictionary) -> void:
+	_active_bakes.erase(int(job.region_id))
 
 
 ## Advance a bake job by one editor-frame check. Returns true once the job is
@@ -358,16 +227,21 @@ static func _bake_job(
 static func _bake_step(job: Dictionary) -> bool:
 	if str(job.phase) == "done":
 		return true
-	var region: Node = job.region
-	if not is_instance_valid(region) or not region.is_inside_tree():
+	## Read the region untyped first: a typed `Node` assignment on a freed
+	## instance raises "Trying to assign invalid previously freed instance"
+	## before any validity check could run.
+	var region_ref = job.region
+	if not is_instance_valid(region_ref) or not (region_ref as Node).is_inside_tree():
 		_bake_abort(job, ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
 			"The navigation region went away while it was baking"))
 		return true
+	var region: Node = region_ref
 	var connection = job.connection
 	if connection != null and not _deferred_request_pending(connection, str(job.request_id)):
 		## The dispatcher gave up on this request (timeout, client gone):
 		## restore the pre-bake resource and answer nothing.
 		_bake_restore(job)
+		_release_bake(job)
 		job.phase = "done"
 		return true
 	if Time.get_ticks_msec() - int(job.started_ms) > int(job.deadline_ms):
@@ -380,15 +254,33 @@ static func _bake_step(job: Dictionary) -> bool:
 		return true
 	if str(job.phase) == "start":
 		job.phase = "baking"
+		var parse_started := Time.get_ticks_msec()
 		if str(job.dimension) == "3d":
 			region.call("bake_navigation_mesh", true)
 		else:
 			region.call("bake_navigation_polygon", true)
+		## The source-geometry parse inside bake_* is a synchronous engine call
+		## that cannot be preempted, so it is measured and reported. If it alone
+		## exhausted the budget, fail now instead of waiting on a bake that has
+		## already overspent it.
+		job.parse_ms = Time.get_ticks_msec() - parse_started
+		if int(job.parse_ms) > int(job.deadline_ms):
+			_bake_abort(job, ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT,
+				"navigation_bake spent %d ms parsing source geometry, over its %d ms budget"
+				% [int(job.parse_ms), int(job.deadline_ms)]))
+			return true
 		return false
 	if bool(region.call("is_baking")):
 		return false
 	## `is_baking()` is cleared by NavMeshGenerator3D::sync() only after the
 	## worker finished and wrote the baked data, so the mesh is final here.
+	## Commit only while the region still holds this job's working duplicate: a
+	## manual assignment (or another tool) may have replaced it mid-bake, and
+	## overwriting that newer resource would discard the user's change.
+	if _get_region_mesh(region, str(job.dimension)) != job.working:
+		_bake_abort(job, ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND,
+			"The region's navigation resource was replaced while the bake was in flight; the bake result was discarded"))
+		return true
 	_bake_commit(job)
 	return true
 
@@ -442,23 +334,31 @@ static func _bake_commit(job: Dictionary) -> void:
 			"vertex_count": vertex_count,
 			"force_sync": bool(job.force_sync),
 			"bake_settle": "settled",
+			"parse_ms": int(job.parse_ms),
 			"undoable": true,
 		}
 	}
+	_release_bake(job)
 	job.phase = "done"
 
 
 static func _bake_abort(job: Dictionary, error: Dictionary) -> void:
 	_bake_restore(job)
+	_release_bake(job)
 	job.result = error
 	job.phase = "done"
 
 
 ## Put the pre-bake resource back after an aborted bake. The region may have
-## been freed meanwhile; only touch it when it is still a valid instance.
+## been freed meanwhile, so it is validity-checked before the typed assignment;
+## and the pre-bake resource is only restored while the region still holds this
+## job's working duplicate — a newer assignment must not be clobbered.
 static func _bake_restore(job: Dictionary) -> void:
-	var region: Node = job.region
-	if not is_instance_valid(region):
+	var region_ref = job.region
+	if not is_instance_valid(region_ref):
+		return
+	var region: Node = region_ref
+	if _get_region_mesh(region, str(job.dimension)) != job.working:
 		return
 	if str(job.dimension) == "3d":
 		region.call("set_navigation_mesh", job.before)
@@ -472,9 +372,11 @@ static func _bake_restore(job: Dictionary) -> void:
 static func _drive_bake_job(job: Dictionary) -> void:
 	var connection = job.connection
 	if not is_instance_valid(connection):
+		_release_bake(job)
 		return
 	var tree: SceneTree = connection.get_tree()
 	if tree == null:
+		_release_bake(job)
 		return
 	var work := ScriptWork.begin("navigation_bake")
 	## The first yield lets the dispatcher register the deferred request before
@@ -532,16 +434,6 @@ static func _resolve_dimension(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Invalid dimension '%s'. Valid: 2d, 3d" % dimension)
 	return {"dimension": dimension}
-
-
-func _resolve_parent(parent_path: String, scene_root: Node) -> Dictionary:
-	if parent_path.is_empty():
-		return {"parent": scene_root}
-	var parent := McpScenePath.resolve(parent_path, scene_root)
-	if parent == null:
-		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
-			McpScenePath.format_parent_error(parent_path, scene_root))
-	return {"parent": parent}
 
 
 ## Resolve `path` to a navigation region and infer its dimension from the
@@ -611,61 +503,9 @@ static func _get_region_mesh(region: Node, dimension: String) -> Resource:
 	return region.get("navigation_polygon")
 
 
-## Declared Variant type of `prop` on `object`, or TYPE_NIL when absent.
-static func _property_type(object: Object, prop: String) -> int:
-	for entry in object.get_property_list():
-		if entry.name == prop:
-			return int(entry.get("type", TYPE_NIL))
-	return TYPE_NIL
-
-
 # ============================================================================
-# Helpers — value coercion
+# Helpers — path points
 # ============================================================================
-
-## Coerce a mesh property to its declared type, with enum-by-name support for
-## the source-geometry selectors.
-static func _coerce_mesh_value(raw: Variant, prop_type: int, key: String) -> Dictionary:
-	if prop_type == TYPE_INT and raw is String:
-		## Enum names are only accepted for the property that owns the
-		## vocabulary: `vertices_per_polygon: "both"` must not silently store 2.
-		var enum_map := _enum_map_for_property(key)
-		if not enum_map.is_empty():
-			if enum_map.has(raw):
-				return {"ok": int(enum_map[raw])}
-			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
-				"Invalid '%s' value '%s'. Valid names: %s" % [key, raw, ", ".join(enum_map.keys())])
-		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
-			"Cannot set '%s' to %s (expected %s)" % [key, type_string(typeof(raw)), type_string(prop_type)])
-	match prop_type:
-		TYPE_FLOAT:
-			var parsed: Variant = McpJsonValues.parse_float(raw)
-			if parsed != null:
-				return {"ok": parsed}
-		TYPE_INT:
-			if raw is int or raw is float or raw is bool:
-				return {"ok": int(raw)}
-		TYPE_BOOL:
-			if raw is bool or raw is int or raw is float:
-				return {"ok": bool(raw)}
-		TYPE_STRING:
-			if raw is String:
-				return {"ok": raw}
-	return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
-		"Cannot set '%s' to %s (expected %s)" % [key, type_string(typeof(raw)), type_string(prop_type)])
-
-
-## The enum-name vocabulary a property accepts, or an empty dict for plain
-## integer properties. The 2D and 3D source-geometry selectors share their
-## tables because the enum values are identical.
-static func _enum_map_for_property(key: String) -> Dictionary:
-	match key:
-		"geometry_parsed_geometry_type", "parsed_geometry_type":
-			return _PARSED_GEOMETRY_TYPES
-		"geometry_source_geometry_mode", "source_geometry_mode":
-			return _SOURCE_GEOMETRY_MODES
-	return {}
-
 
 ## Parse a world point for path queries from {x,y[,z]} / [x,y[,z]].
 static func _coerce_vector(raw: Variant, dimension: String, param_name: String) -> Dictionary:
