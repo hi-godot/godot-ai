@@ -16,6 +16,7 @@ from pathlib import Path
 
 import httpx2 as httpx
 import pytest
+import websockets
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
@@ -42,7 +43,12 @@ from godot_ai.transport.capability import (
     generate_capabilities,
     read_capabilities,
 )
-from tests.conftest import allocate_free_ports, isolate_capability_directory
+from tests.conftest import (
+    MockGodotPlugin,
+    allocate_free_ports,
+    isolate_capability_directory,
+    perform_v4_handshake,
+)
 
 
 def _runtime_capability_dir(runtime_dir: Path) -> Path:
@@ -683,3 +689,94 @@ async def test_clean_sse_eof_reports_unknown_outcome_without_replay() -> None:
     error = result.structured_content["error"]
     assert error["code"] == "TRANSPORT_OUTCOME_UNKNOWN"
     assert error["data"]["retryable"] is False
+
+
+@pytest.mark.parametrize("failure", ["disconnect", "malformed"])
+async def test_editor_failure_preserves_unknown_write_outcome_through_stdio(
+    tmp_path: Path, failure: str
+) -> None:
+    http_port, ws_port = allocate_free_ports(2)
+    runtime_dir = tmp_path / "runtime"
+    transport = _bridge_transport(http_port, ws_port, runtime_dir, tmp_path / "attach.log")
+    sentinel = tmp_path / "sentinel.txt"
+    sentinel.write_text("before", encoding="utf-8")
+    writes = []
+    peer = None
+    backend_pid = None
+    try:
+        async with Client(transport, timeout=20, init_timeout=30) as client:
+            backend_pid = await _wait_backend_pid(runtime_dir / f"backend-{http_port}.log")
+            capability = read_capabilities(http_port, _runtime_capability_dir(runtime_dir))
+            assert capability is not None
+
+            async def connect():
+                ws = await websockets.connect(f"ws://127.0.0.1:{ws_port}")
+                await perform_v4_handshake(
+                    ws, capability=capability.websocket, session_id="sentinel"
+                )
+                return MockGodotPlugin(ws, "sentinel")
+
+            peer = await connect()
+
+            async def apply_without_valid_ack():
+                command = await peer.recv_command(timeout=10)
+                assert command["command"] == "write_file"
+                writes.append(command["request_id"])
+                sentinel.write_text(command["params"]["content"], encoding="utf-8")
+                if failure == "disconnect":
+                    await peer.ws.close(code=1011, reason="private diagnostic must not escape")
+                else:
+                    await peer.ws.send(
+                        json.dumps({"request_id": command["request_id"], "status": 42})
+                    )
+
+            handler = asyncio.create_task(apply_without_valid_ack())
+            result = await client.call_tool(
+                "filesystem_manage",
+                {
+                    "op": "write_text",
+                    "params": {"path": "res://sentinel.txt", "content": "applied"},
+                    "session_id": "sentinel",
+                },
+                raise_on_error=False,
+            )
+            await handler
+            assert result.is_error
+            assert result.structured_content is not None
+            error = result.structured_content["error"]
+            assert error["code"] == "TRANSPORT_OUTCOME_UNKNOWN"
+            assert error["data"]["retryable"] is False
+            assert error["data"]["sub_code"] == (
+                "EDITOR_DISCONNECTED" if failure == "disconnect" else "MALFORMED_EDITOR_RESPONSE"
+            )
+            assert "private diagnostic" not in json.dumps(result.structured_content)
+            assert sentinel.read_text(encoding="utf-8") == "applied"
+            assert len(writes) == 1
+            if failure == "disconnect":
+                peer = await connect()
+
+            async def read_after_failure():
+                command = await peer.recv_command(timeout=10)
+                assert command["command"] == "read_file", "an ambiguous write must never replay"
+                await peer.send_response(
+                    command["request_id"], {"content": sentinel.read_text(encoding="utf-8")}
+                )
+
+            reader = asyncio.create_task(read_after_failure())
+            result = await client.call_tool(
+                "filesystem_manage",
+                {
+                    "op": "read_text",
+                    "params": {"path": "res://sentinel.txt"},
+                    "session_id": "sentinel",
+                },
+            )
+            await reader
+            assert result.data["content"] == "applied"
+            with pytest.raises(TimeoutError):
+                await peer.recv_command(timeout=0.2)
+    finally:
+        if peer is not None:
+            await peer.close()
+        if backend_pid is not None:
+            _terminate_pid(backend_pid)

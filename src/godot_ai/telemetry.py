@@ -48,7 +48,7 @@ from urllib.parse import urlparse
 import httpx
 
 from godot_ai import __version__ as _PACKAGE_VERSION
-from godot_ai.protocol.errors import EditorNotReadySubCode, ErrorCode
+from godot_ai.protocol.errors import EditorNotReadySubCode, EditorTransportSubCode, ErrorCode
 
 logger = logging.getLogger("godot-ai-telemetry")
 
@@ -829,28 +829,21 @@ def _safe_exception_category(exc: Exception) -> str:
 
 
 def _safe_error_sub_code(exc: Exception) -> str | None:
-    """Return ``data.sub_code`` from a GodotCommandError, allowlisted.
-
-    #651 stage 1: EDITOR_NOT_READY carries the concrete editor state in
-    ``data.sub_code`` so telemetry can attribute the opaque bucket per
-    state. Only known ``EditorNotReadySubCode`` values pass — ``data`` is
-    plugin-provided, and arbitrary strings could leak project details the
-    same way exception messages can (see ``_safe_exception_category``).
-    """
+    """Return only the fixed sub-codes belonging to this error family."""
     if exc.__class__.__name__ != "GodotCommandError":
         return None
-    ## Scope to EDITOR_NOT_READY: sub-codes are that family's vocabulary,
-    ## and a different code carrying a stray ``data.sub_code`` (plugin bug,
-    ## handler copy-paste) must not mis-attribute its telemetry row.
     code = getattr(exc, "code", None)
-    code_value = code.value if isinstance(code, ErrorCode) else code
-    if code_value != ErrorCode.EDITOR_NOT_READY.value:
+    if code == ErrorCode.EDITOR_NOT_READY:
+        allowed = {m.value for m in EditorNotReadySubCode}
+    elif code == ErrorCode.TRANSPORT_OUTCOME_UNKNOWN:
+        allowed = {m.value for m in EditorTransportSubCode}
+    else:
         return None
     data = getattr(exc, "data", None)
     if not isinstance(data, dict):
         return None
     sub_code = data.get("sub_code")
-    if isinstance(sub_code, str) and sub_code in {m.value for m in EditorNotReadySubCode}:
+    if isinstance(sub_code, str) and sub_code in allowed:
         return sub_code
     return None
 

@@ -32,6 +32,7 @@ from godot_ai.protocol.envelope import (
     SceneChangedEvent,
     TelemetryOptOutEvent,
 )
+from godot_ai.protocol.errors import EditorTransportError, EditorTransportSubCode
 from godot_ai.services.custom_tool_service import CustomToolDefinition, CustomToolService
 from godot_ai.sessions.registry import Session, SessionRegistry
 from godot_ai.telemetry import RecordType, latch_runtime_opt_out, record_telemetry
@@ -619,7 +620,8 @@ class GodotWebSocketServer:
                         )
                         if malformed is not None:
                             malformed.set_exception(
-                                ConnectionError(
+                                EditorTransportError(
+                                    EditorTransportSubCode.MALFORMED_EDITOR_RESPONSE,
                                     f"Malformed response from session {session_id} "
                                     f"for request {request_id}"
                                 )

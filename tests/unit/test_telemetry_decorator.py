@@ -462,3 +462,34 @@ class TestInstallFastmcpWraps:
 
         assert wrapper.__annotations__ == target.__annotations__
         assert wrapper.__annotations__ is not target.__annotations__
+
+
+@pytest.mark.parametrize(
+    "code,sub_code,expected",
+    [
+        ("TRANSPORT_OUTCOME_UNKNOWN", "EDITOR_DISCONNECTED", "EDITOR_DISCONNECTED"),
+        ("TRANSPORT_OUTCOME_UNKNOWN", "MALFORMED_EDITOR_RESPONSE", "MALFORMED_EDITOR_RESPONSE"),
+        ("TRANSPORT_OUTCOME_UNKNOWN", "EDITOR_IMPORTING", None),
+        ("EDITOR_NOT_READY", "EDITOR_DISCONNECTED", None),
+        ("INTERNAL_ERROR", "EDITOR_DISCONNECTED", None),
+        ("TRANSPORT_OUTCOME_UNKNOWN", "res://private-project", None),
+    ],
+)
+def test_transport_subcodes_are_family_scoped_and_private_data_is_not_exported(
+    isolated_collector, code, sub_code, expected
+):
+    _, sent = isolated_collector
+
+    @tel.telemetry_tool("filesystem_manage")
+    def fail():
+        raise GodotCommandError(
+            code, "private diagnostic", {"sub_code": sub_code, "path": "res://private-project"}
+        )
+
+    with pytest.raises(GodotCommandError):
+        fail()
+    _wait_for(sent, 1)
+    assert len(sent) == 1
+    assert sent[0].data["error"] == code
+    assert sent[0].data.get("error_sub_code") == expected
+    assert "private" not in str(sent[0].data)

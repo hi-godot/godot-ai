@@ -11,9 +11,8 @@ class ErrorCode(StrEnum):
     EDITOR_NOT_READY = "EDITOR_NOT_READY"
     INVALID_PARAMS = "INVALID_PARAMS"
     PLUGIN_DISCONNECTED = "PLUGIN_DISCONNECTED"
-    # Emitted by the attach bridge when a tools/call request may have reached
-    # the backend. Automatic replay is forbidden because the operation may
-    # already have completed.
+    # Emitted when a dispatched call lacks a usable backend or editor response.
+    # Automatic replay is forbidden because the operation may have completed.
     TRANSPORT_OUTCOME_UNKNOWN = "TRANSPORT_OUTCOME_UNKNOWN"
     # Python editor bridge exhausted its bounded pending-command capacity.
     TRANSPORT_OVERLOADED = "TRANSPORT_OVERLOADED"
@@ -108,3 +107,14 @@ class EditorNotReadySubCode(StrEnum):
     # command arrived while a synchronous test run held the editor main
     # thread and was rejected (retryable) instead of buffered.
     EDITOR_TEST_RUNNING = "EDITOR_TEST_RUNNING"
+
+
+class EditorTransportSubCode(StrEnum):
+    EDITOR_DISCONNECTED = "EDITOR_DISCONNECTED"
+    MALFORMED_EDITOR_RESPONSE = "MALFORMED_EDITOR_RESPONSE"
+
+
+class EditorTransportError(ConnectionError):
+    def __init__(self, sub_code: EditorTransportSubCode, message: str):
+        self.sub_code = sub_code
+        super().__init__(message)

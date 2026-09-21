@@ -32,7 +32,7 @@ Every MCP tool and resource call emits one record with:
 - `sub_action` — for rollup tools, the `op` (e.g. `save_as` for `scene_manage`)
 - `success` bool
 - `duration_ms`
-- an error *category* on failure — the structured error-code value for `GodotCommandError` (plus an allowlisted `sub_code` for `EDITOR_NOT_READY`), otherwise just the exception class name. Exception message text never leaves the process (it can embed project paths).
+- an error *category* on failure — the structured error-code value for `GodotCommandError` (plus an allowlisted `sub_code` for `EDITOR_NOT_READY` or `TRANSPORT_OUTCOME_UNKNOWN`), otherwise just the exception class name. Exception message text never leaves the process (it can embed project paths).
 - the hashed `session_id` if the tool targets a specific editor
 
 ### Startup
