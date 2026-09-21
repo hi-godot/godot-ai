@@ -376,22 +376,25 @@ shown by Configure.
 
 ### Oh My Pi
 
-Oh My Pi (`omp`) reads MCP servers from `~/.omp/agent/mcp.json`
-(`%USERPROFILE%/.omp/agent/mcp.json` on Windows) under the standard
-`mcpServers` map ([project](https://github.com/can1357/oh-my-pi)). Entries
-are flat `command`/`args`/`env` with no `type` discriminator: stdio is the
-default when `type` is omitted, and omp rejects an entry that carries both
-`command` and `url`, so reconfigure scrubs `url`, `headers`, and any leftover
-`type` from an http-era entry. `enabled` and `timeout` (milliseconds) are
-omp's documented user-state fields; Configure seeds a 300-second `timeout` on
-a fresh entry — omp's 30-second default undercuts `test_run`'s 300-second
-server budget — and preserves both across reconfigure.
+Oh My Pi (`omp`) uses a typeless `command`/`args`/`env` entry under
+`mcpServers`. The default-profile destination is `~/.omp/agent/mcp.json`
+(`%USERPROFILE%/.omp/agent/mcp.json` on Windows).
 
-omp consults project `.omp/mcp.json` then `.omp/.mcp.json` before the user
-file, and the first definition of a name wins, so a project entry overrides
-the user file. The dock fails closed with the exact path instead of writing a
-shadowed entry. `~/.omp/agent/.mcp.json` and root `mcp.json`/`.mcp.json` are
-compatibility reads omp never writes; a godot-ai entry there is shadowed by
-the primary-file write. `PI_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, and named
-profiles can relocate the omp user root; users on a relocated root should
-follow the manual instructions instead of Configure.
+This descriptor is **manual-only**: Configure and Remove return instructions
+without changing files. A new primary entry would shadow a same-named entry
+in `~/.omp/agent/.mcp.json` or root `mcp.json`/`.mcp.json`, potentially losing
+its `enabled`, `timeout`, `env`, or other user settings. Preserve those settings
+when moving an existing entry. Project `.omp/mcp.json` takes precedence over
+`.omp/.mcp.json`, followed by the active profile's user files; duplicate names
+are not merged.
+
+The displayed path and status describe the default profile. `PI_CONFIG_DIR`,
+`PI_CODING_AGENT_DIR`, `OMP_PROFILE`/`PI_PROFILE`, and `omp --profile` can select
+another destination. Confirm the active profile's file before applying the
+manual entry; Godot does not discover the running client's profile.
+
+The suggested fresh entry sets `timeout: 300000` milliseconds because omp's
+30-second default can interrupt long Godot calls. Preserve an existing timeout
+(including `0`, which disables it) and disabled state. `OMP_MCP_TIMEOUT_MS` takes
+precedence over this per-server value. See the [upstream MCP configuration
+guide](https://github.com/can1357/oh-my-pi/blob/main/docs/mcp-config.md).

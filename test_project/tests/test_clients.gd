@@ -6719,3 +6719,38 @@ func test_omp_descriptor_and_stdio_entry() -> void:
 	assert_false(entry.has("url"))
 	assert_false(entry.has("headers"))
 	assert_true(McpJsonStrategy.verify_entry(c, entry, "http://unused", launch))
+
+
+func test_omp_manual_flow_preserves_primary_compatibility_and_relocated_files() -> void:
+	var client := McpClientRegistry.get_by_id("omp")
+	var saved_paths: Dictionary = client.path_template.duplicate(true)
+	var saved_merge: Dictionary = client.config_merge_path_templates.duplicate(true)
+	var primary := _scratch_dir.path_join("omp_manual/agent/mcp.json")
+	var compatibility := _scratch_dir.path_join("omp_manual/agent/.mcp.json")
+	var relocated := _scratch_dir.path_join("omp_manual/profile/agent/mcp.json")
+	var body := '{"mcpServers":{"godot-ai":{"command":"existing","enabled":false,"timeout":0,"env":{"SENTINEL":"keep"}},"other":{"command":"other"}}}'
+	_write_text(compatibility, body)
+	_write_text(relocated, body)
+	client.path_template = {"unix": primary, "windows": primary}
+	client.config_merge_path_templates = {"unix": PackedStringArray([primary]), "windows": PackedStringArray([primary])}
+	var configured := McpClientConfigurator.configure("omp", "http://127.0.0.1:8000/mcp")
+	var created := FileAccess.file_exists(primary)
+	_write_text(primary, body)
+	var configured_existing := McpClientConfigurator.configure("omp", "http://127.0.0.1:8000/mcp")
+	var removed := McpClientConfigurator.remove("omp", "http://127.0.0.1:8000/mcp")
+	var primary_after := FileAccess.get_file_as_string(primary)
+	var compatibility_after := FileAccess.get_file_as_string(compatibility)
+	var relocated_after := FileAccess.get_file_as_string(relocated)
+	client.path_template = saved_paths
+	client.config_merge_path_templates = saved_merge
+	_remove_if_exists(primary)
+	_remove_if_exists(compatibility)
+	_remove_if_exists(relocated)
+	assert_false(client.automatic_config_edits, "unknown active profile requires manual editing")
+	for result in [configured, configured_existing, removed]:
+		assert_eq(result.get("status"), "error")
+		assert_contains(str(result.get("message", "")), "manual edit")
+	assert_false(created, "Configure must not shadow compatibility state with a new primary entry")
+	assert_eq(primary_after, body, "Configure and Remove preserve existing primary user state")
+	assert_eq(compatibility_after, body, "compatibility config remains byte-identical")
+	assert_eq(relocated_after, body, "profile config remains byte-identical")

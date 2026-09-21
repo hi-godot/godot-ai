@@ -61,7 +61,7 @@ restart that client.
 
 Supported clients include **Claude Code**, **Claude Desktop**, **Codex**,
 **Antigravity**, **Hermes Agent**, **DeepSeek Harness**, **Cursor**,
-**VS Code**, and **Oh My Pi**.
+**VS Code**, and **Oh My Pi** (manual configuration).
 The dock lists all supported clients and provides a **Run this manually**
 fallback where needed.
 

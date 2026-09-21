@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import re
 import signal
@@ -609,3 +610,76 @@ async def test_loopback_status_lease_and_mcp_ignore_proxy_environment(
     finally:
         _terminate_test_process(process)
         backend_log.close()
+
+
+async def test_clean_sse_eof_reports_unknown_outcome_without_replay() -> None:
+    methods: list[str] = []
+    server_errors: list[Exception] = []
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            async with asyncio.timeout(10):
+                headers = await reader.readuntil(b"\r\n\r\n")
+                length = next(
+                    int(line.split(b":", 1)[1])
+                    for line in headers.split(b"\r\n")
+                    if line.lower().startswith(b"content-length:")
+                )
+                payload = json.loads(await reader.readexactly(length))
+                method = payload["method"]
+                methods.append(method)
+                status, mime = "200 OK", "application/json"
+                result = None
+                if method == "initialize":
+                    result = {
+                        "protocolVersion": payload["params"]["protocolVersion"],
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "eof-fixture", "version": "1"},
+                    }
+                elif method == "tools/list":
+                    result = {"tools": [{
+                        "name": "mutation",
+                        "inputSchema": {"type": "object", "properties": {}},
+                    }]}
+                elif method == "tools/call":
+                    mime, body = "text/event-stream", b": ping\n\n"
+                else:
+                    status, body = "202 Accepted", b""
+                if result is not None:
+                    body = json.dumps({
+                        "jsonrpc": "2.0", "id": payload["id"], "result": result
+                    }).encode()
+                writer.write((
+                    f"HTTP/1.1 {status}\r\nContent-Type: {mime}\r\n"
+                    f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+                ).encode() + body)
+                await writer.drain()
+        except Exception as exc:
+            server_errors.append(exc)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def ready() -> BackendStatus:
+        return BackendStatus(
+            instance_id="stable-eof-fixture", server_version=__version__,
+            attach_protocol_version=ATTACH_PROTOCOL_VERSION, ws_port=9500,
+            exclude_domains=(), owner_type="external", tool_catalog_hash="0" * 64,
+            package_path="fixture",
+        )
+
+    server = await asyncio.start_server(respond, "127.0.0.1", 0)
+    async with server:
+        port = server.sockets[0].getsockname()[1]
+        proxy = create_attach_proxy(
+            f"http://127.0.0.1:{port}/mcp", ready, ready, lambda: "t" * 32
+        )
+        async with Client(proxy, timeout=10) as client:
+            result = await client.call_tool("mutation", {}, raise_on_error=False)
+    assert not server_errors
+    assert methods.count("tools/call") == 1
+    assert result.is_error is True
+    assert isinstance(result.structured_content, dict)
+    error = result.structured_content["error"]
+    assert error["code"] == "TRANSPORT_OUTCOME_UNKNOWN"
+    assert error["data"]["retryable"] is False

@@ -687,7 +687,7 @@ func test_registry_wide_attach_shape_declarations() -> void:
 		"hermes": [McpClient.CommandShape.FLAT, null, ["url", "headers"]],
 		"pi": [McpClient.CommandShape.FLAT, null, ["url", "headers", "type"]],
 		## omp is typeless FLAT like Pi; a leftover `type` from an http-era
-		## entry breaks omp's command/url one-of validation, so it is scrubbed.
+		## entry is removed when rendering the canonical stdio configuration.
 		"omp": [McpClient.CommandShape.FLAT, null, ["url", "headers", "type"]],
 		## DeepSeek Harness nests the launch under the loader entry's `config`
 		## and pins `transport` next to command/args (see _dsh_strategy.gd).
