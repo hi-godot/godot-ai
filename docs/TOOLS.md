@@ -26,7 +26,7 @@ not the MCP tool names.
 | `batch_execute` | Run multiple plugin commands atomically (rollback on first error) |
 | `node_create` / `node_set_property` / `node_find` | Common node writes + search |
 | `scene_open` / `scene_save` | Open and save scenes |
-| `script_create` / `script_attach` / `script_patch` | Create, attach, anchor-edit GDScript files |
+| `script_create` / `script_attach` / `script_patch` | Create, attach, anchor-edit script files (GDScript validated; C# text-only, see [C# support](#c-support)) |
 | `project_run` | Play the project, then wait briefly for game liveness (autosave persists in-memory MCP edits unless `autosave=False`) |
 | `test_run` | Run GDScript test suites in the editor — see [testing.md](testing.md) for writing suites and the `McpTestSuite` API |
 | `logs_read` | Read plugin / game / editor / combined log buffers. `source="editor"` surfaces parse errors, GDScript reload warnings, @tool/EditorPlugin runtime errors, push_error/push_warning, and visible Debugger dock Errors-tab rows — use this when the editor's Output or Debugger Errors panel shows red/yellow rows |
@@ -173,6 +173,37 @@ field is the reliable error channel for MCP-written code: the parse failure
 may never ring the `new_errors_since_last_call` doorbell (see "Headless
 sessions" above, #766).
 
+### C# support
+
+GDScript (`.gd`) is the full contract above. C# (`.cs`) is **text-only**
+(#908): the plugin writes, reads, patches and outlines `.cs` files, but it
+never compiles .NET, so nothing on this surface reports a C# compiler error.
+
+- `script_create` and `script_patch` accept `.cs`. The response carries
+  `language: "csharp"`, an empty `diagnostics` array with
+  `diagnostics_status: "not_checked"` (never `"checked"`), a
+  `validation_hint` telling the caller to build, and `dotnet_editor`
+  (whether the connected editor build has .NET at all). Overwrites and
+  patches report `reloaded: false, reload_reason: "csharp_requires_build"`
+  — C# only picks up new source when the assembly is rebuilt.
+- To see compiler errors, build the project (editor **Build** button or
+  `dotnet build`) and read `logs_read`; the editor log router already tags
+  `.cs` file references.
+- On a non-.NET editor build a `.cs` is not a resource: `script_create`
+  replies synchronously (no import-settle wait), `cleanup.rm` lists only the
+  `.cs` (no `.uid` sidecar), and `script_attach` returns
+  `VALUE_OUT_OF_RANGE` naming the missing .NET support instead of a generic
+  "Script not found". On a .NET build, attach after building and scanning.
+- `script_manage(op="find_symbols")` outlines a `.cs` from a line scan:
+  the first `class` and its base type, methods, `[Signal]` delegates (the
+  Godot `EventHandler` suffix is dropped) and `[Export]` members. Response
+  `language` says which parser ran.
+- Any other extension is still rejected; `filesystem_manage(op="write_text")`
+  handles arbitrary text files.
+
+A .NET build/diagnostics channel is tracked separately from this text-only
+contract.
+
 ## Domain rollups (`<domain>_manage`)
 
 Each rollup is a single MCP tool dispatched by `op` name + `params` dict.
@@ -196,7 +227,7 @@ Calls take the form:
 |------|-----|
 | `scene_manage` | `create`, `save_as`, `get_roots` |
 | `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `add_to_group`, `remove_from_group` |
-| `script_manage` | `read`, `detach`, `find_symbols` |
+| `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |

@@ -6,6 +6,28 @@ const DiagnosticsCapture := preload("res://addons/godot_ai/utils/diagnostics_cap
 const ValidationLogger := preload("res://addons/godot_ai/runtime/validation_logger.gd")
 
 ## Handles script creation, reading, attaching, detaching, and symbol inspection.
+##
+## Two script languages cross this surface (#908). GDScript (`.gd`) is the
+## full contract: parse-validated on write, hot-reloaded when already loaded,
+## outlined by `find_symbols`. C# (`.cs`) is text-only: the plugin writes the
+## bytes and outlines the file, but it never compiles .NET — the caller has
+## to build the project (editor Build button or `dotnet build`) to learn
+## about compiler errors, and a `.cs` is only loadable/attachable on a
+## .NET-enabled editor build after that build. Every `.cs` response says so
+## (`diagnostics_status: "not_checked"`, `validation_hint`, `dotnet_editor`)
+## instead of reporting a plain success the caller could mistake for
+## validation.
+
+const LANGUAGE_GDSCRIPT := "gdscript"
+const LANGUAGE_CSHARP := "csharp"
+const CSHARP_VALIDATION_HINT := (
+	"C# is written as text only; Godot AI does not compile .NET. Build the "
+	+ "project (editor Build button or `dotnet build`) to surface compiler "
+	+ "errors, then filesystem_manage(op=\"scan\") before attaching the script."
+)
+const UNSUPPORTED_EXTENSION_MESSAGE := (
+	"Path must end with .gd or .cs (use filesystem_manage op=\"write_text\" for other text files)"
+)
 
 var _undo_redo: EditorUndoRedoManager
 var _connection: McpConnection
@@ -27,8 +49,10 @@ func create_script(params: Dictionary) -> Dictionary:
 	if path_err != null:
 		return path_err
 
-	if not path.ends_with(".gd"):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must end with .gd")
+	var language := script_language(path)
+	if language.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, UNSUPPORTED_EXTENSION_MESSAGE)
+	var is_csharp := language == LANGUAGE_CSHARP
 
 	var existed_before := FileAccess.file_exists(path)
 
@@ -46,8 +70,12 @@ func create_script(params: Dictionary) -> Dictionary:
 		"import_settle": "already_known" if existed_before else "not_waited",
 		"undoable": false,
 		"reason": "File system operations cannot be undone via editor undo",
+		"language": language,
 	}
-	_attach_gdscript_diagnostics(data, path, content)
+	if is_csharp:
+		_attach_csharp_not_checked(data)
+	else:
+		_attach_gdscript_diagnostics(data, path, content)
 
 	# A freshly-declared `class_name` is NOT in the global class table until a
 	# filesystem scan runs — update_file() below registers the file with the
@@ -60,7 +88,7 @@ func create_script(params: Dictionary) -> Dictionary:
 	# Skip the hint when the script failed to parse: a scan won't register a
 	# class from a broken script, so pointing at op="scan" would steer the caller
 	# away from the real fix (the parse error already attached above).
-	var declared_class := _extract_class_name(content)
+	var declared_class := "" if is_csharp else _extract_class_name(content)
 	if (
 		not declared_class.is_empty()
 		and not _script_has_error_diagnostics(data)
@@ -83,27 +111,79 @@ func create_script(params: Dictionary) -> Dictionary:
 	# BEFORE registering the file: a GUI editor loads the script inside
 	# update_file() (see _refresh_loaded_gdscript for the ordering contract).
 	if existed_before:
-		_refresh_loaded_gdscript(data, path, content)
+		if is_csharp:
+			_mark_csharp_not_reloaded(data)
+		else:
+			_refresh_loaded_gdscript(data, path, content)
 
 	_register_written_file(path)
 
 	# `.gd.uid` is the sidecar Godot generates on scan; list both so the caller
-	# can rm the full set in one go.
-	McpResourceIO.attach_cleanup_hint(data, existed_before, [path, path + ".uid"])
+	# can rm the full set in one go. A `.cs` only gets a sidecar on a .NET
+	# editor build, where the C# loader registers it as a resource.
+	McpResourceIO.attach_cleanup_hint(data, existed_before, _cleanup_paths(path, is_csharp))
 
 	# scan() is async — ResourceLoader.exists(path) returns false until Godot's
 	# filesystem pipeline finishes. If we reply now, an immediate attach_script
 	# races and 404s (#261). Defer the response until the resource is visible
 	# (or a bounded timeout elapses). For freshly-created files we wait; on
 	# overwrite the resource was already known to ResourceLoader, so reply now.
+	# A `.cs` on a non-.NET editor never becomes a resource at all — waiting
+	# would burn the whole settle window for nothing, so reply synchronously.
 	var request_id: String = params.get("_request_id", "")
-	if not existed_before and _connection != null and not request_id.is_empty():
+	var can_settle := not is_csharp or editor_has_dotnet()
+	if can_settle and not existed_before and _connection != null and not request_id.is_empty():
 		McpResourceIO.finish_text_write_deferred(_connection, request_id, path, data)
 		return McpDispatcher.DEFERRED_RESPONSE
 
 	# Synchronous fallback: batch_execute (no request_id) and unit-test contexts
 	# (no connection) get the immediate reply that the previous behaviour gave.
 	return {"data": data}
+
+
+## Which authoring contract a script path falls under: LANGUAGE_GDSCRIPT,
+## LANGUAGE_CSHARP, or "" for anything the script tools refuse.
+static func script_language(path: String) -> String:
+	if path.ends_with(".gd"):
+		return LANGUAGE_GDSCRIPT
+	if path.ends_with(".cs"):
+		return LANGUAGE_CSHARP
+	return ""
+
+
+## True on a .NET-enabled editor build. `CSharpScript` is registered with
+## ClassDB only when the mono module is compiled in, which is exactly when
+## ResourceLoader can load a `.cs` (and when Godot writes its `.cs.uid`).
+## A string lookup, so it parses on every supported engine.
+static func editor_has_dotnet() -> bool:
+	return ClassDB.class_exists("CSharpScript")
+
+
+## The `.cs` counterpart of `_attach_gdscript_diagnostics`: same response
+## keys so a caller reads one shape, but `diagnostics_status` says the file
+## was NOT validated. An empty `diagnostics` array on its own would read as
+## "checked, clean", which is the trap #908 is about.
+static func _attach_csharp_not_checked(data: Dictionary) -> void:
+	data["diagnostics"] = []
+	data["diagnostics_detail"] = "none"
+	data["diagnostics_scope"] = "this_file"
+	data["diagnostics_status"] = "not_checked"
+	data["validation_hint"] = CSHARP_VALIDATION_HINT
+	data["dotnet_editor"] = editor_has_dotnet()
+
+
+## The `.cs` counterpart of `_refresh_loaded_gdscript`: C# never hot-reloads
+## from source — the assembly has to be rebuilt — so "the bytes changed" is
+## all a write can promise.
+static func _mark_csharp_not_reloaded(data: Dictionary) -> void:
+	data["reloaded"] = false
+	data["reload_reason"] = "csharp_requires_build"
+
+
+static func _cleanup_paths(path: String, is_csharp: bool) -> Array:
+	if is_csharp and not editor_has_dotnet():
+		return [path]
+	return [path, path + ".uid"]
 
 
 ## Extract the `class_name` a script declares, or "" if none. A cheap line scan
@@ -340,8 +420,10 @@ func patch_script(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: old_text")
 	if not "new_text" in params:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: new_text")
-	if not path.ends_with(".gd"):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Path must end with .gd (use filesystem_write_text for other text files)")
+	var language := script_language(path)
+	if language.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, UNSUPPORTED_EXTENSION_MESSAGE)
+	var is_csharp := language == LANGUAGE_CSHARP
 	if old_text.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "old_text must not be empty")
 
@@ -384,14 +466,18 @@ func patch_script(params: Dictionary) -> Dictionary:
 		"old_size": content.length(),
 		"undoable": false,
 		"reason": "File system operations cannot be undone via editor undo",
+		"language": language,
 	}
-	_attach_gdscript_diagnostics(data, path, new_content)
-
-	# The file is fresh but any already-loaded GDScript for it is not (#937);
-	# make "patch succeeded" mean the loaded code changed, not just the bytes.
-	# Decide and refresh before registering the file with the editor — a GUI
-	# editor loads the script inside update_file() (see _refresh_loaded_gdscript).
-	_refresh_loaded_gdscript(data, path, new_content)
+	if is_csharp:
+		_attach_csharp_not_checked(data)
+		_mark_csharp_not_reloaded(data)
+	else:
+		_attach_gdscript_diagnostics(data, path, new_content)
+		# The file is fresh but any already-loaded GDScript for it is not (#937);
+		# make "patch succeeded" mean the loaded code changed, not just the bytes.
+		# Decide and refresh before registering the file with the editor — a GUI
+		# editor loads the script inside update_file() (see _refresh_loaded_gdscript).
+		_refresh_loaded_gdscript(data, path, new_content)
 	_register_written_file(path)
 
 	return {"data": data}
@@ -411,6 +497,17 @@ func attach_script(params: Dictionary) -> Dictionary:
 	if spath_err != null:
 		return spath_err
 
+	# A `.cs` is a Script only where the mono module exists. Without it the
+	# generic "Script not found" below would send the caller hunting for a
+	# path problem that isn't one (#908).
+	var is_csharp := script_language(script_path) == LANGUAGE_CSHARP
+	if is_csharp and not editor_has_dotnet():
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"script_path: %s is a C# script but this editor build has no .NET support " % script_path
+			+ "(CSharpScript is unavailable). Run a .NET-enabled Godot build, or attach a .gd script.",
+		)
+
 	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
 	if _resolved.has("error"):
 		return _resolved
@@ -418,11 +515,17 @@ func attach_script(params: Dictionary) -> Dictionary:
 	var _scene_root: Node = _resolved.scene_root
 
 	if not ResourceLoader.exists(script_path):
-		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Script not found: %s" % script_path)
+		return ErrorCodes.make(
+			ErrorCodes.RESOURCE_NOT_FOUND,
+			"Script not found: %s" % script_path + _csharp_load_hint(is_csharp),
+		)
 
 	var script: Script = load(script_path)
 	if script == null:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to load script: %s" % script_path)
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"Failed to load script: %s" % script_path + _csharp_load_hint(is_csharp),
+		)
 
 	var old_script: Script = node.get_script()
 
@@ -439,6 +542,18 @@ func attach_script(params: Dictionary) -> Dictionary:
 			"undoable": true,
 		}
 	}
+
+
+## Appended to attach_script's load failures for a `.cs`: on a .NET editor
+## the usual reason is that the assembly hasn't been built since the file
+## appeared, not that the path is wrong.
+static func _csharp_load_hint(is_csharp: bool) -> String:
+	if not is_csharp:
+		return ""
+	return (
+		" (a .cs is loadable only after the project assembly is built — use the "
+		+ "editor Build button or `dotnet build`, then filesystem_manage(op=\"scan\"))"
+	)
 
 
 func detach_script(params: Dictionary) -> Dictionary:
@@ -487,6 +602,9 @@ func find_symbols(params: Dictionary) -> Dictionary:
 
 	var content := file.get_as_text()
 	file.close()
+
+	if script_language(path) == LANGUAGE_CSHARP:
+		return {"data": _csharp_symbols(path, content)}
 
 	var functions: Array[Dictionary] = []
 	var signals_list: Array[String] = []
@@ -560,6 +678,7 @@ func find_symbols(params: Dictionary) -> Dictionary:
 	return {
 		"data": {
 			"path": path,
+			"language": LANGUAGE_GDSCRIPT,
 			"class_name": class_name_str,
 			"extends": extends_str,
 			"functions": functions,
@@ -569,4 +688,110 @@ func find_symbols(params: Dictionary) -> Dictionary:
 			"signal_count": signals_list.size(),
 			"export_count": exports.size(),
 		}
+	}
+
+
+# ----- C# outline ------------------------------------------------------------
+
+## Lines that start with one of these can still match the method pattern
+## (`else if (`, `return Foo(`, `new Bar(`), so they're skipped by first word.
+const _CSHARP_CONTROL_WORDS: PackedStringArray = [
+	"if", "else", "for", "foreach", "while", "do", "switch", "case", "catch",
+	"using", "return", "new", "throw", "await", "lock", "yield", "goto",
+]
+
+## Same outline shape as the GDScript branch, from a line-based scan (no
+## Roslyn here). Mirrors Godot's C# conventions: the first `class` is the
+## script class and its first base type is `extends`; `[Signal]` marks a
+## delegate whose Godot signal name drops the `EventHandler` suffix;
+## `[Export]` marks the next field or property. Attributes may sit on their
+## own line or share the member's line, and may stack (`[Export] [Obsolete]`).
+static func _csharp_symbols(path: String, content: String) -> Dictionary:
+	var functions: Array[Dictionary] = []
+	var signals_list: Array[String] = []
+	var exports: Array[Dictionary] = []
+	var class_name_str := ""
+	var extends_str := ""
+
+	var class_re := RegEx.create_from_string(
+		"^(?:(?:public|internal|private|protected|static|partial|abstract|sealed)\\s+)*"
+		+ "class\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s*<[^>]*>)?(?:\\s*:\\s*([A-Za-z_][A-Za-z0-9_.]*))?"
+	)
+	var method_re := RegEx.create_from_string(
+		"^(?:(?:public|private|protected|internal|static|override|virtual|abstract|async|sealed|new|partial|extern|unsafe)\\s+)*"
+		+ "[A-Za-z_][A-Za-z0-9_<>\\[\\],.?]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?:<[^>]*>)?\\s*\\("
+	)
+	var delegate_re := RegEx.create_from_string("delegate\\s+\\S+\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(")
+	var member_re := RegEx.create_from_string(
+		"^(?:(?:public|private|protected|internal|static|readonly|new|virtual|override|required)\\s+)*"
+		+ "[A-Za-z_][A-Za-z0-9_<>\\[\\],.?]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?:\\{|=|;|$)"
+	)
+
+	var pending_signal := false
+	var pending_export := false
+	var lines := content.split("\n")
+	for i in lines.size():
+		var line := lines[i].strip_edges()
+		if line.is_empty() or line.begins_with("//") or line.begins_with("#"):
+			continue
+
+		# Peel leading attributes; what's left (if anything) is the member.
+		var rest := line
+		while rest.begins_with("["):
+			var close := rest.find("]")
+			if close < 0:
+				break
+			var attr := rest.substr(1, close - 1).strip_edges()
+			if attr == "Signal" or attr.begins_with("Signal("):
+				pending_signal = true
+			if attr == "Export" or attr.begins_with("Export("):
+				pending_export = true
+			rest = rest.substr(close + 1).strip_edges()
+		if rest.is_empty():
+			continue
+
+		if class_name_str.is_empty():
+			var cm := class_re.search(rest)
+			if cm != null:
+				class_name_str = cm.get_string(1)
+				extends_str = cm.get_string(2)
+				continue
+
+		if pending_signal:
+			pending_signal = false
+			var dm := delegate_re.search(rest)
+			if dm != null:
+				var sig := dm.get_string(1)
+				if sig.ends_with("EventHandler"):
+					sig = sig.substr(0, sig.length() - "EventHandler".length())
+				signals_list.append(sig)
+			continue
+
+		if pending_export:
+			pending_export = false
+			var em := member_re.search(rest)
+			if em != null:
+				exports.append({"name": em.get_string(1), "line": i + 1})
+			continue
+
+		if rest.find("delegate ") >= 0:
+			continue
+		var first_word := rest.get_slice(" ", 0).get_slice("(", 0)
+		if first_word in _CSHARP_CONTROL_WORDS:
+			continue
+		var mm := method_re.search(rest)
+		if mm != null:
+			functions.append({"name": mm.get_string(1), "line": i + 1})
+
+	return {
+		"path": path,
+		"language": LANGUAGE_CSHARP,
+		"class_name": class_name_str,
+		"extends": extends_str,
+		"functions": functions,
+		"signals": signals_list,
+		"exports": exports,
+		"function_count": functions.size(),
+		"signal_count": signals_list.size(),
+		"export_count": exports.size(),
 	}
