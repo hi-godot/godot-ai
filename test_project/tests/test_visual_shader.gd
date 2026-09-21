@@ -528,6 +528,41 @@ func test_edit_graph_adds_connects_and_reports_mapping() -> void:
 	assert_eq(shader.get_node_position(VisualShader.TYPE_FRAGMENT, node_id), Vector2(10, 20))
 
 
+func test_create_and_edit_graph_accept_multiple_connections_in_one_call() -> void:
+	## The input dedupe key must include stage/target/port. A format arity bug
+	## collapsed every key to one literal, so the second connection in a single
+	## call was rejected as a duplicate input.
+	var request := _request("multi_connection")
+	request.stages[0].nodes = [
+		{"id": "color", "type": "VisualShaderNodeColorConstant"},
+		{"id": "value", "type": "VisualShaderNodeFloatConstant", "params": {"constant": 0.5}},
+	]
+	request.stages[0].connections = [
+		{"from_node": "color", "from_port": 0, "to_node": "output", "to_port": 0},
+		{"from_node": "value", "from_port": 0, "to_node": "output", "to_port": 1},
+	]
+	var created := _handler.create_graph(request)
+	assert_has_key(created, "data", str(created.get("error", {})))
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_eq(shader.get_node_connections(VisualShader.TYPE_FRAGMENT).size(), 2)
+	var edited := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "add_node", "stage": "fragment", "id": "extra",
+			 "type": "VisualShaderNodeFloatConstant", "params": {"constant": 0.25}},
+			{"op": "connect", "stage": "fragment", "from_node": "extra",
+			 "from_port": 0, "to_node": "output", "to_port": 2},
+			{"op": "add_node", "stage": "fragment", "id": "extra2",
+			 "type": "VisualShaderNodeFloatConstant", "params": {"constant": 0.75}},
+			{"op": "connect", "stage": "fragment", "from_node": "extra2",
+			 "from_port": 0, "to_node": "output", "to_port": 3},
+		],
+	})
+	assert_has_key(edited, "data", str(edited.get("error", {})))
+	shader = ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	assert_eq(shader.get_node_connections(VisualShader.TYPE_FRAGMENT).size(), 4)
+
+
 func test_edit_graph_replaces_disconnects_and_removes() -> void:
 	var request := _request("edit_mutate")
 	assert_has_key(_handler.create_graph(request), "data")
@@ -551,6 +586,28 @@ func test_edit_graph_replaces_disconnects_and_removes() -> void:
 	assert_true(shader.get_node(VisualShader.TYPE_FRAGMENT, 2) == null)
 
 
+func test_edit_graph_disconnect_then_reconnect_same_input() -> void:
+	## Disconnect must release the unqualified stage:target:port key too, or the
+	## reconnected input is still rejected as a duplicate in the same call.
+	var request := _request("edit_reconnect")
+	assert_has_key(_handler.create_graph(request), "data")
+	var result := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "disconnect", "stage": "fragment", "from_node": 2,
+			 "from_port": 0, "to_node": "output", "to_port": 0},
+			{"op": "connect", "stage": "fragment", "from_node": 2,
+			 "from_port": 0, "to_node": "output", "to_port": 0},
+		],
+	})
+	assert_has_key(result, "data", str(result.get("error", {})))
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	var connections := shader.get_node_connections(VisualShader.TYPE_FRAGMENT)
+	assert_eq(connections.size(), 1, "the reconnected input must survive")
+	assert_eq(int(connections[0].from_node), 2)
+	assert_eq(int(connections[0].to_port), 0)
+
+
 func test_edit_graph_varyings_round_trip() -> void:
 	var request := _request("edit_varyings")
 	assert_has_key(_handler.create_graph(request), "data")
@@ -568,6 +625,57 @@ func test_edit_graph_varyings_round_trip() -> void:
 	assert_has_key(removed, "data", str(removed.get("error", {})))
 	shader = ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
 	assert_false(shader.has_varying("glow_var"))
+
+
+func test_edit_graph_sets_varying_node_properties() -> void:
+	## VaryingGetter/Setter expose varying_name/varying_type; without them in
+	## PROPERTIES the node keeps the engine default "[None]" and cannot read or
+	## write a declared varying.
+	var request := _request("edit_varying_nodes")
+	request.stages[0].nodes = [
+		{"id": "value", "type": "VisualShaderNodeFloatConstant", "params": {"constant": 0.5}},
+	]
+	request.stages[0].connections = [
+		{"from_node": "value", "from_port": 0, "to_node": "output", "to_port": 1},
+	]
+	request["varyings"] = [{"name": "glow", "mode": "vertex_to_frag_light", "type": "float"}]
+	var created := _handler.create_graph(request)
+	assert_has_key(created, "data", str(created.get("error", {})))
+	var result := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "add_node", "stage": "fragment", "id": "getter",
+			 "type": "VisualShaderNodeVaryingGetter",
+			 "params": {"varying_name": "glow", "varying_type": "float"}},
+		],
+	})
+	assert_has_key(result, "data", str(result.get("error", {})))
+	var node_id: int = result.data.added[0].node_id
+	var shader := ResourceLoader.load(request.resource_path, "", ResourceLoader.CACHE_MODE_IGNORE) as VisualShader
+	var getter := shader.get_node(VisualShader.TYPE_FRAGMENT, node_id)
+	assert_eq(str(getter.get("varying_name")), "glow")
+	assert_eq(int(getter.get("varying_type")), VisualShader.VARYING_TYPE_FLOAT)
+	var graph := _handler.get_graph({"path": request.resource_path})
+	assert_has_key(graph, "data")
+	var reported := false
+	for stage in graph.data.stages:
+		for node in stage.nodes:
+			if node.id == node_id:
+				reported = str(node.params.get("varying_name", "")) == "glow"
+	assert_true(reported, "get_graph should report the varying node's name")
+	## An illegal identifier is rejected and the file is untouched.
+	var before := FileAccess.get_file_as_bytes(request.resource_path)
+	var invalid := _handler.edit_graph({
+		"resource_path": request.resource_path,
+		"operations": [
+			{"op": "add_node", "stage": "fragment", "id": "bad",
+			 "type": "VisualShaderNodeVaryingGetter",
+			 "params": {"varying_name": "bad name"}},
+		],
+	})
+	assert_has_key(invalid, "error")
+	assert_contains(str(invalid.error.message), "varying_name")
+	assert_eq(FileAccess.get_file_as_bytes(request.resource_path), before, "failed edit must preserve bytes")
 
 
 func test_edit_graph_failures_preserve_file() -> void:

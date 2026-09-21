@@ -99,7 +99,8 @@ const IMPLICIT := {
 ## Only node-authoring properties, never script/resource ownership or arbitrary code.
 const PROPERTIES := [
 	"constant", "texture", "operator", "function", "op_type", "input_name",
-	"parameter_name", "default_value_enabled", "default_value", "qualifier",
+	"parameter_name", "varying_name", "varying_type",
+	"default_value_enabled", "default_value", "qualifier",
 	"source", "texture_type", "texture_filter", "texture_repeat",
 	"hint", "hint_range_min", "hint_range_max", "hint_range_step",
 ]
@@ -514,7 +515,8 @@ func _edit_connection(
 		return _invalid("connection ports must be integers from 0 through 64")
 	if operation.op == "disconnect":
 		shader.disconnect_nodes(stage, source.value, from_port, target.value, to_port)
-		inputs.erase("%s:%d:%d:%d" % [stage, target.value, to_port, source.value])
+		inputs.erase("%d:%d:%d" % [stage, target.value, to_port])
+		inputs.erase("%d:%d:%d:%d" % [stage, target.value, to_port, source.value])
 		return {}
 	return _connect_nodes(shader, stage, source.value, from_port, target.value, to_port, inputs)
 
@@ -575,8 +577,8 @@ func _collect_inputs(shader: VisualShader, mode: String) -> Dictionary:
 			var target := int(connection.get("to_node", -1))
 			var to_port := int(connection.get("to_port", -1))
 			var source := int(connection.get("from_node", -1))
-			inputs["%s:%d:%d" % [stage, target, to_port]] = true
-			inputs["%s:%d:%d:%d" % [stage, target, to_port, source]] = true
+			inputs["%d:%d:%d" % [stage, target, to_port]] = true
+			inputs["%d:%d:%d:%d" % [stage, target, to_port, source]] = true
 	return inputs
 
 
@@ -680,7 +682,7 @@ func _connect_nodes(
 			expanded.append(port)
 	expanded.sort()
 	source_node.set("expanded_output_ports", expanded)
-	var input_key := "%d:%d" % [stage, target, to_port]
+	var input_key := "%d:%d:%d" % [stage, target, to_port]
 	if inputs.has(input_key) or not shader.can_connect_nodes(stage, source, from_port, target, to_port):
 		return _invalid("invalid, duplicate-input or cyclic connection")
 	var err := shader.connect_nodes(stage, source, from_port, target, to_port)
@@ -878,6 +880,8 @@ func _apply_properties(node: VisualShaderNode, values: Dictionary, id: String) -
 			return _invalid("Node %s: invalid %s value %s" % [id, key, str(value)])
 		if key == "parameter_name" and (str(converted.value).is_empty() or not str(converted.value).is_valid_identifier()):
 			return _invalid("Node %s: parameter_name must be a shader identifier" % id)
+		if key == "varying_name" and (str(converted.value).is_empty() or not str(converted.value).is_valid_identifier()):
+			return _invalid("Node %s: varying_name must be a shader identifier" % id)
 		node.set(key, converted.value)
 		if key == "input_name" and node.get_input_real_name().is_empty():
 			return _invalid("Node %s: input %s is unavailable in this shader stage" % [id, str(value)])

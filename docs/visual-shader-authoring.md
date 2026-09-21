@@ -58,7 +58,8 @@ Types must be instantiable engine VisualShaderNode subclasses. Output nodes,
 script-backed custom nodes, and expression nodes cannot be created. Supported
 properties, when exposed and writable on that class, are `constant`, `texture`,
 `operator`, `function`, `op_type`, `input_name`, `parameter_name`,
-`default_value_enabled`, `default_value`, `qualifier`, `source`, `texture_type`,
+`varying_name`, `varying_type`, `default_value_enabled`, `default_value`,
+`qualifier`, `source`, `texture_type`,
 `texture_filter`, `texture_repeat`, `hint`, and `hint_range_min/max/step`.
 Colors use `{r,g,b,a?}`, vectors `{x,y,z?,w?}`, and numeric values must be finite.
 Enums accept engine names or valid integers. Texture paths must be project
