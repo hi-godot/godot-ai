@@ -64,7 +64,8 @@ Ops:
         written. shape_type: box | sphere | capsule | cylinder | convex |
         trimesh (or the class name). convex/trimesh derive the shape from the
         mesh's own triangles, with the mesh scale baked into the shape, and are
-        limited to 10000 triangles per mesh (the hull build runs synchronously
+        limited to 2048 triangles and 6144 vertices per mesh, with bounded mesh types
+        (the hull build runs synchronously
         inside one editor-frame item); trimesh needs a static or area body, and
         a non-uniformly scaled parent chain refuses every type except box.
         body_type: static | area | rigid | character. rigid/character always

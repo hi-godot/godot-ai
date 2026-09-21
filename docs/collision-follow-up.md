@@ -27,9 +27,12 @@ Regression coverage exercises the real driver through partial creation and synch
   concave shape only simulates on a static body or an area — and both hull
   types are refused under a non-uniformly scaled parent chain, like the round
   primitives. Hull/concave work runs synchronously inside one item, so the
-  triangle count is measured during planning: a mesh above 10,000 triangles is
-  refused with its count (a 10k-triangle mesh measured about one 60 Hz frame
-  on Godot 4.7.2).
+  planning checks stored ArrayMesh counts or conservative primitive subdivision
+  bounds before extracting geometry. Limits are 2,048 triangles, 6,144 vertices
+  and 32 ArrayMesh surfaces. Scripted/unsupported mesh types are refused; use
+  a plain ArrayMesh, BoxMesh, PlaneMesh, SphereMesh, CylinderMesh or CapsuleMesh,
+  or choose a primitive collision shape. These are input limits, not a hard
+  wall-clock guarantee for an indivisible engine call.
 - `body_type`: `static | area | rigid | character`.
 - `reparent_mesh` (default `false`; `rigid`/`character` default to `true`):
   when true the mesh moves under the generated body —

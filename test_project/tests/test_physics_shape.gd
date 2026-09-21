@@ -772,7 +772,14 @@ func test_generate_supports_convex_and_trimesh_shapes() -> void:
 	var torus := TorusMesh.new()
 	torus.inner_radius = 0.5
 	torus.outer_radius = 1.5
-	var mesh := _add_generate_mesh_with_mesh("GenerateTorusHull", torus)
+	torus.rings = 8
+	torus.ring_segments = 8
+	var unsupported := PhysicsShapeHandler._validate_hull_workload(torus, "/Torus", "convex")
+	assert_is_error(unsupported, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(unsupported.error.message, "no bounded hull preflight")
+	var baked := ArrayMesh.new()
+	baked.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, torus.get_mesh_arrays())
+	var mesh := _add_generate_mesh_with_mesh("GenerateTorusHull", baked)
 	var path := McpScenePath.from_node(mesh, scene_root)
 	var convex := _handler.generate({"paths": [path], "shape_type": "convex"})
 	assert_has_key(convex, "data")
@@ -868,15 +875,13 @@ func test_generate_mirrored_trimesh_restores_winding() -> void:
 	_remove_node(mirrored)
 
 
-func test_generate_degenerate_hull_frees_detached_nodes() -> void:
+func test_generate_faceless_preflight_allocates_no_nodes() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		skip("No scene root")
 		return
-	## The planning pre-check keeps faceless meshes out of the handler, so the
-	## entry builder's failure path is driven directly with the plan shape it
-	## receives: the engine refuses the trimesh after the entry's body and
-	## collision already exist, and neither is in the tree or the job yet.
+	## Apply-time preflight must refuse faceless geometry before allocating
+	## the body or collision node, even when called directly with a plan.
 	var mesh := _add_generate_mesh_with_mesh("GenerateDegenerateHull", PointMesh.new())
 	var plan := {
 		"mesh": mesh,
@@ -898,14 +903,14 @@ func test_generate_degenerate_hull_frees_detached_nodes() -> void:
 	assert_false(probe_id in Node.get_orphan_node_ids(), "a freed node must leave the orphan list")
 	var entry := PhysicsShapeHandler._create_generated_entry(plan, "trimesh", "static", false)
 	assert_true(entry.has("error"), "a faceless mesh cannot produce a trimesh")
-	assert_contains(entry.error.message, "could not produce")
+	assert_contains(entry.error.message, "no faces")
 	var leaked: Array = []
 	for orphan_id in Node.get_orphan_node_ids():
 		if orphan_id not in before:
 			leaked.append(orphan_id)
 	assert_true(
 		leaked.is_empty(),
-		"a refused hull must free its detached body and collision node (leaked %d)" % leaked.size()
+		"faceless preflight must allocate no detached nodes (leaked %d)" % leaked.size()
 	)
 	assert_true(_find_named_child(scene_root, "GenerateDegenerateHullCollider") == null)
 	_remove_node(mesh)
@@ -2066,4 +2071,78 @@ func test_generate_driver_rolls_back_survivors_when_an_applied_parent_is_freed()
 	assert_true(_find_named_child(root, "GenerateAppliedBCollider") == null)
 	_remove_node(second_parent)
 	root.remove_child(connection)
+	connection.free()
+
+
+func test_hull_preflight_counts_without_extracting_oversized_primitive() -> void:
+	var plane := PlaneMesh.new()
+	plane.subdivide_width = 600
+	plane.subdivide_depth = 600
+	var workload := PhysicsShapeHandler._mesh_workload(plane)
+	assert_eq(workload.triangles, 2 * 601 * 601)
+	assert_true(int(workload.vertices) > PhysicsShapeHandler._GENERATE_HULL_MAX_VERTICES)
+
+
+func test_hull_preflight_bounds_supported_primitive_geometry() -> void:
+	var sphere := SphereMesh.new()
+	sphere.radial_segments = 8
+	sphere.rings = 4
+	var cylinder := CylinderMesh.new()
+	cylinder.radial_segments = 8
+	cylinder.rings = 4
+	var capsule := CapsuleMesh.new()
+	capsule.radial_segments = 8
+	capsule.rings = 4
+	for mesh in [BoxMesh.new(), PlaneMesh.new(), sphere, cylinder, capsule]:
+		var workload := PhysicsShapeHandler._mesh_workload(mesh)
+		assert_false(workload.has("error"))
+		assert_true(int(workload.triangles) >= mesh.get_faces().size() / 3,
+			"preflight must not undercount actual primitive triangles")
+		assert_true(int(workload.vertices) >= mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size(),
+			"preflight must not undercount generated vertices")
+
+
+func test_hull_preflight_rejects_unused_vertex_overflow() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No scene root")
+		return
+	var vertices := PackedVector3Array()
+	vertices.resize(PhysicsShapeHandler._GENERATE_HULL_MAX_VERTICES + 1)
+	vertices[0] = Vector3.ZERO
+	vertices[1] = Vector3.RIGHT
+	vertices[2] = Vector3.FORWARD
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2])
+	var source := ArrayMesh.new()
+	source.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mesh := _add_generate_mesh_with_mesh("UnusedVertices", source)
+	var result := _handler.generate({"paths": [McpScenePath.from_node(mesh, scene_root)], "shape_type": "convex"})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.error.message, "vertices")
+	assert_true(_find_named_child(scene_root, "UnusedVerticesCollider") == null)
+	_remove_node(mesh)
+
+
+func test_hull_preflight_rechecks_geometry_grown_after_planning() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var mesh := _add_generate_mesh("HullGrewAfterPlanning", Vector3.ONE)
+	var box := BoxMesh.new()
+	mesh.mesh = box
+	var connection := _CapturingConnection.new()
+	var job := _generate_job_for([McpScenePath.from_node(mesh, root)], connection, {"shape_type": "trimesh"})
+	assert_false(PhysicsShapeHandler._generate_step(job, 0), "planning yields before application")
+	assert_eq(str(job.phase), "apply")
+	box.subdivide_width = 600
+	box.subdivide_height = 600
+	assert_true(PhysicsShapeHandler._generate_step(job, 0), "growth is refused before construction")
+	assert_is_error(job.result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_true(_find_named_child(root, "HullGrewAfterPlanningCollider") == null)
+	assert_false(job.committed)
+	_remove_node(mesh)
 	connection.free()

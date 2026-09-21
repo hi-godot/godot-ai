@@ -14,7 +14,14 @@ extends RefCounted
 ## Downscale `image` in place so its longest edge is at most
 ## `max_resolution` (0 = no cap), then PNG-encode. Returns
 ## {base64, width, height, original_width, original_height}.
-static func downscale_and_encode(image: Image, max_resolution: int) -> Dictionary:
+static func downscale_and_encode(image: Image, max_resolution: int, use_hdr_2d := false) -> Dictionary:
+	## Compatibility readback stays sRGB, including when HDR 2D is enabled.
+	## Image.linear_to_srgb requires RGB8/RGBA8: converting first quantizes
+	## linear darks and clamps values above 1 rather than tone-mapping them.
+	## Midgray therefore truncates approximately 54.6 -> 54 -> 126.
+	if use_hdr_2d and RenderingServer.get_current_rendering_method() != "gl_compatibility":
+		image.convert(Image.FORMAT_RGBA8)
+		image.linear_to_srgb()
 	var original_width := image.get_width()
 	var original_height := image.get_height()
 

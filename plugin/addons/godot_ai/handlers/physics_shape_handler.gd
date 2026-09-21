@@ -74,14 +74,11 @@ const _GENERATE_SCALE_EPSILON := 0.0001
 ## centered CapsuleMesh reports a ~1.2e-07 Y center). Components below this
 ## snap to zero so generated transforms stay clean.
 const _GENERATE_SNAP_EPSILON := 0.000001
-## Hull/concave generation runs synchronously inside one item: the frame budget
-## is only checked between items, and one `create_convex_shape()` plus the
-## vertex loops in `_fit_mesh_shape` cannot be split. Measured on Godot 4.7.2
-## (Windows, headless): a 10k-triangle mesh costs ~4.9 ms to extract faces plus
-## ~7.9 ms convex / ~11.6 ms trimesh, about one 60 Hz frame; 50k triangles
-## already reach ~28 ms plus ~99 ms trimesh. The cap bounds a single item's
-## synchronous work there; larger meshes are refused with their triangle count.
-const _GENERATE_HULL_MAX_TRIANGLES := 10000
+## Engine hull calls cannot be preempted. These input limits bound admitted
+## geometry, not elapsed time on every machine.
+const _GENERATE_HULL_MAX_TRIANGLES := 2048
+const _GENERATE_HULL_MAX_VERTICES := 6144
+const _GENERATE_HULL_MAX_SURFACES := 32
 
 
 ## Accept either the short form ("box") or the matching Godot class name
@@ -224,6 +221,65 @@ static func _validate_generate_request(params: Dictionary) -> Dictionary:
 	}
 
 
+static func _mesh_workload(mesh: Mesh) -> Dictionary:
+	if mesh.get_script() != null:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Scripted meshes cannot be bounded before hull generation; use an ArrayMesh without a script or a primitive collision shape")
+	var triangles := 0
+	var vertices := 0
+	if mesh is ArrayMesh:
+		var array_mesh := mesh as ArrayMesh
+		var surface_count := array_mesh.get_surface_count()
+		if surface_count > _GENERATE_HULL_MAX_SURFACES:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"Hull generation supports at most %d mesh surfaces; found %d" % [_GENERATE_HULL_MAX_SURFACES, surface_count])
+		for surface in surface_count:
+			var vertex_count := array_mesh.surface_get_array_len(surface)
+			vertices += vertex_count
+			if array_mesh.surface_get_primitive_type(surface) != Mesh.PRIMITIVE_TRIANGLES:
+				continue
+			var index_count := array_mesh.surface_get_array_index_len(surface)
+			triangles += int((index_count if index_count > 0 else vertex_count) / 3)
+		return {"triangles": triangles, "vertices": vertices}
+	# PrimitiveMesh surface counters can generate the entire mesh on first use.
+	if mesh is BoxMesh:
+		var box := mesh as BoxMesh
+		var x := mini(box.subdivide_width, _GENERATE_HULL_MAX_TRIANGLES) + 1
+		var y := mini(box.subdivide_height, _GENERATE_HULL_MAX_TRIANGLES) + 1
+		var z := mini(box.subdivide_depth, _GENERATE_HULL_MAX_TRIANGLES) + 1
+		triangles = 4 * (x * y + x * z + y * z)
+	elif mesh is PlaneMesh:
+		var plane := mesh as PlaneMesh
+		triangles = 2 * (mini(plane.subdivide_width, _GENERATE_HULL_MAX_TRIANGLES) + 1) * (mini(plane.subdivide_depth, _GENERATE_HULL_MAX_TRIANGLES) + 1)
+	elif mesh is SphereMesh or mesh is CylinderMesh or mesh is CapsuleMesh:
+		var radial := mini(int(mesh.get("radial_segments")), _GENERATE_HULL_MAX_TRIANGLES)
+		var rings := mini(int(mesh.get("rings")), _GENERATE_HULL_MAX_TRIANGLES)
+		triangles = 2 * radial * (rings + 2)
+		if mesh is CapsuleMesh:
+			triangles *= 3
+	elif mesh is PointMesh:
+		return {"triangles": 0, "vertices": 1}
+	else:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"Mesh class %s has no bounded hull preflight; use ArrayMesh, BoxMesh, PlaneMesh, SphereMesh, CylinderMesh or CapsuleMesh, or a primitive collision shape" % mesh.get_class())
+	return {"triangles": triangles, "vertices": triangles * 3}
+
+
+static func _validate_hull_workload(mesh: Mesh, mesh_path: String, shape_type: String) -> Dictionary:
+	var workload := _mesh_workload(mesh)
+	if workload.has("error"):
+		return workload
+	if int(workload.triangles) == 0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"MeshInstance3D at %s has a mesh with no faces - a %s shape needs triangles" % [mesh_path, shape_type])
+	if int(workload.triangles) > _GENERATE_HULL_MAX_TRIANGLES or int(workload.vertices) > _GENERATE_HULL_MAX_VERTICES:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"MeshInstance3D at %s exceeds the synchronous hull input limit: at most %d triangles and %d vertices; estimated %d triangles and %d vertices. Reduce geometry or use a primitive collision shape." % [
+				mesh_path, _GENERATE_HULL_MAX_TRIANGLES, _GENERATE_HULL_MAX_VERTICES,
+				int(workload.triangles), int(workload.vertices)])
+	return {}
+
+
 ## Resolve one mesh and capture everything the apply step must find unchanged.
 static func _plan_generate_mesh(
 	mesh_path: String, scene_file: String, scene_root: Node, shape_type: String, reparent_mesh: bool
@@ -254,28 +310,10 @@ static func _plan_generate_mesh(
 			ErrorCodes.RESOURCE_NOT_FOUND,
 			"MeshInstance3D at %s has no mesh resource — there are no bounds to fit" % mesh_path
 		)
-	## Hull and concave shapes are derived from the mesh's triangles, so a
-	## faceless mesh (PointMesh, an empty ArrayMesh) fails the whole request
-	## here instead of returning a null shape from the engine mid-batch. The
-	## same pass measures the triangle count: one hull build and its vertex
-	## loops run synchronously inside a single item, so an oversized mesh is
-	## refused before that work starts.
 	if shape_type == "convex" or shape_type == "trimesh":
-		var faces := mesh.mesh.get_faces()
-		if faces.is_empty():
-			return ErrorCodes.make(
-				ErrorCodes.VALUE_OUT_OF_RANGE,
-				"MeshInstance3D at %s has a mesh with no faces — a %s shape needs triangles" % [mesh_path, shape_type]
-			)
-		var triangle_count := faces.size() / 3
-		if triangle_count > _GENERATE_HULL_MAX_TRIANGLES:
-			return ErrorCodes.make(
-				ErrorCodes.VALUE_OUT_OF_RANGE,
-				(
-					"MeshInstance3D at %s has %d triangles; %s shape generation is limited to "
-					+ "%d triangles per mesh because the hull is built synchronously on the editor frame"
-				) % [mesh_path, triangle_count, shape_type, _GENERATE_HULL_MAX_TRIANGLES]
-			)
+		var error := _validate_hull_workload(mesh.mesh, mesh_path, shape_type)
+		if not error.is_empty():
+			return error
 	var collider_name := mesh.name + _GENERATE_COLLIDER_SUFFIX
 	var existing := parent.get_node_or_null(NodePath(collider_name))
 	if existing != null:
@@ -375,12 +413,10 @@ static func _create_generated_entry(
 	plan: Dictionary, shape_type: String, body_type: String, reparent_mesh: bool
 ) -> Dictionary:
 	var mesh: MeshInstance3D = plan.mesh
-	var body: CollisionObject3D = ClassDB.instantiate(_GENERATED_BODY_CLASSES[body_type])
-	body.name = str(plan.collider_name)
-	body.top_level = bool(plan.top_level)
-	body.transform = plan.body_transform
-	var collision := CollisionShape3D.new()
-	collision.name = "CollisionShape3D"
+	if shape_type == "convex" or shape_type == "trimesh":
+		var error := _validate_hull_workload(mesh.mesh, str(plan.mesh_path), shape_type)
+		if not error.is_empty():
+			return error
 	var bounds: AABB = plan.bounds
 	var shape: Shape3D
 	if shape_type == "convex" or shape_type == "trimesh":
@@ -388,20 +424,22 @@ static func _create_generated_entry(
 		## mesh's scale baked in so the collision node needs no scale of its own.
 		shape = _fit_mesh_shape(mesh, shape_type, plan.mesh_to_body)
 		if shape == null:
-			## Neither node is in the tree nor in `job.created` yet, so no
-			## rollback path can free them.
-			collision.free()
-			body.free()
 			return ErrorCodes.make(
 				ErrorCodes.VALUE_OUT_OF_RANGE,
 				"MeshInstance3D at %s could not produce a %s shape — the mesh geometry is degenerate"
 				% [str(plan.mesh_path), shape_type]
 			)
-		collision.transform = Transform3D.IDENTITY
 	else:
-		collision.position = _snap_tiny(bounds.get_center())
 		shape = ClassDB.instantiate(_SHAPE_3D_CLASSES[shape_type])
 		_apply_shape_size(shape, shape_type, {"aabb": bounds}, true)
+	var body: CollisionObject3D = ClassDB.instantiate(_GENERATED_BODY_CLASSES[body_type])
+	body.name = str(plan.collider_name)
+	body.top_level = bool(plan.top_level)
+	body.transform = plan.body_transform
+	var collision := CollisionShape3D.new()
+	collision.name = "CollisionShape3D"
+	if shape_type != "convex" and shape_type != "trimesh":
+		collision.position = _snap_tiny(bounds.get_center())
 	collision.shape = shape
 	body.add_child(collision)
 	var entry := {

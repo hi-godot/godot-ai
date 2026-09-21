@@ -18,8 +18,17 @@ BODY_TIMEOUT_SECONDS = 15.0
 MAX_HTTP_CONCURRENCY = 64
 MAX_MCP_SESSIONS = 32
 MCP_SESSION_IDLE_SECONDS = 30 * 60
+MCP_HANDSHAKE_VERSIONS = frozenset(
+    {b"2024-11-05", b"2025-03-26", b"2025-06-18", b"2025-11-25"}
+)
 
 _ERRORS = {
+    "MCP_PROTOCOL_UNSUPPORTED": (
+        HTTPStatus.BAD_REQUEST,
+        "Godot AI requires an initialize-handshake MCP protocol; "
+        "use 2025-11-25 or earlier supported revisions.",
+        (),
+    ),
     "TRANSPORT_AUTH_REQUIRED": (
         HTTPStatus.UNAUTHORIZED,
         "A valid Godot AI transport capability is required.",
@@ -147,6 +156,12 @@ class BoundedHTTPMiddleware(_Wrapper):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        if scope.get("path") == "/mcp":
+            versions = _headers(scope, b"mcp-protocol-version")
+            # Sessionless MCP cannot deliver our out-of-request catalog notifications.
+            if versions and (len(versions) != 1 or versions[0] not in MCP_HANDSHAKE_VERSIONS):
+                await _reject(send, "MCP_PROTOCOL_UNSUPPORTED")
+                return
         if self._active >= self.max_concurrency:
             await _reject(send, "TRANSPORT_OVERLOADED")
             return

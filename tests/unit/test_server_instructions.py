@@ -55,7 +55,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "                   add_method_track, set_autoplay, play, stop, list, get,\n"
     "                   create_simple, preset_fade/slide/shake/pulse\n"
     "  material_manage  create, set_param, set_shader_param, get, list, assign,\n"
-    "                   apply_to_node, apply_preset\n"
+    "                   apply_to_node, apply_preset, visual_shader_create_graph\n"
     "  audio_manage     player_create, player_set_stream, player_set_playback,\n"
     "                   play, stop, list\n"
     "  particle_manage  create, set_main, set_process, set_draw_pass, restart,\n"

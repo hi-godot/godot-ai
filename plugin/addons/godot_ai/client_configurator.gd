@@ -132,6 +132,9 @@ static func prepare_major_upgrade_endpoints(from_version: String, to_version: St
 		return {"ok": false, "error": "EditorSettings is unavailable"}
 	var legacy_http := _read_port_setting(McpSettings.SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
 	var legacy_ws := _read_port_setting(SETTING_WS_PORT, DEFAULT_WS_PORT)
+	var occupancy := PortResolver.windows_listener_snapshot() if OS.get_name() == "Windows" else {}
+	if OS.get_name() == "Windows" and not occupancy.known:
+		return {"ok": false, "error": "Windows could not query listening ports; retry endpoint selection."}
 	var selected: Array[int] = []
 	var candidate := legacy_http + 1 if legacy_http < MAX_PORT else MIN_PORT
 	candidate = WindowsPortReservation.suggest_non_excluded_port(candidate, MAX_PORT - candidate + 1, MAX_PORT)
@@ -140,17 +143,32 @@ static func prepare_major_upgrade_endpoints(from_version: String, to_version: St
 		candidate = WindowsPortReservation.suggest_non_excluded_port_from_output(reserved_output, candidate, MAX_PORT - candidate + 1, MAX_PORT)
 		if candidate < MIN_PORT or candidate > MAX_PORT:
 			break
-		if candidate not in [legacy_http, legacy_ws] and not selected.has(candidate) and PortResolver.can_bind_local_port(candidate) and not PortResolver.is_port_in_use(candidate):
-			selected.append(candidate)
-			if selected.size() == 2:
-				break
+		if candidate not in [legacy_http, legacy_ws] and not selected.has(candidate) and PortResolver.can_bind_local_port(candidate):
+			var available: bool
+			if OS.get_name() == "Windows":
+				available = PortResolver.windows_port_occupancy(candidate, occupancy) == PortResolver.PortOccupancy.FREE
+			else:
+				available = not PortResolver.is_port_in_use(candidate)
+			if available:
+				selected.append(candidate)
+				if selected.size() == 2:
+					break
 		candidate += 1
 		if candidate > MAX_PORT:
 			candidate = MIN_PORT
 	if selected.size() != 2:
 		return {"ok": false, "error": "No independent HTTP/WebSocket port pair was available for this major upgrade."}
+	if OS.get_name() == "Windows":
+		occupancy = PortResolver.windows_listener_snapshot()
+		if not occupancy.known:
+			return {"ok": false, "error": "Windows could not query listening ports; retry endpoint selection."}
 	for port in selected:
-		if WindowsPortReservation.parse_excluded(reserved_output, port) or not PortResolver.can_bind_local_port(port) or PortResolver.is_port_in_use(port):
+		var available: bool
+		if OS.get_name() == "Windows":
+			available = PortResolver.windows_port_occupancy(port, occupancy) == PortResolver.PortOccupancy.FREE
+		else:
+			available = not PortResolver.is_port_in_use(port)
+		if WindowsPortReservation.parse_excluded(reserved_output, port) or not PortResolver.can_bind_local_port(port) or not available:
 			return {"ok": false, "error": "The selected upgrade port %d became unavailable; retry endpoint selection." % port}
 	var pair := {"http_port": selected[0], "ws_port": selected[1]}
 	es.set_setting(SETTING_V4_ENDPOINT_PORTS, pair)
@@ -535,13 +553,17 @@ static func allow_hosts() -> String:
 ## "free" honest on macOS/Linux, where the reservation table is empty but the
 ## next port up may still be occupied — the same suggestion feeds the dock
 ## crash body, the port-picker spinbox, and the non-recoverable INCOMPATIBLE
-## log line. Falls back to the clamped candidate if nothing in the window
-## clears both checks (caller surfaces it as a best-effort hint; the user can
-## retry or pick another). Best-effort by nature: a TOCTOU window remains
+## log line. Returns zero when discovery fails or no candidate is
+## available. A TOCTOU window remains
 ## between the probe and the caller actually binding the port. The bind probe
 ## is bounded to `SUGGEST_PORT_MAX_PROBES` attempts so this cold path can't
 ## stall on a pathological run of occupied ports.
-static func suggest_free_port(start: int, span: int = 2048) -> int:
+static func suggest_free_port(start: int, span: int = 2048, occupancy: Dictionary = {}) -> int:
+	if OS.get_name() == "Windows":
+		if occupancy.is_empty():
+			occupancy = PortResolver.windows_listener_snapshot()
+		if not occupancy.known:
+			return 0
 	var candidate := clampi(start, MIN_PORT, MAX_PORT - span + 1)
 	var limit := mini(candidate + span - 1, MAX_PORT)
 	var p := candidate
@@ -556,10 +578,11 @@ static func suggest_free_port(start: int, span: int = 2048) -> int:
 			break
 		p = not_reserved
 		probes += 1
-		if PortResolver.can_bind_local_port(p):
+		var occupied := OS.get_name() == "Windows" and PortResolver.windows_port_occupancy(p, occupancy) != PortResolver.PortOccupancy.FREE
+		if not occupied and PortResolver.can_bind_local_port(p):
 			return p
 		p += 1
-	return candidate
+	return 0
 
 
 # --- Client operations (string id) ---------------------------------------
