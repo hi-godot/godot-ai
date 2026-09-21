@@ -1425,3 +1425,64 @@ func test_generate_driver_frees_the_scene_root_and_releases_the_lease() -> void:
 	assert_eq(connection.captured.size(), 1, "the stale scene must be answered, not left to the timeout")
 	_remove_node(mesh)
 	connection.free()
+
+
+func test_generate_driver_rolls_back_survivors_when_an_applied_parent_is_freed() -> void:
+	## Plan two meshes, apply the first collider, free that item's parent, then
+	## resume the second item. Finalization used to error on the freed entry,
+	## record committed=true with an empty result and leave the second collider
+	## behind; the request must instead fail cleanly, roll the survivor back and
+	## release its work receipt.
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var first_parent := Node3D.new()
+	first_parent.name = "GenerateAppliedParentA"
+	root.add_child(first_parent)
+	first_parent.set_owner(root)
+	var second_parent := Node3D.new()
+	second_parent.name = "GenerateAppliedParentB"
+	root.add_child(second_parent)
+	second_parent.set_owner(root)
+	var first := MeshInstance3D.new()
+	first.name = "GenerateAppliedA"
+	var first_box := BoxMesh.new()
+	first_box.size = Vector3.ONE
+	first.mesh = first_box
+	first_parent.add_child(first)
+	first.set_owner(root)
+	var second := MeshInstance3D.new()
+	second.name = "GenerateAppliedB"
+	var second_box := BoxMesh.new()
+	second_box.size = Vector3.ONE
+	second.mesh = second_box
+	second_parent.add_child(second)
+	second.set_owner(root)
+	var connection := _CapturingConnection.new()
+	root.add_child(connection)
+	connection.set_process(false)
+	var job := _generate_job_for([
+		McpScenePath.from_node(first, root), McpScenePath.from_node(second, root),
+	], connection)
+	PhysicsShapeHandler._generate_step(job, 0)
+	PhysicsShapeHandler._generate_step(job, 0)
+	assert_false(PhysicsShapeHandler._generate_step(job, 0), "apply the first collider")
+	assert_eq(job.created.size(), 1)
+	PhysicsShapeHandler._drive_generate_job(job, connection, generate_driver_frame)
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 1, "worker is tracked before the first yield")
+	root.remove_child(first_parent)
+	first_parent.free()
+	generate_driver_frame.emit()
+	assert_eq(str(job.phase), "done")
+	assert_false(job.committed, "a failed finalization must not claim the batch is committed")
+	assert_eq(ScriptWork.active_count("physics_shape_generate"), 0, "the receipt is released")
+	assert_eq(connection.captured.size(), 1, "the failure is answered once")
+	assert_is_error(connection.captured[0].payload, ErrorCodes.NODE_NOT_FOUND)
+	assert_true(job.result.has("error"))
+	assert_true(_find_named_child(second_parent, "GenerateAppliedBCollider") == null,
+		"the surviving body is rolled back")
+	assert_true(_find_named_child(root, "GenerateAppliedBCollider") == null)
+	_remove_node(second_parent)
+	root.remove_child(connection)
+	connection.free()

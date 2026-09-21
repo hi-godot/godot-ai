@@ -291,10 +291,38 @@ static func _create_generated_entry(
 	body.add_child(collision)
 	return {
 		"mesh": mesh,
+		"mesh_path": str(plan.mesh_path),
 		"parent": plan.parent,
 		"body": body,
 		"collision": collision,
 	}
+
+
+## Why an already-applied entry no longer matches the scene, or "" when every
+## generated body is still present under its planned parent. Checked right
+## before the batch is committed: a node freed or reparented while the
+## remaining entries were applied must fail the request and roll back the
+## surviving bodies, not abort the commit and the reply with freed-instance
+## errors that leave an uncommitted body behind.
+static func _applied_stale_reason(created_nodes: Array[Dictionary]) -> String:
+	for entry in created_nodes:
+		## Keep these untyped until validity is known: a typed assignment raises
+		## on a freed Object before is_instance_valid() can inspect it.
+		var mesh = entry.mesh
+		if not is_instance_valid(mesh) or not mesh.is_inside_tree():
+			return "%s was removed" % str(entry.mesh_path)
+		var parent = entry.parent
+		if not is_instance_valid(parent) or mesh.get_parent() != parent:
+			return "%s was reparented" % str(entry.mesh_path)
+		var body = entry.body
+		if not is_instance_valid(body) or not body.is_inside_tree():
+			return "the generated body for %s was removed" % str(entry.mesh_path)
+		if body.get_parent() != parent:
+			return "the generated body for %s was reparented" % str(entry.mesh_path)
+		var collision = entry.collision
+		if not is_instance_valid(collision) or collision.get_parent() != body:
+			return "the generated collision shape for %s was removed" % str(entry.mesh_path)
+	return ""
 
 
 ## Record all generated nodes as one undo action, optionally executing it.
@@ -426,10 +454,24 @@ static func _generate_step(job: Dictionary, budget_usec: int) -> bool:
 		job.created.append(entry)
 		job.index = int(job.index) + 1
 		work += 1
-	## The nodes are already in the scene, so commit with execute=false: one
-	## atomic undo/redo action without replaying every mutation now.
+	## Revalidate every applied entry before the batch is committed: a mesh,
+	## parent, body or collision freed or reparented while the remaining entries
+	## were applied must fail the request and roll back the surviving bodies
+	## instead of erroring out of the commit and the reply.
 	var created: Array[Dictionary] = []
 	created.assign(job.created)
+	var applied_stale := _applied_stale_reason(created)
+	if not applied_stale.is_empty():
+		var code: String = (
+			ErrorCodes.NODE_NOT_FOUND if applied_stale.ends_with("was removed")
+			else ErrorCodes.EDITED_SCENE_MISMATCH
+		)
+		return _generate_fail(job, ErrorCodes.make(
+			code,
+			"Scene changed while physics shapes were applied: %s; nothing was changed" % applied_stale,
+		))
+	## The nodes are already in the scene, so commit with execute=false: one
+	## atomic undo/redo action without replaying every mutation now.
 	_commit_generated_action(created, scene_root, job.undo_redo, false)
 	job.committed = true
 	job.result = _generated_response(
