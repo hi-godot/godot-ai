@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from godot_ai.handlers import material as material_handlers
 from godot_ai.handlers import shader
 
 
@@ -103,28 +102,3 @@ async def test_shader_get_forwards_path():
         "shader_get",
         {"path": "res://a.gdshader"},
     )
-
-
-async def test_shader_list_forwards_root():
-    runtime = AsyncMock()
-    runtime.send_command.return_value = {"count": 0}
-    await shader.shader_list(runtime, "res://shaders")
-    assert runtime.send_command.call_args.args == (
-        "shader_list",
-        {"root": "res://shaders"},
-    )
-
-
-async def test_material_create_forwards_inline_code(monkeypatch):
-    runtime = AsyncMock()
-    runtime.send_command.return_value = {"path": "res://m.tres"}
-    monkeypatch.setattr(material_handlers, "require_writable_async", AsyncMock())
-    await material_handlers.material_create(
-        runtime,
-        path="res://m.tres",
-        type="shader",
-        code="shader_type spatial;",
-    )
-    params = runtime.send_command.call_args.args[1]
-    assert params["code"] == "shader_type spatial;"
-    assert "shader_path" not in params

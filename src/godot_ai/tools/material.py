@@ -18,11 +18,10 @@ Resource forms: ``godot://materials`` (all materials),
 ``godot://shader/{path}`` (one raw shader's source + parsed metadata).
 
 Ops:
-  • create(path, type="standard", shader_path="", code="", overwrite=False)
+  • create(path, type="standard", shader_path="", overwrite=False)
         Create + save a material .tres at a res:// path. type:
-        "standard" | "orm" | "canvas_item" | "shader". For "shader", pass
-        either shader_path (a .gdshader or VisualShader .tres) or code
-        (inline .gdshader source, compiled before the material is saved).
+        "standard" | "orm" | "canvas_item" | "shader". For "shader",
+        shader_path points to a .gdshader or VisualShader .tres.
   • set_param(path, param, value)
         Set a built-in property on a .tres material. Enum-valued params
         accept names ("alpha" -> TRANSPARENCY_ALPHA). Color/Vector dicts.
@@ -48,19 +47,20 @@ Ops:
         path saves to disk; node_path assigns to a node; overrides merge.
   • shader_create(resource_path, code, overwrite=False, shader_type="spatial")
         Create/replace a raw .gdshader (or .gdshaderinc include) from source
-        text. The code is compiled through Godot before anything is written:
-        parse errors reject the write with line-tagged diagnostics and leave
-        any existing file untouched. Returns shader_type, uniforms (type,
-        hint, hint_string, default), and cleanup hints. Not undoable.
+        text. The code is parsed through Godot's shader compiler for the
+        declared shader type before anything is written: parse errors reject
+        the write with diagnostics and leave any existing file untouched.
+        This is parse/type validation, not a guarantee that every renderer
+        variant compiles. Returns shader_type, uniforms (type, hint,
+        hint_string, default), and cleanup hints. Not undoable.
   • shader_get(path)
         Read a .gdshader/.gdshaderinc: full source, shader_type, uniforms,
         render modes, and #include list.
   • shader_validate(code, kind="shader", shader_type="spatial", base_dir="")
-        Compile shader source without writing a file. Returns valid plus
-        errors/warnings. Pass base_dir (a res:// directory) to validate
+        Parse/type-check shader source without writing a file. Returns valid
+        plus errors/warnings. Pass base_dir (a res:// directory) to validate
         relative #include resolution against where the shader will live.
-  • shader_list(root="res://")
-        List .gdshader and .gdshaderinc files under a project directory.
+        Renderer-specific variant compilation is out of scope.
   • shader_patch(path, old_text, new_text, replace_all=False)
         Anchor-based edit of a shader file: exact substring match, result
         revalidated before the file is replaced. Not undoable.
@@ -84,7 +84,6 @@ def register_material_tools(mcp: FastMCP) -> None:
             "shader_create": shader_handlers.shader_create,
             "shader_get": shader_handlers.shader_get,
             "shader_validate": shader_handlers.shader_validate,
-            "shader_list": shader_handlers.shader_list,
             "shader_patch": shader_handlers.shader_patch,
         },
         read_resource_forms={
@@ -92,6 +91,5 @@ def register_material_tools(mcp: FastMCP) -> None:
             "list": "godot://materials",
             "shader_get": "godot://shader/{path*}",
             "shader_validate": None,  ## Takes source text, not a path.
-            "shader_list": None,  ## Root-filtered scan; no per-resource URI.
         },
     )

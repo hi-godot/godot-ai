@@ -246,7 +246,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "material",
         "  material_manage  create, set_param, set_shader_param, get, list, assign,\n"
         "                   apply_to_node, apply_preset, shader_create, shader_get,\n"
-        "                   shader_validate, shader_list, shader_patch\n",
+        "                   shader_validate, shader_patch\n",
     ),
     (
         "audio",

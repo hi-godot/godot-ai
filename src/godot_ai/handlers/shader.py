@@ -15,7 +15,7 @@ async def shader_create(
     overwrite: bool = False,
     shader_type: str = "spatial",
 ) -> dict:
-    """Compile-check and atomically write a .gdshader / .gdshaderinc file."""
+    """Parse/type-check and atomically write a .gdshader / .gdshaderinc file."""
     await require_writable_async(runtime)
     return await runtime.send_command(
         "shader_create",
@@ -40,16 +40,11 @@ async def shader_validate(
     shader_type: str = "spatial",
     base_dir: str = "",
 ) -> dict:
-    """Compile shader source without writing anything."""
+    """Parse/type-check shader source without writing anything."""
     params: dict[str, Any] = {"code": code, "kind": kind, "shader_type": shader_type}
     if base_dir:
         params["base_dir"] = base_dir
     return await runtime.send_command("shader_validate", params)
-
-
-async def shader_list(runtime: DirectRuntime, root: str = "res://") -> dict:
-    """List .gdshader / .gdshaderinc files under a project directory."""
-    return await runtime.send_command("shader_list", {"root": root})
 
 
 async def shader_patch(

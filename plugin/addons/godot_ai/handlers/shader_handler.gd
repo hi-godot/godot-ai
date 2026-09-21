@@ -22,7 +22,6 @@ const INCLUDE_EXT := "gdshaderinc"
 ## Bounded request size. A shader is hand-authored text; 256 KiB is far past
 ## any real shader and keeps a malformed request from parking the editor.
 const MAX_CODE_BYTES := 262144
-const MAX_LIST_ENTRIES := 1000
 const SHADER_TYPES := ["spatial", "canvas_item", "particles", "sky", "fog"]
 const MODE_NAMES := {
 	Shader.MODE_SPATIAL: "spatial",
@@ -32,7 +31,7 @@ const MODE_NAMES := {
 	Shader.MODE_FOG: "fog",
 }
 const PARSE_FAILURE_TEXT := (
-	"Shader failed to compile. The editor Output panel carries Godot's "
+	"Shader failed the parse/type pass. The editor Output panel carries Godot's "
 	+ "line-tagged compiler details; check syntax, declared uniforms, and "
 	+ "stage-specific builtins for the shader type."
 )
@@ -89,6 +88,7 @@ func create_shader(params: Dictionary) -> Dictionary:
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs != null:
 		efs.update_file(resource_path)
+	_refresh_cached_resource(resource_path, code, kind)
 
 	var uniforms: Array = validation.uniforms
 	var data := {
@@ -203,33 +203,7 @@ func validate_shader(params: Dictionary) -> Dictionary:
 		"errors": validation.errors,
 		"warnings": validation.warnings,
 		"undoable": false,
-		"reason": "Validation compiles a scratch copy; no project state changed",
-	}}
-
-
-func list_shaders(params: Dictionary) -> Dictionary:
-	var root: String = params.get("root", "res://")
-	var path_err = McpPathValidator.path_error(root, "root")
-	if path_err != null:
-		return path_err
-	var efs := EditorInterface.get_resource_filesystem()
-	if efs == null:
-		return ErrorCodes.make_not_ready(
-			ErrorCodes.SUB_EDITOR_UNAVAILABLE, "EditorFileSystem not available", false
-		)
-	var dir := efs.get_filesystem_path(root)
-	if dir == null:
-		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Directory not found: %s" % root)
-
-	var results: Array[Dictionary] = []
-	var state := {"truncated": false}
-	_scan_dir(dir, results, state)
-	return {"data": {
-		"shaders": results,
-		"count": results.size(),
-		"root": root,
-		"truncated": state.truncated,
-		"limit": MAX_LIST_ENTRIES,
+		"reason": "Validation parses a scratch copy; no project state changed",
 	}}
 
 
@@ -301,6 +275,7 @@ func patch_shader(params: Dictionary) -> Dictionary:
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs != null:
 		efs.update_file(path)
+	_refresh_cached_resource(path, new_content, kind)
 
 	var uniforms: Array = validation.uniforms
 	return {"data": {
@@ -319,76 +294,39 @@ func patch_shader(params: Dictionary) -> Dictionary:
 	}}
 
 
-## Validate `code` and return a fresh in-memory Shader for inline embedding.
-## The scratch copy is removed either way; callers get an `error_response`
-## (parse failure) or a `shader` ready to assign to a ShaderMaterial.
-static func build_inline_shader(code: String, directory: String) -> Dictionary:
-	var size_err := _size_error(code)
-	if size_err != null:
-		return {"error_response": size_err}
-	var validation := _validate_code(code, "shader", directory, "spatial", false)
-	if validation.has("error"):
-		return {"error_response": validation.error}
-	if not validation.valid:
-		return {
-			"error_response": _invalid_with_diagnostics("Inline shader parse failed", validation),
-			"diagnostics": validation.diagnostics,
-		}
-	var shader := Shader.new()
-	shader.code = code
-	return {
-		"shader": shader,
-		"shader_type": validation.shader_type,
-		"uniforms": validation.uniforms,
-		"diagnostics": validation.diagnostics,
-	}
-
-
-## Compile `code` through the engine's shader parser and report validity,
+## Parse `code` through the engine's shader parser and report validity,
 ## uniforms, and a synthesized diagnostic on failure. `directory` receives the
 ## scratch files (destination directory for writes, `user://` for standalone
-## validation). `.gdshaderinc` cannot compile alone, so it is wrapped in a
-## minimal `shader_type <type>; #include "<scratch>"` shader in the same
-## directory (include resolution is relative to the including file).
-##
-## `file_backed` writes the scratch `.gdshader` to `directory` and loads it:
-## Godot only resolves relative `#include` paths for standalone shader files,
-## so file-backed validation is required for create/patch to accept shaders
-## that include a sibling `.gdshaderinc`. Inline shaders (embedded in a
-## material) cannot use relative includes at runtime, so they validate
-## in-memory (`file_backed = false`) and a relative include fails there too.
+## validation). The scratch `.gdshader` is written beside the destination and
+## loaded with `ResourceLoader`, so relative `#include` paths resolve exactly
+## as they will for the saved file. `.gdshaderinc` cannot compile alone, so it
+## is wrapped in a minimal `shader_type <type>; #include "<scratch>"` shader in
+## the same directory (include resolution is relative to the including file).
 static func _validate_code(
-	code: String, kind: String, directory: String, shader_type: String,
-	file_backed: bool = true,
+	code: String, kind: String, directory: String, shader_type: String
 ) -> Dictionary:
 	var token := "%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
 	var sentinel := "_mcp_validate_%d" % Time.get_ticks_usec()
-	var shader: Shader = null
-	var scratch_paths: Array[String] = []
-	if kind == "include" or (kind == "shader" and file_backed):
-		var ext := INCLUDE_EXT if kind == "include" else SHADER_EXT
-		var scratch_path := _scratch_path(directory, token, ext)
-		var staged := code if kind == "include" else code + "\nuniform float %s;\n" % sentinel
-		var write_err = _write_scratch(scratch_path, staged)
+	var ext := INCLUDE_EXT if kind == "include" else SHADER_EXT
+	var scratch_path := _scratch_path(directory, token, ext)
+	var staged := code if kind == "include" else code + "\nuniform float %s;\n" % sentinel
+	var write_err = _write_scratch(scratch_path, staged)
+	if write_err != null:
+		return {"error": write_err}
+	var scratch_paths: Array[String] = [scratch_path]
+	var capture_path := scratch_path
+	if kind == "include":
+		var wrapper_path := _scratch_path(directory, token, SHADER_EXT)
+		var wrapper := "shader_type %s;\n#include \"%s\"\nuniform float %s;\n" % [
+			shader_type, scratch_path.get_file(), sentinel
+		]
+		write_err = _write_scratch(wrapper_path, wrapper)
 		if write_err != null:
+			_remove_paths(scratch_paths)
 			return {"error": write_err}
-		scratch_paths.append(scratch_path)
-		var capture_path := scratch_path
-		if kind == "include":
-			var wrapper_path := _scratch_path(directory, token, SHADER_EXT)
-			var wrapper := "shader_type %s;\n#include \"%s\"\nuniform float %s;\n" % [
-				shader_type, scratch_path.get_file(), sentinel
-			]
-			write_err = _write_scratch(wrapper_path, wrapper)
-			if write_err != null:
-				_remove_paths(scratch_paths)
-				return {"error": write_err}
-			scratch_paths.append(wrapper_path)
-			capture_path = wrapper_path
-		shader = ResourceLoader.load(capture_path, "", ResourceLoader.CACHE_MODE_IGNORE) as Shader
-	else:
-		shader = Shader.new()
-		shader.code = code + "\nuniform float %s;\n" % sentinel
+		scratch_paths.append(wrapper_path)
+		capture_path = wrapper_path
+	var shader := ResourceLoader.load(capture_path, "", ResourceLoader.CACHE_MODE_IGNORE) as Shader
 	_remove_paths(scratch_paths)
 
 	var valid := shader != null and _has_uniform(shader, sentinel)
@@ -442,6 +380,24 @@ static func _write_atomic(resource_path: String, code: String, kind: String) -> 
 			"Cannot write %s: %s" % [resource_path, error_string(rename_err)]
 		)
 	return null
+
+
+## Refresh the resource object already cached for `resource_path` so held
+## references (ShaderMaterials, shared Shaders, shader include dependencies)
+## observe the write without waiting for an editor reload. `Shader.set_code()`
+## re-tracks its includes, and `ShaderInclude.set_code()` emits `changed`, which
+## recompiles every dependent shader through the engine's own dependency wiring.
+## A path that was never loaded has no cached identity to refresh.
+static func _refresh_cached_resource(resource_path: String, code: String, kind: String) -> void:
+	var cached := ResourceLoader.get_cached_ref(resource_path)
+	if cached == null:
+		return
+	if kind == "include":
+		if cached is ShaderInclude:
+			(cached as ShaderInclude).set_code(code)
+		return
+	if cached is Shader:
+		(cached as Shader).set_code(code)
 
 
 static func _serialize_uniforms(shader: Shader) -> Array[Dictionary]:
@@ -504,26 +460,6 @@ static func _parse_render_modes(code: String) -> Array[String]:
 			if not trimmed.is_empty():
 				out.append(trimmed)
 	return out
-
-
-func _scan_dir(dir: EditorFileSystemDirectory, out: Array[Dictionary], state: Dictionary) -> void:
-	if state.truncated:
-		return
-	for i in dir.get_file_count():
-		var extension := dir.get_file(i).get_extension().to_lower()
-		if extension != SHADER_EXT and extension != INCLUDE_EXT:
-			continue
-		out.append({
-			"path": dir.get_file_path(i),
-			"kind": "include" if extension == INCLUDE_EXT else "shader",
-		})
-		if out.size() >= MAX_LIST_ENTRIES:
-			state.truncated = true
-			return
-	for i in dir.get_subdir_count():
-		_scan_dir(dir.get_subdir(i), out, state)
-		if state.truncated:
-			return
 
 
 static func _scratch_path(directory: String, token: String, ext: String) -> String:

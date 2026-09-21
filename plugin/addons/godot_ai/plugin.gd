@@ -488,7 +488,6 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("shader_create", "shader", &"create_shader")
 	_dispatcher.register_lazy("shader_get", "shader", &"get_shader")
 	_dispatcher.register_lazy("shader_validate", "shader", &"validate_shader")
-	_dispatcher.register_lazy("shader_list", "shader", &"list_shaders")
 	_dispatcher.register_lazy("shader_patch", "shader", &"patch_shader")
 	_dispatcher.register_lazy("particle_create", "particle", &"create_particle")
 	_dispatcher.register_lazy("particle_set_main", "particle", &"set_main")

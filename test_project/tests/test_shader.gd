@@ -4,17 +4,15 @@ extends McpTestSuite
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const ShaderHandler := preload("res://addons/godot_ai/handlers/shader_handler.gd")
-const MaterialHandler := preload("res://addons/godot_ai/handlers/material_handler.gd")
 
 ## Tests for ShaderHandler — raw .gdshader / .gdshaderinc create, read,
-## validate, list, and patch, plus inline shader materials.
+## validate, and patch.
 ##
 ## NOTE: GDScript tests must not call save_scene, scene_create, scene_open,
 ## quit_editor, or reload_plugin (see CLAUDE.md Known Issues).
 
 const TEST_SHADER_PATH := "res://tests/_mcp_test_shader_suite.gdshader"
 const TEST_INCLUDE_PATH := "res://tests/_mcp_test_shader_suite.gdshaderinc"
-const TEST_MATERIAL_PATH := "res://tests/_mcp_test_shader_suite_mat.tres"
 
 const VALID_SHADER := """shader_type spatial;
 render_mode unshaded;
@@ -47,7 +45,6 @@ const INVALID_INCLUDE := """float broken(float value) {
 """
 
 var _shader_handler: ShaderHandler
-var _material_handler: MaterialHandler
 var _undo_redo: EditorUndoRedoManager
 
 
@@ -58,13 +55,11 @@ func suite_name() -> String:
 func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.get("undo_redo")
 	_shader_handler = ShaderHandler.new()
-	_material_handler = MaterialHandler.new(_undo_redo)
 
 
 func suite_teardown() -> void:
 	_cleanup_artifact(TEST_SHADER_PATH)
 	_cleanup_artifact(TEST_INCLUDE_PATH)
-	_cleanup_artifact(TEST_MATERIAL_PATH)
 
 
 func _cleanup_artifact(path: String) -> void:
@@ -79,6 +74,13 @@ func _create_valid_shader(path: String = TEST_SHADER_PATH) -> Dictionary:
 	return _shader_handler.create_shader({
 		"resource_path": path, "code": VALID_SHADER, "overwrite": true,
 	})
+
+
+func _has_uniform(shader: Shader, name: String) -> bool:
+	for uniform in shader.get_shader_uniform_list():
+		if str(uniform.get("name", "")) == name:
+			return true
+	return false
 
 
 # ============================================================================
@@ -296,27 +298,6 @@ void fragment() {
 
 
 # ============================================================================
-# shader_list
-# ============================================================================
-
-func test_list_finds_created_files() -> void:
-	var shader_result := _create_valid_shader()
-	assert_has_key(shader_result, "data")
-	_cleanup_artifact(TEST_INCLUDE_PATH)
-	var include_result := _shader_handler.create_shader({
-		"resource_path": TEST_INCLUDE_PATH, "code": VALID_INCLUDE,
-	})
-	assert_has_key(include_result, "data")
-	var result := _shader_handler.list_shaders({"root": "res://tests"})
-	assert_has_key(result, "data")
-	var paths: Array[String] = []
-	for entry in result.data.shaders:
-		paths.append(entry.path)
-	assert_true(paths.has(TEST_SHADER_PATH), "List should include the shader")
-	assert_true(paths.has(TEST_INCLUDE_PATH), "List should include the include")
-
-
-# ============================================================================
 # shader_patch
 # ============================================================================
 
@@ -331,6 +312,70 @@ func test_patch_replaces_and_revalidates() -> void:
 	var loaded := ResourceLoader.load(TEST_SHADER_PATH, "", ResourceLoader.CACHE_MODE_IGNORE) as Shader
 	assert_true(loaded != null)
 	assert_true(loaded.get_code().contains("0.75"), "Patched code should be on disk")
+
+
+func test_patch_refreshes_cached_shader_and_shared_material_references() -> void:
+	## dsarno: a held Shader (and the ShaderMaterials sharing it) kept the old
+	## code after a successful patch; only an uncached load saw the new bytes.
+	## The write must refresh the cached resource identity in place.
+	var created := _create_valid_shader()
+	assert_has_key(created, "data")
+	var held := ResourceLoader.load(TEST_SHADER_PATH) as Shader
+	assert_true(held != null, "the shader must load through the cache")
+	assert_true(held.get_code().contains("= 0.5;"), "the cached shader starts at 0.5")
+	var first_material := ShaderMaterial.new()
+	first_material.shader = held
+	var second_material := ShaderMaterial.new()
+	second_material.shader = held
+	var result := _shader_handler.patch_shader({
+		"path": TEST_SHADER_PATH, "old_text": "= 0.5;", "new_text": "= 0.75;",
+	})
+	assert_has_key(result, "data", str(result.get("error", {})))
+	assert_true(held.get_code().contains("= 0.75;"),
+		"the retained Shader must see the patch without a reload")
+	assert_true(first_material.shader == held and second_material.shader == held,
+		"shared material references keep the same resource identity")
+	assert_true(first_material.shader.get_code().contains("= 0.75;"))
+	var cached := ResourceLoader.get_cached_ref(TEST_SHADER_PATH) as Shader
+	assert_true(cached == held, "the cache must still hold the refreshed identity")
+	var fresh := ResourceLoader.load(TEST_SHADER_PATH, "", ResourceLoader.CACHE_MODE_IGNORE) as Shader
+	assert_true(fresh != null and fresh.get_code().contains("= 0.75;"),
+		"disk and the cached identity must agree")
+
+
+func test_patch_refreshes_dependent_shader_when_an_include_changes() -> void:
+	## Include dependencies must refresh too: the engine recompiles a cached
+	## Shader when its cached ShaderInclude emits `changed`.
+	_cleanup_artifact(TEST_INCLUDE_PATH)
+	_cleanup_artifact(TEST_SHADER_PATH)
+	var include_result := _shader_handler.create_shader({
+		"resource_path": TEST_INCLUDE_PATH, "code": VALID_INCLUDE,
+	})
+	assert_has_key(include_result, "data", str(include_result.get("error", {})))
+	var shader_code := """shader_type spatial;
+
+#include "%s"
+
+void fragment() {
+	ALBEDO = vec3(amplify(1.0));
+}
+""" % TEST_INCLUDE_PATH.get_file()
+	var created := _shader_handler.create_shader({
+		"resource_path": TEST_SHADER_PATH, "code": shader_code,
+	})
+	assert_has_key(created, "data", str(created.get("error", {})))
+	var held := ResourceLoader.load(TEST_SHADER_PATH) as Shader
+	assert_true(held != null)
+	assert_true(_has_uniform(held, "shared_strength"),
+		"the include uniform is visible through the shader")
+	var patched := _shader_handler.patch_shader({
+		"path": TEST_INCLUDE_PATH, "old_text": "shared_strength", "new_text": "shared_power",
+		"replace_all": true,
+	})
+	assert_has_key(patched, "data", str(patched.get("error", {})))
+	assert_true(_has_uniform(held, "shared_power"),
+		"the retained shader must recompile against the patched include")
+	assert_false(_has_uniform(held, "shared_strength"))
 
 
 func test_patch_rejects_invalid_result_and_preserves_file() -> void:
@@ -369,40 +414,5 @@ func test_patch_missing_old_text_errors() -> void:
 	assert_has_key(created, "data")
 	var result := _shader_handler.patch_shader({
 		"path": TEST_SHADER_PATH, "old_text": "not_in_file_anywhere", "new_text": "x",
-	})
-	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
-
-
-# ============================================================================
-# material_create inline shader
-# ============================================================================
-
-func test_inline_shader_material_embeds_compiled_shader() -> void:
-	_cleanup_artifact(TEST_MATERIAL_PATH)
-	var result := _material_handler.create_material({
-		"path": TEST_MATERIAL_PATH, "type": "shader", "code": VALID_SHADER,
-	})
-	assert_has_key(result, "data")
-	assert_eq(result.data.inline_shader, true)
-	var mat := ResourceLoader.load(TEST_MATERIAL_PATH, "", ResourceLoader.CACHE_MODE_IGNORE) as ShaderMaterial
-	assert_true(mat != null, "Inline material should load as ShaderMaterial")
-	assert_true(mat.shader is Shader, "Inline shader should be embedded")
-	assert_true(mat.shader.get_code().contains("tint"), "Embedded code should match the request")
-
-
-func test_inline_shader_material_rejects_invalid_code() -> void:
-	_cleanup_artifact(TEST_MATERIAL_PATH)
-	var result := _material_handler.create_material({
-		"path": TEST_MATERIAL_PATH, "type": "shader", "code": INVALID_SHADER,
-	})
-	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
-	assert_false(FileAccess.file_exists(TEST_MATERIAL_PATH), "Invalid inline shader must not be saved")
-
-
-func test_inline_shader_material_rejects_code_and_path() -> void:
-	_cleanup_artifact(TEST_MATERIAL_PATH)
-	var result := _material_handler.create_material({
-		"path": TEST_MATERIAL_PATH, "type": "shader",
-		"code": VALID_SHADER, "shader_path": TEST_SHADER_PATH,
 	})
 	assert_is_error(result, ErrorCodes.INVALID_PARAMS)

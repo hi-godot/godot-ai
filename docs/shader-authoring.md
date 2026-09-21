@@ -1,10 +1,11 @@
 # Raw shader authoring
 
 `material_manage` exposes raw `.gdshader` / `.gdshaderinc` authoring alongside
-the material ops. Every write compiles the staged bytes through Godot's own
-shader compiler **before** the destination file is touched, so invalid code
-never reaches disk and a failed validation preserves an existing file. All
-shader file writes report `undoable: false`; delete the file to revert.
+the material ops. Every write parses the staged bytes through Godot's shader
+compiler — the engine's parse/type pass for the declared shader type — **before**
+the destination file is touched, so invalid code never reaches disk and a failed
+validation preserves an existing file. All shader file writes report
+`undoable: false`; delete the file to revert.
 
 ## Ops
 
@@ -12,13 +13,8 @@ shader file writes report `undoable: false`; delete the file to revert.
 |----|---------|
 | `shader_create(resource_path, code, overwrite=false, shader_type="spatial")` | Validate + atomically write a `.gdshader` or `.gdshaderinc`. |
 | `shader_get(path)` | Full source + parsed metadata. Resource form: `godot://shader/{path}`. |
-| `shader_validate(code, kind="shader", shader_type="spatial", base_dir="")` | Compile-check source without writing anything. |
-| `shader_list(root="res://")` | List `.gdshader` / `.gdshaderinc` files. |
+| `shader_validate(code, kind="shader", shader_type="spatial", base_dir="")` | Parse/type-check source without writing anything. |
 | `shader_patch(path, old_text, new_text, replace_all=false)` | Exact-match edit, revalidated before replacement. |
-
-`material_manage(op="create", type="shader", code=...)` embeds an inline
-`Shader` in a `ShaderMaterial` in one call (mutually exclusive with
-`shader_path`); the code is compiled before the `.tres` is saved.
 
 ## Create workflow
 
@@ -49,14 +45,12 @@ untouched.
   uniform: a scratch copy of the code (or of the `#include` wrapper for a
   `.gdshaderinc`) gets a generated `uniform float _mcp_validate_<token>;`
   appended, and `Shader.get_shader_uniform_list()` is populated only when the
-  whole translation unit parses. A missing sentinel means the code failed to
-  compile.
+  whole translation unit parses. A missing sentinel means the code failed the
+  parse/type pass.
 - `shader_create` / `shader_patch` validate through a scratch `.gdshader`
   written beside the destination and loaded with `ResourceLoader`, so relative
   `#include "<sibling>.gdshaderinc"` paths resolve exactly as they will for the
-  saved file. Inline shader source (embedded in a material) validates in memory,
-  where a relative include correctly fails because Godot only resolves relative
-  includes for standalone shader files.
+  saved file.
 - `.gdshaderinc` cannot compile on its own, so it is wrapped in a minimal
   `shader_type <shader_type>; #include "<scratch>"` shader in the same
   directory. `shader_type` (default `spatial`) selects the wrapper context for
