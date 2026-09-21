@@ -17,7 +17,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.server.providers.proxy import ProxyProvider, ProxyTool
 from mcp.shared.exceptions import MCPError
-from mcp.types import INTERNAL_ERROR, CallToolRequestParams, TextContent
+from mcp.types import CONNECTION_CLOSED, INTERNAL_ERROR, CallToolRequestParams, TextContent
 
 from godot_ai.attach.ensure import AttachStartupError, BackendStatus
 from godot_ai.fastmcp_compat import ToolResult
@@ -266,7 +266,14 @@ def _is_transport_failure(exc: BaseException) -> bool:
         httpx.HTTPStatusError,
     )
     return bool(_trace_failures()) or any(
-        isinstance(item, transport_types) for item in _exception_chain(exc)
+        isinstance(item, transport_types)
+        or (
+            isinstance(item, MCPError)
+            and item.code == CONNECTION_CLOSED
+            and item.message == "SSE stream ended without a response"
+            and item.data is None
+        )
+        for item in _exception_chain(exc)
     )
 
 

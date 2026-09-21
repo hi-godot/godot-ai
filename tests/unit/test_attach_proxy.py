@@ -11,7 +11,7 @@ from typing import Any
 import httpx2 as httpx
 import pytest
 from mcp.shared.exceptions import MCPError
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import CONNECTION_CLOSED, INTERNAL_ERROR, CallToolResult, TextContent, Tool
 
 from godot_ai import __version__
 from godot_ai.attach import proxy as proxy_module
@@ -28,6 +28,7 @@ from godot_ai.attach.proxy import (
     _exception_chain,
     _http_client_factory,
     _is_proven_pre_dispatch_failure,
+    _is_transport_failure,
     _record_http_error_response,
     _record_transport_failure,
     _request_phase,
@@ -1120,3 +1121,58 @@ async def test_backend_monitor_counts_observer_exceptions() -> None:
         monitor_failure_threshold=1,
     )
     await middleware._wait_for_backend_change("instance-a")
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_sdk_sse_closure_is_unknown_without_replay(wrapped: bool) -> None:
+    failure: BaseException = MCPError(
+        CONNECTION_CLOSED, "SSE stream ended without a response"
+    )
+    if wrapped:
+        failure = ExceptionGroup("downstream", [failure])
+    calls = 0
+
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def call_next(_context: Any) -> ToolResult:
+        nonlocal calls
+        calls += 1
+        raise failure
+
+    assert not _is_proven_pre_dispatch_failure(failure)
+    result = await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
+    error = result.to_mcp_result().structured_content["error"]
+    assert error["code"] == "TRANSPORT_OUTCOME_UNKNOWN"
+    assert error["data"]["retryable"] is False
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("code", "message", "data"),
+    [
+        (CONNECTION_CLOSED, "Application rejected this operation", None),
+        (INTERNAL_ERROR, "SSE stream ended without a response", None),
+        (CONNECTION_CLOSED, "SSE stream ended without a response", {}),
+    ],
+)
+async def test_application_rpc_error_is_not_transport_loss(
+    code: int, message: str, data: Any
+) -> None:
+    failure = MCPError(code, message, data)
+    calls = 0
+
+    async def ensure() -> BackendStatus:
+        return _status()
+
+    async def call_next(_context: Any) -> ToolResult:
+        nonlocal calls
+        calls += 1
+        raise failure
+
+    assert not _is_transport_failure(failure)
+    assert not _is_proven_pre_dispatch_failure(failure)
+    with pytest.raises(MCPError) as caught:
+        await AttachRecoveryMiddleware(ensure).on_call_tool(_context(), call_next)
+    assert caught.value is failure
+    assert calls == 1

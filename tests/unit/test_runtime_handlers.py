@@ -3589,6 +3589,27 @@ async def test_physics_shape_generate_threads_scene_file_only_when_given():
     assert "scene_file" not in client.calls[-1]["params"]
 
 
+async def test_physics_shape_generate_threads_reparent_mesh_only_when_requested():
+    """reparent_mesh travels to the plugin only when set; the default payload stays minimal."""
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await physics_shape_handlers.physics_shape_generate(
+        runtime,
+        paths=["/Main/Body"],
+        shape_type="trimesh",
+        body_type="area",
+        reparent_mesh=True,
+    )
+    assert client.calls[-1]["params"] == {
+        "paths": ["/Main/Body"],
+        "shape_type": "trimesh",
+        "body_type": "area",
+        "reparent_mesh": True,
+    }
+    await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
+    assert "reparent_mesh" not in client.calls[-1]["params"]
+
+
 def test_physics_shape_generate_timeout_derives_from_the_plugin_budget():
     """The plugin owns the deferred budget; Python adds only the transport margin."""
     source = (

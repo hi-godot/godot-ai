@@ -2691,6 +2691,123 @@ class TestVisualShaderCreateGraphTool:
         assert result.data["undoable"] is False
         assert result.data["id_map"] == {"fragment": []}
 
+    async def test_forwards_varyings(self, mcp_stack):
+        client, plugin = mcp_stack
+        stages = [{"stage": "fragment", "nodes": [], "connections": []}]
+        varyings = [{"name": "glow", "mode": "frag_to_light", "type": "vector3"}]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_create_graph"
+            assert cmd["params"]["varyings"] == varyings
+            await plugin.send_response(cmd["request_id"], {
+                "resource_path": "res://graph.tres", "undoable": False,
+                "id_map": {"fragment": []}, "node_count": 0, "connection_count": 0,
+                "varyings": ["glow"],
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_create_graph",
+            "params": {
+                "resource_path": "res://graph.tres",
+                "stages": stages,
+                "varyings": varyings,
+            },
+        })
+        await task
+        assert result.data["varyings"] == ["glow"]
+
+
+class TestVisualShaderGetTool:
+    async def test_dispatches_through_material_manage(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_get"
+            assert cmd["params"] == {"path": "res://graph.tres"}
+            await plugin.send_response(cmd["request_id"], {
+                "path": "res://graph.tres",
+                "shader_type": "spatial",
+                "stages": [{
+                    "stage": "fragment",
+                    "nodes": [{"id": 2, "type": "VisualShaderNodeColorConstant",
+                               "position": {"x": 0, "y": 0}, "params": {}}],
+                    "connections": [],
+                }],
+                "node_count": 1,
+                "connection_count": 0,
+                "varyings": [{"name": "glow", "mode": "frag_to_light", "type": "vector3"}],
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_get",
+            "params": {"path": "res://graph.tres"},
+        })
+        await task
+        assert result.data["shader_type"] == "spatial"
+        assert result.data["node_count"] == 1
+        assert result.data["varyings"][0]["name"] == "glow"
+
+
+class TestVisualShaderNodeCatalogTool:
+    async def test_dispatches_through_material_manage(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_node_catalog"
+            assert cmd["params"] == {"filter": "Float", "offset": 0, "limit": 10}
+            await plugin.send_response(cmd["request_id"], {
+                "nodes": [{"type": "VisualShaderNodeFloatConstant", "params": ["constant"]}],
+                "count": 1, "total": 1, "offset": 0, "limit": 10, "aliases": {},
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_node_catalog",
+            "params": {"filter": "Float", "limit": 10},
+        })
+        await task
+        assert result.data["count"] == 1
+        assert result.data["nodes"][0]["type"] == "VisualShaderNodeFloatConstant"
+
+
+class TestVisualShaderEditTool:
+    async def test_dispatches_through_material_manage(self, mcp_stack):
+        client, plugin = mcp_stack
+        operations = [
+            {"op": "add_node", "stage": "fragment", "id": "extra",
+             "type": "VisualShaderNodeFloatConstant", "params": {"constant": 0.5}},
+        ]
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "visual_shader_edit"
+            assert cmd["params"] == {
+                "resource_path": "res://graph.tres",
+                "operations": operations,
+            }
+            await plugin.send_response(cmd["request_id"], {
+                "resource_path": "res://graph.tres",
+                "operations_applied": 1,
+                "added": [{"id": "extra", "node_id": 2, "stage": "fragment"}],
+                "node_count": 1,
+                "connection_count": 0,
+                "undoable": False,
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("material_manage", {
+            "op": "visual_shader_edit",
+            "params": {"resource_path": "res://graph.tres", "operations": operations},
+        })
+        await task
+        assert result.data["operations_applied"] == 1
+        assert result.data["added"][0]["node_id"] == 2
+
 
 class TestPhysicsShapeGenerateTool:
     async def test_generate_dispatches_through_resource_manage(self, mcp_stack):
@@ -2731,6 +2848,40 @@ class TestPhysicsShapeGenerateTool:
         await task
 
         assert result.data["created"][0]["body_path"] == "/Main/BodyCollider"
+        assert result.data["undoable"] is True
+
+    async def test_generate_threads_new_options(self, mcp_stack):
+        """convex + rigid + reparent_mesh reach the plugin command unchanged."""
+        client, plugin = mcp_stack
+
+        async def respond():
+            """Assert the plugin command carries every new option verbatim."""
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "physics_shape_generate"
+            assert cmd["params"] == {
+                "paths": ["/Main/Body"],
+                "shape_type": "convex",
+                "body_type": "rigid",
+                "reparent_mesh": True,
+            }
+            await plugin.send_response(
+                cmd["request_id"], {"created": [], "undoable": True}
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "resource_manage",
+            {
+                "op": "physics_shape_generate",
+                "params": {
+                    "paths": ["/Main/Body"],
+                    "shape_type": "convex",
+                    "body_type": "rigid",
+                    "reparent_mesh": True,
+                },
+            },
+        )
+        await task
         assert result.data["undoable"] is True
 
 
@@ -6163,6 +6314,180 @@ class TestMaterialListTool:
         )
         await task
         assert result.data["count"] == 1
+
+
+class TestShaderCreateTool:
+    async def test_create_dispatch(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "shader_create"
+            assert cmd["params"]["resource_path"] == "res://shaders/pulse.gdshader"
+            assert cmd["params"]["overwrite"] is False
+            assert cmd["params"]["shader_type"] == "spatial"
+            assert cmd["params"]["code"].startswith("shader_type spatial;")
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://shaders/pulse.gdshader",
+                    "kind": "shader",
+                    "shader_type": "spatial",
+                    "uniform_count": 1,
+                    "overwritten": False,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_manage",
+            {
+                "op": "shader_create",
+                "params": {
+                    "resource_path": "res://shaders/pulse.gdshader",
+                    "code": "shader_type spatial;\nuniform float pulse;\n",
+                },
+            },
+        )
+        await task
+        assert result.data["kind"] == "shader"
+        assert result.data["uniform_count"] == 1
+
+    async def test_parse_failure_preserves_diagnostics(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "shader_create"
+            await plugin.send_error(
+                cmd["request_id"],
+                "INVALID_PARAMS",
+                "Shader parse failed; res://shaders/bad.gdshader was not written",
+                data={
+                    "errors": [
+                        {"level": "error", "line": 5, "text": "Expected ';'"}
+                    ]
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_manage",
+            {
+                "op": "shader_create",
+                "params": {
+                    "resource_path": "res://shaders/bad.gdshader",
+                    "code": "shader_type spatial;",
+                },
+            },
+            raise_on_error=False,
+        )
+        await task
+        assert result.is_error
+        error = result.structured_content["error"]
+        assert error["code"] == "INVALID_PARAMS"
+        assert error["data"]["errors"][0]["line"] == 5
+
+
+class TestShaderGetTool:
+    async def test_get_dispatch(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "shader_get"
+            assert cmd["params"] == {"path": "res://shaders/pulse.gdshader"}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://shaders/pulse.gdshader",
+                    "kind": "shader",
+                    "shader_type": "canvas_item",
+                    "uniform_count": 2,
+                    "code": "shader_type canvas_item;\n",
+                    "line_count": 2,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_manage",
+            {"op": "shader_get", "params": {"path": "res://shaders/pulse.gdshader"}},
+        )
+        await task
+        assert result.data["shader_type"] == "canvas_item"
+        assert result.data["uniform_count"] == 2
+
+
+class TestShaderValidateTool:
+    async def test_validate_dispatch(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "shader_validate"
+            assert cmd["params"]["kind"] == "include"
+            assert cmd["params"]["shader_type"] == "spatial"
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "valid": True,
+                    "kind": "include",
+                    "errors": [],
+                    "warnings": [],
+                    "diagnostics": [],
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_manage",
+            {
+                "op": "shader_validate",
+                "params": {"code": "uniform float x;", "kind": "include"},
+            },
+        )
+        await task
+        assert result.data["valid"] is True
+        assert result.data["kind"] == "include"
+
+
+class TestShaderPatchTool:
+    async def test_patch_dispatch(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "shader_patch"
+            assert cmd["params"]["old_text"] == "0.5"
+            assert cmd["params"]["new_text"] == "0.9"
+            assert cmd["params"]["replace_all"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://shaders/pulse.gdshader",
+                    "kind": "shader",
+                    "replacements": 2,
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "material_manage",
+            {
+                "op": "shader_patch",
+                "params": {
+                    "path": "res://shaders/pulse.gdshader",
+                    "old_text": "0.5",
+                    "new_text": "0.9",
+                    "replace_all": True,
+                },
+            },
+        )
+        await task
+        assert result.data["replacements"] == 2
 
 
 class TestMaterialApplyToNodeTool:
