@@ -178,6 +178,36 @@ supported on Windows.
 
 </details>
 
+<details>
+<summary>Linux startup: Steam, Flatpak, and directory permissions</summary>
+
+The development version reads process identity and listening-socket ownership
+from `/proc`, so Steam and Flatpak runtimes do not need to provide `ps`, `lsof`,
+or `ss`. These checks stay inside the editor's sandbox; host PIDs are not used
+to authorize stopping a sandbox process. The backend launcher still needs to
+be installed and executable within that environment.
+
+Steam pressure-vessel can expose `/home -> /var/home` as a user-owned link.
+The development version accepts root- or current-user-owned links beneath
+protected parents and validates every target ancestor. Other-user ownership,
+writable parents, and symlink loops remain rejected.
+
+Some nested user namespaces expose host-root ancestors as an unmapped owner
+(often UID 65534). Those paths still fail ownership verification. Do not chmod
+system directories or treat UID 65534 as trusted to work around this; a usable
+credential directory must have verifiable ownership and be accessible to both
+the editor and its client bridge.
+
+If the selected credential path has group- or world-writable ancestors (for
+example `775` or `777`), startup remains blocked. The plugin lists the existing
+directories with problematic permissions before launching the server.
+Review their ownership and intended sharing; if you own them and
+shared write access is not intentional, `chmod go-w /exact/directory` removes
+group/other write access from that directory. Do not use recursive chmod.
+Godot AI does not change your home or config directory permissions itself.
+
+</details>
+
 ### Reference and support
 
 - [Tools, operations, and resources](docs/TOOLS.md)

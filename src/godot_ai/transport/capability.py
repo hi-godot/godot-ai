@@ -199,15 +199,17 @@ def _is_safe_posix_ancestor(path: Path, info: os.stat_result) -> bool:
     return info.st_uid in {0, os.getuid()} and (mode & 0o022 == 0 or root_sticky_directory)
 
 
-def _is_root_private_directory(path: Path) -> bool:
-    """A root-owned directory closed to group and other writes; no sticky exception."""
+def _is_trusted_private_directory(path: Path) -> bool:
+    """Root/current-user ownership, no group/other writes or sticky exception."""
 
     try:
         info = path.lstat()
     except OSError:
         return False
     return (
-        stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) & 0o022 == 0
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid in {0, os.getuid()}
+        and stat.S_IMODE(info.st_mode) & 0o022 == 0
     )
 
 
@@ -216,11 +218,12 @@ def _reject_unsafe_posix_ancestors(path: Path) -> Path:
 
     Returns ``path`` with every accepted link component replaced by its
     target, so callers operate on a link-free path. A link is followed only
-    when it is owned by root, sits in a root-owned directory that group and
-    other cannot write, and every ancestor before it already passed: another
-    account cannot place such a link, and ostree-based distributions rely on
-    one (``/home -> /var/home`` on Fedora Atomic and Bazzite, #993). Every
-    other link fails closed, as does a chain longer than ``_MAX_LINK_HOPS``.
+    when it and its parent are owned by root or this user, the parent is
+    closed to group/other writes, and every ancestor before it already passed.
+    Another account cannot place such a link. Steam's pressure-vessel owns
+    its ``/home -> /var/home`` link and namespace root as the invoking user.
+    This applies the same account boundary as ordinary directory ancestors.
+    Every other link fails closed, as does a chain longer than ``_MAX_LINK_HOPS``.
     The target's own components are walked under the same rules, so lexical
     ``..`` resolution against the already-resolved parent matches the kernel.
     """
@@ -229,6 +232,8 @@ def _reject_unsafe_posix_ancestors(path: Path) -> Path:
         return path
     remaining = list(path.parts[1:])
     current = Path(path.anchor)
+    if not _is_trusted_private_directory(current):
+        raise OSError(errno.EACCES, "capability path has an unsafe ancestor", current)
     hops = 0
     while remaining:
         current = current / remaining.pop(0)
@@ -239,9 +244,9 @@ def _reject_unsafe_posix_ancestors(path: Path) -> Path:
             return current.joinpath(*remaining)
         if _is_link_or_reparse(info):
             if (
-                info.st_uid != 0
+                info.st_uid not in {0, os.getuid()}
                 or hops >= _MAX_LINK_HOPS
-                or not _is_root_private_directory(current.parent)
+                or not _is_trusted_private_directory(current.parent)
             ):
                 raise OSError(
                     errno.ELOOP,

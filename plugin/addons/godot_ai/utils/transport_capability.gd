@@ -113,7 +113,8 @@ static func _private_path(path: String, directory: bool) -> bool:
 ## writes, so only that directory's owner or root could have placed it; ostree
 ## distributions need this for `/home -> /var/home` (#993). Godot exposes no
 ## owning UID, so this is the strongest proof available here; Python, which
-## publishes the record, additionally requires such a link to be root-owned.
+## publishes the record, additionally verifies root/current-user ownership of
+## the link and its parent (including Steam's user-owned namespace root).
 ## The record file itself is never followed, and a chain longer than
 ## `_MAX_LINK_HOPS` fails closed. Windows keeps rejecting every detectable
 ## link or reparse point.
@@ -244,12 +245,37 @@ static func is_lower_hex(value: String, length: int) -> bool:
 ## spawn turns a silent "proof timed out at capability_record" into a message
 ## that names the directory and the fix.
 static func directory_write_problem(http_port: int) -> String:
-	if OS.get_name() != "Windows":
-		return ""
 	var record := path_for_http_port(http_port)
 	if record.is_empty():
 		return ""
+	if OS.get_name() != "Windows":
+		return posix_directory_problem(record.get_base_dir())
 	return directory_write_problem_for(record.get_base_dir())
+
+
+## Diagnose all existing writable ancestors in one pass. Never chmod the
+## user's home/config directories; Python remains the owning-UID authority.
+static func posix_directory_problem(directory: String) -> String:
+	var problems: Array[String] = []
+	var current := directory.simplify_path()
+	while not current.is_empty():
+		if DirAccess.dir_exists_absolute(current):
+			var permissions := FileAccess.get_unix_permissions(current)
+			if not _safe_posix_ancestor_mode(current, permissions):
+				problems.push_front("%s (mode %03o)" % [current, permissions & _POSIX_PERMISSION_MASK])
+		var parent := current.get_base_dir()
+		if parent.is_empty() or parent == current:
+			break
+		current = parent
+	if problems.is_empty():
+		return ""
+	return (
+		"Godot AI cannot securely store connection credentials. Check these directories: %s. "
+		+ "They must be accessible and not writable by group or other users. "
+		+ "If you own them and shared write access is not intentional, remove group/other write "
+		+ "permission on each named directory (chmod go-w), then retry. "
+		+ "Do not apply chmod recursively. No permissions have been changed."
+	) % "; ".join(problems)
 
 
 static func directory_write_problem_for(directory: String) -> String:

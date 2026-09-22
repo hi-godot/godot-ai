@@ -17,6 +17,7 @@ INSTALLER_SCRIPTS = (
     "release_verifier.gd",
     "update_installer.gd",
     "port_resolver.gd",
+    "linux_proc.gd",
     "windows_port_reservation.gd",
     "update_activation_runner.gd",
 )

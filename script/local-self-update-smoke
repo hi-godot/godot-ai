@@ -84,6 +84,7 @@ CAPSULE_INSTALLER_SCRIPTS = (
     "update_installer.gd",
     "update_activation_runner.gd",
     "port_resolver.gd",
+    "linux_proc.gd",
     "windows_port_reservation.gd",
 )
 DEFAULT_HTTP_PORT = 18000

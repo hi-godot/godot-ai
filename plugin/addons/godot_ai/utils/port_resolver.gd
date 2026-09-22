@@ -14,6 +14,7 @@ const SERVER_PID_FILE := "user://godot_ai_server.pid"
 ## spawn, so a report that exists afterwards belongs to that launch.
 const SERVER_STARTUP_REPORT := "user://godot_ai_server_startup.json"
 const WindowsPortReservation := preload("res://addons/godot_ai/utils/windows_port_reservation.gd")
+const LinuxProc := preload("res://addons/godot_ai/utils/linux_proc.gd")
 static var _process_spawn_mutex := Mutex.new()
 
 enum PortOccupancy { UNKNOWN, FREE, OCCUPIED }
@@ -30,10 +31,10 @@ static func unlock_process_spawn() -> void:
 	_process_spawn_mutex.unlock()
 
 
-## A managed Linux server needs a listener PID tool to prove ownership.
+## Linux can prove ownership through procfs inside minimal desktop sandboxes.
 ## Query each launch so installing the missing tool makes Retry work.
 static func listener_tools_problem() -> String:
-	if OS.get_name() != "Linux":
+	if OS.get_name() != "Linux" or LinuxProc.available():
 		return ""
 	var output: Array = []
 	var available := OS.execute("/bin/sh", ["-c",
@@ -41,7 +42,7 @@ static func listener_tools_problem() -> String:
 	], output, true)
 	if available == 0:
 		return ""
-	return "Cannot verify Linux listener ownership: neither lsof nor ss is available on the editor's PATH. Install lsof or iproute2 (which provides ss), then retry starting the server."
+	return "Cannot verify Linux listener ownership: /proc is unavailable and neither lsof nor ss is available on the editor's PATH. Make /proc accessible inside the editor environment, or install lsof or iproute2 there, then retry starting the server."
 
 
 static func can_bind_local_port(port: int) -> bool:
@@ -66,6 +67,13 @@ static func is_port_in_use(port: int) -> bool:
 ## a wrapping caller's startup trace sees a genuine PowerShell fallback
 ## as `powershell`, not as a silent extra second under `netstat`.
 static func is_port_in_use_via_scrape(port: int, trace: Callable = Callable()) -> bool:
+	if OS.get_name() == "Linux":
+		var linux := LinuxProc.listener_snapshot()
+		if linux.known:
+			return linux.listeners.has(port)
+		## A failed observation cannot prove that a port is free.
+		if not can_bind_local_port(port):
+			return true
 	var output: Array = []
 	if OS.get_name() == "Windows":
 		return windows_port_occupancy(port, windows_listener_snapshot(trace)) != PortOccupancy.FREE
@@ -189,6 +197,12 @@ static func find_all_pids_on_port(port: int, trace: Callable = Callable(), snaps
 		if snapshot.known:
 			pids.assign(snapshot.listeners.get(port, []))
 		return pids
+	if OS.get_name() == "Linux":
+		var linux := LinuxProc.listener_snapshot()
+		if linux.known:
+			var linux_pids := LinuxProc.listener_pids(port, linux)
+			if not linux_pids.is_empty() or not linux.listeners.has(port):
+				return linux_pids
 	var output: Array = []
 	_trace(trace, "lsof")
 	var exit_code := OS.execute("lsof", ["-ti:%d" % port, "-sTCP:LISTEN"], output, true)
@@ -350,6 +364,8 @@ static func pid_alive(pid: int, snapshot: Variant = null) -> bool:
 		return false
 	if snapshot != null:
 		return not _process_snapshot_row(snapshot, pid).is_empty()
+	if OS.get_name() == "Linux":
+		return LinuxProc.is_alive(LinuxProc.process_stat(pid))
 	if OS.get_name() == "Windows":
 		var output: Array = []
 		var exit_code := OS.execute("tasklist", ["/FI", "PID eq %d" % pid, "/NH", "/FO", "CSV"], output, true)
@@ -373,10 +389,12 @@ static func pid_alive(pid: int, snapshot: Variant = null) -> bool:
 ## One Windows query captures the target and at most fifteen ancestors. The
 ## dictionary belongs to one proof boundary, never a cache: callers must take
 ## a fresh snapshot when closing the capture window or authorizing a kill.
-## Non-Windows callers receive null and keep the existing live-query path.
+## Linux captures the same bounded ancestry using procfs; macOS keeps ps.
 ## The process enumeration stays inside PowerShell; only the bounded target
 ## ancestry crosses back into Godot, without logging command-line metadata.
 static func capture_process_snapshot(pid: int) -> Variant:
+	if OS.get_name() == "Linux":
+		return LinuxProc.process_snapshot(pid)
 	if OS.get_name() != "Windows":
 		return null
 	if pid <= 1:
@@ -511,6 +529,8 @@ static func process_commandline(pid: int, snapshot: Variant = null) -> String:
 		if execute_windows_powershell(script, output) != 0 or output.is_empty():
 			return ""
 		return str(output[0]).strip_edges()
+	if OS.get_name() == "Linux":
+		return LinuxProc.commandline(pid)
 	var proc_path := "/proc/%d/cmdline" % pid
 	if FileAccess.file_exists(proc_path):
 		var file := FileAccess.open(proc_path, FileAccess.READ)
@@ -539,6 +559,8 @@ static func process_parent(pid: int, snapshot: Variant = null) -> int:
 		return 0
 	if snapshot != null:
 		return int(_process_snapshot_row(snapshot, pid).get("parent_pid", 0))
+	if OS.get_name() == "Linux":
+		return int(LinuxProc.process_stat(pid).get("parent_pid", 0))
 	var output: Array = []
 	if OS.get_name() == "Windows":
 		var script := (
@@ -599,6 +621,8 @@ static func pid_cmdline_is_godot_ai(pid: int, snapshot: Variant = null) -> bool:
 
 
 static func process_fingerprint(pid: int, snapshot: Variant = null) -> String:
+	if snapshot == null and OS.get_name() == "Linux":
+		snapshot = capture_process_snapshot(pid)
 	if not pid_alive(pid, snapshot):
 		return ""
 	var output: Array = []

@@ -200,14 +200,15 @@ def test_record_rejects_leaf_link_and_permissive_mode(tmp_path) -> None:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX link contract")
-def test_record_rejects_linked_directory_component(tmp_path) -> None:
+def test_record_round_trips_through_same_user_linked_directory(tmp_path) -> None:
     real = tmp_path / "real"
     linked = tmp_path / "linked"
-    real.mkdir()
+    real.mkdir(mode=0o700)
     linked.symlink_to(real, target_is_directory=True)
 
-    with pytest.raises(OSError, match="link or reparse"):
-        write_capabilities(8127, HTTP, WEBSOCKET, instance_nonce=NONCE, directory=linked)
+    written = write_capabilities(8127, HTTP, WEBSOCKET, instance_nonce=NONCE, directory=linked)
+    assert written == real / "http-8127.json"
+    assert read_capabilities(8127, linked) == validate_record(HTTP, WEBSOCKET, NONCE)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX ancestor mode contract")
@@ -340,9 +341,8 @@ def test_default_directory_resolves_through_the_home_link(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX link contract")
-@pytest.mark.parametrize("link_uid", ["self", "other"])
-def test_links_not_owned_by_root_fail_closed(monkeypatch, link_uid) -> None:
-    _ostree_home(monkeypatch, link_uid=os.getuid() if link_uid == "self" else os.getuid() + 1)
+def test_links_owned_by_another_account_fail_closed(monkeypatch) -> None:
+    _ostree_home(monkeypatch, link_uid=os.getuid() + 1)
 
     with pytest.raises(OSError, match="link or reparse"):
         capability_module._reject_unsafe_posix_ancestors(Path(f"{FAKE_ROOT}/home/me/.config"))
@@ -515,3 +515,54 @@ def test_windows_capability_directory_inherits_the_parent_acl(tmp_path) -> None:
         pytest.skip("this interpreter or volume gives mode=0o700 the plain-mkdir DACL")
     assert aces(directory) == aces(control)
     assert aces(directory) != aces(restricted)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+def test_steam_user_owned_root_and_home_link_resolve(monkeypatch) -> None:
+    me = os.getuid()
+    _fake_tree(
+        monkeypatch,
+        {
+            "/": _directory(me),
+            FAKE_ROOT: _directory(me),
+            f"{FAKE_ROOT}/home": _link(me),
+            f"{FAKE_ROOT}/var": _directory(me),
+            f"{FAKE_ROOT}/var/home": _directory(me),
+            f"{FAKE_ROOT}/var/home/me": _directory(me, 0o700),
+        },
+        {f"{FAKE_ROOT}/home": "var/home"},
+    )
+    assert capability_module._reject_unsafe_posix_ancestors(
+        Path(f"{FAKE_ROOT}/home/me/.config/godot-ai/capabilities")
+    ) == Path(f"{FAKE_ROOT}/var/home/me/.config/godot-ai/capabilities")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+@pytest.mark.parametrize("uid,mode", [("other", 0o755), ("self", 0o777)])
+def test_namespace_root_must_be_trusted(monkeypatch, uid, mode) -> None:
+    _fake_tree(
+        monkeypatch,
+        {
+            "/": _directory(os.getuid() + 1 if uid == "other" else os.getuid(), mode),
+        },
+        {},
+    )
+    with pytest.raises(OSError, match="unsafe ancestor"):
+        capability_module._reject_unsafe_posix_ancestors(Path(f"{FAKE_ROOT}/records"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX link ownership")
+@pytest.mark.parametrize("mode", [0o775, 0o777])
+def test_same_user_link_does_not_bypass_writable_target(monkeypatch, mode) -> None:
+    me = os.getuid()
+    _fake_tree(
+        monkeypatch,
+        {
+            FAKE_ROOT: _directory(me),
+            f"{FAKE_ROOT}/home": _link(me),
+            f"{FAKE_ROOT}/target": _directory(me, mode),
+        },
+        {f"{FAKE_ROOT}/home": "target"},
+    )
+    with pytest.raises(OSError, match="unsafe ancestor"):
+        capability_module._reject_unsafe_posix_ancestors(Path(f"{FAKE_ROOT}/home/records"))

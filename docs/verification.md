@@ -97,11 +97,26 @@ by a separate sandbox account can deny the editor's child Python process access
 to its launcher. If startup exits before publishing proof, inspect captured
 stderr and fixture ACLs before attributing the failure to the plugin.
 
-On Linux, listener ownership checks require `lsof` or `ss` (provided by
-`iproute2`). Normal desktop installations commonly include `ss`; minimal test
-containers may include neither. Install one before live verification, for
-example `sudo apt-get install lsof` on Debian/Ubuntu. Missing tools must produce
-an actionable failure, never a bypass of the process ownership checks.
+On Linux, process identity and TCP listener ownership are read from `/proc`
+in the editor's PID/network namespace. Minimal Steam/Flatpak environments do
+not need `ps`, `lsof`, or `ss`. Listener discovery retains `lsof`/`ss` as a
+fallback when procfs listener evidence is unavailable; unreadable ownership
+never grants permission to stop a process. Run
+`tests/integration/test_linux_listener_tools.py` on Linux to exercise an empty
+PATH and real listening sockets, and `test_unix_startup.py` for malformed
+procfs data and directory-permission diagnostics.
+
+For a Steam reproduction, use Valve's actual `SteamLinuxRuntime_soldier`
+launcher, not just its SDK image. Soldier `2.0.20260805.254767` with
+pressure-vessel `0.20260805.0` was exercised under x86-64 Linux: real Godot 4.7
+process/listener checks work without PATH tools, and the lifecycle proof suite
+passes with a protected fixture directory. A Bazzite-style `/home -> var/home`
+also exposes a separate nested-namespace limit: root-owned host bind mounts
+can appear as UID 65534 and are deliberately rejected by the credential
+ownership checks. Do not interpret those fixture results as proof of default
+home-directory startup on every Steam or Flatpak installation. In particular,
+an `XDG_RUNTIME_DIR` environment variable does not prove that its directory is
+shared with host clients.
 
 1. Run the same Ruff scope as CI — production, tests, the `script/` Python
    package, and the executable Python release/smoke scripts:

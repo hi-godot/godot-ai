@@ -71,6 +71,13 @@ def test_real_lifecycle_proof_revalidates_pid_hints_and_final_identity(tmp_path:
                 return  # A reaped fixture grants no new cleanup authority.
 
         try:
+            # macOS framework Python re-execs during startup. Capture its
+            # command identity only after the fixture has entered Python.
+            deadline = time.monotonic() + 30
+            while not (tmp_path / "backend-process.json").exists():
+                assert backend.poll() is None, "backend exited; inspect backend.log"
+                assert time.monotonic() < deadline, "backend fixture did not initialize"
+                time.sleep(.05)
             parent = psutil.Process(backend.pid)
             identity = (parent.create_time(), parent.cmdline())
             owned[backend.pid] = identity
