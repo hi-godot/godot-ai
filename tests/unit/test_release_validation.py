@@ -1,6 +1,7 @@
 """Supplemental release evidence requires native proof and public byte inventories."""
 
 import copy
+import hashlib
 
 import pytest
 
@@ -9,7 +10,7 @@ from script import release_promotion as promotion
 from script import release_support as support
 from script import release_validation as validation
 
-DIGEST = {"sha256": "b" * 64, "size": 12}
+DIGEST = {"sha256": hashlib.sha256(b"fixture-data").hexdigest(), "size": 12}
 MANIFEST = "godot-ai-v4-plugin.manifest.json"
 
 
@@ -88,6 +89,48 @@ def rows(tmp_path, monkeypatch):
                 **engine.build_pin("4.7.0", os_label),
                 "version": "4.7.stable.official.fixture",
             }
+            closures = {}
+            installs = {}
+            for label, version in (("candidate", "4.1.0"), ("predecessor", "4.0.4")):
+                filename = f"godot_ai-{version}-py3-none-any.whl"
+                closures[label] = [
+                    {"filename": filename, "name": "godot-ai", "version": version, **DIGEST}
+                ]
+                (path / "packages").mkdir(exist_ok=True)
+                (path / "packages" / filename).write_bytes(b"fixture-data")
+                if label == "predecessor":
+                    (path / "predecessor-packages").mkdir()
+                    (path / "predecessor-packages" / filename).write_bytes(b"fixture-data")
+                resolution = path / ("offline-" + version + ".json")
+                resolution.write_bytes(
+                    support.canonical(
+                        {
+                            "install": [
+                                {
+                                    "metadata": {"name": "godot-ai", "version": version},
+                                    "download_info": {
+                                        "url": "file:///packages/" + filename,
+                                        "archive_info": {"hashes": {"sha256": DIGEST["sha256"]}},
+                                    },
+                                }
+                            ]
+                        }
+                    )
+                )
+                installs[version] = {
+                    "status": "passed",
+                    "wheel": DIGEST,
+                    "resolution": support.fingerprint(resolution),
+                }
+            index = sorted(
+                closures["candidate"] + closures["predecessor"], key=lambda row: row["filename"]
+            )
+            case["index_inventory"] = index
+            case["dependency_evidence"] = {
+                "closures": closures,
+                "index_inventory": index,
+                "offline_installs": installs,
+            }
             row = {
                 "godot_version": "4.7.0",
                 "schema": 1,
@@ -162,7 +205,7 @@ def test_complete_binds_all_six_native_rows(rows):
     candidate, root, output, _ = rows
     validation.complete(candidate, root, output, "predecessor")
     result = support.read_json(output)
-    assert result["status"] == "passed" and len(result["files"]) == 12
+    assert result["status"] == "passed" and len(result["files"]) == 42
     assert result["candidate"] == support.fingerprint(candidate / "evidence.json")
 
 
@@ -190,6 +233,9 @@ def test_complete_binds_all_six_native_rows(rows):
         "missing_engine",
         "wrong_engine",
         "wrong_engine_row",
+        "missing_closure",
+        "missing_offline_install",
+        "changed_dependency",
     ],
 )
 def test_complete_rejects_partial_or_mixed_evidence(rows, fault):
@@ -239,6 +285,14 @@ def test_complete_rejects_partial_or_mixed_evidence(rows, fault):
             row["cases"][0].pop("godot")
         elif fault == "wrong_engine":
             row["cases"][0]["godot"]["sha256"] = "e" * 64
+        elif fault == "missing_closure":
+            row["cases"][0]["dependency_evidence"]["closures"].pop("predecessor")
+        elif fault == "missing_offline_install":
+            row["cases"][0]["dependency_evidence"]["offline_installs"].pop("4.0.4")
+        elif fault == "changed_dependency":
+            (path.parent / "packages/godot_ai-4.0.4-py3-none-any.whl").write_bytes(b"tampered")
+            row["files"] = support.inventory(path.parent)
+            row["files"].pop("row.json")
         elif fault == "wrong_engine_row":
             row["godot_version"] = "4.7.2"
         path.write_bytes(support.canonical(row))

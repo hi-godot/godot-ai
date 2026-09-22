@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import zipfile
 
 import pytest
 
@@ -345,3 +346,174 @@ def test_update_evidence_rejects_wrong_tree_or_incomplete_cleanup(tmp_path, corr
         )
     with pytest.raises(support.ReleaseError):
         predecessor.verify_update(project, *roots, {"version": "4.0.4"}, {"version": "4.1.0"})
+
+
+def _wheel(root, name, version, requirement=None):
+    root.mkdir(parents=True, exist_ok=True)
+    filename = f"{name}-{version}-py3-none-any.whl"
+    metadata = f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+    if requirement:
+        metadata += f"Requires-Dist: {requirement}\n"
+    with zipfile.ZipFile(root / filename, "w") as archive:
+        prefix = f"{name}-{version}.dist-info/"
+        archive.writestr(prefix + "METADATA", metadata)
+        archive.writestr(
+            prefix + "WHEEL",
+            "Wheel-Version: 1.0\nGenerator: fixture\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(prefix + "RECORD", "")
+    return root / filename
+
+
+def test_merge_rejects_conflicting_filename_and_changed_source(tmp_path):
+    source, target = tmp_path / "source", tmp_path / "target"
+    target.mkdir()
+    wheel = _wheel(source, "dependency", "1.0")
+    rows = predecessor.qualification.dependency_inventory(source)
+    predecessor.merge_dependency_files(source, rows, target)
+    predecessor.merge_dependency_files(source, rows, target)
+    assert (target / wheel.name).read_bytes() == wheel.read_bytes()
+    (target / wheel.name).write_bytes(b"different bytes")
+    with pytest.raises(support.ReleaseError, match="conflicting retained"):
+        predecessor.merge_dependency_files(source, rows, target)
+    assert (target / wheel.name).read_bytes() == b"different bytes"
+    wheel.write_bytes(b"changed source")
+    with pytest.raises(support.ReleaseError, match="changed before merge"):
+        predecessor.merge_dependency_files(source, rows, target)
+
+
+def test_offline_preflight_requires_both_distinct_dependency_versions(tmp_path):
+    candidate, old, combined = (tmp_path / name for name in ("candidate", "old", "combined"))
+    combined.mkdir()
+    _wheel(candidate, "release_probe_dep", "2.0")
+    _wheel(candidate, "godot_ai", "4.2.0", "release_probe_dep==2.0")
+    old_wheel = _wheel(old, "godot_ai", "4.1.0", "release_probe_dep==1.0")
+    predecessor.merge_dependency_files(
+        candidate, predecessor.qualification.dependency_inventory(candidate), combined
+    )
+    predecessor.merge_dependency_files(
+        old, predecessor.qualification.dependency_inventory(old), combined
+    )
+    before = support.inventory(combined)
+    failed = tmp_path / "failed"
+    failed.mkdir()
+    with pytest.raises(support.ReleaseError, match="qualification command failed"):
+        predecessor.offline_preflight(
+            combined, "4.1.0", failed, failed, predecessor.qualification.dependency_inventory(old)
+        )
+    _wheel(old, "release_probe_dep", "1.0")
+    predecessor.merge_dependency_files(
+        old, predecessor.qualification.dependency_inventory(old), combined
+    )
+    assert all(support.fingerprint(combined / name) == digest for name, digest in before.items())
+    assert support.fingerprint(combined / old_wheel.name) == support.fingerprint(old_wheel)
+    for version, dependency in (("4.1.0", "1.0"), ("4.2.0", "2.0")):
+        result = predecessor.offline_preflight(
+            combined,
+            version,
+            tmp_path,
+            tmp_path,
+            predecessor.qualification.dependency_inventory(
+                old if version == "4.1.0" else candidate
+            ),
+        )
+        assert result["status"] == "passed"
+        report = json.loads(
+            (tmp_path / ("offline-" + version + ".json")).read_text(encoding="utf-8")
+        )
+        installed = {
+            item["metadata"]["name"].replace("_", "-"): item["metadata"]["version"]
+            for item in report["install"]
+        }
+        assert installed == {"godot-ai": version, "release-probe-dep": dependency}
+
+
+@pytest.mark.parametrize("corruption", [None, "wheel", "dependency", "yanked"])
+def test_resolve_predecessor_checks_public_bytes(monkeypatch, tmp_path, corruption):
+    original = tmp_path / "public"
+    wheel = _wheel(original / "dist", "godot_ai", "4.1.0", "release_probe_dep==1.0")
+    expected = support.fingerprint(wheel)
+    output = tmp_path / "output"
+    output.mkdir()
+    commands = []
+
+    def execute(command, log, **kwargs):
+        commands.append(command)
+        packages = output / "predecessor-packages"
+        (packages / wheel.name).write_bytes(wheel.read_bytes())
+        dependency = _wheel(packages, "release_probe_dep", "1.0")
+        metadata = {
+            "urls": [
+                {
+                    "filename": dependency.name,
+                    "url": "https://files.pythonhosted.org/" + dependency.name,
+                    "size": dependency.stat().st_size,
+                    "digests": {"sha256": support.fingerprint(dependency)["sha256"]},
+                    "yanked": corruption == "yanked",
+                }
+            ]
+        }
+        if corruption == "dependency":
+            metadata["urls"][0]["digests"]["sha256"] = "0" * 64
+        monkeypatch.setattr(predecessor.public, "public_json", lambda _: metadata)
+
+    monkeypatch.setattr(predecessor.qualification, "execute", execute)
+    previous = {"version": "4.1.0", "files": {"dist/" + wheel.name: expected}}
+    if corruption == "wheel":
+        previous["files"]["dist/" + wheel.name] = {"size": 1, "sha256": "0" * 64}
+    if corruption:
+        with pytest.raises(support.ReleaseError):
+            predecessor.retain_predecessor_dependencies(original, previous, output)
+    else:
+        rows = predecessor.retain_predecessor_dependencies(original, previous, output)
+        assert {(row["name"], row["version"]) for row in rows} == {
+            ("godot-ai", "4.1.0"),
+            ("release-probe-dep", "1.0"),
+        }
+        assert commands[0][-1] == str(wheel)
+        assert "--only-binary=:all:" in commands[0]
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing_release", "unqualified_dependency", "wrong_hash", "wrong_version"]
+)
+def test_offline_resolution_cannot_install_outside_its_own_closure(fault):
+    rows = [
+        {
+            "filename": "godot_ai-4.2.0-py3-none-any.whl",
+            "name": "godot-ai",
+            "version": "4.2.0",
+            "sha256": "a" * 64,
+        },
+        {
+            "filename": "dependency-1.0-py3-none-any.whl",
+            "name": "dependency",
+            "version": "1.0",
+            "sha256": "b" * 64,
+        },
+    ]
+    report = {
+        "install": [
+            {
+                "metadata": {"name": row["name"], "version": row["version"]},
+                "download_info": {
+                    "url": "file:///packages/" + row["filename"],
+                    "archive_info": {"hashes": {"sha256": row["sha256"]}},
+                },
+            }
+            for row in rows
+        ]
+    }
+    predecessor.verify_offline_resolution(report, rows, "4.2.0")
+    if fault == "missing_release":
+        report["install"].pop(0)
+    elif fault == "unqualified_dependency":
+        report["install"][1]["download_info"]["url"] = (
+            "file:///packages/dependency-2.0-py3-none-any.whl"
+        )
+    elif fault == "wrong_hash":
+        report["install"][1]["download_info"]["archive_info"]["hashes"]["sha256"] = "c" * 64
+    else:
+        report["install"][0]["metadata"]["version"] = "4.1.0"
+    with pytest.raises(support.ReleaseError):
+        predecessor.verify_offline_resolution(report, rows, "4.2.0")

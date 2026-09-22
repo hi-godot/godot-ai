@@ -73,7 +73,14 @@ rows install the published predecessor and update to the exact signed A bytes,
 with the same attached bridge across the update. This is required for 4.1.0;
 the A-to-B qualification row does not substitute for the public-to-A hop.
 Require `Require complete supplemental release evidence` to pass and retain
-the `v4-predecessor-attestation` artifact before promotion.
+the `v4-predecessor-attestation` artifact before promotion. Each predecessor
+row resolves and retains the published predecessor's binary dependencies for
+its OS and Python version, separately from A's qualified dependency set. The
+private index contains both sets; matching filenames must have identical
+bytes. Both exact wheels must install offline and pass `pip check` before the
+editor starts. Retained inventories and install reports bind this preflight
+to the supplemental attestation, including when dependency pins change between
+releases.
 
 Then dispatch `release.yml`. Select **patch**, **minor**, or **major**, and
 provide the previous published version and the qualification run ID. The

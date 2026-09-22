@@ -9,11 +9,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -231,6 +234,181 @@ def isolated_environment(root: Path, index: str) -> dict[str, str]:
     return environment
 
 
+def dependency_environment() -> dict[str, str]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("PIP_", "UV_", "PYTHON", "GODOT_AI_"))
+        and key not in {"GH_TOKEN", "GITHUB_TOKEN"}
+    }
+    environment.update(
+        PIP_CONFIG_FILE=os.devnull,
+        PIP_DISABLE_PIP_VERSION_CHECK="1",
+        PYTHONNOUSERSITE="1",
+        GODOT_AI_DISABLE_TELEMETRY="true",
+    )
+    return environment
+
+
+def retain_predecessor_dependencies(predecessor: Path, previous: dict, output: Path) -> list:
+    packages = output / "predecessor-packages"
+    packages.mkdir()
+    wheel = predecessor / "dist" / f"godot_ai-{previous['version']}-py3-none-any.whl"
+    qualification.execute(
+        [
+            sys.executable,
+            "-I",
+            "-m",
+            "pip",
+            "--isolated",
+            "download",
+            "--no-cache-dir",
+            "--only-binary=:all:",
+            "--index-url",
+            "https://pypi.org/simple",
+            "--dest",
+            str(packages),
+            str(wheel),
+        ],
+        output / "predecessor-resolve.log",
+        cwd=output,
+        environment=dependency_environment(),
+    )
+    rows = qualification.dependency_inventory(packages)
+    for row in rows:
+        actual = {key: row[key] for key in ("size", "sha256")}
+        if row["filename"] == wheel.name:
+            expected = previous["files"]["dist/" + wheel.name]
+            support.require(
+                actual == {key: expected[key] for key in actual},
+                "resolved predecessor wheel differs from public bytes",
+            )
+            continue
+        metadata = public.public_json(
+            "https://pypi.org/pypi/"
+            + urllib.parse.quote(row["name"], safe="")
+            + "/"
+            + urllib.parse.quote(row["version"], safe="")
+            + "/json"
+        )
+        matches = [
+            item
+            for item in metadata.get("urls", [])
+            if item.get("filename") == row["filename"] and not item.get("yanked")
+        ]
+        support.require(len(matches) == 1, "predecessor dependency absent or yanked on PyPI")
+        item = matches[0]
+        public.validate_public_url(item["url"], {"files.pythonhosted.org"})
+        support.require(
+            actual == {"size": item["size"], "sha256": item["digests"]["sha256"]},
+            "predecessor dependency differs from public PyPI bytes",
+        )
+    support.require(
+        any(row["filename"] == wheel.name for row in rows),
+        "predecessor resolution omitted its wheel",
+    )
+    return rows
+
+
+def merge_dependency_files(source: Path, rows: list, destination: Path) -> None:
+    for row in rows:
+        name = row["filename"]
+        support.require(
+            Path(name).name == name and name.endswith(".whl"), "invalid dependency filename"
+        )
+        expected = {key: row[key] for key in ("size", "sha256")}
+        support.require(
+            support.fingerprint(source / name) == expected,
+            "retained dependency changed before merge",
+        )
+        target = destination / name
+        if target.exists():
+            support.require(
+                support.fingerprint(target) == expected,
+                "conflicting retained dependency filename: " + name,
+            )
+        else:
+            shutil.copyfile(source / name, target)
+            support.require(support.fingerprint(target) == expected, "copied dependency changed")
+
+
+def verify_offline_resolution(report: dict, dependencies: list, version: str) -> None:
+    allowed = {row["filename"]: row for row in dependencies}
+    installed = report.get("install", [])
+    support.require(isinstance(installed, list) and installed, "empty offline installation report")
+    names = set()
+    found_release = False
+    for item in installed:
+        download = item.get("download_info", {})
+        url = urllib.parse.urlsplit(download.get("url", ""))
+        filename = urllib.parse.unquote(url.path).rsplit("/", 1)[-1]
+        metadata = item.get("metadata", {})
+        name = re.sub(r"[-_.]+", "-", str(metadata.get("name", ""))).lower()
+        row = allowed.get(filename, {})
+        support.require(
+            url.scheme == "file"
+            and row
+            and name not in names
+            and name == row["name"]
+            and metadata.get("version") == row["version"]
+            and download.get("archive_info", {}).get("hashes", {}).get("sha256") == row["sha256"],
+            "offline resolution differs from its retained dependency closure",
+        )
+        names.add(name)
+        if name == "godot-ai":
+            support.require(row["version"] == version, "offline installed release version differs")
+            found_release = True
+    support.require(found_release, "offline report omitted the release")
+
+
+def offline_preflight(
+    packages: Path, version: str, work: Path, output: Path, dependencies: list
+) -> dict:
+    target = work / ("install-" + version)
+    log = output / ("offline-" + version + ".log")
+    environment = dependency_environment()
+    qualification.execute(
+        [sys.executable, "-m", "venv", str(target)], log, cwd=work, environment=environment
+    )
+    python = str(qualification.environment_python(target))
+    wheel = packages / f"godot_ai-{version}-py3-none-any.whl"
+    resolution = output / ("offline-" + version + ".json")
+    qualification.execute(
+        [
+            python,
+            "-I",
+            "-m",
+            "pip",
+            "--isolated",
+            "install",
+            "--no-index",
+            "--no-cache-dir",
+            "--only-binary=:all:",
+            "--find-links",
+            str(packages),
+            "--report",
+            str(resolution),
+            str(wheel),
+        ],
+        log,
+        cwd=work,
+        environment=environment,
+    )
+    verify_offline_resolution(
+        support.read_json(resolution, canonical_required=False), dependencies, version
+    )
+    for args in (
+        ["-m", "pip", "check"],
+        ["-c", f"import importlib.metadata as m; assert m.version('godot-ai') == {version!r}"],
+    ):
+        qualification.execute([python, "-I", *args], log, cwd=work, environment=environment)
+    return {
+        "status": "passed",
+        "wheel": support.fingerprint(wheel),
+        "resolution": support.fingerprint(resolution),
+    }
+
+
 def run_update(
     candidate: Path,
     python_row: Path,
@@ -257,17 +435,32 @@ def run_update(
         prefix="godot-ai-predecessor-", ignore_cleanup_errors=True
     ) as temporary:
         work = Path(temporary).resolve()
-        packages, project = work / "packages", work / "project"
+        packages, project = output / "packages", work / "project"
         packages.mkdir()
         project.mkdir()
-        for row in dependencies:
-            if row["name"] != "godot-ai" or row["version"] == record["version"]:
-                shutil.copyfile(
-                    python_row / "packages" / row["filename"], packages / row["filename"]
-                )
-        old_wheel = f"godot_ai-{previous['version']}-py3-none-any.whl"
-        shutil.copyfile(predecessor / "dist" / old_wheel, packages / old_wheel)
+        candidate_dependencies = [
+            row
+            for row in dependencies
+            if row["name"] != "godot-ai" or row["version"] == record["version"]
+        ]
+        predecessor_dependencies = retain_predecessor_dependencies(predecessor, previous, output)
+        merge_dependency_files(python_row / "packages", candidate_dependencies, packages)
+        merge_dependency_files(output / "predecessor-packages", predecessor_dependencies, packages)
         index_inventory = qualification.dependency_inventory(packages)
+        dependency_evidence = {
+            "closures": {
+                "candidate": candidate_dependencies,
+                "predecessor": predecessor_dependencies,
+            },
+            "index_inventory": index_inventory,
+            "offline_installs": {
+                version: offline_preflight(packages, version, work, output, closure)
+                for version, closure in (
+                    (previous["version"], predecessor_dependencies),
+                    (record["version"], candidate_dependencies),
+                )
+            },
+        }
         certificate, key = runtime._tls_material(work / "tls")
         with runtime.retained_index(packages, index_inventory) as (index, requests):
             environment = isolated_environment(work / "environment", index)
@@ -407,6 +600,7 @@ def run_update(
             "backend_stopped": True,
             "index_artifacts_requested": sorted(set(requests)),
             "index_inventory": index_inventory,
+            "dependency_evidence": dependency_evidence,
             **evidence,
         }
 

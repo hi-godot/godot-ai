@@ -80,6 +80,71 @@ def public_evidence(row: dict, record: dict) -> None:
             )
 
 
+def predecessor_dependencies(case: dict, root: Path, previous: dict, record: dict) -> None:
+    from script import release_predecessor as predecessor
+
+    evidence = case.get("dependency_evidence", {})
+    closures = evidence.get("closures", {})
+    installs = evidence.get("offline_installs", {})
+    support.require(
+        set(closures) == {"candidate", "predecessor"}
+        and set(installs) == {previous["version"], record["version"]},
+        "missing predecessor dependency preflight",
+    )
+    merged = {}
+    for label, identity in (("candidate", record), ("predecessor", previous)):
+        rows = closures[label]
+        support.require(isinstance(rows, list) and rows, "empty retained dependency closure")
+        releases = [row for row in rows if row.get("name") == "godot-ai"]
+        wheel = f"godot_ai-{identity['version']}-py3-none-any.whl"
+        support.require(
+            len(releases) == 1
+            and releases[0].get("version") == identity["version"]
+            and releases[0].get("filename") == wheel
+            and file_metadata(releases[0]) == file_metadata(identity["files"]["dist/" + wheel]),
+            "dependency closure release differs from sealed wheel",
+        )
+        for row in rows:
+            filename = row.get("filename", "")
+            support.require(
+                filename and Path(filename).name == filename and filename.endswith(".whl"),
+                "invalid retained dependency filename",
+            )
+            support.require(
+                filename not in merged or merged[filename] == row,
+                "conflicting predecessor dependency inventory",
+            )
+            merged[filename] = row
+        predecessor.verify_offline_resolution(
+            support.read_json(
+                root / ("offline-" + identity["version"] + ".json"), canonical_required=False
+            ),
+            rows,
+            identity["version"],
+        )
+        install = installs[identity["version"]]
+        support.require(
+            install.get("status") == "passed"
+            and install.get("wheel") == file_metadata(releases[0])
+            and install.get("resolution")
+            == support.fingerprint(root / ("offline-" + identity["version"] + ".json")),
+            "predecessor offline installation evidence differs",
+        )
+    expected = sorted(merged.values(), key=lambda row: row["filename"])
+    support.require(
+        evidence.get("index_inventory") == expected
+        and case.get("index_inventory") == expected
+        and support.inventory(root / "packages")
+        == {name: file_metadata(row) for name, row in merged.items()},
+        "retained predecessor index differs from dependency closures",
+    )
+    support.require(
+        support.inventory(root / "predecessor-packages")
+        == {row["filename"]: file_metadata(row) for row in closures["predecessor"]},
+        "retained predecessor dependency bytes changed",
+    )
+
+
 def predecessor_evidence(row: dict, path: Path, candidate: Path, record: dict) -> dict:
     from script import qualification_engine as engine
     from script import release_predecessor as predecessor
@@ -132,6 +197,7 @@ def predecessor_evidence(row: dict, path: Path, candidate: Path, record: dict) -
         and case.get("to_version") == record["version"],
         "predecessor native case did not pass",
     )
+    predecessor_dependencies(case, path.parent, previous, record)
     result, bridge = case.get("runtime_result", {}), case.get("attached_bridge", {})
     support.require(
         result.get("status") == "passed"
