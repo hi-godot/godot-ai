@@ -5,6 +5,73 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## 4.2.0 (2026-09-21)
+
+New authoring tools cover shaders, navigation, resource inspection and physics
+colliders. File operations and client configuration gain safeguards, and larger
+commands no longer disconnect the editor.
+[Compare v4.1.0...v4.2.0](https://github.com/hi-godot/godot-ai/compare/v4.1.0...v4.2.0).
+
+### Added
+
+- Create and edit VisualShader graphs, inspect their nodes and connections,
+  and browse the native node catalog. Raw shader authoring validates compilation
+  before accepting changes.
+- `navigation_manage` bakes bounded 3D mesh geometry and queries paths on
+  explicitly selected 2D or 3D navigation maps.
+- Physics shape generation supports convex and trimesh geometry, rigid and
+  character bodies, and explicit `shape_type="auto"` selection for primitive
+  meshes. The default remains box. Opt-in `overwrite=true` refreshes colliders
+  created with this release's provenance markers, preserving node identities,
+  body settings and shared resources in one undoable action.
+- `resource_manage(op="inspect")` reads bounded native resource graphs from
+  live node properties, including inline resources, without running script
+  getters. Existing property reads remain unchanged.
+- `filesystem_manage` can move, rename and remove resource groups with sidecars
+  and reference checks. Removal defaults to the OS trash; these disk operations
+  are not editor-undoable and do not rewrite literal-path dependencies.
+- Theme tools support texture styleboxes, fonts, icons and per-node stylebox
+  overrides. UI tools support rich text, and animation tracks accept more typed
+  property values.
+- Client configuration supports ZCode and Oh My Pi. Oh My Pi configuration
+  respects effective enable/disable settings and environment overrides.
+- Script tools accept `.cs` files for text operations. They do not compile C#
+  or report compiler diagnostics; use Godot's Build panel or `dotnet build`.
+- Optional startup phase timings help locate slow synchronous initialization.
+
+### Fixed
+
+- Large incoming WebSocket commands no longer close the editor connection at
+  the previous 8 KiB buffer limit.
+- Attach connections normalize SSE closure without replaying tool calls.
+  Endpoint recovery is distinguished from backend process exit, and transport
+  failures retain their structured reasons.
+- Client configuration mutations run through one dock worker. Windows port
+  selection detects wildcard listeners, and unsupported IPv6-only remote
+  access is rejected explicitly.
+- HDR 2D game screenshots use the correct colors, and the dock's Settings tab
+  scrolls instead of clipping its contents.
+- Abandoned physics generation requests clean up their pending work.
+
+### Limits
+
+- Automatic shape selection fits box, sphere, capsule and cylinder primitives;
+  other meshes fall back to box bounds. Refresh refuses unmarked or changed
+  collider relationships rather than replacing user-created scene structure.
+- Large collider batches prepare work across frames, but their final atomic
+  undo commit can exceed the cooperative 4 ms work budget.
+- Navigation baking is bounded and mesh-only; 2D baking is not supported.
+
+### Known issues
+
+- Intermittent Windows startup delays and attach failures remain under
+  investigation. This release improves diagnostics, but does not claim to
+  resolve [#1089](https://github.com/hi-godot/godot-ai/issues/1089) or
+  [#1056](https://github.com/hi-godot/godot-ai/issues/1056).
+- The Steam/Linux report in
+  [#1059](https://github.com/hi-godot/godot-ai/issues/1059) awaits environment
+  details.
+
 ## 4.1.0 (2026-09-11)
 
 Plugin updates now activate inside the running editor, preserving open scenes,
