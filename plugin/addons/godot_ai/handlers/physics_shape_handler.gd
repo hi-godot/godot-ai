@@ -1,6 +1,7 @@
 @tool
 extends "res://addons/godot_ai/handlers/command_handler.gd"
 
+const Refresh := preload("res://addons/godot_ai/handlers/physics_shape_refresh.gd")
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 ## Sizes a CollisionShape2D/CollisionShape3D to match a visual sibling's
@@ -176,6 +177,8 @@ static func _validate_generate_request(params: Dictionary) -> Dictionary:
 				) % body_type
 			)
 
+	if params.has("overwrite") and params.overwrite is not bool:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "overwrite must be a boolean")
 	var raw_paths: Variant = params.get("paths", [])
 	if not raw_paths is Array:
 		return ErrorCodes.make(
@@ -219,6 +222,7 @@ static func _validate_generate_request(params: Dictionary) -> Dictionary:
 		"body_type": body_type,
 		"reparent_mesh": reparent_mesh,
 		"paths": paths,
+		"overwrite": params.get("overwrite", false),
 	}
 
 
@@ -270,7 +274,11 @@ static func _plan_generate_mesh(
 			"Node at %s is %s — must be MeshInstance3D" % [mesh_path, node.get_class()]
 		)
 	var mesh := node as MeshInstance3D
+	if mesh.has_meta(Refresh.MARKER):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Mesh at %s already has a collider sibling or generated collider provenance; use overwrite=true to refresh its shape" % mesh_path)
 	var parent := mesh.get_parent()
+	if parent != null and parent.has_meta(Refresh.MARKER):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Cannot create beneath a generated body at %s: missing or inconsistent source provenance" % mesh_path)
 	if parent == null:
 		return ErrorCodes.make(
 			ErrorCodes.INVALID_PARAMS,
@@ -338,6 +346,7 @@ static func _plan_generate_mesh(
 	return {"plan": {
 		"mesh": mesh,
 		"mesh_path": mesh_path,
+		"mesh_name": mesh.name,
 		"auto_shape": auto_shape,
 		"shape_type": shape_type,
 		"source_mesh": mesh.mesh,
@@ -368,6 +377,8 @@ static func _plan_stale_reason(plan: Dictionary) -> String:
 	if not is_instance_valid(mesh_ref) or not mesh_ref.is_inside_tree():
 		return "was removed"
 	var mesh: MeshInstance3D = mesh_ref
+	if mesh.name != plan.mesh_name:
+		return "was renamed"
 	var parent_ref = plan.parent
 	if not is_instance_valid(parent_ref) or mesh.get_parent() != parent_ref:
 		return "was reparented"
@@ -435,6 +446,8 @@ static func _create_generated_entry(
 	var entry := {
 		"mesh": mesh,
 		"mesh_path": str(plan.mesh_path),
+		"mesh_name": mesh.name,
+		"body_name": body.name,
 		"shape_type": shape_type,
 		"auto_shape": bool(plan.get("auto_shape", false)),
 		"source_mesh": plan.get("source_mesh"),
@@ -451,6 +464,7 @@ static func _create_generated_entry(
 		entry["mesh_index"] = mesh.get_index()
 		entry["mesh_transform"] = mesh.transform
 		entry["mesh_owner"] = mesh.owner
+	Refresh.prepare_markers(entry)
 	return entry
 
 
@@ -463,19 +477,18 @@ static func _fit_mesh_shape(mesh: MeshInstance3D, shape_type: String, mesh_to_bo
 	)
 	if shape == null:
 		return null
-	var scale := mesh_to_body.basis.get_scale()
-	if scale.is_equal_approx(Vector3.ONE):
+	if mesh_to_body.is_equal_approx(Transform3D.IDENTITY):
 		return shape
 	if shape is ConvexPolygonShape3D:
 		var points := (shape as ConvexPolygonShape3D).points
 		for index in points.size():
-			points[index] = points[index] * scale
+			points[index] = mesh_to_body * points[index]
 		(shape as ConvexPolygonShape3D).points = points
 	else:
 		var faces := (shape as ConcavePolygonShape3D).get_faces()
 		for index in faces.size():
-			faces[index] = faces[index] * scale
-		if scale.x * scale.y * scale.z < 0.0:
+			faces[index] = mesh_to_body * faces[index]
+		if mesh_to_body.basis.determinant() < 0.0:
 			## A mirrored scale reverses triangle winding, and a
 			## ConcavePolygonShape3D collides with front faces only.
 			for index in range(0, faces.size(), 3):
@@ -509,6 +522,8 @@ static func _applied_stale_reason(created_nodes: Array[Dictionary]) -> String:
 		var mesh = entry.mesh
 		if not is_instance_valid(mesh) or not mesh.is_inside_tree():
 			return "%s was removed" % str(entry.mesh_path)
+		if mesh.name != entry.mesh_name:
+			return "%s was renamed" % str(entry.mesh_path)
 		var auto_stale := _auto_source_stale_reason(mesh, entry)
 		if not auto_stale.is_empty():
 			return "%s %s" % [str(entry.mesh_path), auto_stale]
@@ -524,11 +539,15 @@ static func _applied_stale_reason(created_nodes: Array[Dictionary]) -> String:
 		var body = entry.body
 		if not is_instance_valid(body) or not body.is_inside_tree():
 			return "the generated body for %s was removed" % str(entry.mesh_path)
+		if body.name != entry.body_name:
+			return "the generated body for %s was renamed" % str(entry.mesh_path)
 		if body.get_parent() != parent:
 			return "the generated body for %s was reparented" % str(entry.mesh_path)
 		var collision = entry.collision
 		if not is_instance_valid(collision) or collision.get_parent() != body:
 			return "the generated collision shape for %s was removed" % str(entry.mesh_path)
+		if collision.name != &"CollisionShape3D":
+			return "the generated collision shape for %s was renamed" % str(entry.mesh_path)
 	return ""
 
 
@@ -542,8 +561,15 @@ static func _commit_generated_action(
 	undo_redo: EditorUndoRedoManager,
 	execute: bool,
 ) -> void:
-	undo_redo.create_action("MCP: Generate physics shapes for %d mesh(es)" % created_nodes.size())
+	undo_redo.create_action("MCP: Generate physics shapes for %d mesh(es)" % created_nodes.size(), UndoRedo.MERGE_DISABLE, scene_root)
 	for entry in created_nodes:
+		if bool(entry.get("refresh", false)):
+			undo_redo.add_do_method(ClassDB, "class_set_property", entry.collision, "shape", entry.new_shape)
+			undo_redo.add_do_method(ClassDB, "class_set_property", entry.collision, "transform", entry.new_transform)
+			undo_redo.add_undo_method(ClassDB, "class_set_property", entry.collision, "shape", entry.old_shape)
+			undo_redo.add_undo_method(ClassDB, "class_set_property", entry.collision, "transform", entry.old_transform)
+			continue
+		Refresh.record_marker_action(entry, undo_redo, execute)
 		var parent: Node = entry.parent
 		var body: CollisionObject3D = entry.body
 		var collision: CollisionShape3D = entry.collision
@@ -577,6 +603,7 @@ static func _generated_response(
 			"shape_path": McpScenePath.from_node(entry.collision, scene_root),
 			"shape_type": str(entry.shape_type),
 			"body_type": body_type,
+			"operation": "refresh" if bool(entry.get("refresh", false)) else "create",
 		})
 	return {"data": {"created": created, "undoable": true}}
 
@@ -589,6 +616,7 @@ static func _generate_job(
 	validated: Dictionary, undo_redo: EditorUndoRedoManager, connection, request_id: String
 ) -> Dictionary:
 	return {
+		"refresh_worker": Refresh.new(),
 		"validated": validated,
 		"undo_redo": undo_redo,
 		"connection": connection,
@@ -609,6 +637,8 @@ static func _generate_job(
 static func _generate_step(job: Dictionary, budget_usec: int) -> bool:
 	if str(job.phase) == "done":
 		return true
+	if bool(job.validated.get("overwrite", false)):
+		return job.refresh_worker.step(job, budget_usec)
 	var validated: Dictionary = job.validated
 	var connection = job.connection
 	if connection != null:
@@ -725,6 +755,9 @@ static func _generate_rollback(job: Dictionary) -> void:
 	## Once the undo action owns these bodies they are a completed user change,
 	## even if the transport disappears before its reply can be delivered.
 	if bool(job.get("committed", false)):
+		return
+	if bool(job.validated.get("overwrite", false)):
+		job.refresh_worker.cleanup(job)
 		return
 	for entry in job.created:
 		## Keep this untyped until validity is known: assigning a freed Object to

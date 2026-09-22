@@ -2810,6 +2810,30 @@ class TestVisualShaderEditTool:
 
 
 class TestPhysicsShapeGenerateTool:
+    async def test_generate_refresh_forwards_opt_in(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "physics_shape_generate"
+            assert cmd["params"] == {
+                "paths": ["/Main/Sphere"], "shape_type": "auto",
+                "overwrite": True, "body_type": "static",
+            }
+            await plugin.send_response(cmd["request_id"], {
+                "created": [{"mesh_path": "/Main/Sphere", "shape_type": "sphere"}],
+                "undoable": True,
+            })
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("resource_manage", {
+            "op": "physics_shape_generate",
+            "params": {"paths": ["/Main/Sphere"], "shape_type": "auto", "overwrite": True},
+        })
+        await task
+        assert result.data["created"] == [{"mesh_path": "/Main/Sphere", "shape_type": "sphere"}]
+        assert result.data["undoable"] is True
+
     async def test_generate_auto_forwards_and_returns_resolved_shape(self, mcp_stack):
         client, plugin = mcp_stack
 

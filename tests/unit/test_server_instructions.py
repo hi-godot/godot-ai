@@ -76,7 +76,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "  theme_manage     create, set_color, set_constant, set_font_size,\n"
     "                   set_stylebox_flat, apply\n"
     "  ui_manage        set_anchor_preset, set_text, build_layout, draw_recipe\n"
-    "  resource_manage  search, load, assign, get_info, create,\n"
+    "  resource_manage  search, load, inspect, assign, get_info, create,\n"
     "                   curve_set_points, environment_create,\n"
     "                   physics_shape_autofit, physics_shape_generate,\n"
     "                   gradient_texture_create,\n"

@@ -19,6 +19,7 @@ async def physics_shape_generate(
     body_type: str = "static",
     reparent_mesh: bool = False,
     scene_file: str = "",
+    overwrite: bool = False,
 ) -> dict:
     """Generate sibling physics bodies and shapes for 3D meshes.
 
@@ -34,6 +35,8 @@ async def physics_shape_generate(
     ## Opt-in like every node mutation: a non-empty scene_file pins the request
     ## to that edited scene (EDITED_SCENE_MISMATCH otherwise). reparent_mesh is
     ## likewise only sent when requested, so the default payload stays minimal.
+    if overwrite:
+        params["overwrite"] = True
     if reparent_mesh:
         params["reparent_mesh"] = True
     if scene_file:

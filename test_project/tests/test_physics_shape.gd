@@ -797,6 +797,7 @@ func test_generate_supports_convex_and_trimesh_shapes() -> void:
 		"the hull must span the mesh's own bounds"
 	)
 	_remove_node(convex_nodes.body)
+	mesh.remove_meta(&"_godot_ai_physics_v1")
 
 	var trimesh := _handler.generate({"paths": [path], "shape_type": "trimesh"})
 	assert_has_key(trimesh, "data")
@@ -835,6 +836,7 @@ func test_generate_bakes_mesh_scale_into_hull_and_trimesh() -> void:
 			"the mesh's own scale must be baked into the %s vertices" % shape_type
 		)
 		_remove_node(nodes.body)
+		mesh.remove_meta(&"_godot_ai_physics_v1")
 	_remove_node(mesh)
 
 
@@ -1623,6 +1625,7 @@ func test_generate_refuses_non_uniform_parent_scale_for_round_shapes() -> void:
 	var boxed := _handler.generate({"paths": [path], "shape_type": "box"})
 	assert_has_key(boxed, "data")
 	_remove_node(_find_named_child(parent, "GenerateUnderScaledParentCollider"))
+	mesh.remove_meta(&"_godot_ai_physics_v1")
 	## A uniform parent scale keeps a sphere a sphere.
 	parent.scale = Vector3(2, 2, 2)
 	var uniform := _handler.generate({"paths": [path], "shape_type": "sphere"})

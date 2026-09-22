@@ -248,7 +248,7 @@ Calls take the form:
 | `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `set_stylebox_texture`, `set_font`, `set_icon`, `stylebox_override`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `set_richtext`, `build_layout`, `draw_recipe` |
-| `resource_manage` | `search`, `load`, `assign`, `get_info`, `create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
+| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
 | `api_manage` | `get_class` |
 | `client_manage` | `status`, `configure`, `remove` |
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
@@ -408,3 +408,53 @@ don't, and the only path that supports `session_id` pinning.
 preloaded GDScript dependencies can remain stale after edits in the same
 editor. Restart the editor before validating dependency changes; see the
 [freshness contract](tool-surface.md#test-run-freshness-after-dependency-edits).
+
+### Inspect a live native resource
+
+`resource_manage(op="inspect", params={"node_path":"/Main/Collider","property":"shape","depth":2})`
+reads a Resource already assigned to a native node property. It does not load,
+save, duplicate, or mutate resources. Existing node reads and `load` keep their
+current response shapes. `session_id` remains a top-level rollup parameter.
+
+The result has `root`, an ordered `resources` list, and `truncations`. Resource
+values use response-local `ref` identifiers; repeated identities share a record.
+Each record has `id`, `type`, `path`, and `properties`. Arrays are lists; dictionary
+values use an `entries` list of key/value pairs so bounded keys cannot collide.
+
+Supported native families are Shape2D/3D, Mesh, Material, PhysicsMaterial,
+StyleBox, Gradient, Curve/Curve2D/Curve3D, GradientTexture1D/2D, CurveTexture, and
+CurveXYZTexture. Scripted or unsupported roots are refused. Nested scripted or
+unsupported resources retain a bounded type/path summary and an omission reason.
+Only native editor-visible properties are read; script and dynamic getters are
+excluded. Native engine getter execution time is not bounded by this operation.
+
+Resource depth is 0 through 3, with the root at depth 0. Fixed upper limits are
+32 resource records, 64 properties per resource, 64 entries per collection,
+512 visited values, and 8 nested containers. Strings and keys are limited to
+256 characters and 1,024 encoded JSON bytes. Up to 32 truncation records explain
+omissions; repeated truncations may collapse to `truncation_limit`. A conservative
+construction budget can stop traversal sooner. The complete encoded operation
+result is capped at 64 KiB, including graph and truncation metadata. This is not
+a cap on the surrounding MCP wire frame. A result that cannot fit is refused
+with an explicit size error; reducing depth can make the request fit.
+
+### Refresh generated physics shapes
+
+`resource_manage(op="physics_shape_generate", params={"paths":["/Main/Mesh"],"overwrite":true})`
+refreshes the shape and collision transform of a collider generated with provenance
+markers by this version. It preserves the body and collision node identities, body
+settings, scripts and other children. Body type and wrapping options must match the
+existing layout. The default remains refusal when a collider already exists.
+
+Unmarked legacy colliders, stale links, and topology changes are refused. The
+markers are typed relative NodePaths saved with the scene; renaming or moving a
+node can invalidate a link. A refreshed collider receives a new Shape3D, leaving
+shared old resources untouched; undo restores the exact old resource and transform.
+Convex/trimesh vertices are fitted in the existing body coordinate system, including
+rotation, translation and mirrored winding. Existing hull budgets and scale guards
+still apply. Mixed creation and refresh requests prepare resources across frames,
+revalidate against intervening edits, then commit one undo action. Each returned
+`created` item includes `operation` (`create` or `refresh`).
+
+The 4 ms budget applies to cooperative preparation. Final validation and the
+atomic undo action cannot yield; a maximum-size batch can exceed that budget.
