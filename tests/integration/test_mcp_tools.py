@@ -2821,7 +2821,10 @@ class TestPhysicsShapeGenerateTool:
                 "overwrite": True, "body_type": "static",
             }
             await plugin.send_response(cmd["request_id"], {
-                "created": [{"mesh_path": "/Main/Sphere", "shape_type": "sphere"}],
+                "created": [{
+                    "mesh_path": "/Main/Sphere", "shape_type": "sphere",
+                    "operation": "refresh",
+                }],
                 "undoable": True,
             })
 
@@ -2831,7 +2834,9 @@ class TestPhysicsShapeGenerateTool:
             "params": {"paths": ["/Main/Sphere"], "shape_type": "auto", "overwrite": True},
         })
         await task
-        assert result.data["created"] == [{"mesh_path": "/Main/Sphere", "shape_type": "sphere"}]
+        assert result.data["created"] == [{
+            "mesh_path": "/Main/Sphere", "shape_type": "sphere", "operation": "refresh",
+        }]
         assert result.data["undoable"] is True
 
     async def test_generate_auto_forwards_and_returns_resolved_shape(self, mcp_stack):

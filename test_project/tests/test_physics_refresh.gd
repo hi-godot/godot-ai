@@ -129,6 +129,7 @@ func test_mixed_create_refresh_is_one_action_and_failed_plan_changes_neither() -
 	assert_is_error(failed, Errors.NODE_NOT_FOUND)
 	assert_true(body.get_node("CollisionShape3D").shape == old)
 	assert_false(_root.has_node("RefreshMixedFreshCollider"))
+	assert_false(fresh.has_meta(Refresh.MARKER))
 	var result := _handler.generate({"paths": paths, "overwrite": true})
 	assert_eq(result.data.created[0].operation, "refresh")
 	assert_eq(result.data.created[1].operation, "create")
