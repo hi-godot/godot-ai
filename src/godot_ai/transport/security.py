@@ -156,17 +156,22 @@ class BoundedHTTPMiddleware(_Wrapper):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        unsupported_protocol = False
         if scope.get("path") == "/mcp":
             versions = _headers(scope, b"mcp-protocol-version")
             # Sessionless MCP cannot deliver our out-of-request catalog notifications.
-            if versions and (len(versions) != 1 or versions[0] not in MCP_HANDSHAKE_VERSIONS):
-                await _reject(send, "MCP_PROTOCOL_UNSUPPORTED")
-                return
+            unsupported_protocol = bool(versions) and (
+                len(versions) != 1 or versions[0] not in MCP_HANDSHAKE_VERSIONS
+            )
         if self._active >= self.max_concurrency:
             await _reject(send, "TRANSPORT_OVERLOADED")
             return
 
-        manager = self._session_manager() if scope.get("path") == "/mcp" else None
+        manager = (
+            self._session_manager()
+            if scope.get("path") == "/mcp" and not unsupported_protocol
+            else None
+        )
         new_session = manager is not None and not _headers(scope, b"mcp-session-id")
         if manager is not None:
             instances = getattr(manager, "_server_instances", None)
@@ -183,7 +188,11 @@ class BoundedHTTPMiddleware(_Wrapper):
         try:
             replay = await self._bounded_body(scope, receive, send)
             if replay is not None:
-                await self.app(scope, replay, send)
+                if unsupported_protocol:
+                    # Closing with an unread body can reset TCP before the 400 reaches the client.
+                    await _reject(send, "MCP_PROTOCOL_UNSUPPORTED")
+                else:
+                    await self.app(scope, replay, send)
         finally:
             self._active -= 1
             self._new_session_reservations -= int(new_session)

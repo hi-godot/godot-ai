@@ -254,3 +254,179 @@ def test_h11_incomplete_header_deadline_closes_the_socket() -> None:
     finally:
         protocol.connection_lost(None)
         loop.close()
+
+
+class _UnsupportedBoundary(BoundedHTTPMiddleware):
+    def _session_manager(self):
+        raise AssertionError("unsupported protocol touched session manager")
+
+
+async def _unexpected_endpoint(_scope, _receive, _send):
+    raise AssertionError("unsupported protocol reached endpoint")
+
+
+def _unsupported_scope(*headers):
+    return _scope((b"mcp-protocol-version", b"2026-07-28"), *headers)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        [],
+        [(b"mcp-session-id", b"untrusted")],
+        [
+            (b"mcp-protocol-version", b"2025-11-25"),
+        ],
+    ],
+)
+async def test_unsupported_consumes_body_without_session_access(extra):
+    app = _UnsupportedBoundary(_unexpected_endpoint, max_sessions=1)
+    chunks = [
+        {"type": "http.request", "body": b"one", "more_body": True},
+        {"type": "http.request", "body": b"two", "more_body": False},
+    ]
+    sent = []
+
+    async def receive():
+        assert app._active == 1
+        assert app._new_session_reservations == 0
+        return chunks.pop(0)
+
+    async def send(message):
+        assert not chunks
+        sent.append(message)
+
+    await app(_unsupported_scope(*extra), receive, send)
+    assert sent[0]["status"] == 400
+    assert _error_code(sent) == "MCP_PROTOCOL_UNSUPPORTED"
+    assert app._active == app._new_session_reservations == 0
+
+
+@pytest.mark.parametrize("ending", ["complete", "cancel", "disconnect", "send_failure"])
+async def test_unsupported_admission_and_cleanup(ending):
+    app = _UnsupportedBoundary(_unexpected_endpoint, max_concurrency=1)
+    entered, release = asyncio.Event(), asyncio.Event()
+    sent = []
+
+    async def receive():
+        entered.set()
+        await release.wait()
+        return (
+            {"type": "http.disconnect"}
+            if ending == "disconnect"
+            else {
+                "type": "http.request",
+                "body": b"done",
+            }
+        )
+
+    async def send(message):
+        if ending == "send_failure":
+            raise ConnectionError("test peer gone")
+        sent.append(message)
+
+    first = asyncio.create_task(app(_unsupported_scope(), receive, send))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert app._active == 1
+
+        async def no_read():
+            raise AssertionError("overloaded body consumed")
+
+        overloaded = []
+
+        async def overload_send(message):
+            overloaded.append(message)
+
+        await app(_unsupported_scope(), no_read, overload_send)
+        assert overloaded[0]["status"] == 503
+        assert _error_code(overloaded) == "TRANSPORT_OVERLOADED"
+        assert app._active == 1
+        if ending == "cancel":
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+        else:
+            release.set()
+            if ending == "send_failure":
+                with pytest.raises(ConnectionError, match="test peer gone"):
+                    await first
+            else:
+                await first
+                assert _error_code(sent) == "MCP_PROTOCOL_UNSUPPORTED"
+        assert app._active == app._new_session_reservations == 0
+    finally:
+        release.set()
+        if not first.done():
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+
+
+@pytest.mark.parametrize(
+    "headers,chunks,status,code",
+    [
+        ([(b"content-length", b"invalid")], [], 400, "INVALID_CONTENT_LENGTH"),
+        ([(b"content-length", b"1"), (b"content-length", b"1")], [], 400, "INVALID_CONTENT_LENGTH"),
+        ([(b"content-length", b"5")], [], 413, "REQUEST_BODY_TOO_LARGE"),
+        (
+            [],
+            [
+                {"type": "http.request", "body": b"123", "more_body": True},
+                {"type": "http.request", "body": b"45"},
+            ],
+            413,
+            "REQUEST_BODY_TOO_LARGE",
+        ),
+    ],
+)
+async def test_unsupported_preserves_body_limits(headers, chunks, status, code):
+    app = _UnsupportedBoundary(_unexpected_endpoint, max_body_bytes=4)
+    incoming = list(chunks)
+    sent = []
+
+    async def receive():
+        assert incoming, "invalid declared length must reject before reading"
+        return incoming.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    await app(_unsupported_scope(*headers), receive, send)
+    assert sent[0]["status"] == status
+    assert _error_code(sent) == code
+    assert app._active == app._new_session_reservations == 0
+
+
+async def test_unsupported_timeout_releases_admission():
+    app = _UnsupportedBoundary(_unexpected_endpoint, body_timeout_seconds=0.001)
+    sent = []
+
+    async def receive():
+        await asyncio.Event().wait()
+        raise AssertionError("timeout must interrupt receive")
+
+    async def send(message):
+        sent.append(message)
+
+    await app(_unsupported_scope(), receive, send)
+    assert sent[0]["status"] == 408
+    assert _error_code(sent) == "REQUEST_BODY_TIMEOUT"
+    assert app._active == app._new_session_reservations == 0
+
+
+async def test_unsupported_unauthorized_body_is_not_consumed():
+    bounded = _UnsupportedBoundary(_unexpected_endpoint)
+    app = CapabilityAuthMiddleware(bounded, CAPABILITY)
+    sent = []
+
+    async def receive():
+        raise AssertionError("unauthorized body consumed")
+
+    async def send(message):
+        sent.append(message)
+
+    await app(_unsupported_scope(), receive, send)
+    assert sent[0]["status"] == 401
+    assert _error_code(sent) == "TRANSPORT_AUTH_REQUIRED"
+    assert bounded._active == bounded._new_session_reservations == 0

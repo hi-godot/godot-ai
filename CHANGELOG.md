@@ -5,6 +5,17 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## 4.2.1 (2026-09-21)
+
+Fix intermittent MCP connection failures during protocol discovery on Windows.
+The server now reads the permitted request body before returning its protocol
+error, allowing clients to finish discovery and initialize normally. Existing
+authentication, request-size, timeout and concurrency limits remain in force.
+[Compare v4.2.0...v4.2.1](https://github.com/hi-godot/godot-ai/compare/v4.2.0...v4.2.1).
+
+The separate intermittent Windows updater process-identity failure remains
+under investigation in [#1105](https://github.com/hi-godot/godot-ai/issues/1105).
+
 ## 4.2.0 (2026-09-21)
 
 New authoring tools cover shaders, navigation, resource inspection and physics
