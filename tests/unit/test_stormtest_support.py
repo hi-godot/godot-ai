@@ -607,6 +607,9 @@ def test_repin_retries_typed_read_disconnect_without_relaxing_identity(tmp_path,
     import time
     from unittest.mock import AsyncMock, Mock
 
+    from mcp.shared.exceptions import MCPError
+    from mcp_types import CONNECTION_CLOSED
+
     tree = ast.parse((ROOT / "script/stormtest.py").read_text(encoding="utf-8"))
     functions = [node for node in tree.body
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -640,6 +643,8 @@ def test_repin_retries_typed_read_disconnect_without_relaxing_identity(tmp_path,
         "StormConfigError": support.StormConfigError,
         "TOLERATED_RELOAD_ERRORS": support.TOLERATED_RELOAD_ERRORS,
         "transport_exception_code": support.transport_exception_code,
+        "MCPError": MCPError,
+        "CONNECTION_CLOSED": CONNECTION_CLOSED,
         "_abort": Mock(), "_record_admin_error": Mock(),
     }
     exec(compile(ast.Module(body=functions, type_ignores=[]), "stormtest.py", "exec"), namespace)

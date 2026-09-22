@@ -77,6 +77,9 @@ from contextlib import asynccontextmanager  # noqa: E402
 from _transport_auth import authorization_header  # noqa: E402
 from fastmcp import Client  # noqa: E402
 from fastmcp.client.transports import StreamableHttpTransport  # noqa: E402
+from mcp.shared._httpx_utils import create_mcp_http_client  # noqa: E402
+from mcp.shared.exceptions import MCPError  # noqa: E402
+from mcp_types import CONNECTION_CLOSED  # noqa: E402
 from stormtest_support import (  # noqa: E402
     DISPOSABLE_MARKER,
     DISPOSABLE_MARKER_TOKEN,
@@ -120,9 +123,38 @@ DEFAULT_PROFILE_CONFIG = PROJECT_ROOT / "docs" / "verification" / "storm-profile
 def _mcp_client(url: str) -> Client:
     """Build one authenticated client from the current private record."""
 
+    authorization = authorization_header(url)
+
+    async def reject_rotated_initialization(response):
+        if response.status_code != 401 or str(response.request.url) != url:
+            return
+        request = response.request
+        if request.method != "POST" or request.headers.get("Authorization") != authorization:
+            return
+        try:
+            message = json.loads(request.content)
+        except (ValueError, UnicodeDecodeError):
+            return
+        if not isinstance(message, dict) or message.get("method") not in {
+            "server/discover", "initialize",
+        }:
+            return
+        # Managed reload replaces the private record. Only an observed rotation
+        # may turn an initialization 401 into the existing bounded reconnect path.
+        if authorization_header(url) != authorization:
+            raise ConnectionError("MCP initialization capability rotated during reload")
+
+    def http_client_factory(*, follow_redirects=False, **kwargs):
+        # The SDK handles same-origin redirects; do not enable the legacy
+        # FastMCP factory flag, which would follow redirects in httpx itself.
+        client = create_mcp_http_client(**kwargs)
+        client.event_hooks["response"].append(reject_rotated_initialization)
+        return client
+
     transport = StreamableHttpTransport(
         url,
-        headers={"Authorization": authorization_header(url)},
+        headers={"Authorization": authorization},
+        httpx_client_factory=http_client_factory,
     )
     return Client(transport, timeout=CALL_TIMEOUT, init_timeout=CALL_TIMEOUT)
 
@@ -1395,6 +1427,12 @@ async def _repin_locked_target(w: Worker, previous_session_id: str) -> bool:
         except Exception as error:
             await _hard_close(candidate_client)
             code = _err_code(error)
+            # Replacement proof uses only reads, including SDK result-schema discovery.
+            # A closed metadata stream can be retried here without replaying mutations.
+            if (isinstance(error, MCPError)
+                    and error.error.code == CONNECTION_CLOSED
+                    and error.error.message == "SSE stream ended without a response"):
+                code = "CONNECTION"
             if code not in TOLERATED_RELOAD_ERRORS:
                 _record_admin_error(code, "qualification.repin")
                 _abort(f"target {target_id}: replacement-session proof failed: {code}")
