@@ -42,10 +42,10 @@ def _status(port, token=None):
 
 @pytest.mark.parametrize("transport", ["streamable-http", "sse"])
 def test_sigterm_cleans_real_backend_record_and_preserves_signal_exit(tmp_path, transport):
-    with socket.socket() as http, socket.socket() as ws:
-        http.bind(("127.0.0.1", 0))
-        ws.bind(("127.0.0.1", 0))
-        port, ws_port = http.getsockname()[1], ws.getsockname()[1]
+    with socket.socket() as http_socket, socket.socket() as ws_socket:
+        http_socket.bind(("127.0.0.1", 0))
+        ws_socket.bind(("127.0.0.1", 0))
+        port, ws_port = http_socket.getsockname()[1], ws_socket.getsockname()[1]
     directory = tmp_path / "capabilities"
     with (tmp_path / "backend.log").open("wb") as log:
         child = subprocess.Popen(
@@ -54,12 +54,17 @@ def test_sigterm_cleans_real_backend_record_and_preserves_signal_exit(tmp_path, 
             env=_environment(tmp_path), stdout=log, stderr=subprocess.STDOUT,
         )
     try:
+        status_attempts = 0
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
             assert child.poll() is None, "backend exited; inspect backend.log"
             record = read_capabilities(port, directory)
             if record is not None:
                 try:
+                    status_attempts += 1
+                    if status_attempts == 1:
+                        # Publication can precede HTTP binding; exercise that retry every run.
+                        raise ConnectionRefusedError("fixture startup refusal")
                     status, data = _status(port, record.http)
                 except (OSError, http.client.HTTPException):
                     time.sleep(.05)
@@ -71,6 +76,7 @@ def test_sigterm_cleans_real_backend_record_and_preserves_signal_exit(tmp_path, 
             time.sleep(.05)
         else:
             pytest.fail("authenticated backend never became ready")
+        assert status_attempts >= 2
         assert _status(port)[0] == 401
         assert record_path(port, directory).exists()
         child.send_signal(signal.SIGTERM)
@@ -92,10 +98,10 @@ def test_sigterm_during_startup_unwinds_owned_claim_before_signal_exit(tmp_path)
     script = tmp_path / "early.py"
     marker = tmp_path / "claim-held"
     cleaned = tmp_path / "cleaned"
-    with socket.socket() as http, socket.socket() as ws:
-        http.bind(("127.0.0.1", 0))
-        ws.bind(("127.0.0.1", 0))
-        port, ws_port = http.getsockname()[1], ws.getsockname()[1]
+    with socket.socket() as http_socket, socket.socket() as ws_socket:
+        http_socket.bind(("127.0.0.1", 0))
+        ws_socket.bind(("127.0.0.1", 0))
+        port, ws_port = http_socket.getsockname()[1], ws_socket.getsockname()[1]
     script.write_text(
         "import asyncio\nfrom pathlib import Path\n"
         "from godot_ai import main\n"
