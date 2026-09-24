@@ -519,29 +519,51 @@ def run_update(
                     record["version"],
                     bridge_log,
                 )
-                with bridge:
-                    completed = subprocess.run(
-                        runtime._editor_command(executable, project),
-                        cwd=work,
-                        env=environment,
-                        capture_output=True,
-                        timeout=runtime.TIMEOUT_SECONDS,
-                        check=False,
-                    )
-                    runtime._write_secret_free_log(
-                        output / "godot.log",
-                        completed.stdout + completed.stderr,
-                        (release.token, index),
-                    )
-                    support.require(completed.returncode == 0, "public predecessor update failed")
-                    runtime._wait_for_runtime_result(
-                        project / "runtime-result.json", runtime.TIMEOUT_SECONDS
-                    )
-                runtime._write_secret_free_log(
-                    output / "attached-bridge.log",
-                    bridge_log.read_bytes() if bridge_log.exists() else b"",
-                    (release.token, index),
+                private_values = (
+                    release.token,
+                    index,
+                    runtime._private_index_capability(index),
+                    runtime.ORIGIN,
                 )
+                editor_output = None
+                primary_error = None
+                try:
+                    with bridge:
+                        try:
+                            completed = subprocess.run(
+                                runtime._editor_command(executable, project),
+                                cwd=work,
+                                env=environment,
+                                capture_output=True,
+                                timeout=runtime.TIMEOUT_SECONDS,
+                                check=False,
+                            )
+                        except subprocess.TimeoutExpired as error:
+                            editor_output = (error.stdout or b"") + (error.stderr or b"")
+                            raise
+                        editor_output = completed.stdout + completed.stderr
+                        support.require(
+                            len(editor_output) <= support.MAX_FILE_BYTES,
+                            "runtime diagnostic output exceeds artifact size bound",
+                        )
+                        runtime._write_secret_free_log(
+                            output / "godot.log",
+                            editor_output or b"qualification diagnostic was empty\n",
+                            private_values,
+                        )
+                        support.require(
+                            completed.returncode == 0, "public predecessor update failed"
+                        )
+                        runtime._wait_for_runtime_result(
+                            project / "runtime-result.json", runtime.TIMEOUT_SECONDS
+                        )
+                except BaseException as error:
+                    primary_error = error
+                    raise
+                finally:
+                    runtime._retain_runtime_diagnostics(
+                        project, bridge_log, output, private_values, editor_output, primary_error
+                    )
                 support.require(
                     not bridge.fault and bridge.ok_before_update >= 1 and bridge.served_b,
                     "same attached predecessor bridge did not serve both versions",

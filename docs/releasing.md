@@ -82,6 +82,14 @@ editor starts. Retained inventories and install reports bind this preflight
 to the supplemental attestation, including when dependency pins change between
 releases.
 
+Failed editor runs retain available `godot.log`, `attached-bridge.log`,
+`runtime-result.json`, and `runtime-progress.json` diagnostics before the
+temporary project is removed. `runtime-diagnostics.json` records whether each
+file was retained, absent, empty, or could not be collected. Private values
+cause the affected output to be withheld. Collection failures do not replace
+an active runtime failure, and retained diagnostic files never count as a
+passed upgrade case. Subprocess timeouts retain captured output when available.
+
 Then dispatch `release.yml`. Select **patch**, **minor**, or **major**, and
 provide the previous published version and the qualification run ID. The
 `verify-approval` job checks the run's provenance before downloading anything,

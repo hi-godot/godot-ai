@@ -414,7 +414,7 @@ def test_cli_finder_cache_is_mutex_guarded() -> None:
         "can race safely against worker-thread find() calls."
     )
 
-    find_one_block = get_func_block(source, "static func _find_one(exe_name: String) -> String:")
+    find_one_block = get_func_block(source, "static func _find_one(")
     # Lock + unlock pattern must appear at least twice: once around the
     # cache read, once around the cache writeback. _resolve() must run
     # outside any lock — the lock/unlock count therefore tells us the

@@ -20,8 +20,12 @@ pytestmark = pytest.mark.editor
 SECRET = "timing-private-command-and-environment"
 
 
-@pytest.mark.parametrize("tracing,invalid", [(True, False), (False, False), (True, True)])
-def test_startup_calls_attribute_discovery_and_preserve_refusal(tmp_path: Path, tracing, invalid):
+@pytest.mark.parametrize("tracing,invalid,setting", [
+    (True, False, False), (False, False, False), (True, True, False), (True, False, True),
+])
+def test_startup_calls_attribute_discovery_and_preserve_refusal(
+    tmp_path: Path, tracing, invalid, setting
+):
     godot = godot_bin_or_skip()
     smoke = load_smoke_script()
     project = tmp_path / "project"
@@ -38,9 +42,12 @@ def test_startup_calls_attribute_discovery_and_preserve_refusal(tmp_path: Path, 
     configurator = addon / "client_configurator.gd"
     configurator.write_text(smoke.replace_function(
         configurator.read_text(encoding="utf-8"),
-        "static func get_server_command() -> Array[String]:",
-        'static func get_server_command() -> Array[String]:\n'
+        "static func get_server_command(trace: Callable = Callable()) -> Array[String]:",
+        'static func get_server_command(trace: Callable = Callable()) -> Array[String]:\n'
         '\tOS.delay_msec(250)\n'
+        '\tMcpCliFinder._trace_lookup(trace, \"inherited_path\", \"timed_out\", '
+        'Time.get_ticks_msec(), '
+        f'{{\"exit_code\": -1, \"timed_out\": true, \"stdout\": {json.dumps(SECRET)}}})\n'
         f'\treturn [{json.dumps(SECRET)}]\n',
     ), encoding="utf-8")
     with socket.socket() as http, socket.socket() as ws:
@@ -61,7 +68,7 @@ def test_startup_calls_attribute_discovery_and_preserve_refusal(tmp_path: Path, 
         'func _run() -> void:\n'
         '\tvar settings := EditorInterface.get_editor_settings()\n'
         '\tsettings.set_setting("godot_ai/telemetry_enabled", false)\n'
-        '\tsettings.set_setting("godot_ai/log_startup_timing", false)\n'
+        f'\tsettings.set_setting("godot_ai/log_startup_timing", {str(setting).lower()})\n'
         '\tsettings.set_setting("godot_ai/v4_endpoint_ports", '
         f'{{"http_port": {http_port}, "ws_port": {ws_port}}})\n'
         '\tEditorInterface.set_plugin_enabled("godot_ai", true)\n'
@@ -82,7 +89,7 @@ def test_startup_calls_attribute_discovery_and_preserve_refusal(tmp_path: Path, 
         "USERPROFILE": str(isolated / "home"),
         "XDG_CONFIG_HOME": str(isolated / "config"),
         "GODOT_AI_DISABLE_TELEMETRY": "true",
-        "GODOT_AI_STARTUP_TRACE": "1" if tracing else "0",
+        "GODOT_AI_STARTUP_TRACE": "1" if tracing and not setting else "0",
         "PYTHONPATH": SECRET,
     }
     for directory in ("roaming", "local", "home", "config"):
@@ -110,6 +117,14 @@ def test_startup_calls_attribute_discovery_and_preserve_refusal(tmp_path: Path, 
                 "warm_env_snapshot", "worktree_source", "server_command",
                 "http_port_reservation", "lifecycle_configure", "startup_release"]
     assert [name for name, _ in begins] == expected, trace
+    lookup = [json.loads(line.split("lookup=", 1)[1])
+              for line in trace.splitlines() if "lookup=" in line]
+    assert len(lookup) == 1
+    assert lookup[0]["tier"] == "inherited_path"
+    assert lookup[0]["status"] == "timed_out"
+    assert lookup[0]["timed_out"] is True
+    assert lookup[0]["cache_hit"] is False
+    assert lookup[0]["exit_code"] == -1
     duration = {name: int(elapsed) for name, elapsed, _ in ends}
     assert duration["server_command"] >= 250, trace
     command_start = trace.index("call=server_command begin")

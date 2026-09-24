@@ -14,6 +14,7 @@ import platform
 import queue
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -767,6 +768,85 @@ def _write_secret_free_log(path: Path, output: bytes, secrets: tuple[str, ...]) 
     path.write_bytes(output)
 
 
+def _read_runtime_diagnostic(path: Path) -> tuple[str, bytes | None]:
+    limit = support.MAX_FILE_BYTES if path.suffix == ".log" else support.MAX_JSON_BYTES
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return "absent", None
+    except OSError:
+        return "read_error", None
+    try:
+        if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            return "invalid_type", None
+        if info.st_size > limit:
+            return "too_large", None
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_NONBLOCK", 0)
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+                info.st_dev,
+                info.st_ino,
+            ):
+                return "invalid_type", None
+            data = stream.read(limit + 1)
+        return ("too_large", None) if len(data) > limit else ("read", data)
+    except OSError:
+        return "read_error", None
+
+
+def _retain_runtime_diagnostics(
+    project: Path,
+    bridge_log: Path,
+    output: Path,
+    private_values: tuple[str, ...],
+    editor_output: bytes | None,
+    primary_error: BaseException | None,
+) -> None:
+    statuses = {}
+    sources = {
+        "godot.log": None,
+        "attached-bridge.log": bridge_log,
+        "runtime-result.json": project / "runtime-result.json",
+        "runtime-progress.json": project / "runtime-progress.json",
+    }
+    for name, path in sources.items():
+        if path is None:
+            status, data = ("absent", None) if editor_output is None else ("read", editor_output)
+        else:
+            status, data = _read_runtime_diagnostic(path)
+        if data is not None:
+            limit = support.MAX_FILE_BYTES if name.endswith(".log") else support.MAX_JSON_BYTES
+            if len(data) > limit:
+                status = "too_large"
+            else:
+                try:
+                    _write_secret_free_log(
+                        output / name,
+                        data or b"qualification diagnostic was empty\n",
+                        private_values,
+                    )
+                except support.ReleaseError:
+                    status = "withheld_private_value"
+                except OSError:
+                    status = "write_error"
+                else:
+                    status = "retained" if data else "empty"
+        statuses[name] = status
+    failed = any(status not in {"retained", "absent", "empty"} for status in statuses.values())
+    try:
+        (output / "runtime-diagnostics.json").write_bytes(support.canonical(statuses))
+    except OSError:
+        failed = True
+    if failed:
+        message = "runtime diagnostic retention failed; inspect retained file statuses"
+        if primary_error is None:
+            raise support.ReleaseError(message)
+        primary_error.add_note(message)
+        print(message, file=sys.stderr)
+
+
 def _require_values_absent(root: Path, values: tuple[str, ...]) -> None:
     needles = tuple(value.encode() for value in values if value)
     for path in root.rglob("*"):
@@ -972,31 +1052,45 @@ def exact_a_to_b(
                     records["b"]["version"],
                     bridge_log,
                 )
-                with bridge:
-                    completed = subprocess.run(
-                        _editor_command(executable, project),
-                        cwd=work,
-                        env=environment,
-                        capture_output=True,
-                        timeout=TIMEOUT_SECONDS,
-                        check=False,
+                private_values = (release.token, index, _private_index_capability(index), ORIGIN)
+                editor_output = None
+                primary_error = None
+                try:
+                    with bridge:
+                        try:
+                            completed = subprocess.run(
+                                _editor_command(executable, project),
+                                cwd=work,
+                                env=environment,
+                                capture_output=True,
+                                timeout=TIMEOUT_SECONDS,
+                                check=False,
+                            )
+                        except subprocess.TimeoutExpired as error:
+                            editor_output = (error.stdout or b"") + (error.stderr or b"")
+                            raise
+                        editor_output = completed.stdout + completed.stderr
+                        support.require(
+                            len(editor_output) <= support.MAX_FILE_BYTES,
+                            "runtime diagnostic output exceeds artifact size bound",
+                        )
+                        _write_secret_free_log(
+                            output / "godot.log",
+                            editor_output or b"qualification diagnostic was empty\n",
+                            private_values,
+                        )
+                        support.require(
+                            completed.returncode == 0, "real Godot A-to-B update failed"
+                        )
+                        print("Waiting for the restarted editor to report candidate B", flush=True)
+                        _wait_for_runtime_result(project / "runtime-result.json", TIMEOUT_SECONDS)
+                except BaseException as error:
+                    primary_error = error
+                    raise
+                finally:
+                    _retain_runtime_diagnostics(
+                        project, bridge_log, output, private_values, editor_output, primary_error
                     )
-                    _write_secret_free_log(
-                        output / "godot.log",
-                        completed.stdout + completed.stderr,
-                        (release.token, index),
-                    )
-                    support.require(completed.returncode == 0, "real Godot A-to-B update failed")
-                    # The swap restarts the editor; the process above exits and
-                    # the restarted editor finishes the case once the attached
-                    # bridge has listed the session candidate B serves.
-                    print("Waiting for the restarted editor to report candidate B", flush=True)
-                    _wait_for_runtime_result(project / "runtime-result.json", TIMEOUT_SECONDS)
-                _write_secret_free_log(
-                    output / "attached-bridge.log",
-                    bridge_log.read_bytes() if bridge_log.is_file() else b"",
-                    (release.token, index),
-                )
                 support.require(not bridge.fault, f"attached bridge failed: {bridge.fault}")
                 support.require(
                     bridge.ok_before_update >= 1,

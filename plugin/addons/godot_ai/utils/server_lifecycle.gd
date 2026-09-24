@@ -850,17 +850,19 @@ func _effect_launch(payload: Dictionary) -> Dictionary:
 	## stable across two reads; otherwise a legitimate exec looks like PID reuse.
 	var capture_started := Time.get_ticks_msec()
 	var attempts: Array = []
-	var exact_grant := PortResolver.capture_process_kill_grant(pid, true, attempts)
+	var snapshot_diagnostics: Array = []
+	var exact_grant := PortResolver.capture_process_kill_grant(pid, true, attempts, snapshot_diagnostics)
 	var fingerprint_deadline := capture_started + LAUNCH_FINGERPRINT_TIMEOUT_MS
 	while exact_grant.is_empty() and Time.get_ticks_msec() < fingerprint_deadline:
 		OS.delay_msec(100)
-		exact_grant = PortResolver.capture_process_kill_grant(pid, true, attempts)
+		exact_grant = PortResolver.capture_process_kill_grant(pid, true, attempts, snapshot_diagnostics)
 	var fingerprint := str(exact_grant.get("fingerprint", ""))
 	return {
 		"ok": not fingerprint.is_empty(),
 		"reason": "launch_unproven" if fingerprint.is_empty() else "",
 		"message": (
 			_launch_unproven_message(pid, attempts, Time.get_ticks_msec() - capture_started)
+			+ _snapshot_diagnostic_summary(snapshot_diagnostics)
 			if fingerprint.is_empty()
 			else ""
 		),
@@ -871,6 +873,23 @@ func _effect_launch(payload: Dictionary) -> Dictionary:
 		"baseline_instance_id": str(payload.get("baseline_instance_id", "")),
 		"launch_id": launch_id,
 	}
+
+
+static func _snapshot_diagnostic_summary(diagnostics: Array) -> String:
+	var labels: Array[String] = []
+	for item in diagnostics.slice(0, 8):
+		var stage: String = item.stage if item.stage in PortResolver.SNAPSHOT_DIAGNOSTIC_STAGES else "unknown"
+		var category: String = item.category if item.category in PortResolver.SNAPSHOT_DIAGNOSTIC_CATEGORIES else "unknown"
+		var label := "launch_grant/%s/%s" % [stage, category]
+		if int(item.depth) >= 0:
+			label += " at depth %d" % clampi(int(item.depth), 0, 16)
+		if int(item.count) > 1:
+			label += " x%d" % clampi(int(item.count), 1, 10000)
+		if int(item.elapsed_ms) >= 0:
+			label += " (first query %d ms)" % clampi(int(item.elapsed_ms), 0, 600000)
+		if not labels.has(label):
+			labels.append(label)
+	return "" if labels.is_empty() else " Snapshot diagnostics: " + "; ".join(labels) + "."
 
 
 ## Name which identity check failed so a Windows report can be acted on

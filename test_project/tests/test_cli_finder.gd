@@ -88,3 +88,58 @@ func test_pick_best_path_empty_input_returns_empty() -> void:
 	var picked: String = McpCliFinder._pick_best_path(PackedStringArray())
 	assert_eq(picked, "",
 		"No input lines must yield an empty string, not a synthetic path")
+
+
+func test_lookup_failure_distinguishes_absence_from_failed_observation() -> void:
+	assert_eq(McpCliFinder._lookup_failure({"exit_code": 1}, true), "not_found")
+	assert_eq(McpCliFinder._lookup_failure({"exit_code": 1}, false), "nonzero_exit")
+	assert_eq(McpCliFinder._lookup_failure({"exit_code": 2}, true), "nonzero_exit")
+	assert_eq(McpCliFinder._lookup_failure({"exit_code": 0, "stdout": " \r\n"}, true), "empty_output")
+	assert_eq(McpCliFinder._lookup_failure({"exit_code": 0, "stdout": "private/path"}, false), "unusable_output")
+	for flag in ["timed_out", "spawn_failed", "cancelled", "termination_failed"]:
+		assert_eq(McpCliFinder._lookup_failure({"exit_code": 1, flag: true}, true), flag)
+
+
+func test_lookup_trace_excludes_raw_result_fields() -> void:
+	var records: Array = []
+	var sink := func(record: Dictionary) -> void: records.append(record)
+	var private_result := {
+		"exit_code": -1, "timed_out": true,
+		"stdout": "PRIVATE_LOOKUP_CANARY", "stderr": "PRIVATE_LOOKUP_CANARY",
+		"output": "PRIVATE_LOOKUP_CANARY", "command": "PRIVATE_LOOKUP_CANARY",
+	}
+	McpCliFinder._trace_lookup(Callable(), "inherited_path", "timed_out", 0, private_result)
+	assert_eq(records.size(), 0, "No sink must stay silent")
+	McpCliFinder._trace_lookup(sink, "inherited_path", "timed_out", Time.get_ticks_msec(), private_result)
+	assert_eq(records.size(), 1)
+	assert_eq(records[0].status, "timed_out")
+	assert_eq(records[0].exit_code, -1)
+	assert_true(records[0].timed_out)
+	assert_false(records[0].cache_hit)
+	assert_true(records[0].elapsed_ms >= 0)
+	assert_false(JSON.stringify(records).contains("PRIVATE_LOOKUP_CANARY"))
+	assert_eq(records[0].size(), 9, "Only the fixed diagnostic schema leaves the finder")
+
+
+func test_lookup_trace_preserves_cached_miss_and_hit() -> void:
+	var key := "godot-ai-finder-private-canary"
+	var records: Array = []
+	var sink := func(record: Dictionary) -> void: records.append(record)
+	McpCliFinder._mutex.lock()
+	McpCliFinder._cache[key] = ""
+	McpCliFinder._searched[key] = true
+	McpCliFinder._mutex.unlock()
+	assert_eq(McpCliFinder.find([key], sink), "")
+	assert_eq(McpCliFinder.find([key]), "", "Tracing must not invalidate a miss")
+	assert_eq(records.size(), 1)
+	assert_eq(records[0].status, "cached_miss")
+	assert_true(records[0].cache_hit)
+	McpCliFinder._mutex.lock()
+	McpCliFinder._cache[key] = "PRIVATE_LOOKUP_CANARY"
+	McpCliFinder._mutex.unlock()
+	assert_eq(McpCliFinder.find([key], sink), "PRIVATE_LOOKUP_CANARY")
+	assert_eq(records[1].status, "resolved")
+	assert_true(records[1].cache_hit)
+	assert_false(JSON.stringify(records).contains("PRIVATE_LOOKUP_CANARY"))
+	assert_false(JSON.stringify(records).contains(key))
+	McpCliFinder.invalidate(key)

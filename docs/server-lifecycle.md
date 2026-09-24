@@ -41,6 +41,19 @@ consult the adjacent lifecycle error if the endpoint was refused. Disable the
 setting after collecting a trace. Tracing does not change startup timeouts,
 authentication, or retries.
 
+Launcher discovery adds `lookup=` records when startup tracing is enabled.
+Each record names the lookup tier and result, elapsed milliseconds, and
+execution flags. A `cached_miss` means an earlier lookup returned no path;
+it does not establish that the executable is absent or explain the earlier
+failure. The records omit executable paths, output, and environment values.
+The dock's explicit Refresh retains its existing negative-cache recovery.
+
+A failed Windows launch can also report bounded snapshot diagnostics naming
+the capture pair or its first or final member and a fixed failure category.
+`collector_null` means the collector returned no usable snapshot; it does not identify the
+underlying operating-system exception. These diagnostics do not grant process
+ownership or change the checks required before stopping a process.
+
 ## Upgrading from a pre-v4 installation
 
 A verified pre-v4 to v4 update selects two free loopback ports before starting

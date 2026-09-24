@@ -844,11 +844,15 @@ def patch_port_isolation(
 
 def patch_server_command(path: Path, command: list[str]) -> None:
     text = path.read_text(encoding="utf-8")
-    text = replace_function(
-        text,
+    signatures = (
         "static func get_server_command() -> Array[String]:",
-        (f"static func get_server_command() -> Array[String]:\n\treturn {json.dumps(command)}"),
+        "static func get_server_command(trace: Callable = Callable()) -> Array[String]:",
     )
+    matches = [signature for signature in signatures if signature in text]
+    if len(matches) != 1 or text.count(matches[0]) != 1:
+        raise HarnessError("Expected one supported server-command function")
+    signature = matches[0]
+    text = replace_function(text, signature, f"{signature}\n\treturn {json.dumps(command)}")
     path.write_text(text, encoding="utf-8")
 
 

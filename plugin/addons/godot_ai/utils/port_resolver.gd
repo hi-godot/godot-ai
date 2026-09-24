@@ -15,6 +15,12 @@ const SERVER_PID_FILE := "user://godot_ai_server.pid"
 const SERVER_STARTUP_REPORT := "user://godot_ai_server_startup.json"
 const WindowsPortReservation := preload("res://addons/godot_ai/utils/windows_port_reservation.gd")
 const LinuxProc := preload("res://addons/godot_ai/utils/linux_proc.gd")
+const SNAPSHOT_DIAGNOSTIC_STAGES := ["single", "pair", "first", "final"]
+const SNAPSHOT_DIAGNOSTIC_CATEGORIES := [
+	"invalid_pid", "shell_exit", "empty_output", "outer_size", "outer_json", "outer_shape",
+	"snapshot_size", "snapshot_json", "snapshot_shape", "collector_null", "row_shape",
+	"row_pid", "row_chain", "row_identity", "lineage_cycle",
+]
 static var _process_spawn_mutex := Mutex.new()
 
 enum PortOccupancy { UNKNOWN, FREE, OCCUPIED }
@@ -392,18 +398,23 @@ static func pid_alive(pid: int, snapshot: Variant = null) -> bool:
 ## Linux captures the same bounded ancestry using procfs; macOS keeps ps.
 ## The process enumeration stays inside PowerShell; only the bounded target
 ## ancestry crosses back into Godot, without logging command-line metadata.
-static func capture_process_snapshot(pid: int) -> Variant:
+static func capture_process_snapshot(pid: int, diagnostics: Variant = null) -> Variant:
 	if OS.get_name() == "Linux":
 		return LinuxProc.process_snapshot(pid)
 	if OS.get_name() != "Windows":
 		return null
 	if pid <= 1:
-		return {"capture_error": true}
+		return _snapshot_failure(diagnostics, "invalid_pid", "single")
 	var script := _windows_process_snapshot_script(pid)
 	var output: Array = []
-	if execute_windows_powershell(script, output) != 0 or output.is_empty():
-		return {"capture_error": true}
-	return parse_process_snapshot(str(output[0]), pid)
+	var began := Time.get_ticks_msec()
+	var code := execute_windows_powershell(script, output)
+	if code != 0 or output.is_empty():
+		return _snapshot_failure(
+			diagnostics, "shell_exit" if code != 0 else "empty_output",
+			"single", -1, Time.get_ticks_msec() - began
+		)
+	return parse_process_snapshot(str(output[0]), pid, diagnostics)
 
 
 static func _windows_process_snapshot_script(pid: int) -> String:
@@ -426,61 +437,99 @@ static func _windows_process_snapshot_script(pid: int) -> String:
 
 ## Independent CIM maps in separate scriptblock scopes are
 ## captured within one shell invocation. No snapshot crosses a grant call.
-static func _capture_windows_process_snapshot_pair(pid: int) -> Array:
+static func _capture_windows_process_snapshot_pair(pid: int, diagnostics: Variant = null) -> Array:
 	var query := _windows_process_snapshot_script(pid)
 	var script := (
 		"$first = & { %s }; $final = & { %s }; "
 		+ "ConvertTo-Json -InputObject @([string]$first,[string]$final) -Compress"
 	) % [query, query]
 	var output: Array = []
-	if execute_windows_powershell(script, output) != 0 or output.is_empty():
+	var began := Time.get_ticks_msec()
+	var code := execute_windows_powershell(script, output)
+	if code != 0 or output.is_empty():
+		_snapshot_failure(
+			diagnostics, "shell_exit" if code != 0 else "empty_output",
+			"pair", -1, Time.get_ticks_msec() - began
+		)
 		return [{"capture_error": true}, {"capture_error": true}]
-	return _parse_process_snapshot_pair(str(output[0]), pid)
+	return _parse_process_snapshot_pair(str(output[0]), pid, diagnostics)
 
 
-static func _parse_process_snapshot_pair(raw: String, pid: int) -> Array:
+static func _parse_process_snapshot_pair(
+	raw: String, pid: int, diagnostics: Variant = null
+) -> Array:
 	if raw.length() > 4 * 1024 * 1024 + 16:
+		_snapshot_failure(diagnostics, "outer_size", "pair")
 		return [{"capture_error": true}, {"capture_error": true}]
 	var json := JSON.new()
 	if json.parse(raw) != OK:
+		_snapshot_failure(diagnostics, "outer_json", "pair")
 		return [{"capture_error": true}, {"capture_error": true}]
 	var pair: Variant = json.data
 	if not (pair is Array) or pair.size() != 2 or not (pair[0] is String and pair[1] is String):
+		_snapshot_failure(diagnostics, "outer_shape", "pair")
 		return [{"capture_error": true}, {"capture_error": true}]
-	return [parse_process_snapshot(pair[0], pid), parse_process_snapshot(pair[1], pid)]
+	return [
+		parse_process_snapshot(pair[0], pid, diagnostics, "first"),
+		parse_process_snapshot(pair[1], pid, diagnostics, "final"),
+	]
 
 
-static func parse_process_snapshot(raw: String, expected_pid: int) -> Dictionary:
+static func parse_process_snapshot(
+	raw: String, expected_pid: int, diagnostics: Variant = null, stage := "single"
+) -> Dictionary:
 	if raw.length() > 1024 * 1024:
-		return {"capture_error": true}
+		return _snapshot_failure(diagnostics, "snapshot_size", stage, -1)
 	var json := JSON.new()
 	if json.parse(raw) != OK:
-		return {"capture_error": true}
+		return _snapshot_failure(diagnostics, "snapshot_json", stage, -1)
 	var rows: Variant = json.data
 	if not (rows is Array) or rows.size() > 16:
-		return {"capture_error": true}
+		return _snapshot_failure(diagnostics, "collector_null" if rows == null else "snapshot_shape", stage)
 	var snapshot := {}
 	var next_pid := expected_pid
 	for row in rows:
 		if not (row is Dictionary):
-			return {"capture_error": true}
+			return _snapshot_failure(diagnostics, "row_shape", stage, snapshot.size())
 		var value: Variant = row.get("pid")
 		if (
 			not (value is int or value is float) or not is_finite(float(value))
 			or float(value) <= 1.0 or float(value) > 4294967295.0
 			or float(value) != float(int(value))
 		):
-			return {"capture_error": true}
+			return _snapshot_failure(diagnostics, "row_pid", stage, snapshot.size())
 		var pid := int(value)
 		if pid <= 1 or pid != next_pid or snapshot.has(pid):
-			return {"capture_error": true}
+			return _snapshot_failure(diagnostics, "row_chain", stage, snapshot.size())
 		snapshot[pid] = row
 		if _process_snapshot_row(snapshot, pid).is_empty():
-			return {"capture_error": true}
+			return _snapshot_failure(diagnostics, "row_identity", stage, snapshot.size() - 1)
 		next_pid = int(row.parent_pid)
 		if snapshot.has(next_pid):
-			return {"capture_error": true}
+			return _snapshot_failure(diagnostics, "lineage_cycle", stage, snapshot.size() - 1)
 	return snapshot
+
+
+## Diagnostics never carry proof rows, command lines, or shell output. The
+## caller owns this sink: at most eight distinct failures, with bounded counts.
+## Snapshots and authority remain unchanged.
+static func _snapshot_failure(
+	diagnostics: Variant, category: String, stage: String, depth := -1, elapsed_ms := -1
+) -> Dictionary:
+	stage = stage if stage in SNAPSHOT_DIAGNOSTIC_STAGES else "unknown"
+	category = category if category in SNAPSHOT_DIAGNOSTIC_CATEGORIES else "unknown"
+	if diagnostics is Array:
+		for item in diagnostics:
+			if item.category == category and item.stage == stage and item.depth == depth:
+				item.count = mini(int(item.count) + 1, 10000)
+				return {"capture_error": true}
+		if diagnostics.size() < 8:
+			diagnostics.append({
+				"category": category, "stage": stage, "depth": clampi(depth, -1, 16),
+				"elapsed_ms": clampi(elapsed_ms, -1, 600000), "count": 1,
+			})
+	return {"capture_error": true}
+
 
 
 ## An unavailable capture is not evidence that its PID has exited.
@@ -666,12 +715,12 @@ static func process_fingerprint(pid: int, snapshot: Variant = null) -> String:
 ## `diagnostics`, when given, receives one word naming the check that
 ## refused the grant. It costs no extra probe and never changes the result.
 static func capture_process_kill_grant(
-	pid: int, require_brand := false, diagnostics: Array = []
+	pid: int, require_brand := false, diagnostics: Array = [], snapshot_diagnostics: Variant = null
 ) -> Dictionary:
 	if pid <= 1 or pid == OS.get_process_id():
 		diagnostics.append("invalid_pid")
 		return {}
-	var pair: Array = _capture_windows_process_snapshot_pair(pid) if OS.get_name() == "Windows" else []
+	var pair: Array = _capture_windows_process_snapshot_pair(pid, snapshot_diagnostics) if OS.get_name() == "Windows" else []
 	var first: Variant = pair[0] if not pair.is_empty() else capture_process_snapshot(pid)
 	if capture_failed(first):
 		diagnostics.append("identity_unavailable")

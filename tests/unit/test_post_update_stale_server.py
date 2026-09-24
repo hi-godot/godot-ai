@@ -118,9 +118,11 @@ def test_owned_launch_waits_boundedly_for_a_stable_branded_process_grant() -> No
 
     assert "const LAUNCH_FINGERPRINT_TIMEOUT_MS := 15_000" in source
     assert "capture_started + LAUNCH_FINGERPRINT_TIMEOUT_MS" in launch
-    ## Brand is required on every capture; the trailing list only records why a
-    ## capture was refused and never changes the result.
-    assert launch.count("capture_process_kill_grant(pid, true, attempts)") == 2
+    ## Brand is required on every capture; both trailing lists record diagnostics
+    ## and never change the grant result.
+    assert launch.count(
+        "capture_process_kill_grant(pid, true, attempts, snapshot_diagnostics)"
+    ) == 2
     assert (
         "while exact_grant.is_empty() and Time.get_ticks_msec() < fingerprint_deadline:" in launch
     )

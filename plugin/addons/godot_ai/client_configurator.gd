@@ -1676,7 +1676,7 @@ static func _is_symlink(path: String) -> bool:
 	return dir.is_link(path)
 
 
-static func get_server_command() -> Array[String]:
+static func get_server_command(trace: Callable = Callable()) -> Array[String]:
 	## `mode_override() == "user"` skips the dev_venv tier even when a nearby
 	## .venv exists — the override then becomes an actual workaround for
 	## the "user venv misidentified as dev checkout" bug, not just a
@@ -1687,7 +1687,7 @@ static func get_server_command() -> Array[String]:
 			print("MCP | using dev venv: %s" % venv_python)
 			return [venv_python, "-m", "godot_ai"]
 
-	var uvx := find_uvx()
+	var uvx := find_uvx(trace)
 	if not uvx.is_empty():
 		var version := get_plugin_version()
 		## PEP 440 local build tags (e.g. 3.0.2+local.1) are not on PyPI.
@@ -1715,7 +1715,7 @@ static func get_server_command() -> Array[String]:
 		cmd.append_array(["--from", "godot-ai==%s" % pypi_version, "godot-ai"])
 		return cmd
 
-	var system_cmd := _find_system_install()
+	var system_cmd := _find_system_install(trace)
 	if not system_cmd.is_empty():
 		print("MCP | using system install: %s" % system_cmd)
 		return [system_cmd]
@@ -1746,8 +1746,8 @@ static func get_server_launch_mode() -> String:
 const PREWARM_TIMEOUT_MS := 180000
 
 
-static func find_uvx() -> String:
-	return CliFinder.find(_uvx_cli_names())
+static func find_uvx(trace: Callable = Callable()) -> String:
+	return CliFinder.find(_uvx_cli_names(), trace)
 
 
 ## Pure argv builder for the pre-warm spawn, split out so tests can pin the
@@ -2085,11 +2085,11 @@ static func find_worktree_src_dir(start_dir: String) -> String:
 ## directly: the finder adds the well-known-install-dirs and login-shell
 ## PATH tiers plus its per-exe cache, and this drops the private
 ## `_pick_best_path` cross-class reach (#711).
-static func _find_system_install() -> String:
+static func _find_system_install(trace: Callable = Callable()) -> String:
 	## Built with append, not a ternary of untyped literals — assigning a
 	## ternary's Array to Array[String] is a runtime error on newer Godot
 	## builds (same idiom as _uvx_cli_names above).
 	var names: Array[String] = ["godot-ai"]
 	if OS.get_name() == "Windows":
 		names.push_front("godot-ai.exe")
-	return CliFinder.find(names)
+	return CliFinder.find(names, trace)

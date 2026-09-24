@@ -1355,6 +1355,11 @@ func _startup_trace_call_end(name: String, started_ms: int) -> void:
 	)
 
 
+func _startup_trace_lookup(record: Dictionary) -> void:
+	if _startup_trace_enabled:
+		print("MCP startup trace | lookup=%s" % JSON.stringify(record))
+
+
 func _startup_trace_finish(path: String) -> void:
 	if not _startup_trace_enabled:
 		return
@@ -1392,7 +1397,8 @@ func _capture_lifecycle_plan() -> Dictionary:
 	_startup_trace_call_end("worktree_source", worktree_started)
 	var expected_version := ClientConfigurator.get_plugin_version()
 	var command_started := _startup_trace_call_begin("server_command")
-	var server_command := ClientConfigurator.get_server_command()
+	var lookup_trace := _startup_trace_lookup if _startup_trace_enabled else Callable()
+	var server_command := ClientConfigurator.get_server_command(lookup_trace)
 	_startup_trace_call_end("server_command", command_started)
 	var pid_file := ProjectSettings.globalize_path(PortResolver.SERVER_PID_FILE)
 	var startup_report := ProjectSettings.globalize_path(PortResolver.SERVER_STARTUP_REPORT)

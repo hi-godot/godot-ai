@@ -204,7 +204,7 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "server-selector.py" in base_configurator
     assert '"-I"' in base_configurator
     assert "godot-ai==" not in _static_func_block(
-        base_configurator, "static func get_server_command() -> Array[String]:"
+        base_configurator, "static func get_server_command("
     )
     assert "return default_port" in base_configurator
     assert "static func ensure_settings_registered() -> void:" in base_configurator
@@ -314,7 +314,7 @@ def test_self_update_smoke_harness_prepares_fixture(tmp_path: Path) -> None:
     assert "const DEFAULT_HTTP_PORT := 18000" in vnext_configurator
     assert "server-selector.py" in vnext_configurator
 
-    server_signature = "static func get_server_command() -> Array[String]:"
+    server_signature = "static func get_server_command("
     assert _static_func_block(base_configurator, server_signature) == _static_func_block(
         vnext_configurator, server_signature
     )
@@ -1299,4 +1299,38 @@ def test_expected_version_patch_refuses_unknown_or_ambiguous_plan(tmp_path, sour
     path.write_text(source, encoding="utf-8")
     with pytest.raises(smoke.HarnessError, match="uniquely patch"):
         smoke.patch_expected_server_version(path, "9.8.7")
+    assert path.read_text(encoding="utf-8") == source
+
+
+@pytest.mark.parametrize("signature", [
+    "static func get_server_command() -> Array[String]:",
+    "static func get_server_command(trace: Callable = Callable()) -> Array[String]:",
+])
+def test_patch_server_command_preserves_released_and_traced_signatures(tmp_path, signature):
+    smoke = load_smoke_script()
+    path = tmp_path / "configurator.gd"
+    path.write_text(
+        signature + '\n\treturn ["old"]\n\nstatic func next_function():\n\tpass\n',
+        encoding="utf-8",
+    )
+    smoke.patch_server_command(path, ["fixture-python", "-I", "fixture.py"])
+    text = path.read_text(encoding="utf-8")
+    assert signature in text
+    assert '\treturn ["fixture-python", "-I", "fixture.py"]' in text
+    assert '"old"' not in text
+    assert "static func next_function():" in text
+
+
+@pytest.mark.parametrize("source", [
+    "static func unrelated():\n\tpass\n",
+    "static func get_server_command() -> Array[String]:\n\treturn []\n" * 2,
+    "static func get_server_command() -> Array[String]:\n\treturn []\n"
+    "static func get_server_command(trace: Callable = Callable()) -> Array[String]:\n\treturn []\n",
+])
+def test_patch_server_command_rejects_missing_or_ambiguous_source(tmp_path, source):
+    smoke = load_smoke_script()
+    path = tmp_path / "configurator.gd"
+    path.write_text(source, encoding="utf-8")
+    with pytest.raises(smoke.HarnessError, match="one supported server-command"):
+        smoke.patch_server_command(path, ["fixture-python"])
     assert path.read_text(encoding="utf-8") == source

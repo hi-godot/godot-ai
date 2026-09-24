@@ -232,8 +232,9 @@ def prepare_clean_major_migration_project(
     configurator = release_tree / "client_configurator.gd"
     configurator_text = smoke.replace_function(
         configurator.read_text(encoding="utf-8"),
-        "static func find_uvx() -> String:",
-        f"static func find_uvx() -> String:\n\treturn {json.dumps(str(fake_uvx))}",
+        "static func find_uvx(trace: Callable = Callable()) -> String:",
+        "static func find_uvx(trace: Callable = Callable()) -> String:\n"
+        f"\treturn {json.dumps(str(fake_uvx))}",
     )
     configurator_text = smoke.subn_once(
         configurator,

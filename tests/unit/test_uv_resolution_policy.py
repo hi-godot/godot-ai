@@ -38,7 +38,7 @@ def test_one_policy_owns_public_index_and_explicit_qualification_escape() -> Non
 def test_every_uvx_server_attach_and_prewarm_builder_uses_one_policy() -> None:
     configurator = _source("client_configurator.gd")
     attach = get_func_block(configurator, "static func _resolve_attach_launch_uncached(")
-    server = get_func_block(configurator, "static func get_server_command() -> Array[String]:")
+    server = get_func_block(configurator, "static func get_server_command(")
     prewarm = get_func_block(
         configurator, "static func prewarm_server_package_argv(version: String) -> Array[String]:"
     )

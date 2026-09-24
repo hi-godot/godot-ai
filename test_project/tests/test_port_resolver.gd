@@ -607,3 +607,74 @@ func test_netstat_pid_and_occupancy_parsers_reject_the_same_malformed_table() ->
 	assert_eq(McpPortResolver.parse_windows_netstat_pids(raw, 12345), [])
 	assert_eq(McpPortResolver.windows_port_occupancy(12345,
 		McpPortResolver.windows_snapshot_from_netstat(0, [raw])), McpPortResolver.PortOccupancy.UNKNOWN)
+
+
+func test_snapshot_diagnostics_preserve_payload_and_withhold_private_rows() -> void:
+	var rows := _snapshot_rows()
+	var raw := JSON.stringify(rows)
+	var diagnostics: Array = []
+	assert_eq(McpPortResolver.parse_process_snapshot(raw, 4242, diagnostics), McpPortResolver.parse_process_snapshot(raw, 4242))
+	assert_eq(diagnostics, [], "successful captures stay quiet")
+	rows[1].identity = "|private-canary"
+	rows[1].commandline = "private-canary"
+	raw = JSON.stringify(rows)
+	assert_eq(McpPortResolver.parse_process_snapshot(raw, 4242, diagnostics), {"capture_error": true})
+	assert_eq(McpPortResolver.parse_process_snapshot(raw, 4242), {"capture_error": true})
+	assert_eq(diagnostics, [{"category": "row_identity", "stage": "single", "depth": 1, "elapsed_ms": -1, "count": 1}])
+	assert_false(JSON.stringify(diagnostics).contains("private-canary"))
+
+
+func test_snapshot_diagnostics_distinguish_pair_and_ancestor_failures() -> void:
+	var rows := _snapshot_rows()
+	rows[1].parent_pid = 4242
+	var diagnostics: Array = []
+	var pair := McpPortResolver._parse_process_snapshot_pair(JSON.stringify([JSON.stringify(rows), "null"]), 4242, diagnostics)
+	assert_eq(pair, [{"capture_error": true}, {"capture_error": true}])
+	assert_eq(diagnostics[0].category, "lineage_cycle")
+	assert_eq(diagnostics[0].stage, "first")
+	assert_eq(diagnostics[0].depth, 1)
+	assert_eq(diagnostics[1].category, "collector_null")
+	assert_eq(diagnostics[1].stage, "final")
+	diagnostics.clear()
+	assert_eq(McpPortResolver._parse_process_snapshot_pair("[]", 4242, diagnostics), pair)
+	assert_eq(diagnostics[0].category, "outer_shape")
+	assert_eq(diagnostics[0].stage, "pair")
+
+
+func test_snapshot_diagnostics_aggregate_without_changing_refusals() -> void:
+	var diagnostics: Array = []
+	for index in range(20):
+		assert_eq(McpPortResolver.parse_process_snapshot("null", 4242, diagnostics), {"capture_error": true})
+	assert_eq(diagnostics.size(), 1)
+	assert_eq(diagnostics[0].count, 20)
+	var reasons: Array = []
+	assert_eq(McpPortResolver.capture_process_kill_grant(0, true, reasons, diagnostics), {})
+	assert_eq(reasons, ["invalid_pid"])
+	assert_eq(diagnostics[0].count, 20)
+	var Lifecycle := load("res://addons/godot_ai/utils/server_lifecycle.gd")
+	assert_eq(Lifecycle._snapshot_diagnostic_summary(diagnostics), " Snapshot diagnostics: launch_grant/single/collector_null x20.")
+
+
+func test_snapshot_diagnostic_summary_rejects_caller_text() -> void:
+	var diagnostics: Array = []
+	assert_eq(McpPortResolver.parse_process_snapshot("null", 4242, diagnostics, "private-canary"), {"capture_error": true})
+	assert_eq(diagnostics[0].stage, "unknown")
+	assert_false(JSON.stringify(diagnostics).contains("private-canary"))
+	diagnostics[0].stage = "private-canary"
+	diagnostics[0].category = "private-canary"
+	var Lifecycle := load("res://addons/godot_ai/utils/server_lifecycle.gd")
+	assert_eq(Lifecycle._snapshot_diagnostic_summary(diagnostics), " Snapshot diagnostics: launch_grant/unknown/unknown.")
+
+
+func test_snapshot_diagnostics_bound_distinct_ancestor_failures() -> void:
+	var diagnostics: Array = []
+	for bad_depth in range(16):
+		var rows: Array = []
+		for depth in range(16):
+			rows.append({"pid": 5000 + depth, "parent_pid": 5001 + depth, "identity": "time|launcher", "commandline": "launcher"})
+		rows[bad_depth].identity = "|private-canary"
+		assert_eq(McpPortResolver.parse_process_snapshot(JSON.stringify(rows), 5000, diagnostics), {"capture_error": true})
+	assert_eq(diagnostics.size(), 8)
+	assert_eq(diagnostics[0].depth, 0)
+	assert_eq(diagnostics[7].depth, 7)
+	assert_false(JSON.stringify(diagnostics).contains("private-canary"))
