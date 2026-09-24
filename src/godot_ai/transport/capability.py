@@ -262,6 +262,17 @@ def _reject_unsafe_posix_ancestors(path: Path) -> Path:
             current = Path(target.anchor)
             continue
         if not _is_safe_posix_ancestor(current, info):
+            if info.st_uid not in {0, os.getuid()}:
+                raise PermissionError(
+                    errno.EACCES,
+                    f"capability path has an unsafe ancestor: owner UID {info.st_uid} "
+                    f"is neither root nor current UID {os.getuid()}. "
+                    "A sandbox may hide ownership. Set GODOT_AI_CAPABILITY_DIR to a "
+                    "verified private shared directory in both Godot's launch environment "
+                    "and the outside AI client's environment. Do not change system-directory "
+                    "ownership or permissions.",
+                    current,
+                )
             raise OSError(errno.EACCES, "capability path has an unsafe ancestor", current)
     return current
 

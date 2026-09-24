@@ -566,3 +566,57 @@ def test_same_user_link_does_not_bypass_writable_target(monkeypatch, mode) -> No
     )
     with pytest.raises(OSError, match="unsafe ancestor"):
         capability_module._reject_unsafe_posix_ancestors(Path(f"{FAKE_ROOT}/home/records"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership contract")
+@pytest.mark.parametrize("owner_uid", [65534, 1001])
+def test_untrusted_ancestor_owner_remains_refused_with_shared_directory_guidance(
+    monkeypatch, tmp_path, owner_uid
+) -> None:
+    from godot_ai import runtime_info
+
+    monkeypatch.setattr(capability_module.os, "getuid", lambda: 1000)
+    _fake_tree(
+        monkeypatch,
+        {
+            FAKE_ROOT: _directory(1000),
+            f"{FAKE_ROOT}/home": _link(1000),
+            f"{FAKE_ROOT}/var": _directory(1000),
+            f"{FAKE_ROOT}/var/home": _directory(owner_uid),
+        },
+        {f"{FAKE_ROOT}/home": "var/home"},
+    )
+    requested = Path(f"{FAKE_ROOT}/home/me/.config/godot-ai/capabilities")
+    with pytest.raises(PermissionError) as failure:
+        capability_module._reject_unsafe_posix_ancestors(requested)
+    assert failure.value.errno == errno.EACCES
+    assert Path(failure.value.filename) == Path(f"{FAKE_ROOT}/var/home")
+    assert f"owner UID {owner_uid}" in str(failure.value)
+    assert "current UID 1000" in str(failure.value)
+    report = tmp_path / "startup.json"
+    monkeypatch.setattr(runtime_info, "_STARTUP_REPORT_PATH", report)
+    monkeypatch.setattr(runtime_info, "_STARTUP_REPORT_WRITTEN", False)
+    assert runtime_info.report_startup_failure(failure.value) == report
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["error"] == "PermissionError"
+    assert "GODOT_AI_CAPABILITY_DIR" in payload["message"]
+    assert "Godot's launch environment" in payload["message"]
+    assert "outside AI client's environment" in payload["message"]
+    assert "Do not change system-directory" in payload["message"]
+    assert payload["hint"] == ""
+    assert len(payload["message"]) < 600
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership contract")
+def test_trusted_owner_writable_ancestor_keeps_permission_refusal(monkeypatch) -> None:
+    monkeypatch.setattr(capability_module.os, "getuid", lambda: 1000)
+    _fake_tree(
+        monkeypatch,
+        {FAKE_ROOT: _directory(1000), f"{FAKE_ROOT}/shared": _directory(1000, 0o777)},
+        {},
+    )
+    with pytest.raises(PermissionError) as failure:
+        capability_module._reject_unsafe_posix_ancestors(Path(f"{FAKE_ROOT}/shared/records"))
+    assert failure.value.errno == errno.EACCES
+    assert Path(failure.value.filename) == Path(f"{FAKE_ROOT}/shared")
+    assert failure.value.strerror == "capability path has an unsafe ancestor"

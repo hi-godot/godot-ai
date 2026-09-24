@@ -181,14 +181,14 @@ supported on Windows.
 <details>
 <summary>Linux startup: Steam, Flatpak, and directory permissions</summary>
 
-The development version reads process identity and listening-socket ownership
+Godot AI 4.2.2 and later read process identity and listening-socket ownership
 from `/proc`, so Steam and Flatpak runtimes do not need to provide `ps`, `lsof`,
 or `ss`. These checks stay inside the editor's sandbox; host PIDs are not used
 to authorize stopping a sandbox process. The backend launcher still needs to
 be installed and executable within that environment.
 
 Steam pressure-vessel can expose `/home -> /var/home` as a user-owned link.
-The development version accepts root- or current-user-owned links beneath
+Godot AI 4.2.2 and later accept root- or current-user-owned links beneath
 protected parents and validates every target ancestor. Other-user ownership,
 writable parents, and symlink loops remain rejected.
 
@@ -197,6 +197,9 @@ Some nested user namespaces expose host-root ancestors as an unmapped owner
 system directories or treat UID 65534 as trusted to work around this; a usable
 credential directory must have verifiable ownership and be accessible to both
 the editor and its client bridge.
+Use the [explicit shared-directory guide](docs/steam-capability-directory.md)
+when the startup error names an untrusted ancestor owner. Resolving `/home`
+with `realpath` alone does not fix an untrusted `/var/home` ancestor.
 
 If the selected credential path has group- or world-writable ancestors (for
 example `775` or `777`), startup remains blocked. The plugin lists the existing
