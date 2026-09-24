@@ -18,7 +18,7 @@ RUNTIME_DEPENDENCIES = {
     "pydantic": "2.13.5",
     "sniffio": "1.3.1",
     "starlette": "1.6.0",
-    "uvicorn": "0.52.4",
+    "uvicorn": "0.53.0",
     "websockets": "17.1",
 }
 
