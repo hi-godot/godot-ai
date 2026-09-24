@@ -10,6 +10,7 @@ import sys
 import time
 import tomllib
 from collections.abc import Sequence
+from contextlib import nullcontext
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -419,4 +420,8 @@ def _serve(
             access_log=http_access_log_enabled()
         )
 
-    server.run(transport=args.transport, **transport_kwargs)
+    from godot_ai._signals import unwind_before_sigterm
+
+    shutdown = unwind_before_sigterm() if args.transport != "stdio" else nullcontext()
+    with shutdown:
+        server.run(transport=args.transport, **transport_kwargs)
