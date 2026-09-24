@@ -5,6 +5,38 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## 4.2.3 (2026-09-24)
+
+Preserve startup failure evidence and clean up backend credentials on orderly
+POSIX termination.
+
+### Fixed
+
+- HTTP and SSE backends now finish lifecycle cleanup before exiting on a
+  default POSIX SIGTERM, removing their credential record and releasing owned
+  resources. Custom signal handlers and Windows behavior remain unchanged.
+- Failed release qualification retains available editor output, bridge logs,
+  and runtime result/progress files. Optional launcher traces distinguish
+  lookup outcomes; failed Windows launch-grant checks report bounded process
+  snapshot failure categories.
+- Steam namespace ownership errors identify the untrusted owner and explain
+  how to configure a verified private shared credential directory in both
+  the Godot and outside client environments. Ownership and permission checks
+  remain enforced. See the [setup guide](docs/steam-capability-directory.md).
+
+### Known limitations
+
+Native Bazzite confirmation remains pending in
+[#1113](https://github.com/hi-godot/godot-ai/issues/1113). The explicit shared
+location was verified in Valve Soldier; this release does not select a safe
+automatic fallback for every Steam installation.
+
+The intermittent Windows process-identity failure
+[#1105](https://github.com/hi-godot/godot-ai/issues/1105) and launcher-discovery
+failure [#1107](https://github.com/hi-godot/godot-ai/issues/1107) remain open.
+The added diagnostics help investigate those reports and do not establish
+that their original causes are fixed.
+
 ## 4.2.2 (2026-09-23)
 
 Improve Linux startup in environments that omit common process tools.
