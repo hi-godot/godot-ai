@@ -5,6 +5,39 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## 4.2.2 (2026-09-23)
+
+Improve Linux startup in environments that omit common process tools.
+
+### Fixed
+
+- Linux process identity and listener ownership checks now read `/proc` in the
+  editor's namespace, so startup no longer requires `ps`, `lsof`, or `ss` when
+  that evidence is available.
+- Credential paths accept root- or current-user-owned directory links beneath
+  protected parents. Every target ancestor still undergoes ownership and
+  permission checks.
+- Unix startup reports existing credential-path ancestors with unsafe
+  permissions before launching the server. Godot AI does not change directory
+  permissions automatically.
+
+### Maintenance
+
+- Upgrade Uvicorn from 0.52.4 to 0.53.0.
+- Update the Codecov CI action from 7.0.0 to 7.1.1.
+
+### Known limitations
+
+Steam startup remains under investigation in
+[#1059](https://github.com/hi-godot/godot-ai/issues/1059). Nested namespaces can
+expose ancestors as unmapped UID 65534, which remains untrusted. Confirmation
+of the reported Flatpak setup is still pending in
+[#1108](https://github.com/hi-godot/godot-ai/issues/1108).
+
+The intermittent Windows updater process-identity failure
+[#1105](https://github.com/hi-godot/godot-ai/issues/1105) and launcher-discovery
+failure [#1107](https://github.com/hi-godot/godot-ai/issues/1107) remain open.
+
 ## 4.2.1 (2026-09-21)
 
 Fix intermittent MCP connection failures during protocol discovery on Windows.
