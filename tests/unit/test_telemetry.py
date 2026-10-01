@@ -256,8 +256,8 @@ class TestTelemetryConfigCleanup:
 
 
 def _drain_to(collector: tel.TelemetryCollector, bucket: list[tel.TelemetryRecord]) -> None:
-    """Replace ``_send`` with a list-appender for assertion-friendly capture."""
-    collector._send = bucket.append  # type: ignore[method-assign]
+    """Replace ``_add_pending`` with a list-appender for assertion-friendly capture."""
+    collector._add_pending = bucket.append  # type: ignore[method-assign]
 
 
 class TestTelemetryCollector:
@@ -461,7 +461,7 @@ class TestPublicHelpers:
 
         ## And the new collector actually drains records.
         sent: list[tel.TelemetryRecord] = []
-        second._send = sent.append  # type: ignore[method-assign]
+        second._add_pending = sent.append  # type: ignore[method-assign]
         tel.record_telemetry(tel.RecordType.USAGE, {"after_restart": True})
         deadline = time.monotonic() + 1.0
         while not sent and time.monotonic() < deadline:

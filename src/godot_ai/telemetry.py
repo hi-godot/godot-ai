@@ -18,18 +18,24 @@ and simplified:
   falling back, so a misconfigured self-host can't leak to production.
 
 Fire-and-forget: a single background daemon thread drains a bounded
-``queue.Queue`` and POSTs records. Telemetry never blocks the caller and
-never raises out of a tool path.
+``queue.Queue`` into a pending list and POSTs it as one ``{"events": [...]}``
+batch every ``FLUSH_INTERVAL_S`` (and once more at shutdown). Successful
+tool calls are not queued at all: they are counted in memory per
+(tool, sub_action, hashed session) with a coarse latency histogram and
+shipped as one ``tool_rollup`` event per flush. Telemetry never blocks the
+caller and never raises out of a tool path.
 """
 
 from __future__ import annotations
 
+import bisect
 import contextlib
 import functools
 import hashlib
 import inspect
 import json
 import logging
+import math
 import os
 import platform
 import queue
@@ -55,6 +61,29 @@ logger = logging.getLogger("godot-ai-telemetry")
 ## Worker-queue sentinel: flush the milestones file from the worker thread
 ## instead of the caller's (event-loop) thread — see record_milestone (#716).
 _PERSIST_MILESTONES = object()
+## Worker-queue sentinel: wake the worker so shutdown() doesn't wait out a
+## poll timeout before the final flush.
+_WAKE = object()
+
+## Upper bounds (ms) of the ``tool_rollup`` latency histogram buckets: a
+## duration lands in the first bucket whose bound is >= it, the last
+## (``inf``) catches everything above 60 s. Part of the wire format — the
+## ingest side decodes ``h`` positionally against this list.
+ROLLUP_BUCKET_BOUNDS_MS: tuple[float, ...] = (
+    10,
+    25,
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2500,
+    5000,
+    10000,
+    30000,
+    60000,
+    math.inf,
+)
 
 ## Public surface: anything importable from this module that callers may
 ## reach for. Kept small on purpose — we want a single choke point.
@@ -94,6 +123,8 @@ class RecordType(str, Enum):
     GODOT_CONNECTION = "godot_connection"
     CLIENT_CONNECTION = "client_connection"
     PLUGIN_EVENT = "plugin_event"
+    ## Per-flush aggregate of successful tool calls (see record_tool_usage).
+    TOOL_ROLLUP = "tool_rollup"
 
 
 class MilestoneType(str, Enum):
@@ -160,7 +191,7 @@ def hash_session_id(session_id: str | None, *, salt: str = "") -> str:
 ## One-way and unpersisted: the wire has no "enable" message, so on a
 ## shared backend the most restrictive editor wins, and a replacement
 ## server reads the env/EditorSetting preference at spawn as usual. An
-## ``Event`` because ``record()`` and ``_send()`` read it off-thread.
+## ``Event`` because ``record()`` and ``_flush()`` read it off-thread.
 _runtime_opt_out = threading.Event()
 
 
@@ -208,7 +239,7 @@ class TelemetryConfig:
     ## test backend, the local-sink smoke flow). Validated through
     ## ``_is_valid_endpoint`` like any other URL — wrong scheme /
     ## loopback / missing netloc fall back to "no sends".
-    DEFAULT_ENDPOINT = "https://godot-ai-telemetry-pudmurzsnq-uw.a.run.app/events"
+    DEFAULT_ENDPOINT = "https://godot-ai-telemetry-v2-pudmurzsnq-uw.a.run.app/events"
     DEFAULT_TIMEOUT = 1.5
 
     def __init__(self) -> None:
@@ -355,6 +386,12 @@ class TelemetryCollector:
 
     QUEUE_MAXSIZE = 1000
     SHUTDOWN_TIMEOUT = 2.0
+    ## Batching: one POST per interval at most (plus the shutdown flush).
+    ## Overridable via GODOT_AI_TELEMETRY_FLUSH_INTERVAL for smoke runs.
+    FLUSH_INTERVAL_S = 900.0
+    PENDING_MAXSIZE = 1000
+    MAX_EVENTS_PER_POST = 500
+    MAX_ROLLUP_TOOLS = 1000
 
     def __init__(self, config: TelemetryConfig | None = None) -> None:
         self.config = config or TelemetryConfig()
@@ -365,8 +402,19 @@ class TelemetryCollector:
         ## in docs/TELEMETRY.md.
         self._queue: queue.Queue[TelemetryRecord] = queue.Queue(maxsize=self.QUEUE_MAXSIZE)
         self._shutdown = False
-        ## One-shot guard for the "endpoint unset" debug log in _send so a
-        ## flood of dequeued records doesn't flood logs at debug level.
+        ## Drained records awaiting the next flush. Worker-thread only.
+        self._pending: list[TelemetryRecord] = []
+        ## Successful tool calls since the last flush:
+        ## (tool_name, sub_action, hashed session) -> 13-bucket histogram.
+        ## Written from the asyncio thread, swapped out by the worker, so
+        ## it has its own lock (``_lock`` is held across milestone file I/O).
+        self._rollup: dict[tuple[str, str | None, str], list[int]] = {}
+        self._rollup_window_start: float | None = None
+        self._rollup_lock = threading.Lock()
+        self._flush_interval = self._resolve_flush_interval()
+        self._last_flush = time.monotonic()
+        ## One-shot guard for the "endpoint unset" debug log in _post so
+        ## repeated flushes don't flood logs at debug level.
         self._endpoint_unset_logged = False
         self._worker: threading.Thread | None = None
         ## Reusable httpx client. Built lazily on first send so a never-
@@ -430,6 +478,19 @@ class TelemetryCollector:
         except OSError as exc:
             logger.debug("Could not persist milestones: %s", exc)
 
+    @classmethod
+    def _resolve_flush_interval(cls) -> float:
+        raw = os.environ.get("GODOT_AI_TELEMETRY_FLUSH_INTERVAL", "").strip()
+        if not raw:
+            return cls.FLUSH_INTERVAL_S
+        try:
+            value = float(raw)
+        except ValueError:
+            return cls.FLUSH_INTERVAL_S
+        if not math.isfinite(value):
+            return cls.FLUSH_INTERVAL_S
+        return max(1.0, value)
+
     # --- public api ------------------------------------------------------
 
     def record(
@@ -463,6 +524,34 @@ class TelemetryCollector:
         except queue.Full:
             logger.debug("Telemetry queue full; dropping %s", record.record_type)
 
+    def record_tool_success(
+        self,
+        tool_name: str,
+        duration_ms: float,
+        *,
+        sub_action: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        """Count a successful tool call into the current rollup window.
+
+        No event is queued: successes are ~84% of all calls and only their
+        volume and latency shape matter, so they ship as one ``tool_rollup``
+        event per flush instead of one record each.
+        """
+        if not self.config.enabled or not self.config.live_enabled():
+            return
+        ## Same salted hash record() applies (issue #529).
+        hashed = hash_session_id(session_id, salt=self._customer_uuid or "") if session_id else ""
+        key = (tool_name, sub_action, hashed)
+        bucket = bisect.bisect_left(ROLLUP_BUCKET_BOUNDS_MS, duration_ms)
+        with self._rollup_lock:
+            if self._rollup_window_start is None:
+                self._rollup_window_start = time.time()
+            hist = self._rollup.get(key)
+            if hist is None:
+                hist = self._rollup[key] = [0] * len(ROLLUP_BUCKET_BOUNDS_MS)
+            hist[bucket] += 1
+
     def record_milestone(
         self, milestone: MilestoneType, data: dict[str, Any] | None = None
     ) -> bool:
@@ -493,12 +582,15 @@ class TelemetryCollector:
         return True
 
     def shutdown(self) -> None:
+        ## The worker drains the queue, does one final flush, then exits.
         self._shutdown = True
         ## Worker is None when telemetry was disabled at construction.
         if self._worker is not None and self._worker.is_alive():
+            with contextlib.suppress(queue.Full):
+                self._queue.put_nowait(_WAKE)
             self._worker.join(timeout=self.SHUTDOWN_TIMEOUT)
 
-        ## ``_send`` is single-consumer by design (only the worker
+        ## ``_post`` is single-consumer by design (only the worker
         ## thread calls it), so the in-method lazy-create of
         ## ``self._client`` is safe against double-construct. The
         ## race we *do* have to avoid is closing ``self._client``
@@ -526,33 +618,92 @@ class TelemetryCollector:
             try:
                 rec = self._queue.get(timeout=0.5)
             except queue.Empty:
-                continue
+                rec = None
+            if rec is not None:
+                self._handle(rec)
+            ## Monotonic so a wall-clock jump can't stall or burst flushes.
+            ## Only a flush that had something to send resets the clock.
+            if time.monotonic() - self._last_flush >= self._flush_interval and self._has_unsent():
+                self._flush()
+        ## Shutdown: drain whatever is still queued, then one final flush.
+        while True:
             try:
-                if rec is _PERSIST_MILESTONES:
-                    with self._lock:
-                        self._save_milestones()
-                else:
-                    self._send(rec)
-            except Exception:  # noqa: BLE001  ## telemetry must never raise out
-                logger.debug("Telemetry send failed", exc_info=True)
-            finally:
-                with contextlib.suppress(Exception):
-                    self._queue.task_done()
+                rec = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            self._handle(rec)
+        self._flush()
 
-    def _send(self, record: TelemetryRecord) -> None:
+    def _handle(self, rec: Any) -> None:
+        try:
+            if rec is _PERSIST_MILESTONES:
+                with self._lock:
+                    self._save_milestones()
+            elif rec is not _WAKE:
+                self._add_pending(rec)
+        except Exception:  # noqa: BLE001  ## telemetry must never raise out
+            logger.debug("Telemetry record handling failed", exc_info=True)
+        finally:
+            with contextlib.suppress(Exception):
+                self._queue.task_done()
+
+    def _add_pending(self, record: TelemetryRecord) -> None:
+        if len(self._pending) >= self.PENDING_MAXSIZE:
+            logger.debug("Telemetry pending batch full; dropping %s", record.record_type)
+            return
+        self._pending.append(record)
+
+    def _has_unsent(self) -> bool:
+        return bool(self._pending or self._rollup)
+
+    def _flush(self) -> None:
+        """Send pending records plus the rollup window. Never raises."""
+        self._last_flush = time.monotonic()
+        pending, self._pending = self._pending, []
+        with self._rollup_lock:
+            rollup, self._rollup = self._rollup, {}
+            window_start, self._rollup_window_start = self._rollup_window_start, None
+        ## Opted out since these were collected (env change or the #913
+        ## latch): drop them unsent.
         if not self.config.live_enabled():
             return
-        endpoint = self.config.endpoint
-        if not endpoint:
-            ## Pre-backend phase: log exactly once at debug level so an
-            ## operator tailing logs can confirm telemetry is alive, then
-            ## drop every subsequent record silently. Without the
-            ## one-shot flag, a busy session would flood debug logs.
-            if not self._endpoint_unset_logged:
-                logger.debug("Telemetry endpoint unset; dropping records (logged once)")
-                self._endpoint_unset_logged = True
-            return
+        try:
+            events = [self._payload(rec) for rec in pending]
+            if rollup:
+                events.extend(self._rollup_payloads(rollup, window_start or time.time()))
+            for start in range(0, len(events), self.MAX_EVENTS_PER_POST):
+                self._post(events[start : start + self.MAX_EVENTS_PER_POST])
+        except Exception:  # noqa: BLE001  ## telemetry must never raise out
+            logger.debug("Telemetry flush failed", exc_info=True)
 
+    def _rollup_payloads(
+        self,
+        rollup: dict[tuple[str, str | None, str], list[int]],
+        window_start: float,
+    ) -> list[dict[str, Any]]:
+        window_end = time.time()
+        tools = [
+            {"tool_name": name, "sub_action": sub, "s": sid, "ok": sum(hist), "h": hist}
+            for (name, sub, sid), hist in rollup.items()
+        ]
+        payloads = []
+        for start in range(0, len(tools), self.MAX_ROLLUP_TOOLS):
+            record = TelemetryRecord(
+                record_type=RecordType.TOOL_ROLLUP,
+                timestamp=window_start,
+                customer_uuid=self._customer_uuid or "unknown",
+                session_id="",
+                data={
+                    "window_start": window_start,
+                    "window_end": window_end,
+                    "tools": tools[start : start + self.MAX_ROLLUP_TOOLS],
+                },
+            )
+            payloads.append(self._payload(record))
+        return payloads
+
+    @staticmethod
+    def _payload(record: TelemetryRecord) -> dict[str, Any]:
         enriched = dict(record.data)
         enriched.setdefault(
             "platform_detail",
@@ -572,6 +723,21 @@ class TelemetryCollector:
         }
         if record.milestone is not None:
             payload["milestone"] = record.milestone.value
+        return payload
+
+    def _post(self, events: list[dict[str, Any]]) -> None:
+        if not events or not self.config.live_enabled():
+            return
+        endpoint = self.config.endpoint
+        if not endpoint:
+            ## Pre-backend phase: log exactly once at debug level so an
+            ## operator tailing logs can confirm telemetry is alive, then
+            ## drop every subsequent batch silently. Without the
+            ## one-shot flag, a busy session would flood debug logs.
+            if not self._endpoint_unset_logged:
+                logger.debug("Telemetry endpoint unset; dropping records (logged once)")
+                self._endpoint_unset_logged = True
+            return
 
         try:
             if self._client is None:
@@ -584,7 +750,7 @@ class TelemetryCollector:
                 ## endpoint validation that exists precisely to keep those
                 ## records off cleartext transports (#532).
                 self._client = httpx.Client(timeout=self.config.timeout, trust_env=False)
-            response = self._client.post(endpoint, json=payload)
+            response = self._client.post(endpoint, json={"events": events})
             if not 200 <= response.status_code < 300:
                 logger.debug("Telemetry endpoint returned HTTP %s", response.status_code)
         except httpx.HTTPError as exc:
@@ -674,13 +840,21 @@ def record_tool_usage(
     session_id: str | None = None,
     error_sub_code: str | None = None,
 ) -> None:
+    sub = _truncate(sub_action, 64) if sub_action is not None else None
+    if success:
+        ## Successes are counted into the per-flush ``tool_rollup``, not
+        ## queued one by one — see TelemetryCollector.record_tool_success.
+        get_telemetry().record_tool_success(
+            tool_name, duration_ms, sub_action=sub, session_id=session_id
+        )
+        return
     data: dict[str, Any] = {
         "tool_name": tool_name,
         "success": success,
         "duration_ms": round(duration_ms, 2),
     }
-    if sub_action is not None:
-        data["sub_action"] = _truncate(sub_action, 64)
+    if sub is not None:
+        data["sub_action"] = sub
     if error:
         data["error"] = _truncate(error, 200)
     ## #651 stage 1: separate field, not a mutation of ``error`` — dashboards
@@ -954,7 +1128,8 @@ def _expose_wrapped_surface(wrapper: Callable[..., Any], func: Callable[..., Any
 
 
 def telemetry_tool(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Decorator: record one ``tool_execution`` per call to ``func``."""
+    """Decorator: count each successful call to ``func`` into the
+    ``tool_rollup``; record one ``tool_execution`` per failed call."""
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         return _instrument(func, name=tool_name, kind="tool")

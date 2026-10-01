@@ -21,12 +21,12 @@ from godot_ai.tools._meta_tool import register_manage_tool
 
 @pytest.fixture
 def captured(isolated_data_dir):
-    """Yield the list that ``_send`` appends to. Builds on the shared
+    """Yield the list that ``_add_pending`` appends to. Builds on the shared
     ``isolated_data_dir`` (``tests/unit/conftest.py``) for env-clean +
     tmp-dir + reset_telemetry isolation."""
     collector = tel.get_telemetry()
     sent: list[tel.TelemetryRecord] = []
-    collector._send = sent.append  # type: ignore[method-assign]
+    collector._add_pending = sent.append  # type: ignore[method-assign]
     return sent
 
 
@@ -546,7 +546,7 @@ class TestRuntimeTelemetryOptOut:
         ## server stops producing records.
         reg = self._registry_with_session()
         ## Registering queues a connect record. Drain it *before* latching —
-        ## the fixture swaps ``_send`` for a list append, so the worker can
+        ## the fixture swaps ``_add_pending`` for a list append, so the worker can
         ## still deliver it after a later clear and fail the assert below.
         _wait_for(captured, 1)
         captured.clear()

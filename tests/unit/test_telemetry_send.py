@@ -1,8 +1,8 @@
 """Coverage-targeted tests for the parts of ``godot_ai.telemetry`` that
 the other test files mock out:
 
-* ``TelemetryCollector._send`` — the real httpx POST path (and its
-  empty-endpoint short-circuit, non-2xx, transport-error branches).
+* ``TelemetryCollector._flush`` / ``_post`` — the real httpx POST path (and
+  its empty-endpoint short-circuit, non-2xx, transport-error branches).
 * Convenience helpers ``record_latency`` / ``record_failure``.
 * ``install_fastmcp_wraps`` resource form.
 * Worker-loop exception swallowing.
@@ -50,11 +50,17 @@ def _record(milestone: tel.MilestoneType | None = None) -> tel.TelemetryRecord:
     )
 
 
-# --- _send ---------------------------------------------------------------
+def _send(collector: tel.TelemetryCollector, record: tel.TelemetryRecord) -> None:
+    """Stage one record and flush it now, bypassing the flush interval."""
+    collector._add_pending(record)
+    collector._flush()
+
+
+# --- _flush / _post -------------------------------------------------------
 
 
 class TestSendOverHttpx:
-    """Drive the real ``_send`` path with a mocked ``httpx.Client``."""
+    """Drive the real flush/POST path with a mocked ``httpx.Client``."""
 
     def test_later_env_opt_out_drops_an_already_queued_record(
         self, monkeypatch, clean_env, isolated_data_dir
@@ -65,13 +71,14 @@ class TestSendOverHttpx:
         monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
 
         with patch("godot_ai.telemetry.httpx.Client") as client_cls:
-            collector._send(_record())
+            _send(collector, _record())
 
         client_cls.assert_not_called()
+        assert collector._pending == []
         collector.shutdown()
 
     def test_empty_endpoint_short_circuits(self, clean_env, isolated_data_dir) -> None:
-        ## With no endpoint set, _send must not even open an httpx.Client.
+        ## With no endpoint set, a flush must not even open an httpx.Client.
         ## Telemetry is on-by-default with a baked-in endpoint, so we
         ## clear the resolved value to simulate the "invalid override
         ## fell back to empty" path (e.g. a self-host that set a
@@ -79,7 +86,7 @@ class TestSendOverHttpx:
         collector = tel.TelemetryCollector()
         collector.config.endpoint = ""
         with patch("godot_ai.telemetry.httpx.Client") as client_cls:
-            collector._send(_record())
+            _send(collector, _record())
         client_cls.assert_not_called()
         collector.shutdown()
 
@@ -94,7 +101,7 @@ class TestSendOverHttpx:
         caplog.clear()
         with caplog.at_level(logging.DEBUG, logger="godot-ai-telemetry"):
             for _ in range(50):
-                collector._send(_record())
+                _send(collector, _record())
         endpoint_msgs = [r for r in caplog.records if "endpoint unset" in r.getMessage()]
         assert len(endpoint_msgs) == 1
         collector.shutdown()
@@ -107,12 +114,15 @@ class TestSendOverHttpx:
         client_inst.post.return_value = MagicMock(status_code=200)
 
         with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst):
-            collector._send(_record())
+            _send(collector, _record())
 
         client_inst.post.assert_called_once()
         call_args = client_inst.post.call_args
         assert call_args.args[0] == "https://example.com/x"
-        payload = call_args.kwargs["json"]
+        body = call_args.kwargs["json"]
+        assert list(body) == ["events"]
+        assert len(body["events"]) == 1
+        payload = body["events"][0]
         assert payload["record"] == "tool_execution"
         assert payload["customer_uuid"] == "anon-uuid"
         assert payload["session_id"] == "hashed@a3f2"
@@ -146,7 +156,7 @@ class TestSendOverHttpx:
         client_inst.post.return_value = MagicMock(status_code=200)
 
         with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst) as ctor:
-            collector._send(_record())
+            _send(collector, _record())
 
         assert ctor.call_args.kwargs.get("trust_env") is False
 
@@ -167,7 +177,7 @@ class TestSendOverHttpx:
 
         with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst) as ctor:
             for _ in range(5):
-                collector._send(_record())
+                _send(collector, _record())
 
         assert ctor.call_count == 1, "httpx.Client must be built once and reused"
         assert client_inst.post.call_count == 5
@@ -185,9 +195,9 @@ class TestSendOverHttpx:
         client_inst.post.return_value = MagicMock(status_code=200)
 
         with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst):
-            collector._send(_record(milestone=tel.MilestoneType.FIRST_STARTUP))
+            _send(collector, _record(milestone=tel.MilestoneType.FIRST_STARTUP))
 
-        payload = client_inst.post.call_args.kwargs["json"]
+        payload = client_inst.post.call_args.kwargs["json"]["events"][0]
         assert payload["milestone"] == "first_startup"
 
         collector.shutdown()
@@ -202,7 +212,7 @@ class TestSendOverHttpx:
         client_inst.post.return_value = MagicMock(status_code=500)
 
         with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst):
-            collector._send(_record())  # must not raise
+            _send(collector, _record())  # must not raise
 
         collector.shutdown()
 
@@ -216,7 +226,7 @@ class TestSendOverHttpx:
         client_inst.post.side_effect = _httpx.HTTPError("nope")
 
         with patch("godot_ai.telemetry.httpx.Client", return_value=client_inst):
-            collector._send(_record())  # must not raise
+            _send(collector, _record())  # must not raise
 
         collector.shutdown()
 
@@ -231,17 +241,17 @@ class TestWorkerLoopRobustness:
         collector = tel.TelemetryCollector()
         calls: list[tel.TelemetryRecord] = []
 
-        def fake_send(rec: tel.TelemetryRecord) -> None:
+        def fake_add_pending(rec: tel.TelemetryRecord) -> None:
             calls.append(rec)
             if len(calls) == 1:
                 raise RuntimeError("first call boom")
 
-        collector._send = fake_send  # type: ignore[method-assign]
+        collector._add_pending = fake_add_pending  # type: ignore[method-assign]
 
         collector.record(tel.RecordType.USAGE, {"n": 1})
         collector.record(tel.RecordType.USAGE, {"n": 2})
 
-        ## Both records must reach the worker even though the first send
+        ## Both records must reach the worker even though the first one
         ## raised — exceptions must not kill the worker thread.
         deadline = time.monotonic() + 2.0
         while len(calls) < 2 and time.monotonic() < deadline:
@@ -259,7 +269,7 @@ class TestConvenienceHelpers:
     def _captured(self, isolated_data_dir):
         collector = tel.get_telemetry()
         sent: list[tel.TelemetryRecord] = []
-        collector._send = sent.append  # type: ignore[method-assign]
+        collector._add_pending = sent.append  # type: ignore[method-assign]
         return collector, sent
 
     def _wait(self, sent: list, n: int = 1) -> None:
@@ -312,7 +322,8 @@ class TestConvenienceHelpers:
 
     def test_record_tool_usage_no_sub_action_no_error(self, clean_env, isolated_data_dir) -> None:
         _, sent = self._captured(isolated_data_dir)
-        tel.record_tool_usage("ping", True, 1.0)
+        ## A failure (successes are rolled up, never queued) with no error text.
+        tel.record_tool_usage("ping", False, 1.0)
         self._wait(sent)
         assert "sub_action" not in sent[0].data
         assert "error" not in sent[0].data
@@ -359,8 +370,6 @@ class TestDecoratorEdges:
         monkeypatch.setattr(_inspect, "signature", boom)
 
         collector = tel.get_telemetry()
-        sent: list[tel.TelemetryRecord] = []
-        collector._send = sent.append  # type: ignore[method-assign]
 
         @tel.telemetry_tool("signless")
         def signless(x: int) -> int:
@@ -369,28 +378,18 @@ class TestDecoratorEdges:
         result = signless(21)
         assert result == 42  # function still runs
 
-        deadline = time.monotonic() + 1.0
-        while not sent and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert sent
-        assert "sub_action" not in sent[0].data
+        assert list(collector._rollup) == [("signless", None, "")]
 
     def test_none_op_value_does_not_become_string_none(self, clean_env, isolated_data_dir) -> None:
         collector = tel.get_telemetry()
-        sent: list[tel.TelemetryRecord] = []
-        collector._send = sent.append  # type: ignore[method-assign]
 
         @tel.telemetry_tool("manage")
         def manage(op: str | None = None, params: dict | None = None) -> dict:
             return {"ok": True}
 
         manage(op=None)
-        deadline = time.monotonic() + 1.0
-        while not sent and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert sent
         ## ``None`` for the sub-action key must be filtered, not stringified.
-        assert "sub_action" not in sent[0].data
+        assert list(collector._rollup) == [("manage", None, "")]
 
 
 # --- install_fastmcp_wraps: resource form -------------------------------
@@ -402,7 +401,7 @@ class TestWrapsResourceForm:
 
         collector = tel.get_telemetry()
         sent: list[tel.TelemetryRecord] = []
-        collector._send = sent.append  # type: ignore[method-assign]
+        collector._add_pending = sent.append  # type: ignore[method-assign]
 
         mcp = FastMCP("test")
         tel.install_fastmcp_wraps(mcp)
@@ -646,13 +645,14 @@ class TestShutdownEdges:
         collector._client = client_inst
 
         collector.record(tel.RecordType.USAGE, {"x": 1})
-        ## Wait for the worker to actually be inside post() before
-        ## calling shutdown, otherwise the worker might exit cleanly
-        ## and we'd test the wrong branch.
-        assert worker_in_post.wait(timeout=2.0), "worker never entered post()"
 
-        collector.shutdown()  # join times out → must NOT close client
+        ## The shutdown flush POSTs the queued record; post() blocks, so
+        ## the join times out → must NOT close client.
+        collector.shutdown()
 
+        ## The worker was really inside post(), not already gone — else
+        ## this would exercise the wrong branch.
+        assert worker_in_post.is_set(), "worker never entered post()"
         client_inst.close.assert_not_called()
         assert collector._client is client_inst, "client must still be live"
 

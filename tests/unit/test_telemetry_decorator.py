@@ -18,13 +18,13 @@ from godot_ai.godot_client.client import GodotCommandError
 
 @pytest.fixture
 def isolated_collector(isolated_data_dir):
-    """A fresh telemetry collector with ``_send`` redirected into a list
+    """A fresh telemetry collector with ``_add_pending`` redirected into a list
     so tests can assert on captured records. Builds on the shared
     ``isolated_data_dir`` fixture (``tests/unit/conftest.py``) for the
     env-clean + tmp-dir + reset_telemetry dance."""
     collector = tel.get_telemetry()
     sent: list[tel.TelemetryRecord] = []
-    collector._send = sent.append  # type: ignore[method-assign]
+    collector._add_pending = sent.append  # type: ignore[method-assign]
     return collector, sent
 
 
@@ -36,24 +36,28 @@ def _wait_for(records: list, count: int, timeout: float = 2.0) -> None:
         time.sleep(0.02)
 
 
+def _rollup(collector: tel.TelemetryCollector) -> dict:
+    """Successful calls are counted, not queued: read the rollup counters."""
+    with collector._rollup_lock:
+        return {key: list(hist) for key, hist in collector._rollup.items()}
+
+
 class TestTelemetryToolSync:
     def test_records_success(self, isolated_collector) -> None:
-        _, sent = isolated_collector
+        collector, sent = isolated_collector
 
         @tel.telemetry_tool("my_tool")
         def my_tool(x: int) -> int:
             return x * 2
 
         assert my_tool(21) == 42
-        _wait_for(sent, 1)
+        _wait_for(sent, 1, timeout=0.2)
 
-        assert len(sent) == 1
-        rec = sent[0]
-        assert rec.record_type is tel.RecordType.TOOL_EXECUTION
-        assert rec.data["tool_name"] == "my_tool"
-        assert rec.data["success"] is True
-        assert "duration_ms" in rec.data
-        assert "error" not in rec.data
+        ## A success is counted into the rollup, never queued as an event.
+        assert sent == []
+        rollup = _rollup(collector)
+        assert list(rollup) == [("my_tool", None, "")]
+        assert sum(rollup[("my_tool", None, "")]) == 1
 
     def test_records_failure(self, isolated_collector) -> None:
         _, sent = isolated_collector
@@ -193,30 +197,30 @@ class TestTelemetryToolSync:
         assert "secret-project" not in rec.data["error"]
 
     def test_extracts_op_as_sub_action(self, isolated_collector) -> None:
-        _, sent = isolated_collector
+        collector, _ = isolated_collector
 
         @tel.telemetry_tool("scene_manage")
         def manage(op: str, params: dict | None = None) -> dict:
             return {"ok": True}
 
         manage(op="save_as", params={"path": "res://x.tscn"})
-        _wait_for(sent, 1)
 
-        assert sent[0].data["sub_action"] == "save_as"
+        assert list(_rollup(collector)) == [("scene_manage", "save_as", "")]
 
     def test_extracts_session_id(self, isolated_collector) -> None:
-        _, sent = isolated_collector
+        collector, _ = isolated_collector
 
         @tel.telemetry_tool("x")
         def x(session_id: str = "") -> None:
             return None
 
         x(session_id="my-game@a3f2")
-        _wait_for(sent, 1)
 
-        ## session_id is hashed before serialization.
-        assert sent[0].session_id.endswith("@a3f2")
-        assert "my-game" not in sent[0].session_id
+        ## session_id is hashed (salted, as record() does) before counting.
+        [(_, _, hashed)] = list(_rollup(collector))
+        assert hashed.endswith("@a3f2")
+        assert "my-game" not in hashed
+        assert hashed == tel.hash_session_id("my-game@a3f2", salt=collector._customer_uuid)
 
     def test_records_class_name_for_long_error_message(self, isolated_collector) -> None:
         _, sent = isolated_collector
@@ -235,18 +239,16 @@ class TestTelemetryToolSync:
 
 class TestTelemetryToolAsync:
     def test_async_records_success(self, isolated_collector) -> None:
-        _, sent = isolated_collector
+        collector, _ = isolated_collector
 
         @tel.telemetry_tool("async_tool")
         async def my_async() -> int:
             return 7
 
         result = asyncio.run(my_async())
-        _wait_for(sent, 1)
 
         assert result == 7
-        assert sent[0].data["success"] is True
-        assert sent[0].data["tool_name"] == "async_tool"
+        assert list(_rollup(collector)) == [("async_tool", None, "")]
 
     def test_async_records_failure(self, isolated_collector) -> None:
         _, sent = isolated_collector
@@ -342,7 +344,7 @@ class TestInstallFastmcpWraps:
     FastMCP instance instruments tools registered after the wrap."""
 
     def test_tools_registered_after_wrap_are_instrumented(self, isolated_collector) -> None:
-        _, sent = isolated_collector
+        collector, _ = isolated_collector
         from fastmcp import FastMCP
 
         mcp = FastMCP("test")
@@ -353,14 +355,11 @@ class TestInstallFastmcpWraps:
             return x + 1
 
         asyncio.run(wrapped_tool(41))
-        _wait_for(sent, 1)
 
-        assert len(sent) == 1
-        assert sent[0].data["tool_name"] == "wrapped_tool"
-        assert sent[0].data["success"] is True
+        assert list(_rollup(collector)) == [("wrapped_tool", None, "")]
 
     def test_bare_decorator_form_works(self, isolated_collector) -> None:
-        _, sent = isolated_collector
+        collector, _ = isolated_collector
         from fastmcp import FastMCP
 
         mcp = FastMCP("test")
@@ -371,8 +370,7 @@ class TestInstallFastmcpWraps:
             return x + 1
 
         asyncio.run(bare(0))
-        _wait_for(sent, 1)
-        assert sent[0].data["tool_name"] == "bare"
+        assert list(_rollup(collector)) == [("bare", None, "")]
 
     def test_disabled_collector_skips_records_from_wrap(
         self, isolated_collector, monkeypatch
@@ -393,6 +391,7 @@ class TestInstallFastmcpWraps:
         _wait_for(sent, 0, timeout=0.3)
 
         assert sent == []
+        assert _rollup(collector) == {}
 
     def test_manage_tool_schema_builds_through_wrap(self, isolated_collector) -> None:
         """Issue #435 regression: ``<domain>_manage`` rollups have their

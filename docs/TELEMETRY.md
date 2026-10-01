@@ -18,22 +18,45 @@ goes, and how to opt out. All telemetry code is open source and lives in
   given install, but the same project name produces different hashes on
   different installations — so hashes can't be correlated across users or
   reversed with a dictionary of common project names.
-- **Non-blocking**: events go through a bounded in-process queue and a
-  single daemon worker. Telemetry failures never propagate to tool
-  callers.
+- **Successful tool calls are counted, not logged one by one**: only
+  failures are sent as individual events. Successes are reduced to a count
+  and a coarse latency histogram per tool per ~15-minute window (see
+  "Tool & resource execution" below), so the timing and order of what you
+  did in the editor never leaves the process.
+- **Batched and non-blocking**: events go through a bounded in-process
+  queue and a single daemon worker that sends them in one batched request
+  roughly every 15 minutes, plus once when the server shuts down. Telemetry
+  failures never propagate to tool callers.
 - **Easy opt-out**: Respects opt-out via environment variable or through
   in-editor settings menu. See "Opting out" below.
 
 ## What we collect
 
 ### Tool & resource execution
-Every MCP tool and resource call emits one record with:
+Every **failed** MCP tool call, and every resource call, emits one
+`tool_execution` / `resource_retrieval` record with:
 - tool / resource name (e.g. `node_create`, `scene_manage`)
 - `sub_action` — for rollup tools, the `op` (e.g. `save_as` for `scene_manage`)
 - `success` bool
 - `duration_ms`
 - an error *category* on failure — the structured error-code value for `GodotCommandError` (plus an allowlisted `sub_code` for `EDITOR_NOT_READY` or `TRANSPORT_OUTCOME_UNKNOWN`), otherwise just the exception class name. Exception message text never leaves the process (it can embed project paths).
 - the hashed `session_id` if the tool targets a specific editor
+
+**Successful** tool calls are not sent individually. The server counts them
+in memory and, at each flush, sends a single `tool_rollup` record covering
+the window since the previous flush. Its `data` holds `window_start` /
+`window_end` (epoch seconds) and a `tools` list with one entry per
+(tool, `sub_action`, hashed session id) combination seen in the window:
+
+- `tool_name`, `sub_action` (or `null`), `s` — the hashed session id (or `""`)
+- `ok` — how many calls succeeded in the window
+- `h` — those calls' durations as a 13-bucket histogram, with bucket upper
+  bounds of 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000 and
+  60000 ms, the last bucket counting everything slower (`ok` = `sum(h)`)
+
+No per-call timestamps or exact durations are kept for successful calls.
+This is strictly less data than earlier versions sent, which recorded
+every successful call as its own event.
 
 ### Startup
 A single `startup` record on server lifespan enter:
@@ -164,7 +187,11 @@ telemetry disabled.
 ## Endpoint configuration
 
 Telemetry POSTs to a baked-in default endpoint operated by the
-godot-ai maintainers. The endpoint URL lives in
+godot-ai maintainers. Each request body is a batch,
+`{"events": [<record>, ...]}` (at most 500 records per request), sent at
+most once per flush interval — 15 minutes by default — and once more when
+the server shuts down. Records still queued when telemetry is opted out
+are discarded unsent. The endpoint URL lives in
 ``TelemetryConfig.DEFAULT_ENDPOINT`` (`src/godot_ai/telemetry.py`); see
 the source for the current value.
 
@@ -176,6 +203,10 @@ export GODOT_AI_TELEMETRY_ENDPOINT=https://telemetry.example.com/events
 
 # Optional: customize request timeout (default 1.5 seconds):
 export GODOT_AI_TELEMETRY_TIMEOUT=2.5
+
+# Optional: batch flush interval in seconds (default 900, minimum 1).
+# Mostly useful for smoke tests that don't want to wait 15 minutes:
+export GODOT_AI_TELEMETRY_FLUSH_INTERVAL=5
 
 # Local-sink smoke testing (loopback endpoints are otherwise rejected):
 export GODOT_AI_TELEMETRY_ALLOW_LOOPBACK=1
@@ -205,7 +236,9 @@ Two files:
 
 Delete the data directory to reset both.
 
-## Example record
+## Example records
+
+A failed tool call:
 
 ```json
 {
@@ -219,13 +252,47 @@ Delete the data directory to reset both.
   "data": {
     "tool_name": "scene_manage",
     "sub_action": "save_as",
-    "success": true,
+    "success": false,
     "duration_ms": 12.7,
+    "error": "EDITOR_NOT_READY",
+    "error_sub_code": "EDITOR_PLAYING",
     "platform_detail": "Darwin 24.0.0 (arm64)",
     "python_version": "3.11.10"
   }
 }
 ```
+
+A window of successful tool calls (`timestamp` = the first success in the
+window):
+
+```json
+{
+  "record": "tool_rollup",
+  "timestamp": 1736294400.123,
+  "customer_uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "session_id": "",
+  "version": "0.0.41",
+  "platform": "Darwin",
+  "source": "darwin",
+  "data": {
+    "window_start": 1736294400.123,
+    "window_end": 1736295300.456,
+    "tools": [
+      {
+        "tool_name": "scene_manage",
+        "sub_action": "save_as",
+        "s": "3f1a8b22@7f9c3a10d8e426b1",
+        "ok": 4,
+        "h": [0, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    ],
+    "platform_detail": "Darwin 24.0.0 (arm64)",
+    "python_version": "3.11.10"
+  }
+}
+```
+
+Both are sent inside a batch: `{"events": [ ... ]}`.
 
 ## How it's wired
 

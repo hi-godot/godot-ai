@@ -5,6 +5,21 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## Unreleased
+
+### Changed
+
+- Telemetry sends less, less often. Successful tool calls are no longer sent
+  one event per call: the server counts them per tool and sends one
+  `tool_rollup` record per window with a count and a coarse latency
+  histogram, so no per-call timing of successful work leaves the process.
+  Failed tool calls are still sent individually with the same fields as
+  before. All records are batched into one request roughly every 15 minutes
+  and once at server shutdown, and go to a new ingest endpoint. Opting out
+  still stops all sends, including anything already batched.
+  `GODOT_AI_TELEMETRY_FLUSH_INTERVAL` overrides the interval for self-hosters
+  and smoke tests. See [docs/TELEMETRY.md](docs/TELEMETRY.md).
+
 ## 4.2.3 (2026-09-24)
 
 Preserve startup failure evidence and clean up backend credentials on orderly
