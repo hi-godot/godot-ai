@@ -30,8 +30,8 @@ reading. Release engineering: [docs/releasing.md](docs/releasing.md).
   owner of a directory above your home directory is no longer tested, which
   is where OpenSSH's `StrictModes` stops too. Write permissions there, and
   ownership from your home directory down, are still enforced, and nothing
-  is relaxed outside a sandbox. The same rule covers Steam's runtime and
-  rootless containers
+  is relaxed outside a sandbox, or in a container where UID 65534 is a real
+  account. The same rule covers Steam's runtime
   ([#1113](https://github.com/hi-godot/godot-ai/issues/1113)).
 - A Flatpak editor that shares your home directory publishes its credentials
   under the host's `~/.config/godot-ai` instead of Flatpak's per-app config

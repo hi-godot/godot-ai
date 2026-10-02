@@ -517,20 +517,21 @@ plugin, which cannot see file ownership, follows a link only below a directory
 closed to group/other writes; the server, which publishes the record, is the
 side that verifies root/current-user ownership.
 
-Flatpak, Steam's pressure-vessel, and rootless containers run in a user
-namespace that does not map the host's root, so its `/home` (`/var/home` on
-ostree) reads back as the kernel's overflow UID (65534). Inside
-a namespace whose `/proc/self/uid_map` is not the initial identity map, the
-owner of a component walked on the way to the home directory is therefore not
-tested when it is that UID. OpenSSH's `StrictModes` stops at the home directory
+Flatpak and Steam's pressure-vessel run in a user namespace that maps only
+the invoking user, so the host's root-owned `/home` (`/var/home` on ostree)
+reads back as the kernel's overflow UID (65534). Inside a namespace whose
+`/proc/self/uid_map` has no range containing that UID, the owner of a
+component walked on the way to the home directory is therefore not tested
+when it is that UID. OpenSSH's `StrictModes` stops at the home directory
 for the same reason: where the administrator placed it is the administrator's
 concern. Such a component must still be closed to group/other writes. The home
 directory, everything below it, and any path that does not lead to it keep the
-root/current-user ownership test, and in the initial namespace UID 65534 is
-the real `nobody` account and stays refused. Flatpak and pressure-vessel map
-no other account into the sandbox, so nothing inside it can own or write such
-a directory, and the client outside still applies the full test to the same
-path with real owners.
+root/current-user ownership test. Where a mapped range contains UID 65534 it
+is a real account and stays refused: `nobody` in the initial namespace, and
+the container's own `nobody` in a rootless container that maps a subordinate
+ID range. Flatpak and pressure-vessel map no other account into the sandbox,
+so nothing inside it can own or write such a directory, and the client outside
+still applies the full test to the same path with real owners.
 
 Flatpak sets `XDG_CONFIG_HOME` to the app's own `~/.var/app/<id>/config`. When
 `/.flatpak-info` grants the sandbox `host` or `home` read-write, the plugin and

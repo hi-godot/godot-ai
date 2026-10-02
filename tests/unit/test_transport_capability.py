@@ -805,16 +805,32 @@ def test_unresolvable_home_grants_no_hidden_owner_trust(monkeypatch, home) -> No
 @pytest.mark.parametrize(
     "uid_map,overflow,expected",
     [
+        # The initial namespace maps every UID: 65534 is the real ``nobody``.
         ("         0          0 4294967295\n", "65534\n", None),
+        # Flatpak, and bubblewrap's nested map as pressure-vessel uses it.
         ("      1000       1000          1\n", "65534\n", 65534),
         ("      1000          0          1\n", "65533\n", 65533),
-        ("         0     100000      65536\n", "65534\n", 65534),
+        # A range that ends below the overflow UID leaves it unmapped.
+        ("         0     100000       1000\n", "65534\n", 65534),
+        # Rootless containers map a subordinate range holding their own nobody.
+        ("         0     100000      65536\n", "65534\n", None),
+        (
+            "         0          1       1000\n      1000          0          1\n"
+            "      1001       1001      64536\n",
+            "65534\n",
+            None,
+        ),
+        ("      1000       1000          1\n     65534     165534          1\n", "65534\n", None),
+        # Unreadable or malformed evidence grants nothing.
+        ("      1000       1000\n", "65534\n", None),
+        ("      1000       1000          x\n", "65534\n", None),
+        ("", "65534\n", None),
         ("      1000       1000          1\n", "not-a-uid\n", None),
         (None, "65534\n", None),
         ("      1000       1000          1\n", None, None),
     ],
 )
-def test_unnameable_owner_uid_exists_only_inside_a_user_namespace(
+def test_overflow_uid_is_unnameable_only_when_no_mapped_range_contains_it(
     monkeypatch, tmp_path, uid_map, overflow, expected
 ) -> None:
     for name, constant, content in (

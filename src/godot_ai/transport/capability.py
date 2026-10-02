@@ -262,18 +262,25 @@ def _is_trusted_private_directory(
 def _unnameable_owner_uid() -> int | None:
     """The UID this user namespace reports for an owner it cannot name.
 
-    Flatpak, Steam's pressure-vessel and rootless containers run in a user
-    namespace that does not map the host's root, so a directory it owns reads
-    back as the kernel's overflow UID (65534). ``None`` in the initial
-    namespace, where every reported owner is a real account.
+    Flatpak and Steam's pressure-vessel run in a user namespace that maps only
+    the invoking user, so a directory owned by the host's root reads back as
+    the kernel's overflow UID (65534). ``None`` whenever a mapped range contains
+    that UID, because it is then a real account here: every owner in the
+    initial namespace, and ``nobody`` in a rootless container that maps a
+    subordinate ID range. A map that cannot be read or parsed is ``None`` too.
     """
 
     try:
-        if _USER_NAMESPACE_MAP.read_text(encoding="ascii").split() == ["0", "0", "4294967295"]:
-            return None
-        return int(_OVERFLOW_UID.read_text(encoding="ascii"))
+        fields = [int(field) for field in _USER_NAMESPACE_MAP.read_text(encoding="ascii").split()]
+        overflow_uid = int(_OVERFLOW_UID.read_text(encoding="ascii"))
     except (OSError, ValueError):
         return None
+    if not fields or len(fields) % 3:
+        return None
+    for start, length in zip(fields[0::3], fields[2::3], strict=True):
+        if start <= overflow_uid < start + length:
+            return None
+    return overflow_uid
 
 
 def _ancestors_of_home(unnameable_uid: int) -> frozenset[Path]:
@@ -309,9 +316,9 @@ def _reject_unsafe_posix_ancestors(path: Path) -> Path:
     The target's own components are walked under the same rules, so lexical
     ``..`` resolution against the already-resolved parent matches the kernel.
 
-    A trusted owner is root or this user. Inside a user namespace that does
-    not map the host's root (Flatpak, pressure-vessel, rootless containers), its
-    ``/home`` reads back as the overflow UID, so there the owner of
+    A trusted owner is root or this user. Inside a user namespace that maps
+    neither the host's root nor the overflow UID (Flatpak, pressure-vessel), the
+    host's ``/home`` reads back as the overflow UID, so there the owner of
     a directory above the home directory is not tested: that is where sshd's
     StrictModes stops too, because the administrator chose where homes live.
     Such a directory must still be closed to group/other writes, and the home

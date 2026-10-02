@@ -192,15 +192,16 @@ Godot AI 4.2.2 and later accept root- or current-user-owned links beneath
 protected parents and validates every target ancestor. Other-user ownership,
 writable parents, and symlink loops remain rejected.
 
-Flatpak, Steam's runtime, and rootless containers run in a user namespace that
-does not include the host's root account. Its `/home` (`/var/home` on Fedora
-Atomic, Bazzite, and other ostree systems) then reads back as an owner the
-sandbox cannot name, usually UID 65534, and Godot AI 4.2.3 and earlier refuse
-to start there. Later versions do not test the owner of a directory above
-your home directory when they run inside such a namespace, which is where
-OpenSSH's `StrictModes` stops too. That directory must still be closed to group
-and other writes. Your home directory and everything below it must still belong
-to you or root, and nothing is relaxed outside a user namespace.
+Flatpak and Steam's runtime run in a user namespace that maps only your own
+user. The host's root-owned `/home` (`/var/home` on Fedora Atomic, Bazzite, and
+other ostree systems) then reads back as an owner the sandbox cannot name,
+usually UID 65534, and Godot AI 4.2.3 and earlier refuse to start there. Later
+versions do not test the owner of a directory above your home directory when
+they run inside such a namespace, which is where OpenSSH's `StrictModes` stops
+too. That directory must still be closed to group and other writes. Your home
+directory and everything below it must still belong to you or root. Nothing is
+relaxed outside a user namespace, or inside one where UID 65534 is a real
+account, as in a rootless container that maps a subordinate ID range.
 
 A Flatpak editor that shares your home directory, as the Flathub Godot build
 does by default, publishes its credentials under the host's `~/.config/godot-ai`
