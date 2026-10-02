@@ -101,6 +101,9 @@ durable lock at the exact path reported by
 directory rather than `user://`, because global client configuration is shared
 by every Godot project for the account. The claim stays held through post-write
 status verification. Status probes and manual instructions remain lock-free.
+Inside a Flatpak editor the OS config directory is the per-app
+`~/.var/app/<id>/config`, so the lock is shared by every Flatpak editor for the
+account but not with an editor running outside the sandbox.
 
 An existing or malformed lock fails closed. If a timed-out CLI mutation cannot
 prove that its process tree terminated, the lock deliberately survives plugin
@@ -240,8 +243,14 @@ app's private config directly instead of relying on copy-on-write read-through
 from a fallback path. When that private leaf is absent, the first later
 existing candidate is a read-only seed: Configure starts from its complete
 contents, merges the new entry, and writes only the authoritative private
-target. If no wildcard package matches and no file exists, the first
-non-wildcard candidate is the deterministic create target. Ambiguous wildcard
+target. If no wildcard package matches and no file exists, the create target
+is the non-wildcard candidate whose own directories already exist, because the
+client has run from there, and the first non-wildcard candidate when none do.
+Candidates are compared level by level, from the directory that would hold
+the file upward, so a client nested in its host app's settings (a VS Code
+extension) follows the host app when its own directory exists nowhere. Only
+directories the templates name below their shared root count: a container
+such as `~/.config` exists whether or not the client does. Ambiguous wildcard
 groups return a structured resolution error that status, Configure, Remove,
 and manual instructions surface to the user. Claude Desktop uses this on
 Windows to select its MSIX `LocalCache/Roaming` config without hardcoding the
@@ -272,6 +281,93 @@ actionable diagnostic, such as an ambiguous package path or unreadable config.
 The dock renders one row per client with a status dot, Configure/Remove buttons,
 and a per-row "Run this manually" fallback for cases when auto-configure cannot
 find a CLI.
+
+### Linux: Flatpak editors and Flatpak clients
+
+Flatpak changes two things this layer depends on: where `XDG_CONFIG_HOME`
+points, and which directories a sandboxed process can see. Everything below
+was observed with the Flathub builds of Godot 4.7.2 and VS Code 1.139.1 under
+Flatpak 1.16.6.
+
+**The editor is a Flatpak.** Flatpak sets `XDG_CONFIG_HOME` to the editor's own
+`~/.var/app/org.godotengine.Godot/config`. A client path expanded from it (VS
+Code, VS Code Insiders, Zed, Cline, Kilo Code, Roo Code, Zoo Code, Trae, Claude
+Desktop) was written, read back, and reported as configured in a directory no
+client reads, and an existing config under `~/.config` was neither detected nor
+migrated. `McpPathTemplate.expand` now asks
+`McpTransportCapability.linux_config_home_variable` which variable holds the
+config home, the same rule that places the capability directory. When
+`/.flatpak-info` grants `host` or `home` read-write, `$XDG_CONFIG_HOME` reads
+`HOST_XDG_CONFIG_HOME`, which Flatpak sets only when the host had
+`XDG_CONFIG_HOME`, and falls back to `~/.config`. `HOST_XDG_CONFIG_HOME` is
+part of the warmed environment snapshot and `/.flatpak-info` is read once
+under the snapshot's mutex, so dock workers resolve the same path as the main
+thread (#691).
+
+A sandbox without that grant keeps its own variable, because Flatpak mounts an
+`xdg-config/<dir>` grant inside the per-app directory. Nothing else such a
+sandbox writes is visible outside it: its home directory is a private tmpfs.
+Configure still reports success for those paths, so set clients up by hand in
+that configuration.
+
+**What the entry launches.** The entry carries the launcher the sandboxed
+editor resolved, so that path has to exist outside the sandbox too. `uvx` from
+the standalone installer (`~/.local/bin`) and a development checkout's `.venv`
+both qualify. The sandbox's `/usr` and `/app` belong to Flatpak's runtime, not
+to the host: a distribution-packaged `uv` in the host's `/usr/bin` is invisible
+to the editor, which then reports that no launcher was found instead of
+writing one. The editor runs with `PATH=/app/bin:/usr/bin` and `SHELL=/bin/sh`,
+so the login-shell lookup reads `~/.profile` but not `~/.bash_profile` or
+`~/.zshrc`, and the well-known directories under the home directory are what
+usually find `uvx` and client CLIs. Claude Code from its
+native installer (`~/.local/bin/claude`, 2.1.287 checked) runs inside the
+sandbox, and `claude mcp add` writes the host-visible `~/.claude.json`; with no
+runnable CLI the JSON fallback writes the same file. The plugin never crosses
+the boundary with `flatpak-spawn --host`. The Configure-time prewarm fills the
+sandbox's own uv cache (`~/.var/app/<id>/cache/uv`), not the one a client
+outside the sandbox uses, so that client's first launch still builds its
+environment.
+
+**The client is a Flatpak.** A Flatpak IDE reads only its own
+`~/.var/app/<ide-id>/config`. VS Code (`com.visualstudio.code`, with Cline,
+Kilo Code, Roo Code and Zoo Code inside it) and Zed (`dev.zed.Zed`) declare
+that location as a second Linux entry in `config_path_candidates`, after
+`path_template`. VS Code's was confirmed with `code --add-mcp`, which writes
+`~/.var/app/com.visualstudio.code/config/Code/User/mcp.json`; Zed's follows
+from its source, where the Flatpak build restarts on the host with
+`FLATPAK_XDG_CONFIG_HOME` and reads `$FLATPAK_XDG_CONFIG_HOME/zed`. An editor
+outside Flatpak sees both locations and applies the candidate rules above: an
+existing file, then the location whose directories exist, then `~/.config`.
+With both builds installed, the one outside Flatpak is configured and the
+other needs the manual entry. A stray `~/.config/Code/User/mcp.json` left by an
+earlier Configure counts as an existing file; delete it if VS Code is
+installed only as a Flatpak.
+
+A Flatpak editor cannot see another Flatpak app's directory. Flatpak mounts a
+tmpfs over `~/.var/app` and binds only the running app's own directory into
+it, whatever `host` or `home` grant the app holds, so a file created under
+another app's path stays inside the sandbox. Such a candidate is therefore
+neither evidence nor a create target. When nothing shows the client outside
+Flatpak either, Configure writes nothing and returns the grant that makes the
+directory visible:
+
+```sh
+flatpak override --user \
+  --filesystem="$HOME/.var/app/com.visualstudio.code" org.godotengine.Godot
+```
+
+After Godot restarts, Configure writes into that directory. The resolution
+carries this as `create_error`, not `error`: status keeps reading the ordinary
+location and reports `not_configured`, so a client that is simply not
+installed does not turn its row into an error, and the manual instructions
+name both files. The entry works inside the IDE's sandbox when that sandbox
+shares the home directory, because the bridge finds the capability record by
+the same config-home rule; launching the written entry inside VS Code's
+sandbox returned `editor_state` from the sandboxed editor.
+
+No Flatpak location is declared for VS Code Insiders, whose Flathub beta
+package no longer installs, or for Trae and Claude Desktop, which have no
+Flathub build.
 
 ### Agents on another machine or in a container
 

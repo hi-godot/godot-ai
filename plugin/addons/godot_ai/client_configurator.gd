@@ -613,6 +613,8 @@ static func configure(id: String, url: String = "", launch_context: Dictionary =
 	if not client.automatic_config_edits:
 		return _manual_edit_result(client, "configure")
 	var path_error := _config_path_resolution_error(client)
+	if path_error.is_empty():
+		path_error = _config_create_error(client)
 	if not path_error.is_empty():
 		return {"status": "error", "message": path_error}
 	## Capture `url` once so a port flip in EditorSettings between write and
@@ -895,6 +897,16 @@ static func _config_path_resolution_error(client: Client) -> String:
 	if client.config_type == "cli":
 		return ""
 	return str(client.resolved_config_path_details().get("error", ""))
+
+
+## Why Configure must not create this client's file although status may still
+## read the path: `create_error` in `McpClient`'s candidate rules. Kept apart
+## from the function above, whose signature `script/local-self-update-smoke`
+## patches by exact match, in release trees as well as this one.
+static func _config_create_error(client: Client) -> String:
+	if client.config_type == "cli":
+		return ""
+	return str(client.resolved_config_path_details().get("create_error", ""))
 
 
 # --- Strategy dispatch + verify (testable seam) --------------------------
@@ -1240,6 +1252,16 @@ static func manual_command(id: String) -> String:
 	)
 	if cmd.is_empty():
 		return cmd
+	## The path above is the one outside Flatpak. When this sandboxed editor
+	## cannot see where a Flatpak build keeps the same file, that may be the
+	## wrong one for this user, and this text is all a refused Configure (or a
+	## manual-only client) leaves them to go on.
+	var hidden_paths: Variant = path_resolution.get("hidden_paths", null)
+	if hidden_paths is PackedStringArray and not hidden_paths.is_empty():
+		cmd += (
+			"\n\nA Flatpak build keeps this file at %s instead. Godot's own Flatpak "
+			+ "sandbox cannot see it, so edit that one if it is the build you use."
+		) % " or ".join(hidden_paths)
 	## #507: when the allow-host opt-in names a non-loopback range, also
 	## surface the LAN URL so the user can copy-paste the right address into
 	## a remote agent. Informational only — configure/remove still WRITE the

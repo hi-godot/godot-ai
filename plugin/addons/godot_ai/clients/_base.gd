@@ -79,10 +79,21 @@ var path_template: Dictionary = {}
 ##      a fallback path that may become invisible after copy-on-write. When
 ##      that private leaf is new, Configure seeds it from the first later
 ##      existing candidate so read-through content is not shadowed.
-##   2. If no file or wildcard package match exists, the first non-wildcard
-##      template is the deterministic create target.
+##   2. If no file or wildcard package match exists, the create target is the
+##      non-wildcard template whose own directories already exist, because the
+##      client has run from there (`_evident_create_path` gives the order),
+##      and otherwise the first non-wildcard template. This is what sends a
+##      Flatpak-only IDE's entry to `~/.var/app/<id>/config/...` instead of a
+##      `~/.config` it never reads.
 ##   3. Multiple matches within any wildcard group are ambiguous and fail
 ##      closed instead of choosing an arbitrary package.
+##   4. A template inside another Flatpak app's `~/.var/app/<id>` is never a
+##      create target while this editor's own Flatpak sandbox hides that
+##      directory (`McpPathTemplate.hidden_flatpak_app_dir`). When rule 2 then
+##      finds no existing directory among the rest, the resolution carries
+##      `create_error` and the unseen `hidden_paths`: status still reads the
+##      first template, and Configure refuses rather than create a file the
+##      client may never read.
 ##
 ## Exact-file and config-home environment overrides still have higher
 ## priority. When this map has no entry for the current platform,
@@ -404,7 +415,11 @@ func _resolve_ordered_config_path_candidates(templates: Variant) -> Dictionary:
 	var ordered_templates: Array = []
 	for template_variant in templates:
 		ordered_templates.append(str(template_variant))
-	var fallback_create_path := ""
+	## Candidates whose file does not exist yet and that Configure could create.
+	var create_templates := PackedStringArray()
+	var create_paths := PackedStringArray()
+	var hidden_app_dirs := PackedStringArray()
+	var hidden_paths := PackedStringArray()
 	for index in range(ordered_templates.size()):
 		var template := str(ordered_templates[index])
 		var expanded_template := McpPathTemplate.expand(template)
@@ -444,10 +459,113 @@ func _resolve_ordered_config_path_candidates(templates: Variant) -> Dictionary:
 				return {"path": "", "error": seed["error"]}
 			_clear_config_path_warning()
 			return {"path": path, "error": "", "seed_path": seed.get("path", "")}
-		if fallback_create_path.is_empty():
-			fallback_create_path = path
+		# Creating below a directory the sandbox hides would land on its
+		# private tmpfs and vanish with the editor, so a hidden candidate can
+		# be neither evidence nor a create target.
+		var hidden_app_dir := McpPathTemplate.hidden_flatpak_app_dir(path)
+		if not hidden_app_dir.is_empty():
+			hidden_paths.append(path)
+			if not hidden_app_dirs.has(hidden_app_dir):
+				hidden_app_dirs.append(hidden_app_dir)
+			continue
+		create_templates.append(template)
+		create_paths.append(path)
 	_clear_config_path_warning()
-	return {"path": fallback_create_path, "error": ""}
+	var evident_create_path := _evident_create_path(create_templates, create_paths)
+	if not evident_create_path.is_empty():
+		return {"path": evident_create_path, "error": ""}
+	var fallback_create_path := "" if create_paths.is_empty() else create_paths[0]
+	if hidden_app_dirs.is_empty():
+		return {"path": fallback_create_path, "error": ""}
+	var hidden_error := hidden_flatpak_config_error(
+		display_name, fallback_create_path.get_base_dir(), hidden_app_dirs
+	)
+	if fallback_create_path.is_empty():
+		return {"path": "", "error": hidden_error}
+	return {
+		"path": fallback_create_path,
+		"error": "",
+		"create_error": hidden_error,
+		"hidden_paths": hidden_paths,
+	}
+
+
+## The location the client has demonstrably run from, among candidates with no
+## config file yet; "" when nothing says. Candidates are compared level by
+## level, from the directory that would hold the file upward, and the first
+## level at which one of those directories exists decides, in descriptor order.
+## A client nested in its host app's settings (a VS Code extension) therefore
+## follows the host app when the extension's own directory exists nowhere,
+## instead of creating a second, unread copy of the host's settings tree.
+##
+## Only directories the templates name below their shared root are compared,
+## and only as many levels as the shortest template has. Those belong to the
+## client; a container such as ~/.config exists whether or not the client does.
+static func _evident_create_path(templates: PackedStringArray, paths: PackedStringArray) -> String:
+	if paths.is_empty():
+		return ""
+	var shared := _shared_root_length(templates)
+	var levels := -1
+	for template in templates:
+		var own_directories := template.split("/").size() - 1 - shared
+		levels = own_directories if levels < 0 else mini(levels, own_directories)
+	var directories := PackedStringArray()
+	for path in paths:
+		directories.append(path.get_base_dir())
+	for _level in range(maxi(levels, 0)):
+		for index in range(directories.size()):
+			if DirAccess.dir_exists_absolute(directories[index]):
+				return paths[index]
+		for index in range(directories.size()):
+			directories[index] = directories[index].get_base_dir()
+	return ""
+
+
+## How many leading path elements every template shares, counting the root
+## element (`$XDG_CONFIG_HOME`, `~`, a drive) and never the file name. At least
+## one: the root is never the client's own directory.
+static func _shared_root_length(templates: PackedStringArray) -> int:
+	if templates.size() < 2:
+		return 1
+	var first := templates[0].split("/")
+	var shared := first.size() - 1
+	for index in range(1, templates.size()):
+		var other := templates[index].split("/")
+		var limit := mini(shared, other.size() - 1)
+		var same := 0
+		while same < limit and first[same] == other[same]:
+			same += 1
+		shared = same
+	return maxi(shared, 1)
+
+
+## Why Configure will not create a client's settings file from inside a
+## Flatpak editor: nothing shows the client runs from the ordinary location,
+## and the location a Flatpak build of it uses cannot be inspected. Names the
+## one grant that lets this editor see it.
+static func hidden_flatpak_config_error(
+	client_name: String, settings_dir: String, hidden_app_dirs: PackedStringArray
+) -> String:
+	var app_id := McpPathTemplate.flatpak_app_id()
+	var grants := PackedStringArray()
+	for app_dir in hidden_app_dirs:
+		grants.append("--filesystem=%s" % app_dir)
+	var missing := (
+		"%s does not exist" % settings_dir
+		if not settings_dir.is_empty()
+		else "it has no settings location outside Flatpak"
+	)
+	return (
+		"Could not find where %s keeps its settings: %s, and a Flatpak build "
+		+ "keeps them under %s, which Godot's own Flatpak sandbox cannot see. "
+		+ "If you use the Flatpak build, run `flatpak override --user %s %s`, "
+		+ "restart Godot, and configure again. If it is installed outside "
+		+ "Flatpak, start it once so it creates its settings, then configure "
+		+ "again."
+	) % [
+		client_name, missing, ", ".join(hidden_app_dirs),
+		" ".join(grants), app_id if not app_id.is_empty() else "<Godot's Flatpak ID>",
+	]
 
 
 ## Find a readable seed for a newly-created authoritative wildcard target.

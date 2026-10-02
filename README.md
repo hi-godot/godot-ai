@@ -208,6 +208,15 @@ does by default, publishes its credentials under the host's `~/.config/godot-ai`
 (or the host's `XDG_CONFIG_HOME`) instead of Flatpak's per-app config
 directory, so an AI client outside the sandbox finds them without configuration.
 
+**Configure** from that editor writes client settings to the same host
+directories. Install `uv` with its standalone installer, so that `uvx` is in
+`~/.local/bin`: the sandbox cannot see a system package in `/usr/bin`. An IDE
+that is itself a Flatpak (VS Code, Zed) keeps its settings under its own
+`~/.var/app/<id>`, which a Flatpak Godot cannot see. Configure then stops and
+prints the `flatpak override` command that grants access; run it and restart
+Godot. Details:
+[client configuration](docs/client-configuration.md#linux-flatpak-editors-and-flatpak-clients).
+
 Use the [explicit shared-directory guide](docs/steam-capability-directory.md)
 on 4.2.3 and earlier, for a Flatpak editor that does not share your home
 directory, and whenever the startup error still names an untrusted ancestor

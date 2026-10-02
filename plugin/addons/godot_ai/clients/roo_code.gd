@@ -11,6 +11,14 @@ func _init() -> void:
 		"windows": "$APPDATA/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
 		"linux": "$XDG_CONFIG_HOME/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
 	}
+	## globalStorage follows VS Code's user data, which the Flathub build keeps
+	## in its own app directory (see vscode.gd).
+	config_path_candidates = {
+		"linux": [
+			path_template["linux"],
+			"~/.var/app/com.visualstudio.code/config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json",
+		],
+	}
 	server_key_path = PackedStringArray(["mcpServers"])
 	## Roo defaults an entry with no "type" to SSE transport — which returns
 	## HTTP 400 against our streamable-http endpoint on `/mcp`. Pin the type

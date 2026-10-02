@@ -39,16 +39,32 @@ reading. Release engineering: [docs/releasing.md](docs/releasing.md).
   connect without `GODOT_AI_CAPABILITY_DIR`. See the
   [setup guide](docs/steam-capability-directory.md) for editors that do not
   share it.
+- Configure from a Flatpak editor writes the files your AI clients read.
+  Flatpak points `XDG_CONFIG_HOME` at Godot's per-app directory, so VS Code,
+  VS Code Insiders, Zed, Cline, Kilo Code, Roo Code, Zoo Code, Trae, and
+  Claude Desktop were configured under
+  `~/.var/app/org.godotengine.Godot/config`, shown as configured, and never
+  saw the entry. A configuration already in `~/.config` was not detected or
+  updated either. An editor that shares your home directory now uses the
+  host's `~/.config`, or the host's `XDG_CONFIG_HOME`. Click **Configure**
+  again for those clients after updating.
+- VS Code and Zed installed as Flatpaks are configured in their own
+  `~/.var/app/<id>/config`, the only place they read. This covers Cline, Kilo
+  Code, Roo Code, and Zoo Code inside a Flatpak VS Code. Godot outside Flatpak
+  finds that directory by itself. Godot inside Flatpak cannot see another
+  app's directory, so when it finds no sign of the client outside Flatpak,
+  Configure stops and prints the `flatpak override` command that grants
+  access, instead of writing a file the client never reads. See
+  [client configuration](docs/client-configuration.md#linux-flatpak-editors-and-flatpak-clients).
 
 ### Known limitations
 
 The Steam path was exercised in a bubblewrap namespace laid out like Steam's
 pressure-vessel, not with the Steam client. Confirmation on a Steam install
 and on native Bazzite is pending in
-[#1113](https://github.com/hi-godot/godot-ai/issues/1113). Automatic client
-configuration from a Flatpak editor still writes clients whose settings live
-under `XDG_CONFIG_HOME` (VS Code, Zed, Cline, and similar) into Flatpak's
-per-app config directory; add `godot-ai attach` to those clients manually.
+[#1113](https://github.com/hi-godot/godot-ai/issues/1113). A Flatpak editor
+that does not share your home directory still reports Configure as successful
+for client files only its own sandbox can see; set clients up by hand there.
 
 ### Maintenance
 

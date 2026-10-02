@@ -14,6 +14,15 @@ func _init() -> void:
 		"windows": "$APPDATA/Code/User/mcp.json",
 		"linux": "$XDG_CONFIG_HOME/Code/User/mcp.json",
 	}
+	## The Flathub build keeps its user data in the app's own directory and
+	## never reads ~/.config/Code. Verified against com.visualstudio.code
+	## 1.139.1: `code --add-mcp` writes the second path, under `servers`.
+	config_path_candidates = {
+		"linux": [
+			path_template["linux"],
+			"~/.var/app/com.visualstudio.code/config/Code/User/mcp.json",
+		],
+	}
 	server_key_path = PackedStringArray(["servers"])
 	entry_extra_fields = {"type": "http"}
 	## Attach migration (#838). VS Code stdio entries are flat command/args/env

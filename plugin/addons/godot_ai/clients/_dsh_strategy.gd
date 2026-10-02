@@ -68,6 +68,10 @@ static func configure(
 		return {"status": "error", "message": path_error}
 	if path.is_empty():
 		return {"status": "error", "message": "Could not resolve config path for %s on this OS" % client.display_name}
+	## Set only while no candidate file exists, so this never blocks an update.
+	var create_error := str(resolution.get("create_error", ""))
+	if not create_error.is_empty():
+		return {"status": "error", "message": create_error}
 	## Fail closed before touching the file — same contract as JSON/TOML/YAML.
 	var launch_error := command_launch_error(client, launch)
 	if not launch_error.is_empty():

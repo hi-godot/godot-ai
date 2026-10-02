@@ -342,13 +342,17 @@ static func path_for_http_port(http_port: int) -> String:
 ## one, else the `~/.config` default. Python's `capability_directory` applies
 ## the same rule, so the server publishes where this reads.
 static func linux_config_home(flatpak_info: String) -> String:
-	var variable := (
-		"HOST_XDG_CONFIG_HOME" if flatpak_shares_home(flatpak_info) else "XDG_CONFIG_HOME"
-	)
-	var config := OS.get_environment(variable).strip_edges()
+	var config := OS.get_environment(linux_config_home_variable(flatpak_info)).strip_edges()
 	if config.is_empty():
 		config = OS.get_environment("HOME").path_join(".config")
 	return config
+
+
+## The variable that names that directory; unset or empty means `~/.config`.
+## Split out because `McpPathTemplate` must read it through its own
+## thread-safe environment snapshot rather than `OS.get_environment` (#691).
+static func linux_config_home_variable(flatpak_info: String) -> String:
+	return "HOST_XDG_CONFIG_HOME" if flatpak_shares_home(flatpak_info) else "XDG_CONFIG_HOME"
 
 
 ## Whether `/.flatpak-info` text describes a sandbox that can write the host's

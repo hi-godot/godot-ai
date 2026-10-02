@@ -21,6 +21,16 @@ func _init() -> void:
 		"linux": "$XDG_CONFIG_HOME/zed/settings.json",
 		"windows": "$APPDATA/Zed/settings.json",
 	}
+	## The Flathub build restarts itself on the host with
+	## FLATPAK_XDG_CONFIG_HOME set to its own app directory, and reads
+	## `$FLATPAK_XDG_CONFIG_HOME/zed` instead of ~/.config/zed
+	## (crates/paths/src/paths.rs, crates/cli/src/main.rs).
+	config_path_candidates = {
+		"linux": [
+			path_template["linux"],
+			"~/.var/app/dev.zed.Zed/config/zed/settings.json",
+		],
+	}
 	server_key_path = PackedStringArray(["context_servers"])
 	## Attach migration (#838). Current Zed's context_servers entries are an
 	## untagged serde enum discriminated by shape: `command` (string) + args/env

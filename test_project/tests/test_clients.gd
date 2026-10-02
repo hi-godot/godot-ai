@@ -1073,7 +1073,11 @@ func test_path_template_leaves_home_derived_tokens_in_place_without_home() -> vo
 	## a relative path — but it collapsed to `godot`, which names nothing the
 	## user could act on. Both spellings of the same intent now fail the same
 	## way, and both still say what failed.
-	const VARS := ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "APPDATA", "LOCALAPPDATA"]
+	## HOST_XDG_CONFIG_HOME is what `$XDG_CONFIG_HOME` reads when this suite
+	## runs inside a Flatpak editor that shares the home directory.
+	const VARS := [
+		"HOME", "USERPROFILE", "XDG_CONFIG_HOME", "HOST_XDG_CONFIG_HOME", "APPDATA", "LOCALAPPDATA",
+	]
 	var saved := {}
 	for var_name in VARS:
 		saved[var_name] = OS.get_environment(var_name)
@@ -1100,6 +1104,615 @@ func test_path_template_leaves_home_derived_tokens_in_place_without_home() -> vo
 			"%s must survive expansion unchanged when home is unresolvable" % templates[index])
 		assert_false(resolved[index].is_absolute_path(),
 			"%s must not expand to an absolute path" % templates[index])
+
+
+# ----- Flatpak editor: XDG_CONFIG_HOME is the sandbox's own directory -----
+
+const _SANDBOX_CONFIG_HOME := "/sandbox/app/config"
+const _XDG_CLIENT_TEMPLATE := "$XDG_CONFIG_HOME/Code/User/mcp.json"
+
+
+func test_xdg_config_home_is_the_host_directory_when_flatpak_shares_home() -> void:
+	## Flatpak points XDG_CONFIG_HOME at ~/.var/app/<id>/config. Expanding a
+	## client path from it wrote VS Code's mcp.json where VS Code never looks,
+	## read it back from there, and reported "configured".
+	var home := OS.get_environment("HOME")
+	if home.is_empty():
+		home = OS.get_environment("USERPROFILE")
+	var saved := _enter_environment({
+		"XDG_CONFIG_HOME": _SANDBOX_CONFIG_HOME, "HOST_XDG_CONFIG_HOME": "",
+	})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var host_default := McpPathTemplate.expand(_XDG_CLIENT_TEMPLATE)
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("home;"))
+	var home_grant := McpPathTemplate.expand(_XDG_CLIENT_TEMPLATE)
+	## Flatpak forwards the host's own XDG_CONFIG_HOME under this name, and
+	## only when the host had one.
+	OS.set_environment("HOST_XDG_CONFIG_HOME", "/host/config")
+	var host_named := McpPathTemplate.expand(_XDG_CLIENT_TEMPLATE)
+	_leave_environment(saved)
+
+	assert_false(home.is_empty(), "HOME / USERPROFILE not set in test environment")
+	assert_eq(host_default, home.path_join(".config/Code/User/mcp.json"),
+		"with no HOST_XDG_CONFIG_HOME the host's config directory is ~/.config")
+	assert_eq(home_grant, host_default, "a `home` grant shares the home like `host` does")
+	assert_eq(host_named, "/host/config/Code/User/mcp.json")
+
+
+func test_xdg_config_home_stays_the_sandbox_directory_without_a_home_grant() -> void:
+	## Flatpak mounts an `xdg-config/<dir>` grant inside the per-app directory,
+	## so a sandbox without the home reaches the host's files through its own
+	## variable. Outside Flatpak, HOST_XDG_CONFIG_HOME means nothing at all.
+	var saved := _enter_environment({
+		"XDG_CONFIG_HOME": _SANDBOX_CONFIG_HOME, "HOST_XDG_CONFIG_HOME": "/host/config",
+	})
+	var resolved := {}
+	for filesystems in ["xdg-run/speech-dispatcher;", "xdg-config/Code;", "home:ro;", "!home;~/projects;"]:
+		McpPathTemplate._set_flatpak_info_for_test(_flatpak_info(filesystems))
+		resolved["filesystems=%s" % filesystems] = McpPathTemplate.expand(_XDG_CLIENT_TEMPLATE)
+	McpPathTemplate._set_flatpak_info_for_test("")
+	resolved["not a Flatpak sandbox"] = McpPathTemplate.expand(_XDG_CLIENT_TEMPLATE)
+	_leave_environment(saved)
+
+	assert_eq(resolved.size(), 5)
+	for case in resolved:
+		assert_eq(resolved[case], _SANDBOX_CONFIG_HOME.path_join("Code/User/mcp.json"), case)
+
+
+func test_client_config_home_follows_the_capability_directory_rule() -> void:
+	## One rule decides both where the server publishes its credentials and
+	## where client configs are written. A second copy here could drift, and
+	## the editor would then configure clients for a directory other than the
+	## one their bridge reads.
+	var sharing := _flatpak_info("xdg-run/speech-dispatcher;host;")
+	var private := _flatpak_info("xdg-run/speech-dispatcher;")
+	assert_eq(McpTransportCapability.linux_config_home_variable(sharing), "HOST_XDG_CONFIG_HOME")
+	assert_eq(McpTransportCapability.linux_config_home_variable(private), "XDG_CONFIG_HOME")
+	assert_eq(McpTransportCapability.linux_config_home_variable(""), "XDG_CONFIG_HOME")
+
+	var saved := _enter_environment({
+		"XDG_CONFIG_HOME": _SANDBOX_CONFIG_HOME, "HOST_XDG_CONFIG_HOME": "/host/config",
+	})
+	var expanded := {}
+	var capability := {}
+	for info in [sharing, private, ""]:
+		McpPathTemplate._set_flatpak_info_for_test(info)
+		expanded[info] = McpPathTemplate.expand("$XDG_CONFIG_HOME")
+		capability[info] = McpTransportCapability.linux_config_home(info)
+	_leave_environment(saved)
+
+	assert_eq(expanded[sharing], "/host/config")
+	for info in expanded:
+		assert_eq(expanded[info], capability[info],
+			"client paths and the capability directory must share one config home")
+
+
+func test_flatpak_host_config_home_reaches_workers_from_the_snapshot() -> void:
+	## #691: dock workers resolve config paths off the main thread and may only
+	## read the warmed snapshot. Were HOST_XDG_CONFIG_HOME missing from it, a
+	## worker would fall back to ~/.config while the main thread named the
+	## host's directory, and the status sweep would look in a different file
+	## than Configure wrote.
+	var saved := _enter_environment({
+		"XDG_CONFIG_HOME": _SANDBOX_CONFIG_HOME, "HOST_XDG_CONFIG_HOME": "/host/warmed",
+	})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("host;"))
+	McpPathTemplate.warm_env_snapshot()
+	OS.set_environment("HOST_XDG_CONFIG_HOME", "/host/mutated-after-warm")
+	var thread := Thread.new()
+	var start_err := thread.start(func() -> String:
+		return McpPathTemplate.expand(_XDG_CLIENT_TEMPLATE)
+	)
+	var worker_path := str(thread.wait_to_finish()) if start_err == OK else ""
+	_leave_environment(saved)
+
+	assert_eq(start_err, OK, "worker thread must start")
+	assert_eq(worker_path, "/host/warmed/Code/User/mcp.json",
+		"a worker must resolve the host directory from the snapshot, not the live env")
+
+
+func test_flatpak_info_is_read_once_and_only_on_linux() -> void:
+	McpPathTemplate._set_flatpak_info_for_test("[Application]\nname=test.Injected\n")
+	var injected := McpPathTemplate._flatpak_info_text()
+	var injected_id := McpPathTemplate.flatpak_app_id()
+	McpPathTemplate._set_flatpak_info_for_test(null)
+	var forgotten := not McpPathTemplate._flatpak_info_read
+	var real := McpPathTemplate._flatpak_info_text()
+	var cached := McpPathTemplate._flatpak_info_read
+	var real_id := McpPathTemplate.flatpak_app_id()
+
+	assert_eq(injected, "[Application]\nname=test.Injected\n")
+	assert_eq(injected_id, "test.Injected")
+	assert_true(forgotten, "passing null must drop the stand-in")
+	assert_true(cached, "the first read must be kept for the life of the process")
+	## This suite also runs inside a real Flatpak editor, where the file exists.
+	var on_linux := OS.get_name() != "macOS" and OS.get_name() != "Windows"
+	assert_eq(real, McpTransportCapability._flatpak_info() if on_linux else "",
+		"only Linux has Flatpak; elsewhere the leading slash names a drive root")
+	assert_eq(real_id.is_empty(), real.is_empty())
+
+
+func test_hidden_flatpak_app_dir_is_reported_only_from_a_sandbox_that_hides_it() -> void:
+	var home := _fresh_scratch("flatpak_hidden_home")
+	DirAccess.make_dir_recursive_absolute(home.path_join(".var/app/org.godotengine.Godot/config"))
+	DirAccess.make_dir_recursive_absolute(home.path_join(".var/app/com.example.Granted/config"))
+	var hidden_file := home.path_join(".var/app/com.example.Ide/config/App/User/mcp.json")
+	var granted_file := home.path_join(".var/app/com.example.Granted/config/App/mcp.json")
+	var own_file := home.path_join(".var/app/org.godotengine.Godot/config/godot/editor.json")
+	var plain_file := home.path_join(".config/App/mcp.json")
+	var saved := _enter_environment({"HOME": home})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var in_sandbox := {}
+	for path in [hidden_file, granted_file, own_file, plain_file]:
+		in_sandbox[path] = McpPathTemplate.hidden_flatpak_app_dir(path)
+	McpPathTemplate._set_flatpak_info_for_test("")
+	var outside := McpPathTemplate.hidden_flatpak_app_dir(hidden_file)
+	_leave_environment(saved)
+	_remove_dir_recursive(home)
+
+	assert_eq(in_sandbox[hidden_file], home.path_join(".var/app/com.example.Ide"),
+		"another app's directory that the sandbox does not show is unknown, not absent")
+	assert_eq(in_sandbox[granted_file], "", "a granted directory is visible")
+	assert_eq(in_sandbox[own_file], "", "the editor's own directory is always mounted")
+	assert_eq(in_sandbox[plain_file], "", "only ~/.var/app is masked")
+	assert_eq(outside, "", "outside Flatpak a missing directory is simply absent")
+
+
+func test_xdg_client_configures_the_host_file_from_a_flatpak_editor() -> void:
+	## The reported failure end to end: Configure, the read-back verification
+	## and status must all name the host's ~/.config, and nothing may be left
+	## in the sandbox's per-app directory.
+	var root := _fresh_scratch("flatpak_host_config")
+	var sandbox_config := root.path_join(".var/app/org.godotengine.Godot/config")
+	var host_path := root.path_join(".config/Code/User/mcp.json")
+	## A config the host's client already has must be found, not shadowed.
+	_write_text(host_path, '{"servers":{"someone-else":{"command":"keep-me"}}}')
+	var client := _make_test_json_client(_XDG_CLIENT_TEMPLATE)
+	client.display_name = "XDG Client Test"
+	client.server_key_path = PackedStringArray(["servers"])
+	var saved := _enter_environment({
+		"HOME": root, "XDG_CONFIG_HOME": sandbox_config, "HOST_XDG_CONFIG_HOME": "",
+	})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var url := "http://127.0.0.1:8000/mcp"
+	var resolved := client.resolved_config_path()
+	var before := McpJsonStrategy.check_status(client, "godot-ai", url)
+	var configured := McpJsonStrategy.configure(client, "godot-ai", url)
+	var verified := McpClientConfigurator._verify_post_state(
+		client, configured, McpClient.Status.CONFIGURED, url, "configure"
+	)
+	var removed := McpJsonStrategy.remove(client, "godot-ai")
+	var after_remove := McpJsonStrategy.check_status(client, "godot-ai", url)
+	_leave_environment(saved)
+
+	assert_eq(resolved, host_path)
+	assert_eq(before, McpClient.Status.NOT_CONFIGURED)
+	assert_eq(configured.get("status"), "ok")
+	assert_eq(verified.get("status"), "ok", "verification must read the file Configure wrote")
+	assert_eq(removed.get("status"), "ok")
+	assert_eq(after_remove, McpClient.Status.NOT_CONFIGURED)
+	var remaining = JSON.parse_string(_read_text(host_path))
+	assert_true(remaining is Dictionary and remaining.get("servers", {}).has("someone-else"),
+		"the host's existing servers must survive")
+	assert_false(DirAccess.dir_exists_absolute(sandbox_config.path_join("Code")),
+		"nothing may be written into the sandbox's per-app config directory")
+	_remove_dir_recursive(root)
+
+
+func test_linux_xdg_descriptors_resolve_outside_the_flatpak_app_directory() -> void:
+	## Every shipped descriptor whose Linux path is rooted at XDG_CONFIG_HOME,
+	## driven through the real registry. Status detection and the post-update
+	## migration both start from this path.
+	if OS.get_name() == "macOS" or OS.get_name() == "Windows":
+		skip("Linux path templates")
+		return
+	var home := _fresh_scratch("flatpak_descriptor_home")
+	var vscode_storage := "Code/User/globalStorage"
+	var expected := {
+		"vscode": "Code/User/mcp.json",
+		"vscode_insiders": "Code - Insiders/User/mcp.json",
+		"zed": "zed/settings.json",
+		"cline": vscode_storage.path_join("saoudrizwan.claude-dev/settings/cline_mcp_settings.json"),
+		"kilo_code": vscode_storage.path_join("kilocode.kilo-code/settings/mcp_settings.json"),
+		"roo_code": vscode_storage.path_join("rooveterinaryinc.roo-cline/settings/mcp_settings.json"),
+		"zoo_code": vscode_storage.path_join("zoocodeorganization.zoo-code/settings/mcp_settings.json"),
+		"trae": "Trae/User/mcp.json",
+		"claude_desktop": "Claude/claude_desktop_config.json",
+	}
+	var saved := _enter_environment({
+		"HOME": home,
+		"XDG_CONFIG_HOME": home.path_join(".var/app/org.godotengine.Godot/config"),
+		"HOST_XDG_CONFIG_HOME": "",
+	})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var host_default := {}
+	for id in expected:
+		host_default[id] = McpClientRegistry.get_by_id(id).resolved_config_path()
+	OS.set_environment("HOST_XDG_CONFIG_HOME", "/host/config")
+	var host_named := {}
+	for id in expected:
+		host_named[id] = McpClientRegistry.get_by_id(id).resolved_config_path()
+	_leave_environment(saved)
+
+	## Fails when a descriptor is added with an XDG_CONFIG_HOME path and left
+	## out of the map above.
+	for id in McpClientRegistry.ids():
+		var client := McpClientRegistry.get_by_id(id)
+		if str(client.path_template.get("linux", "")).begins_with("$XDG_CONFIG_HOME"):
+			assert_true(expected.has(id), "%s resolves through XDG_CONFIG_HOME but is not covered" % id)
+	for id in expected:
+		assert_eq(host_default[id], home.path_join(".config").path_join(expected[id]), id)
+		assert_eq(host_named[id], "/host/config".path_join(expected[id]), id)
+
+
+# ----- Flatpak IDEs: settings under ~/.var/app/<ide-id> -----
+
+func test_candidate_create_target_follows_the_existing_settings_directory() -> void:
+	## A Flatpak-only IDE has no ~/.config/<App>, so that directory's absence
+	## and the per-app directory's presence say which file the IDE reads.
+	var root := _fresh_scratch("candidate_settings_dir")
+	var native_path := root.path_join("config/Code/User/mcp.json")
+	var flatpak_path := root.path_join("var-app/com.example.Ide/config/Code/User/mcp.json")
+	DirAccess.make_dir_recursive_absolute(flatpak_path.get_base_dir())
+	var client := _make_two_location_client(native_path, flatpak_path)
+	McpPathTemplate._set_flatpak_info_for_test("")
+	var url := "http://127.0.0.1:8000/mcp"
+	var resolution := client.resolved_config_path_details()
+	var configured := McpJsonStrategy.configure(client, "godot-ai", url)
+	var status := McpJsonStrategy.check_status(client, "godot-ai", url)
+	McpPathTemplate._set_flatpak_info_for_test(null)
+
+	assert_eq(resolution.get("path"), flatpak_path)
+	assert_eq(str(resolution.get("create_error", "")), "")
+	assert_eq(configured.get("status"), "ok")
+	assert_eq(status, McpClient.Status.CONFIGURED)
+	assert_true(FileAccess.file_exists(flatpak_path), "the entry must land where the IDE reads")
+	assert_false(DirAccess.dir_exists_absolute(root.path_join("config")),
+		"the location the IDE does not use must not be created")
+	_remove_dir_recursive(root)
+
+
+func test_candidate_existing_file_wins_over_an_earlier_settings_directory() -> void:
+	var root := _fresh_scratch("candidate_file_over_dir")
+	var native_path := root.path_join("config/Code/User/mcp.json")
+	var flatpak_path := root.path_join("var-app/com.example.Ide/config/Code/User/mcp.json")
+	DirAccess.make_dir_recursive_absolute(native_path.get_base_dir())
+	_write_text(flatpak_path, '{"mcpServers":{"someone-else":{"command":"keep-me"}}}')
+	var client := _make_two_location_client(native_path, flatpak_path)
+	McpPathTemplate._set_flatpak_info_for_test("")
+	var with_later_file := client.resolved_config_path()
+	_write_text(native_path, "{}")
+	var with_both_files := client.resolved_config_path()
+	McpPathTemplate._set_flatpak_info_for_test(null)
+
+	assert_eq(with_later_file, flatpak_path, "an existing file outranks an earlier bare directory")
+	assert_eq(with_both_files, native_path, "existing files win in descriptor order")
+	_remove_dir_recursive(root)
+
+
+func test_candidate_first_template_is_the_create_target_without_evidence() -> void:
+	## Unchanged default: nothing installed anywhere, or both locations in use.
+	var root := _fresh_scratch("candidate_no_evidence")
+	var native_path := root.path_join("config/Code/User/mcp.json")
+	var flatpak_path := root.path_join("var-app/com.example.Ide/config/Code/User/mcp.json")
+	var client := _make_two_location_client(native_path, flatpak_path)
+	McpPathTemplate._set_flatpak_info_for_test("")
+	var nothing_exists := client.resolved_config_path_details()
+	DirAccess.make_dir_recursive_absolute(native_path.get_base_dir())
+	DirAccess.make_dir_recursive_absolute(flatpak_path.get_base_dir())
+	var both_directories := client.resolved_config_path_details()
+	McpPathTemplate._set_flatpak_info_for_test(null)
+
+	assert_eq(nothing_exists.get("path"), native_path)
+	assert_eq(str(nothing_exists.get("create_error", "")), "",
+		"outside a sandbox a missing directory is absent, not hidden")
+	assert_eq(both_directories.get("path"), native_path, "descriptor order breaks the tie")
+	_remove_dir_recursive(root)
+
+
+func test_candidate_shared_root_directories_are_not_evidence() -> void:
+	## Both templates sit under one existing root, which says nothing about
+	## where the client keeps its settings. With neither location's own
+	## directories present the first template stays the create target, even
+	## though the second is the shallower path.
+	var root := _fresh_scratch("candidate_shared_root")
+	DirAccess.make_dir_recursive_absolute(root)
+	var deep_path := root.path_join("vendor/app/settings/mcp.json")
+	var shallow_path := root.path_join("app/mcp.json")
+	var client := _make_two_location_client(deep_path, shallow_path)
+	McpPathTemplate._set_flatpak_info_for_test("")
+	var without_evidence := client.resolved_config_path()
+	DirAccess.make_dir_recursive_absolute(shallow_path.get_base_dir())
+	var with_evidence := client.resolved_config_path()
+	McpPathTemplate._set_flatpak_info_for_test(null)
+
+	assert_eq(without_evidence, deep_path, "a shared container must not select a location")
+	assert_eq(with_evidence, shallow_path, "the location's own directory does")
+	_remove_dir_recursive(root)
+
+
+func test_hidden_flatpak_ide_refuses_configure_instead_of_writing_an_unread_file() -> void:
+	## A Flatpak editor cannot see another Flatpak app's ~/.var/app directory.
+	## With no sign of an install outside Flatpak either, writing ~/.config
+	## would report success for a file a Flatpak IDE never reads, and creating
+	## the per-app path would land on the sandbox's private tmpfs.
+	var home := _fresh_scratch("flatpak_blind_home")
+	var own_config := home.path_join(".var/app/org.godotengine.Godot/config")
+	DirAccess.make_dir_recursive_absolute(own_config)
+	var native_path := home.path_join(".config/Code/User/mcp.json")
+	var ide_dir := home.path_join(".var/app/com.example.Ide")
+	var flatpak_path := ide_dir.path_join("config/Code/User/mcp.json")
+	var client := _make_two_location_client(
+		_XDG_CLIENT_TEMPLATE, "~/.var/app/com.example.Ide/config/Code/User/mcp.json"
+	)
+	var saved := _enter_environment({
+		"HOME": home, "XDG_CONFIG_HOME": own_config, "HOST_XDG_CONFIG_HOME": "",
+	})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var url := "http://127.0.0.1:8000/mcp"
+	var resolution := client.resolved_config_path_details()
+	var configured := McpJsonStrategy.configure(client, "godot-ai", url)
+	var status := McpJsonStrategy.check_status_details(client, "godot-ai", url)
+	var facade_configure := McpClientConfigurator._config_create_error(client)
+	var facade_status := McpClientConfigurator._config_path_resolution_error(client)
+	_leave_environment(saved)
+
+	var create_error := str(resolution.get("create_error", ""))
+	assert_eq(resolution.get("path"), native_path, "status keeps reading the ordinary location")
+	assert_eq(resolution.get("error"), "", "an uninstalled client must not turn its row into an error")
+	assert_eq(resolution.get("hidden_paths"), PackedStringArray([flatpak_path]))
+	assert_contains(create_error, native_path.get_base_dir())
+	assert_contains(
+		create_error,
+		"flatpak override --user --filesystem=%s org.godotengine.Godot" % ide_dir,
+		"the refusal must carry the grant that fixes it",
+	)
+	assert_eq(configured.get("status"), "error")
+	assert_eq(configured.get("message"), create_error)
+	assert_eq(facade_configure, create_error, "Configure must stop before launch discovery")
+	assert_eq(facade_status, "")
+	assert_eq(status.get("status"), McpClient.Status.NOT_CONFIGURED)
+	assert_eq(status.get("error_msg"), "")
+	assert_false(DirAccess.dir_exists_absolute(home.path_join(".config")),
+		"a refused Configure must not create the ordinary location")
+	assert_false(DirAccess.dir_exists_absolute(ide_dir),
+		"nor a per-app directory that only this sandbox would see")
+	assert_false(DirAccess.dir_exists_absolute(own_config.path_join("Code")))
+	_remove_dir_recursive(home)
+
+
+func test_every_strategy_refuses_to_create_a_file_the_resolution_cannot_vouch_for() -> void:
+	## `create_error` is honoured where the file would be created, so a
+	## descriptor of any config type that gains a Flatpak location is covered,
+	## not only the JSON ones that have one today.
+	var home := _fresh_scratch("flatpak_blind_strategies")
+	var own_config := home.path_join(".var/app/org.godotengine.Godot/config")
+	DirAccess.make_dir_recursive_absolute(own_config)
+	var candidates := [
+		"$XDG_CONFIG_HOME/App/settings.conf",
+		"~/.var/app/com.example.Ide/config/App/settings.conf",
+	]
+	var yaml := McpClient.new()
+	yaml.id = "yaml_test"
+	yaml.display_name = "YAML Test"
+	yaml.config_type = "yaml"
+	yaml.server_key_path = PackedStringArray(["mcp_servers"])
+	var clients: Array[McpClient] = [
+		_make_test_json_client(candidates[0]),
+		_make_test_toml_client(candidates[0]),
+		yaml,
+		_make_test_dsh_client(candidates[0]),
+	]
+	for client in clients:
+		client.config_path_candidates = {
+			"darwin": candidates, "windows": candidates, "linux": candidates, "unix": candidates,
+		}
+	var saved := _enter_environment({
+		"HOME": home, "XDG_CONFIG_HOME": own_config, "HOST_XDG_CONFIG_HOME": "",
+	})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var url := "http://127.0.0.1:8000/mcp"
+	var results := {
+		"json": McpJsonStrategy.configure(clients[0], "godot-ai", url),
+		"toml": McpTomlStrategy.configure(clients[1], "godot-ai", url),
+		"yaml": McpYamlStrategy.configure(clients[2], "godot-ai", url),
+		"dsh": McpDshStrategy.configure(clients[3], "godot-ai", url, _test_attach_launch()),
+	}
+	_leave_environment(saved)
+
+	for config_type in results:
+		assert_eq(results[config_type].get("status"), "error", config_type)
+		assert_contains(str(results[config_type].get("message", "")), "flatpak override --user",
+			"%s must return the resolution's refusal" % config_type)
+	assert_false(DirAccess.dir_exists_absolute(home.path_join(".config")),
+		"no strategy may create the ordinary location")
+	assert_false(DirAccess.dir_exists_absolute(own_config.path_join("App")))
+	_remove_dir_recursive(home)
+
+
+func test_nested_client_follows_its_host_app_when_its_own_directory_is_missing() -> void:
+	## A VS Code extension keeps its settings inside VS Code's. With the
+	## extension's directory nowhere yet, taking the first location would build
+	## a second ~/.config/Code tree beside a Flatpak-only VS Code, and that
+	## stray tree would then pass for an install outside Flatpak.
+	var root := _fresh_scratch("candidate_nested_client")
+	var native_ide := root.path_join("config/Code/User")
+	var flatpak_ide := root.path_join("var-app/com.example.Ide/config/Code/User")
+	DirAccess.make_dir_recursive_absolute(flatpak_ide.path_join("globalStorage"))
+	var extension_file := "globalStorage/publisher.extension/settings/mcp_settings.json"
+	var extension := _make_two_location_client(
+		native_ide.path_join(extension_file), flatpak_ide.path_join(extension_file)
+	)
+	var ide := _make_two_location_client(
+		native_ide.path_join("mcp.json"), flatpak_ide.path_join("mcp.json")
+	)
+	McpPathTemplate._set_flatpak_info_for_test("")
+	var extension_target := extension.resolved_config_path()
+	var configured := McpJsonStrategy.configure(extension, "godot-ai", "http://127.0.0.1:8000/mcp")
+	var ide_target := ide.resolved_config_path()
+	McpPathTemplate._set_flatpak_info_for_test(null)
+
+	assert_eq(extension_target, flatpak_ide.path_join(extension_file),
+		"the extension's entry belongs inside the app that would host it")
+	assert_eq(configured.get("status"), "ok")
+	assert_eq(ide_target, flatpak_ide.path_join("mcp.json"),
+		"configuring the extension must not change where its host app is found")
+	assert_false(DirAccess.dir_exists_absolute(root.path_join("config")),
+		"no settings tree may appear for an install that does not exist")
+	_remove_dir_recursive(root)
+
+
+func test_hidden_flatpak_ide_does_not_block_an_install_outside_flatpak() -> void:
+	var home := _fresh_scratch("flatpak_native_ide_home")
+	var own_config := home.path_join(".var/app/org.godotengine.Godot/config")
+	DirAccess.make_dir_recursive_absolute(own_config)
+	var native_path := home.path_join(".config/Code/User/mcp.json")
+	## The app's own directory is enough; it need not have created User/ yet.
+	DirAccess.make_dir_recursive_absolute(home.path_join(".config/Code"))
+	var client := _make_two_location_client(
+		_XDG_CLIENT_TEMPLATE, "~/.var/app/com.example.Ide/config/Code/User/mcp.json"
+	)
+	var saved := _enter_environment({
+		"HOME": home, "XDG_CONFIG_HOME": own_config, "HOST_XDG_CONFIG_HOME": "",
+	})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var resolution := client.resolved_config_path_details()
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	_leave_environment(saved)
+
+	assert_eq(resolution.get("path"), native_path)
+	assert_eq(str(resolution.get("create_error", "")), "",
+		"a directory the client created is evidence enough to write there")
+	assert_eq(configured.get("status"), "ok")
+	assert_true(FileAccess.file_exists(native_path))
+	_remove_dir_recursive(home)
+
+
+func test_granted_flatpak_ide_is_configured_from_a_flatpak_editor() -> void:
+	## After `flatpak override --filesystem=~/.var/app/<ide-id>` the directory
+	## is visible, and the entry belongs in it.
+	var home := _fresh_scratch("flatpak_granted_ide_home")
+	var own_config := home.path_join(".var/app/org.godotengine.Godot/config")
+	DirAccess.make_dir_recursive_absolute(own_config)
+	var flatpak_path := home.path_join(".var/app/com.example.Ide/config/Code/User/mcp.json")
+	DirAccess.make_dir_recursive_absolute(flatpak_path.get_base_dir())
+	var client := _make_two_location_client(
+		_XDG_CLIENT_TEMPLATE, "~/.var/app/com.example.Ide/config/Code/User/mcp.json"
+	)
+	var saved := _enter_environment({
+		"HOME": home, "XDG_CONFIG_HOME": own_config, "HOST_XDG_CONFIG_HOME": "",
+	})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var resolution := client.resolved_config_path_details()
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
+	_leave_environment(saved)
+
+	assert_eq(resolution.get("path"), flatpak_path)
+	assert_eq(str(resolution.get("create_error", "")), "")
+	assert_eq(configured.get("status"), "ok")
+	assert_true(FileAccess.file_exists(flatpak_path))
+	assert_false(DirAccess.dir_exists_absolute(home.path_join(".config")))
+	_remove_dir_recursive(home)
+
+
+func test_flatpak_ide_descriptors_keep_path_template_as_the_first_candidate() -> void:
+	## `path_template` stays the documented location outside Flatpak, and the
+	## per-app candidate must name one Flatpak app's directory: that shape is
+	## what the hidden-directory rule recognises.
+	var with_flatpak_candidate := PackedStringArray()
+	for id in McpClientRegistry.ids():
+		var client := McpClientRegistry.get_by_id(id)
+		var candidates: Array = client.config_path_candidates.get("linux", [])
+		if candidates.is_empty():
+			continue
+		with_flatpak_candidate.append(id)
+		assert_eq(str(candidates[0]), str(client.path_template.get("linux", "")),
+			"%s: the first Linux candidate must be path_template" % id)
+		for index in range(1, candidates.size()):
+			assert_true(str(candidates[index]).begins_with("~/.var/app/"),
+				"%s: %s is not a Flatpak per-app path" % [id, candidates[index]])
+	with_flatpak_candidate.sort()
+	assert_eq(
+		with_flatpak_candidate,
+		PackedStringArray(["cline", "kilo_code", "roo_code", "vscode", "zed", "zoo_code"]),
+		"VS Code, its extensions and Zed are the clients with a maintained Flathub build",
+	)
+
+
+func test_linux_descriptors_find_a_flatpak_ide_from_an_editor_outside_flatpak() -> void:
+	if OS.get_name() == "macOS" or OS.get_name() == "Windows":
+		skip("Linux path templates")
+		return
+	var home := _fresh_scratch("flatpak_ide_descriptor_home")
+	var vscode_user := ".var/app/com.visualstudio.code/config/Code/User"
+	var expected := {
+		"vscode": vscode_user.path_join("mcp.json"),
+		"cline": vscode_user.path_join(
+			"globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
+		),
+		"kilo_code": vscode_user.path_join("globalStorage/kilocode.kilo-code/settings/mcp_settings.json"),
+		"roo_code": vscode_user.path_join(
+			"globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json"
+		),
+		"zoo_code": vscode_user.path_join(
+			"globalStorage/zoocodeorganization.zoo-code/settings/mcp_settings.json"
+		),
+		"zed": ".var/app/dev.zed.Zed/config/zed/settings.json",
+	}
+	## What a Flatpak IDE that has been started leaves behind. No extension has
+	## run, so each one is found through VS Code's own directories.
+	DirAccess.make_dir_recursive_absolute(home.path_join(vscode_user).path_join("globalStorage"))
+	DirAccess.make_dir_recursive_absolute(home.path_join(".var/app/dev.zed.Zed/config/zed"))
+	var saved := _enter_environment({"HOME": home, "XDG_CONFIG_HOME": "", "HOST_XDG_CONFIG_HOME": ""})
+	McpPathTemplate._set_flatpak_info_for_test("")
+	var resolved := {}
+	for id in expected:
+		resolved[id] = McpClientRegistry.get_by_id(id).resolved_config_path_details()
+	_leave_environment(saved)
+
+	for id in expected:
+		assert_eq(resolved[id].get("path"), home.path_join(expected[id]), id)
+		assert_eq(str(resolved[id].get("create_error", "")), "", id)
+	_remove_dir_recursive(home)
+
+
+func test_linux_manual_instructions_name_the_flatpak_file_the_editor_cannot_see() -> void:
+	## A refused Configure leaves the user with this text, and Zed is always
+	## edited by hand: naming only ~/.config would send a Flatpak-IDE user to a
+	## file the IDE never reads.
+	if OS.get_name() == "macOS" or OS.get_name() == "Windows":
+		skip("Linux path templates")
+		return
+	var home := _fresh_scratch("flatpak_manual_home")
+	var own_config := home.path_join(".var/app/org.godotengine.Godot/config")
+	DirAccess.make_dir_recursive_absolute(own_config)
+	## Resolve the attach launcher under the real HOME first. It is cached per
+	## launch context, so the calls below reuse it instead of searching the
+	## scratch home and caching "no launcher" for the rest of the session.
+	McpClientConfigurator.resolve_attach_launch(McpClientConfigurator.capture_launch_context())
+	var saved := _enter_environment({
+		"HOME": home, "XDG_CONFIG_HOME": own_config, "HOST_XDG_CONFIG_HOME": "",
+	})
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var blind := McpClientConfigurator.manual_command("zed")
+	var refused := McpClientConfigurator.configure("vscode")
+	McpPathTemplate._set_flatpak_info_for_test("")
+	var outside := McpClientConfigurator.manual_command("zed")
+	_leave_environment(saved)
+
+	var flatpak_settings := home.path_join(".var/app/dev.zed.Zed/config/zed/settings.json")
+	assert_contains(blind, home.path_join(".config/zed/settings.json"))
+	assert_contains(blind, "A Flatpak build keeps this file at %s instead" % flatpak_settings)
+	assert_false(outside.contains("A Flatpak build keeps this file"),
+		"outside a sandbox nothing is hidden, so there is nothing to add")
+	assert_eq(refused.get("status"), "error")
+	assert_contains(
+		str(refused.get("message", "")),
+		"--filesystem=%s" % home.path_join(".var/app/com.visualstudio.code"),
+	)
+	assert_false(DirAccess.dir_exists_absolute(home.path_join(".config")),
+		"the refused Configure must not have written anything")
+	_remove_dir_recursive(home)
 
 
 func test_path_candidate_expansion_supports_directory_wildcard_and_missing_leaf() -> void:
@@ -4299,6 +4912,9 @@ func test_zed_attach_entry_scrubs_every_http_only_key() -> void:
 func test_zed_configure_and_remove_never_mutate_jsonc() -> void:
 	var client := McpClientRegistry.get_by_id("zed")
 	var saved_paths: Dictionary = client.path_template.duplicate(true)
+	## Linux resolves through the candidates, which would bypass the redirect.
+	var saved_candidates := client.config_path_candidates
+	client.config_path_candidates = {}
 	var path := _scratch_dir.path_join("zed-manual-only.json")
 	var body := "// Zed settings\n{\n\t\"context_servers\": {}\n}\n"
 	var file := FileAccess.open(path, FileAccess.WRITE)
@@ -4311,13 +4927,16 @@ func test_zed_configure_and_remove_never_mutate_jsonc() -> void:
 		"unix": path,
 	}
 
+	var resolved := client.resolved_config_path()
 	var configured := McpClientConfigurator.configure("zed", "http://127.0.0.1:8000/mcp")
 	var removed := McpClientConfigurator.remove("zed", "http://127.0.0.1:8000/mcp")
 	var check := FileAccess.open(path, FileAccess.READ)
 	var after := check.get_as_text()
 	check.close()
 	client.path_template = saved_paths
+	client.config_path_candidates = saved_candidates
 
+	assert_eq(resolved, path, "the descriptor must be aimed at the scratch file")
 	assert_eq(configured.get("status"), "error")
 	assert_contains(str(configured.get("message", "")), "manual edit")
 	assert_eq(removed.get("status"), "error")
@@ -4345,6 +4964,9 @@ func test_zed_status_reads_stock_jsonc_settings() -> void:
 	## A default install carries a comment header and must show a real status.
 	var client := McpClientRegistry.get_by_id("zed")
 	var saved_paths: Dictionary = client.path_template.duplicate(true)
+	## Linux resolves through the candidates, which would bypass the redirect.
+	var saved_candidates := client.config_path_candidates
+	client.config_path_candidates = {}
 	var path := _scratch_dir.path_join("zed-stock-jsonc.json")
 	var launch := _test_attach_launch()
 	client.path_template = {"darwin": path, "linux": path, "windows": path, "unix": path}
@@ -4360,6 +4982,7 @@ func test_zed_status_reads_stock_jsonc_settings() -> void:
 	var present := McpJsonStrategy.check_status_details(client, "godot-ai", "http://unused", launch)
 
 	client.path_template = saved_paths
+	client.config_path_candidates = saved_candidates
 	_remove_if_exists(path)
 
 	assert_eq(
@@ -5562,6 +6185,67 @@ func _make_candidate_json_client(root: String, roaming_path: String) -> McpClien
 	return client
 
 
+## A client with one settings location outside Flatpak and one a Flatpak build
+## of it would use, in the order the shipped descriptors declare them.
+func _make_two_location_client(native_path: String, flatpak_path: String) -> McpClient:
+	var client := _make_test_json_client(native_path)
+	client.display_name = "Two Location Test"
+	var candidates := [native_path, flatpak_path]
+	client.config_path_candidates = {
+		"darwin": candidates,
+		"windows": candidates,
+		"linux": candidates,
+		"unix": candidates,
+	}
+	return client
+
+
+## `/.flatpak-info` as Flatpak 1.16.6 writes it for the Flathub Godot build,
+## with the sandbox's filesystem grants substituted.
+func _flatpak_info(filesystems: String) -> String:
+	return (
+		"[Application]\nname=org.godotengine.Godot\n"
+		+ "runtime=runtime/org.freedesktop.Sdk/x86_64/25.08\n\n"
+		+ "[Instance]\nflatpak-version=1.16.6\nsession-bus-proxy=true\n\n"
+		+ "[Context]\nshared=network;ipc;\nsockets=x11;pulseaudio;\ndevices=all;\n"
+		+ "filesystems=%s\n\n"
+		+ "[Session Bus Policy]\norg.freedesktop.Flatpak=talk\n"
+	) % filesystems
+
+
+## An empty starting point for a fixture tree. Fails the test when a previous
+## run's files survive: most of these tests turn on a file being absent.
+func _fresh_scratch(name: String) -> String:
+	var path := _scratch_dir.path_join(name)
+	_remove_dir_recursive(path)
+	assert_false(DirAccess.dir_exists_absolute(path), "stale fixture at %s" % path)
+	return path
+
+
+## Set each variable ("" unsets it) and return what `_leave_environment` restores.
+func _enter_environment(values: Dictionary) -> Dictionary:
+	var saved := {}
+	for variable in values:
+		saved[variable] = OS.get_environment(variable)
+		if str(values[variable]).is_empty():
+			OS.unset_environment(variable)
+		else:
+			OS.set_environment(variable, str(values[variable]))
+	return saved
+
+
+## Restore the environment, forget any stand-in for `/.flatpak-info`, and
+## re-warm the snapshot so no worker keeps serving a test's values.
+func _leave_environment(saved: Dictionary) -> void:
+	for variable in saved:
+		if str(saved[variable]).is_empty():
+			OS.unset_environment(variable)
+		else:
+			OS.set_environment(variable, str(saved[variable]))
+	McpPathTemplate._set_flatpak_info_for_test(null)
+	McpClientConfigurator.warm_env_snapshot()
+
+
 func _make_test_toml_client(path: String) -> McpClient:
 	var c := McpClient.new()
 	c.id = "toml_test"
@@ -5621,6 +6305,9 @@ func _remove_dir_recursive(path: String) -> void:
 	var dir := DirAccess.open(path)
 	if dir == null:
 		return
+	## Home-directory fixtures are made of dot-directories (.config, .var). Left
+	## behind, they would hand the next run a file where it expects none.
+	dir.include_hidden = true
 	for file_name in dir.get_files():
 		DirAccess.remove_absolute(path.path_join(file_name))
 	for dir_name in dir.get_directories():

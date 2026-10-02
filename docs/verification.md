@@ -139,6 +139,17 @@ so the same environment resolves inside and outside. Then:
   real home restored for `flatpak` itself. The editor's PID is namespaced, so
   `run_godot_editor`'s `require_same_editor` comparison with the launcher PID
   cannot hold there; compare the two editor receipts instead.
+- For client configuration, call `client_manage` through the bridge from
+  outside the sandbox and check where each file landed: the host's `~/.config`,
+  never `~/.var/app/org.godotengine.Godot/config`. Use a real Flatpak client
+  for the other half (`flatpak --user install flathub com.visualstudio.code`).
+  `dbus-run-session -- flatpak run --user com.visualstudio.code --add-mcp
+  '{"name":"probe","command":"true"}'` shows where it keeps `mcp.json` without
+  a display, and the editor sees that directory only after
+  `flatpak override --user --filesystem="$HOME/.var/app/com.visualstudio.code"
+  org.godotengine.Godot` and a restart. A bridge started by a probe starts a
+  backend of its own when none is running; stop it before launching the next
+  editor, which would otherwise adopt it.
 
 1. Run the same Ruff scope as CI — production, tests, the `script/` Python
    package, and the executable Python release/smoke scripts:

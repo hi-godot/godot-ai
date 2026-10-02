@@ -11,6 +11,14 @@ func _init() -> void:
 		"windows": "$APPDATA/Code/User/globalStorage/zoocodeorganization.zoo-code/settings/mcp_settings.json",
 		"linux": "$XDG_CONFIG_HOME/Code/User/globalStorage/zoocodeorganization.zoo-code/settings/mcp_settings.json",
 	}
+	## globalStorage follows VS Code's user data, which the Flathub build keeps
+	## in its own app directory (see vscode.gd).
+	config_path_candidates = {
+		"linux": [
+			path_template["linux"],
+			"~/.var/app/com.visualstudio.code/config/Code/User/globalStorage/zoocodeorganization.zoo-code/settings/mcp_settings.json",
+		],
+	}
 	server_key_path = PackedStringArray(["mcpServers"])
 	## Local validation against the installed extension shows Zoo stores MCP
 	## entries in `settings/mcp_settings.json` under `mcpServers`, matching Roo's

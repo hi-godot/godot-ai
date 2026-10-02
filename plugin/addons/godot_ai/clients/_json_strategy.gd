@@ -23,6 +23,10 @@ static func configure(
 		return {"status": "error", "message": path_error}
 	if path.is_empty():
 		return {"status": "error", "message": "Could not resolve config path for %s on this OS" % client.display_name}
+	## Set only while no candidate file exists, so this never blocks an update.
+	var create_error := str(resolution.get("create_error", ""))
+	if not create_error.is_empty():
+		return {"status": "error", "message": create_error}
 
 	var seed_path := str(resolution.get("seed_path", ""))
 	var read_path := seed_path if not FileAccess.file_exists(path) and not seed_path.is_empty() else path
