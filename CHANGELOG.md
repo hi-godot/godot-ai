@@ -20,6 +20,12 @@ reading. Release engineering: [docs/releasing.md](docs/releasing.md).
   `GODOT_AI_TELEMETRY_FLUSH_INTERVAL` overrides the interval for self-hosters
   and smoke tests. See [docs/TELEMETRY.md](docs/TELEMETRY.md).
 
+### Maintenance
+
+- Upgrade FastMCP and fastmcp-slim from 4.0.5 to 4.0.10, HTTPX2 and HTTPCore2
+  from 2.13.0 to 2.13.1, Uvicorn from 0.53.0 to 0.54.0, and Starlette from
+  1.6.0 to 1.7.0.
+
 ## 4.2.3 (2026-09-24)
 
 Preserve startup failure evidence and clean up backend credentials on orderly
