@@ -36,6 +36,9 @@ _FLATPAK_INFO = Path("/.flatpak-info")
 _FLATPAK_HOME_GRANTS = frozenset(
     {"host", "host:rw", "host:create", "home", "home:rw", "home:create"}
 )
+# Every read-write spelling of the grant that exposes the host's whole config
+# directory without the home around it.
+_FLATPAK_CONFIG_GRANTS = frozenset({"xdg-config", "xdg-config:rw", "xdg-config:create"})
 _USER_NAMESPACE_MAP = Path("/proc/self/uid_map")
 _OVERFLOW_UID = Path("/proc/sys/kernel/overflowuid")
 
@@ -153,8 +156,8 @@ def capability_directory() -> Path:
     else:
         # Flatpak points XDG_CONFIG_HOME at the app's own ~/.var/app/<id>/config,
         # which a client outside that sandbox never reads. When the sandbox
-        # shares the real home, use the directory the host itself names.
-        name = "HOST_XDG_CONFIG_HOME" if _flatpak_shares_home() else "XDG_CONFIG_HOME"
+        # shares the host's config directory, use the one the host itself names.
+        name = "HOST_XDG_CONFIG_HOME" if _flatpak_shares_config_home() else "XDG_CONFIG_HOME"
         config = os.environ.get(name, "").strip()
         if config:
             base = Path(config).expanduser()
@@ -179,17 +182,38 @@ def _flatpak_shares_home() -> bool:
     directories as the only ones a process outside the sandbox can also see.
     """
 
+    return not _FLATPAK_HOME_GRANTS.isdisjoint(_flatpak_filesystem_grants())
+
+
+def _flatpak_shares_config_home() -> bool:
+    """Whether this is a Flatpak sandbox that can write the host's config directory.
+
+    True when it shares the home, and for a read-write grant of the whole of
+    ``xdg-config``: Flatpak mounts that one at the host's path only and leaves
+    ``XDG_CONFIG_HOME`` on the per-app directory. An ``xdg-config/<dir>`` grant
+    does not count, because Flatpak mounts it inside the per-app directory as
+    well, so ``XDG_CONFIG_HOME`` already reaches it.
+    """
+
+    return _flatpak_shares_home() or not _FLATPAK_CONFIG_GRANTS.isdisjoint(
+        _flatpak_filesystem_grants()
+    )
+
+
+def _flatpak_filesystem_grants() -> list[str]:
+    """The ``[Context] filesystems=`` entries of ``/.flatpak-info``; empty outside Flatpak."""
+
     try:
         lines = _FLATPAK_INFO.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
-        return False
+        return []
     group = ""
     for line in lines:
         if line.startswith("["):
             group = line.strip()
         elif group == "[Context]" and line.startswith("filesystems="):
-            return not _FLATPAK_HOME_GRANTS.isdisjoint(line.partition("=")[2].split(";"))
-    return False
+            return line.partition("=")[2].split(";")
+    return []
 
 
 def record_path(http_port: int, directory: Path | None = None) -> Path:

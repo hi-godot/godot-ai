@@ -33,12 +33,13 @@ reading. Release engineering: [docs/releasing.md](docs/releasing.md).
   is relaxed outside a sandbox, or in a container where UID 65534 is a real
   account. The same rule covers Steam's runtime
   ([#1113](https://github.com/hi-godot/godot-ai/issues/1113)).
-- A Flatpak editor that shares your home directory publishes its credentials
-  under the host's `~/.config/godot-ai` instead of Flatpak's per-app config
-  directory, so AI clients outside the sandbox, or in a sandbox of their own,
-  connect without `GODOT_AI_CAPABILITY_DIR`. See the
-  [setup guide](docs/steam-capability-directory.md) for editors that do not
-  share it.
+- A Flatpak editor that shares your home directory, or the whole of
+  `xdg-config`, publishes its credentials under the host's
+  `~/.config/godot-ai` instead of Flatpak's per-app config directory, so AI
+  clients outside the sandbox, or in a sandbox of their own, connect without
+  `GODOT_AI_CAPABILITY_DIR`. See the
+  [setup guide](docs/steam-capability-directory.md) for editors that share
+  neither.
 - Configure from a Flatpak editor writes the files your AI clients read.
   Flatpak points `XDG_CONFIG_HOME` at Godot's per-app directory, so VS Code,
   VS Code Insiders, Zed, Cline, Kilo Code, Roo Code, Zoo Code, Trae, and
@@ -56,15 +57,25 @@ reading. Release engineering: [docs/releasing.md](docs/releasing.md).
   Configure stops and prints the `flatpak override` command that grants
   access, instead of writing a file the client never reads. See
   [client configuration](docs/client-configuration.md#linux-flatpak-editors-and-flatpak-clients).
+- A Flatpak editor that cannot write the file a client reads no longer shows
+  that client as configured. With Godot's home access removed (Flatseal, or
+  `flatpak override --nofilesystem=host`), the sandbox's home directory is
+  private: Configure wrote `~/.cursor/mcp.json` there, reported success, and
+  the host never had the file. Configure and Remove now stop and name the
+  `flatpak override` that grants access. A sandbox granted only some
+  directories (`--filesystem=~/.cursor`, `--filesystem=xdg-config/Code`)
+  configures the clients kept in them, provided Godot AI's own credentials
+  are shared too (`--filesystem=xdg-config/godot-ai:create`): without them
+  the client could not connect, so Configure stops and names that grant.
+  Status under a read-only grant shows what the client really has. See the
+  [setup guide](docs/steam-capability-directory.md#client-configuration-from-a-restricted-flatpak-sandbox).
 
 ### Known limitations
 
 The Steam path was exercised in a bubblewrap namespace laid out like Steam's
 pressure-vessel, not with the Steam client. Confirmation on a Steam install
 and on native Bazzite is pending in
-[#1113](https://github.com/hi-godot/godot-ai/issues/1113). A Flatpak editor
-that does not share your home directory still reports Configure as successful
-for client files only its own sandbox can see; set clients up by hand there.
+[#1113](https://github.com/hi-godot/godot-ai/issues/1113).
 
 ### Maintenance
 

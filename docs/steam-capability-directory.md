@@ -5,7 +5,8 @@ Flatpak or Steam's runtime and shares your home directory with the host. Use
 this guide for:
 
 - Godot AI 4.2.3 and earlier in any Flatpak or Steam sandbox;
-- a Flatpak editor that does not share your home directory;
+- a Flatpak editor that does not share your home directory, including the
+  message **Configure** returns there;
 - a startup error that still names a capability-path ancestor owned by a UID
   other than root or your current user.
 
@@ -36,6 +37,61 @@ Give the outside AI client the same value as described under
 Flatpak creates the directory when the app starts, so start Godot before the
 client. `flatpak override --user --show org.godotengine.Godot` lists what is
 set.
+
+## Client configuration from a restricted Flatpak sandbox
+
+The Flathub Godot build shares your home directory. If you removed that
+access (Flatseal, or `flatpak override --nofilesystem=host`), the sandbox's
+home directory is private, and nothing Godot writes there reaches your AI
+clients. **Configure** and **Remove** then stop with a message instead of
+writing a file only the sandbox can see. There are three ways forward.
+
+Share the home directory again. This is what the message suggests, and
+nothing else is needed afterwards:
+
+```sh
+flatpak override --user --filesystem=home org.godotengine.Godot
+```
+
+Share only what Godot AI needs: the directory each client keeps its settings
+in, and the directory Godot AI publishes its credentials in. For Cursor and VS
+Code:
+
+```sh
+flatpak override --user org.godotengine.Godot \
+  --filesystem=~/.cursor \
+  --filesystem=xdg-config/Code \
+  --filesystem=xdg-config/godot-ai:create
+```
+
+`--filesystem=xdg-config` on its own covers the credentials and every client
+that keeps its settings under `~/.config`. Flatpak mounts a granted directory
+only if it exists when Godot starts, so start the client once first, or add
+`:create` as on the last line. Grant the directory, not the settings file: a
+grant for the file alone can be read but not replaced. Restart Godot after
+changing an override. `flatpak override --user --show org.godotengine.Godot`
+lists what is set.
+
+Godot also has to see the launcher the entry names. A restricted sandbox does
+not see `uvx` in your home directory, and Configure then reports that no
+launcher was found
+([client configuration](client-configuration.md#linux-flatpak-editors-and-flatpak-clients)).
+
+Or leave the sandbox as it is and add the entry by hand. The client row's
+**Run this manually** panel in the dock shows it whenever Godot can see a
+launcher, and
+[the remote-agent recipe](client-configuration.md#agents-on-another-machine-or-in-a-container)
+shows the command otherwise. Put it in the client's own settings file, then
+give Godot and the client the per-app runtime directory above, so the
+client's bridge finds Godot's credentials.
+
+Without the credentials directory a client entry would be correct but could
+not connect: the bridge the client starts looks in `~/.config/godot-ai`, and
+a sandbox that shares neither your home nor `xdg-config` publishes inside
+`~/.var/app/org.godotengine.Godot`. Configure stops there as well and names
+the `xdg-config/godot-ai:create` grant, unless Godot was started with
+`GODOT_AI_CAPABILITY_DIR`, which is your own arrangement to complete on the
+client's side.
 
 ## Choose and verify a shared location
 
@@ -118,6 +174,25 @@ ran through a driver outside the sandbox, `godot-ai attach` connected from the
 host and from a second Flatpak sandbox, and exact 3.2.1 and 3.2.5 installs
 updated into it. The same checks fail on 4.2.3. The per-app runtime directory
 above was verified with an unmodified 4.2.3 editor and client.
+
+Client configuration from a restricted sandbox was verified with the same
+build on the ostree-style layout. With `--nofilesystem=host`, Configure and
+Remove refused for Cursor, Trae, VS Code, Claude Code, OpenCode and Codex and
+wrote nothing, where the previous code reported each as configured. With
+`~/.cursor`, `xdg-config/Code` and `xdg-config/Trae:create` granted, the
+entries landed in the host's files. A grant for a directory that did not
+exist, a `--nofilesystem` rule under `home`, a grant for `~/.claude.json`
+alone, and `home:ro` were each refused with their own message, and status
+under `home:ro` still reported the clients configured on the host. With the
+whole of `xdg-config` granted, the credentials were published in the host's
+`~/.config/godot-ai` and a driver outside the sandbox connected without
+`GODOT_AI_CAPABILITY_DIR`. With `~/.cursor` granted alone, Configure refused
+and named the credentials grant, where an earlier build wrote an entry whose
+bridge found no record. With `xdg-config/godot-ai:create` added, the entry it
+wrote connected when launched from outside. With a stand-in for the `claude`
+CLI visible in a sandbox without the home, the previous code ran it there and
+reported Claude Code configured from a `~/.claude.json` the host never had;
+Configure and Remove now refuse before running it.
 
 The ownership rule was also exercised in a bubblewrap namespace laid out like
 Steam's pressure-vessel. It has not been run against the Steam client itself.

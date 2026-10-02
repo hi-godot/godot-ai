@@ -30,6 +30,9 @@ static func configure(
 	server_url: String,
 	launch: Dictionary = {},
 ) -> Dictionary:
+	var write_error := config_write_error(client)
+	if not write_error.is_empty():
+		return {"status": "error", "message": write_error}
 	## Fail closed before any subprocess runs: a command-shape client without a
 	## verified attach launcher must not register anything (see
 	## docs/client-configuration.md — an ERROR beats an entry known to be broken).
@@ -184,6 +187,9 @@ static func _status_details(
 
 
 static func remove(client: McpClient, server_name: String) -> Dictionary:
+	var write_error := config_write_error(client)
+	if not write_error.is_empty():
+		return {"status": "error", "message": write_error}
 	var cli := _resolve_cli(client)
 	if cli.is_empty():
 		return {"status": "error", "message": "%s not found" % client.display_name}
@@ -438,6 +444,21 @@ static func _scope_probe_verdict(
 ## the JSON-fallback file is still a valid place to read status back from.
 static func uses_scope_token(client: McpClient) -> bool:
 	return client.cli_register_template.has(SCOPE_TOKEN)
+
+
+## Why neither Configure nor Remove may run this client's CLI. The CLI runs
+## inside this editor's Flatpak sandbox, so what it puts in the file the client
+## keeps its servers in (the JSON-fallback file) lands where the client outside
+## never reads it. That file takes the `user` scope's entry and the `local`
+## scope's per-project block. Only `project` goes elsewhere, into the working
+## directory's `.mcp.json`, and is left to the CLI. A descriptor that names no
+## such file has nothing to check.
+static func config_write_error(client: McpClient) -> String:
+	if not client.has_json_fallback():
+		return ""
+	if uses_scope_token(client) and McpSettings.client_scope() == "project":
+		return ""
+	return client.config_write_error()
 
 
 ## Public view of the pre-cleanup sweep, for the manual-command text: what the

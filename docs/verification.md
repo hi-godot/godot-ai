@@ -150,6 +150,20 @@ so the same environment resolves inside and outside. Then:
   org.godotengine.Godot` and a restart. A bridge started by a probe starts a
   backend of its own when none is running; stop it before launching the next
   editor, which would otherwise adopt it.
+- For a sandbox that does not share the home, add `--nofilesystem=host
+  --filesystem=<checkout>` to the `flatpak run` above. The record is then in
+  `~/.var/app/org.godotengine.Godot/config/godot-ai/capabilities`, so give the
+  driver outside that path as `GODOT_AI_CAPABILITY_DIR`. Configure and Remove
+  must return the refusal and leave both the host's files and the per-app
+  `config` directory untouched. Then grant one client's directory
+  (`--filesystem=~/.cursor`, `--filesystem=xdg-config/Code`): Configure must
+  now refuse for the credentials and name `xdg-config/godot-ai:create`. Add
+  that grant, after which the driver outside needs no
+  `GODOT_AI_CAPABILITY_DIR`, the entry must land in the host's file, and
+  launching that entry from outside must reach the editor. Flatpak does not
+  list `--nofilesystem` rules in `/.flatpak-info` and skips a granted
+  directory that does not exist at launch, so cover both: each must refuse
+  with its own message. Run the suite once in this sandbox too.
 
 1. Run the same Ruff scope as CI — production, tests, the `script/` Python
    package, and the executable Python release/smoke scripts:

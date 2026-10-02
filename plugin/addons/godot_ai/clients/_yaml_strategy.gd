@@ -24,6 +24,8 @@ static func configure(
 	var resolution := client.resolved_config_path_details()
 	var path := str(resolution.get("path", ""))
 	var path_error := str(resolution.get("error", ""))
+	if path_error.is_empty() and not path.is_empty():
+		path_error = McpClient.unshared_flatpak_config_error(client.display_name, path)
 	if not path_error.is_empty():
 		return {"status": "error", "message": path_error}
 	if path.is_empty():
@@ -109,6 +111,8 @@ static func remove(client: McpClient, server_name: String) -> Dictionary:
 	var resolution := client.resolved_config_path_details()
 	var path := str(resolution.get("path", ""))
 	var path_error := str(resolution.get("error", ""))
+	if path_error.is_empty() and not path.is_empty():
+		path_error = McpClient.unshared_flatpak_config_error(client.display_name, path)
 	if not path_error.is_empty():
 		return {"status": "error", "message": path_error}
 	if path.is_empty() or not FileAccess.file_exists(path):

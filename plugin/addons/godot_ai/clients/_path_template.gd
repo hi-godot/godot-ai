@@ -23,12 +23,18 @@ extends RefCounted
 static var _env_snapshot := {}
 static var _env_snapshot_mutex := Mutex.new()
 
+const LinuxProc := preload("res://addons/godot_ai/utils/linux_proc.gd")
+const _MOUNTINFO_PATH := "/proc/self/mountinfo"
+
 ## `/.flatpak-info` as Flatpak wrote it before this process started, or "" when
 ## this is not a Flatpak sandbox. The sandbox it describes cannot change while
 ## the process runs, so one read serves every thread. Guarded by
 ## `_env_snapshot_mutex`, like the snapshot it is consulted alongside.
 static var _flatpak_info := ""
 static var _flatpak_info_read := false
+## What that sandbox mounted, from `/proc/self/mountinfo`: read with the file
+## above, and only inside a sandbox. Empty when it could not be read.
+static var _flatpak_mounts: Array[Dictionary] = []
 
 ## Every var this layer and its sibling consumers (`_base.gd`
 ## `config_file_override_details`, `config_home_override_details`, `_cli_finder.gd` lookups,
@@ -39,9 +45,10 @@ const _BASE_ENV_VARS: Array[String] = [
 	"HOME",
 	"USERPROFILE",
 	"XDG_CONFIG_HOME",
-	## What `$XDG_CONFIG_HOME` reads in a Flatpak editor that shares the home
-	## directory — see `_env_source`.
+	## What `$XDG_CONFIG_HOME` reads in a Flatpak editor — see `_env_source`.
 	"HOST_XDG_CONFIG_HOME",
+	## Read by `flatpak_hides_credentials` on the workers that run Configure.
+	"GODOT_AI_CAPABILITY_DIR",
 	"APPDATA",
 	"LOCALAPPDATA",
 	"SHELL",
@@ -93,43 +100,93 @@ static func warm_env_snapshot(extra_vars: PackedStringArray = PackedStringArray(
 ## Linux has Flatpak; elsewhere the leading slash would name a drive root.
 static func _flatpak_info_text() -> String:
 	_env_snapshot_mutex.lock()
-	if not _flatpak_info_read:
-		_flatpak_info = McpTransportCapability._flatpak_info() if _os_key() == "linux" else ""
-		_flatpak_info_read = true
+	_read_flatpak_sandbox()
 	var info := _flatpak_info
 	_env_snapshot_mutex.unlock()
 	return info
 
 
+## The sandbox's mounts, cached with the description above. The list is built
+## once and never changed, so callers on any thread may read it.
+static func _flatpak_mount_list() -> Array[Dictionary]:
+	_env_snapshot_mutex.lock()
+	_read_flatpak_sandbox()
+	var mounts := _flatpak_mounts
+	_env_snapshot_mutex.unlock()
+	return mounts
+
+
+## Caller holds `_env_snapshot_mutex`.
+static func _read_flatpak_sandbox() -> void:
+	if _flatpak_info_read:
+		return
+	_flatpak_info = McpTransportCapability._flatpak_info() if _os_key() == "linux" else ""
+	var mountinfo := ""
+	if not _flatpak_info.is_empty():
+		mountinfo = str(LinuxProc.read_text(_MOUNTINFO_PATH).text)
+	_flatpak_mounts = McpTransportCapability.parse_mountinfo(mountinfo)
+	_flatpak_info_read = true
+
+
 ## Stand in for the sandbox description so tests can cover Flatpak resolution
-## on any host. Pass null to forget it; the next read then asks the real file.
-static func _set_flatpak_info_for_test(info: Variant) -> void:
+## on any host, with `mountinfo` as its `/proc/self/mountinfo`: by default no
+## mount evidence at all, never the real file's. Pass null to forget both; the
+## next read then asks the real files.
+static func _set_flatpak_info_for_test(info: Variant, mountinfo: String = "") -> void:
 	_env_snapshot_mutex.lock()
 	_flatpak_info = "" if info == null else str(info)
+	_flatpak_mounts = McpTransportCapability.parse_mountinfo(mountinfo)
 	_flatpak_info_read = info != null
 	_env_snapshot_mutex.unlock()
 
 
 ## This editor's Flatpak application ID, or "" outside Flatpak.
 static func flatpak_app_id() -> String:
-	var group := ""
-	for line in _flatpak_info_text().split("\n"):
-		if line.begins_with("["):
-			group = line.strip_edges()
-		elif group == "[Application]" and line.begins_with("name="):
-			return line.trim_prefix("name=").strip_edges()
-	return ""
+	return McpTransportCapability.flatpak_application_id(_flatpak_info_text())
 
 
-## The host's config directory when this editor is a Flatpak that shares the
-## home directory; "" anywhere else, and when it cannot be resolved. For
-## callers whose own default is `OS.get_config_dir()`, which in that sandbox
-## is the per-app directory that nothing outside it reads.
+## The host's config directory when this editor is a Flatpak that shares it
+## (through the home directory, or a grant for the whole of `xdg-config`); ""
+## anywhere else, and when it cannot be resolved. For callers whose own
+## default is `OS.get_config_dir()`, which in that sandbox is the per-app
+## directory that nothing outside it reads.
 static func flatpak_host_config_home() -> String:
-	if not McpTransportCapability.flatpak_shares_home(_flatpak_info_text()):
+	if not McpTransportCapability.flatpak_shares_config_home(_flatpak_info_text()):
 		return ""
 	var config_home := expand("$XDG_CONFIG_HOME")
 	return config_home if config_home.is_absolute_path() else ""
+
+
+## Whether this editor's Flatpak sandbox keeps Godot AI's credentials where a
+## client outside it does not look. The bridge a client starts reads the
+## host's `<config home>/godot-ai/capabilities`, so an entry Configure writes
+## from such a sandbox cannot connect, however right its file is.
+##
+## The server publishes in the host's config directory when the sandbox
+## shares it (`McpTransportCapability.linux_config_home_variable`), and
+## otherwise in the per-app one, which is the host's only where an
+## `xdg-config/` grant mounted the host's directory inside it. Either way the
+## host's directory has to be shared read-write, which `flatpak_write_block`
+## decides. An editor given `GODOT_AI_CAPABILITY_DIR` publishes somewhere this
+## cannot judge, and its client needs the same variable: never hidden here.
+static func flatpak_hides_credentials() -> bool:
+	var info := _flatpak_info_text()
+	if info.is_empty():
+		return false
+	if not env_lookup(McpTransportCapability.CAPABILITY_DIR_ENV).strip_edges().is_empty():
+		return false
+	var config_home := expand("$XDG_CONFIG_HOME")
+	if not config_home.is_absolute_path():
+		return false
+	var host_directory := config_home.path_join("godot-ai/capabilities")
+	if not flatpak_write_block(host_directory.path_join("http.json")).is_empty():
+		return true
+	if McpTransportCapability.flatpak_shares_config_home(info):
+		return false
+	var grant := McpTransportCapability.flatpak_grant_over(
+		info, host_directory, _home(), config_home
+	)
+	return not str(grant.get("location", "")).begins_with("xdg-config/")
 
 
 ## The `~/.var/app/<id>` directory of another Flatpak app that `path` lies in,
@@ -269,15 +326,76 @@ static func expand(template: String) -> String:
 ## The environment variable a token's value is read from. Flatpak points
 ## `XDG_CONFIG_HOME` at the editor's own `~/.var/app/<id>/config`, where no
 ## client looks: a path expanded from it is written, read back, and reported
-## as configured without the client ever seeing it. When the sandbox shares
-## the home directory, `McpTransportCapability` names the host's variable
-## instead, the same rule that decides where the server publishes credentials.
-## A sandbox that does not share it keeps its own: Flatpak mounts an
-## `xdg-config/<dir>` grant inside that per-app directory.
+## as configured without the client ever seeing it. Inside a sandbox the token
+## therefore reads the host's variable, so a template always names the file
+## the client reads. Whether this sandbox can reach that file is a separate
+## question, answered by `flatpak_write_block`. Every grant that shares part
+## of the host's config directory mounts it at the host's path, an
+## `xdg-config/<dir>` grant included, so no path has to go through the per-app
+## directory, where a leftover from an earlier run would pass for the client's
+## own file.
 static func _env_source(var_name: String) -> String:
-	if var_name != "XDG_CONFIG_HOME":
-		return var_name
-	return McpTransportCapability.linux_config_home_variable(_flatpak_info_text())
+	if var_name == "XDG_CONFIG_HOME" and not _flatpak_info_text().is_empty():
+		return "HOST_XDG_CONFIG_HOME"
+	return var_name
+
+
+## Why a file this editor writes at `path` would not be the one a client
+## outside its Flatpak sandbox reads there. {} when it would be, and always
+## outside Flatpak. Otherwise one of:
+## - {"needs": grant}: no read-write grant covers the file's directory, and
+##   this is the `--filesystem=` value that would. That is the read-only grant
+##   that does cover it when there is one, because a wider grant does not
+##   lift it.
+## - {"unmounted": directory}: a read-write grant names this directory, but
+##   Flatpak mounted nothing there, which is what it does when the directory
+##   does not exist as the app starts.
+## - {"hidden": directory}: inside a granted directory, this one is an empty
+##   tmpfs, which is how Flatpak carries out a denial (`--nofilesystem`).
+## - {"read_only": directory}: granted read-write, mounted read-only.
+##
+## The directory is what has to be shared, not the file: `McpAtomicWrite`
+## stages a temporary file beside the target and renames it into place, which
+## cannot replace a file Flatpak mounted on its own. It also follows a
+## symlinked config file to its target, so that is the file tested.
+static func flatpak_write_block(path: String) -> Dictionary:
+	var info := _flatpak_info_text()
+	if info.is_empty():
+		return {}
+	var directory := McpAtomicWrite._resolve_symlink_target(path).get_base_dir()
+	var home := _home()
+	var inside_home := (
+		not home.is_empty() and McpTransportCapability.path_is_within(home, directory)
+	)
+	var grant := McpTransportCapability.flatpak_grant_over(
+		info, directory, home, expand("$XDG_CONFIG_HOME")
+	)
+	if not grant.get("writable", false):
+		if not grant.is_empty():
+			return {"needs": str(grant["location"])}
+		## Nothing under ~/.var/app comes with the home, so there the app's
+		## directory has to be granted by name.
+		var apps := home.path_join(".var/app") + "/"
+		if inside_home and directory.begins_with(apps):
+			return {"needs": apps + directory.trim_prefix(apps).get_slice("/", 0)}
+		return {"needs": "home" if inside_home else directory}
+	var root := str(grant["root"])
+	var real_root := McpTransportCapability.real_path(root)
+	var mount := McpTransportCapability.flatpak_blocking_mount(
+		_flatpak_mount_list(),
+		McpTransportCapability.real_path(directory),
+		McpTransportCapability.real_path(home) if inside_home else real_root,
+	)
+	if mount.is_empty():
+		return {}
+	var mount_point := str(mount["mount_point"])
+	if mount["read_only"]:
+		return {"read_only": mount_point}
+	## A tmpfs above the granted directory is not there because of the grant:
+	## the grant's own mount is what is missing.
+	if not McpTransportCapability.path_is_within(real_root, mount_point):
+		return {"unmounted": root}
+	return {"hidden": mount_point}
 
 
 ## Home-derived default for a var the environment does not define. Returns ""

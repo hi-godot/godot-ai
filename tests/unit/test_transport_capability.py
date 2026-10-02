@@ -915,6 +915,62 @@ def test_flatpak_filesystem_grants_are_read_from_the_context_group_only(
     assert capability_module._flatpak_shares_home() is False
 
 
+@pytest.mark.parametrize(
+    "filesystems,expected",
+    [
+        ("xdg-run/speech-dispatcher;host;", True),
+        ("home:create;", True),
+        # The whole of xdg-config is mounted at the host's path only.
+        ("xdg-config;xdg-run/speech-dispatcher;", True),
+        ("xdg-config:create;", True),
+        ("xdg-config:rw;", True),
+        ("home:ro;xdg-config;", True),
+        ("xdg-config:ro;", False),
+        ("!xdg-config;", False),
+        # A subdirectory grant is also mounted inside the per-app directory.
+        ("xdg-config/godot-ai;", False),
+        ("xdg-config/godot-ai:create;xdg-config:ro;", False),
+        ("~/.config;", False),
+        ("xdg-data;xdg-cache;", False),
+        ("xdg-run/speech-dispatcher;", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_flatpak_shares_config_home_with_the_home_or_the_whole_xdg_config(
+    monkeypatch, tmp_path, filesystems, expected
+) -> None:
+    # Mirrors test_project/tests/test_transport_capability.gd: the plugin reads
+    # where this publishes.
+    _flatpak_info(monkeypatch, tmp_path, filesystems)
+
+    assert capability_module._flatpak_shares_config_home() is expected
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX XDG path contract")
+@pytest.mark.parametrize(
+    "filesystems", ["xdg-config;xdg-run/speech-dispatcher;", "xdg-config:create;"]
+)
+def test_flatpak_sharing_the_whole_config_directory_publishes_there(
+    monkeypatch, tmp_path, filesystems
+) -> None:
+    home = tmp_path / "home"
+    sandbox_config = home / ".var" / "app" / "org.godotengine.Godot" / "config"
+    sandbox_config.mkdir(parents=True, mode=0o700)
+    monkeypatch.delenv("GODOT_AI_CAPABILITY_DIR", raising=False)
+    monkeypatch.delenv("HOST_XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(sandbox_config))
+    monkeypatch.setattr(capability_module.sys, "platform", "linux")
+    _flatpak_info(monkeypatch, tmp_path, filesystems)
+
+    assert capability_directory() == (home / ".config" / "godot-ai" / "capabilities").resolve()
+
+    host_config = tmp_path / "host-config"
+    monkeypatch.setenv("HOST_XDG_CONFIG_HOME", str(host_config))
+    assert capability_directory() == (host_config / "godot-ai" / "capabilities").resolve()
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX XDG path contract")
 def test_flatpak_sharing_home_publishes_to_the_host_config_directory(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
@@ -940,7 +996,10 @@ def test_flatpak_sharing_home_publishes_to_the_host_config_directory(monkeypatch
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX XDG path contract")
-@pytest.mark.parametrize("filesystems", ["xdg-run/speech-dispatcher;", "home:ro;", None])
+@pytest.mark.parametrize(
+    "filesystems",
+    ["xdg-run/speech-dispatcher;", "home:ro;", "xdg-config/godot-ai;", "xdg-config:ro;", None],
+)
 def test_flatpak_without_a_writable_home_keeps_its_own_config_directory(
     monkeypatch, tmp_path, filesystems
 ) -> None:

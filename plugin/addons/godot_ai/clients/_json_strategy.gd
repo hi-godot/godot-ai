@@ -19,6 +19,8 @@ static func configure(
 	var resolution := client.resolved_config_path_details()
 	var path := str(resolution.get("path", ""))
 	var path_error := str(resolution.get("error", ""))
+	if path_error.is_empty() and not path.is_empty():
+		path_error = McpClient.unshared_flatpak_config_error(client.display_name, path)
 	if not path_error.is_empty():
 		return {"status": "error", "message": path_error}
 	if path.is_empty():
@@ -63,6 +65,9 @@ static func _configure_merged(
 	launch: Dictionary,
 	project_roots: PackedStringArray,
 ) -> Dictionary:
+	var write_error := _merge_write_error(client)
+	if not write_error.is_empty():
+		return {"status": "error", "message": write_error}
 	var launch_error := command_launch_error(client, launch)
 	if not launch_error.is_empty():
 		return {"status": "error", "message": launch_error}
@@ -263,6 +268,8 @@ static func remove(
 	var resolution := client.resolved_config_path_details()
 	var path := str(resolution.get("path", ""))
 	var path_error := str(resolution.get("error", ""))
+	if path_error.is_empty() and not path.is_empty():
+		path_error = McpClient.unshared_flatpak_config_error(client.display_name, path)
 	if not path_error.is_empty():
 		return {"status": "error", "message": path_error}
 	if path.is_empty() or not FileAccess.file_exists(path):
@@ -288,6 +295,9 @@ static func remove(
 static func _remove_merged(
 	client: McpClient, server_name: String, project_roots: PackedStringArray
 ) -> Dictionary:
+	var write_error := _merge_write_error(client)
+	if not write_error.is_empty():
+		return {"status": "error", "message": write_error}
 	## Scope ambiguity (omp named profiles) blocks Remove too: clearing the
 	## default files while a profile reads its own would report a success the
 	## running client never observes (#1085).
@@ -752,6 +762,21 @@ static func _merge_paths(client: McpClient) -> PackedStringArray:
 					if not path.is_empty() and not result.has(path):
 						result.append(path)
 	return result
+
+
+## The Flatpak write check `configure` and `remove` make on their one path,
+## made here on every tier. Any tier this sandbox does not share with the host
+## refuses the whole Configure or Remove: an unseen tier may hold the
+## definition the client actually uses. Status reads past it, as it does for
+## an ordinary client.
+static func _merge_write_error(client: McpClient) -> String:
+	for path in _merge_paths(client):
+		if not path.is_absolute_path():
+			continue
+		var write_error := McpClient.unshared_flatpak_config_error(client.display_name, path)
+		if not write_error.is_empty():
+			return write_error
+	return ""
 
 
 ## Pi's project tiers are relative to Pi's process cwd, not Godot's. Inspect

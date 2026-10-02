@@ -342,6 +342,57 @@ func resolved_config_path_details() -> Dictionary:
 	return {"path": "", "error": unresolved_config_path_error(display_name, path)}
 
 
+## Why Configure and Remove must leave this client's resolved file alone; ""
+## when they may write it. See `unshared_flatpak_config_error`.
+func config_write_error() -> String:
+	var path := resolved_config_path()
+	return "" if path.is_empty() else unshared_flatpak_config_error(display_name, path)
+
+
+## Why Configure and Remove must leave the file at `path` alone when this
+## editor runs in a Flatpak sandbox that does not share it read-write with the
+## host; "" when it does, and outside Flatpak. A file written there is read
+## back and verified by this editor and never seen by the client.
+##
+## Every strategy asks this before it writes, ahead of `create_error`: where a
+## Flatpak build of the client keeps its settings is beside the point until
+## the sandbox can write the ordinary location at all. Status does not ask.
+## It keeps reading the path, and under a read-only grant that is the
+## client's real file.
+static func unshared_flatpak_config_error(client_name: String, path: String) -> String:
+	var block := McpPathTemplate.flatpak_write_block(path)
+	if block.is_empty():
+		return ""
+	var refused := (
+		"Godot runs in a Flatpak sandbox that cannot write %s where %s reads "
+		+ "it, so nothing was changed."
+	) % [path, client_name]
+	var by_hand := "or edit that file by hand (docs/steam-capability-directory.md)."
+	if block.has("unmounted"):
+		return refused + (
+			" Flatpak was asked to share %s but mounted nothing there, which "
+			+ "is what it does when the directory does not exist as Godot "
+			+ "starts. Create it, restart Godot, and try again, %s"
+		) % [block["unmounted"], by_hand]
+	if block.has("hidden"):
+		return refused + (
+			" Flatpak hides %s from this sandbox, as a --nofilesystem rule "
+			+ "does. Remove that rule, restart Godot, and try again, %s"
+		) % [block["hidden"], by_hand]
+	if block.has("read_only"):
+		return refused + (
+			" %s is mounted read-only. Make it writable, restart Godot, and "
+			+ "try again, %s"
+		) % [block["read_only"], by_hand]
+	var app_id := McpPathTemplate.flatpak_app_id()
+	return refused + (
+		" Run `flatpak override --user --filesystem=%s %s`, restart Godot, "
+		+ "and try again, or edit that file by hand: "
+		+ "docs/steam-capability-directory.md covers a sandbox without that "
+		+ "grant."
+	) % [block["needs"], app_id if not app_id.is_empty() else "<Godot's Flatpak ID>"]
+
+
 ## Shared wording for a path template `McpPathTemplate.expand` could not fully
 ## resolve. Used by the guard above and by the merge-tier loader in
 ## `_json_strategy.gd`, which resolves its own templates and never passes

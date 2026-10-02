@@ -199,6 +199,48 @@ def test_all_automatic_mutations_hold_one_global_claim_through_verification() ->
     )
 
 
+def test_flatpak_write_refusals_precede_launcher_discovery_and_the_claim() -> None:
+    """A refused Configure or Remove must cost nothing and touch nothing.
+
+    Every strategy refuses on its own to write a file a Flatpak editor does not
+    share with the host, so dropping the facade's check changes no outcome. It
+    changes what happens first: launcher discovery and the global claim would
+    run for an action already known to fail. Configure asks about the file
+    before the credentials, because the home grant that fixes the first fixes
+    both.
+    """
+
+    configurator_source = (PLUGIN_ROOT / "client_configurator.gd").read_text(encoding="utf-8")
+    cli_source = (PLUGIN_ROOT / "clients" / "_cli_strategy.gd").read_text(encoding="utf-8")
+    configure = get_func_block(configurator_source, "static func configure(")
+    remove = get_func_block(configurator_source, "static func remove(")
+    write_error = get_func_block(configurator_source, "static func _config_write_error(")
+
+    assert (
+        configure.index("_config_path_resolution_error(client)")
+        < configure.index("_config_write_error(client)")
+        < configure.index("_config_create_error(client)")
+        < configure.index("_credentials_error(client)")
+        < configure.index("capture_launch_context()")
+        < configure.index("MutationLock.acquire(")
+    )
+    assert (
+        remove.index("_config_path_resolution_error(client)")
+        < remove.index("_config_write_error(client)")
+        < remove.index("capture_launch_context()")
+        < remove.index("MutationLock.acquire(")
+    )
+    assert "_credentials_error(" not in remove, (
+        "Remove takes an entry away; whether its bridge could connect is beside the point"
+    )
+    assert "CliStrategy.config_write_error(client)" in write_error
+    for name in ("configure", "remove"):
+        strategy = get_func_block(cli_source, f"static func {name}(")
+        assert strategy.index("config_write_error(client)") < strategy.index(
+            "_resolve_cli(client)"
+        ), f"{name} must refuse before it looks for a CLI to run"
+
+
 def test_client_owner_persists_unproven_mutation_and_blocks_update_quiescence() -> None:
     owner_source = (PLUGIN_ROOT / "utils" / "client_job_owner.gd").read_text(encoding="utf-8")
     request = get_func_block(owner_source, "func _start_action(")

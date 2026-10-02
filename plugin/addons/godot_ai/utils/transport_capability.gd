@@ -20,6 +20,12 @@ const _FLATPAK_INFO_PATH := "/.flatpak-info"
 const _FLATPAK_HOME_GRANTS: Array[String] = [
 	"host", "host:rw", "host:create", "home", "home:rw", "home:create",
 ]
+## Root directories a `host` grant leaves out of the sandbox, where Flatpak's
+## own runtime lives (`dont_mount_in_root` in flatpak-context.c).
+const _FLATPAK_HOST_EXCLUDED: Array[String] = [
+	"lib", "lib32", "lib64", "bin", "sbin", "usr", "boot", "root",
+	"tmp", "etc", "app", "run", "proc", "sys", "dev", "var",
+]
 const _KEYS: Array[String] = [
 	"version", "http", "websocket", "instance_nonce",
 ]
@@ -338,7 +344,7 @@ static func path_for_http_port(http_port: int) -> String:
 ## The config directory a Linux process outside this one would also name.
 ## Flatpak points `XDG_CONFIG_HOME` at the app's own `~/.var/app/<id>/config`,
 ## which a client outside that sandbox never reads. When the sandbox shares
-## the real home, the host's value is `HOST_XDG_CONFIG_HOME` if the host set
+## the host's config directory, that is `HOST_XDG_CONFIG_HOME` if the host set
 ## one, else the `~/.config` default. Python's `capability_directory` applies
 ## the same rule, so the server publishes where this reads.
 static func linux_config_home(flatpak_info: String) -> String:
@@ -349,10 +355,23 @@ static func linux_config_home(flatpak_info: String) -> String:
 
 
 ## The variable that names that directory; unset or empty means `~/.config`.
-## Split out because `McpPathTemplate` must read it through its own
-## thread-safe environment snapshot rather than `OS.get_environment` (#691).
 static func linux_config_home_variable(flatpak_info: String) -> String:
-	return "HOST_XDG_CONFIG_HOME" if flatpak_shares_home(flatpak_info) else "XDG_CONFIG_HOME"
+	return (
+		"HOST_XDG_CONFIG_HOME" if flatpak_shares_config_home(flatpak_info) else "XDG_CONFIG_HOME"
+	)
+
+
+## Whether `/.flatpak-info` text describes a sandbox that can write the host's
+## config directory at its own path: one that shares the home, or holds a
+## read-write grant for the whole of `xdg-config`. Flatpak mounts that grant at
+## the host's path only and leaves `XDG_CONFIG_HOME` on the per-app directory.
+## An `xdg-config/<dir>` grant does not count: Flatpak mounts it inside the
+## per-app directory as well, so `XDG_CONFIG_HOME` already reaches it.
+static func flatpak_shares_config_home(flatpak_info: String) -> bool:
+	return (
+		flatpak_shares_home(flatpak_info)
+		or bool(_flatpak_filesystems(flatpak_info).get("xdg-config", false))
+	)
 
 
 ## Whether `/.flatpak-info` text describes a sandbox that can write the host's
@@ -370,6 +389,313 @@ static func flatpak_shares_home(flatpak_info: String) -> bool:
 					return true
 			return false
 	return false
+
+
+## The grant in `/.flatpak-info` text that decides whether the sandbox shares
+## `path` with the host, so that a process outside it finds the same file at
+## the same location. Returned as {root, location, writable}: the directory or
+## file the grant covers, the grant as Flatpak spells it (`home`, `~/dir`,
+## `xdg-config/dir`), and whether it is read-write. {} when no grant covers
+## the path.
+##
+## `home` and `host` share the home directory, except `~/.var/app`: there
+## Flatpak hides every app's directory but the sandbox's own, whatever the
+## grant, and shares that one with no grant at all. `host` also shares the
+## root directories its runtime does not occupy. `~/dir` and `/dir` share that
+## location, and `xdg-config[/dir]` the host's config directory,
+## `host_config_home`. The narrowest grant decides, as the narrowest mount
+## does. The other `xdg-` names share nothing here: where they lie depends on
+## host settings the sandbox cannot read, so their paths fail closed.
+##
+## A grant says what Flatpak was asked for, not what it mounted. It skips a
+## location that does not exist when the app starts, and `/.flatpak-info`
+## leaves out denials (`--nofilesystem`). `flatpak_blocking_mount` checks the
+## answer against the mounts.
+static func flatpak_grant_over(
+	flatpak_info: String, path: String, home: String, host_config_home: String
+) -> Dictionary:
+	var target := path.simplify_path()
+	if not target.is_absolute_path():
+		return {}
+	var grants := _flatpak_filesystems(flatpak_info)
+	var found := {}
+	for location in grants:
+		var root := _flatpak_grant_path(str(location), home, host_config_home)
+		if root.is_empty() or not path_is_within(root, target):
+			continue
+		var covered := str(found.get("root", ""))
+		if root.length() > covered.length():
+			found = {"root": root, "location": str(location), "writable": bool(grants[location])}
+		elif root == covered and found["writable"] and not grants[location]:
+			## Two spellings of one location: Flatpak mounts whichever it
+			## reaches last, so only agreement counts as writable.
+			found = {"root": root, "location": str(location), "writable": false}
+	var home_dir := home.simplify_path()
+	var top := target.get_slice("/", 1)
+	var wide := {}
+	if not home.is_empty() and path_is_within(home_dir, target):
+		var apps_dir := home_dir.path_join(".var/app")
+		var app_id := flatpak_application_id(flatpak_info)
+		if path_is_within(apps_dir, target):
+			if not app_id.is_empty() and path_is_within(apps_dir.path_join(app_id), target):
+				wide = {
+					"root": apps_dir.path_join(app_id),
+					"location": apps_dir.path_join(app_id),
+					"writable": true,
+				}
+		elif grants.has("home") or grants.has("host"):
+			## Flatpak applies the wider of the two modes to the home directory,
+			## so a read-write `home` is always enough for a path inside it.
+			wide = {
+				"root": home_dir,
+				"location": "home",
+				"writable": bool(grants.get("home", false)) or bool(grants.get("host", false)),
+			}
+	elif grants.has("host") and not top.is_empty() and top not in _FLATPAK_HOST_EXCLUDED:
+		wide = {"root": "/" + top, "location": "host", "writable": bool(grants["host"])}
+	if str(wide.get("root", "")).length() > str(found.get("root", "")).length():
+		return wide
+	return found
+
+
+## The sandboxed app's ID from `/.flatpak-info` text, or "" outside Flatpak.
+static func flatpak_application_id(flatpak_info: String) -> String:
+	var group := ""
+	for line in flatpak_info.split("\n"):
+		if line.begins_with("["):
+			group = line.strip_edges()
+		elif group == "[Application]" and line.begins_with("name="):
+			return line.trim_prefix("name=").strip_edges()
+	return ""
+
+
+## Whether `directory` is `path` or one of its ancestors.
+static func path_is_within(directory: String, path: String) -> bool:
+	return path == directory or path.begins_with(directory.trim_suffix("/") + "/")
+
+
+## Where a grant's location lies in the sandbox, or "" for one this cannot
+## place (`host-os`, `xdg-documents`, ...).
+static func _flatpak_grant_path(location: String, home: String, host_config_home: String) -> String:
+	var placed := ""
+	if location == "~" or location.begins_with("~/"):
+		placed = home.path_join(location.substr(2))
+	elif location.begins_with("/"):
+		placed = _home_spelling(location, home)
+	elif not host_config_home.is_empty() and (
+		location == "xdg-config" or location.begins_with("xdg-config/")
+	):
+		placed = host_config_home + location.trim_prefix("xdg-config")
+	return placed.simplify_path() if placed.is_absolute_path() else ""
+
+
+## `/home` and `/var/home` are one directory on ostree systems, and Flatpak
+## mounts a grant at whichever is real, keeping the link. A grant spelled the
+## way the home directory is not therefore reads as the one that is.
+static func _home_spelling(path: String, home: String) -> String:
+	for spelling in [["/var/home/", "/home/"], ["/home/", "/var/home/"]]:
+		if home.begins_with(spelling[0]) and path.begins_with(spelling[1]):
+			return str(spelling[0]) + path.trim_prefix(spelling[1])
+	return path
+
+
+## The `[Context] filesystems=` grants of `/.flatpak-info` text as
+## {location: writable}, a location being the grant without its mode: `host`,
+## `~/dir`, `/dir`, `xdg-config/dir`. Plain and `:create` grants are writable.
+## `:ro`, a denial (`!`) and a mode this does not know are not.
+static func _flatpak_filesystems(flatpak_info: String) -> Dictionary:
+	var grants := {}
+	var group := ""
+	for line in flatpak_info.split("\n"):
+		if line.begins_with("["):
+			group = line.strip_edges()
+		elif group == "[Context]" and line.begins_with("filesystems="):
+			for entry in _key_file_list(line.trim_prefix("filesystems=").strip_edges()):
+				var grant := _flatpak_location_and_mode(entry.trim_prefix("!"))
+				## `!host:reset` withdraws inherited grants. It names no location.
+				if grant[0].is_empty() or grant[1] == "reset":
+					continue
+				grants[grant[0]] = not entry.begins_with("!") and grant[1] in ["", "rw", "create"]
+			break
+	return grants
+
+
+## A key file list value split on its unescaped `;`, with the key file's own
+## escapes resolved. Flatpak's `\:` and `\\` reach the entry as `\:` and `\\`.
+static func _key_file_list(value: String) -> PackedStringArray:
+	var entries := PackedStringArray()
+	var entry := ""
+	var index := 0
+	while index < value.length():
+		var character := value[index]
+		if character == "\\" and index + 1 < value.length():
+			index += 1
+			match value[index]:
+				"s":
+					entry += " "
+				"n":
+					entry += "\n"
+				"t":
+					entry += "\t"
+				"r":
+					entry += "\r"
+				_:
+					entry += value[index]
+		elif character == ";":
+			entries.append(entry)
+			entry = ""
+		else:
+			entry += character
+		index += 1
+	if not entry.is_empty():
+		entries.append(entry)
+	return entries
+
+
+## One grant as [location, mode]. Flatpak escapes a `:` or `\` that belongs to
+## the location, and the first bare `:` starts the mode (`ro`, `create`).
+static func _flatpak_location_and_mode(entry: String) -> PackedStringArray:
+	var location := ""
+	var index := 0
+	while index < entry.length():
+		var character := entry[index]
+		if character == "\\" and index + 1 < entry.length():
+			index += 1
+			location += entry[index]
+		elif character == ":":
+			return PackedStringArray([location, entry.substr(index + 1)])
+		else:
+			location += character
+		index += 1
+	return PackedStringArray([location, ""])
+
+
+## `/proc/self/mountinfo` text as one {mount_point, root, fstype, read_only}
+## per mount, in the kernel's order. A line that does not parse is left out.
+static func parse_mountinfo(mountinfo: String) -> Array[Dictionary]:
+	var mounts: Array[Dictionary] = []
+	for line in mountinfo.split("\n", false):
+		var fields := line.split(" ", false)
+		## Optional fields end at a lone "-"; the filesystem type follows it.
+		var separator := fields.find("-", 6)
+		if separator < 0 or separator + 1 >= fields.size():
+			continue
+		mounts.append({
+			"mount_point": _unescape_mount_path(fields[4]),
+			"root": _unescape_mount_path(fields[3]),
+			"fstype": fields[separator + 1],
+			"read_only": fields[5].split(",").has("ro"),
+		})
+	return mounts
+
+
+## The mount that holds `path`: the one with the longest mount point at or
+## above it and, among equals, the last listed, which is mounted on top.
+## {} when none is.
+static func mount_for_path(mounts: Array[Dictionary], path: String) -> Dictionary:
+	var target := path.simplify_path()
+	var found := {}
+	for mount in mounts:
+		var mount_point := str(mount["mount_point"])
+		if (
+			path_is_within(mount_point, target)
+			and mount_point.length() >= str(found.get("mount_point", "")).length()
+		):
+			found = mount
+	return found
+
+
+## The mount that contradicts a grant covering `path`: a file written there
+## would stay inside the sandbox, or cannot be written. {} when the mounts
+## bear the grant out.
+##
+## An ungranted location lies on the tmpfs Flatpak builds the sandbox on, and
+## so does a granted one that did not exist when the app started. A denial
+## hides a location behind an empty tmpfs of its own, as Flatpak hides
+## `~/.var/app`. Such a tmpfs is recognised by being mounted whole (root `/`)
+## below `boundary`, the directory the caller knows to be the host's: the home
+## directory for a path inside it, else the granted directory. A tmpfs at or
+## above the boundary is the host's own (`/home` on a tmpfs) and blocks
+## nothing. Neither does an empty mount list, so unreadable evidence leaves
+## the grant's answer standing.
+static func flatpak_blocking_mount(
+	mounts: Array[Dictionary], path: String, boundary: String
+) -> Dictionary:
+	var mount := mount_for_path(mounts, path)
+	if mount.is_empty():
+		return {}
+	var mount_point := str(mount["mount_point"])
+	var host_directory := boundary.simplify_path()
+	if mount["fstype"] == "tmpfs" and (
+		mount_point == "/"
+		or (
+			mount["root"] == "/"
+			and mount_point != host_directory
+			and path_is_within(host_directory, mount_point)
+		)
+	):
+		return mount
+	return mount if mount["read_only"] else {}
+
+
+## `path` as the kernel names it, with every symlink among its existing
+## components replaced by its target. Mount points are listed by real path, so
+## a home spelled `/home/<user>` on an ostree system has to be read as
+## `/var/home/<user>` before it can be looked up among them. Components that do
+## not exist are kept as written. A chain longer than `_MAX_LINK_HOPS` returns
+## the path unchanged.
+static func real_path(path: String) -> String:
+	if OS.get_name() == "Windows":
+		return path
+	var remaining := path.simplify_path().split("/", false)
+	var current := "/"
+	var hops := 0
+	while not remaining.is_empty():
+		var parent := DirAccess.open(current)
+		if parent == null:
+			break
+		var candidate := current.path_join(remaining[0])
+		remaining.remove_at(0)
+		if not parent.is_link(candidate):
+			current = candidate
+			continue
+		var target := parent.read_link(candidate)
+		if hops >= _MAX_LINK_HOPS or target.is_empty():
+			return path
+		hops += 1
+		if not target.is_absolute_path():
+			target = current.path_join(target)
+		var target_parts := target.simplify_path().split("/", false)
+		target_parts.append_array(remaining)
+		remaining = target_parts
+		current = "/"
+	return current if remaining.is_empty() else current.path_join("/".join(remaining))
+
+
+## Undo the octal escapes mountinfo uses for space, tab, newline and backslash.
+static func _unescape_mount_path(field: String) -> String:
+	if not field.contains("\\"):
+		return field
+	var path := ""
+	var index := 0
+	while index < field.length():
+		var code := field.substr(index + 1, 3)
+		if field[index] == "\\" and _is_octal_byte(code):
+			path += char(int(code[0]) * 64 + int(code[1]) * 8 + int(code[2]))
+			index += 4
+		else:
+			path += field[index]
+			index += 1
+	return path
+
+
+static func _is_octal_byte(code: String) -> bool:
+	if code.length() != 3:
+		return false
+	for digit in code:
+		if digit not in "01234567":
+			return false
+	return true
 
 
 static func _flatpak_info() -> String:

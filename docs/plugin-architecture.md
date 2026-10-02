@@ -534,10 +534,12 @@ so nothing inside it can own or write such a directory, and the client outside
 still applies the full test to the same path with real owners.
 
 Flatpak sets `XDG_CONFIG_HOME` to the app's own `~/.var/app/<id>/config`. When
-`/.flatpak-info` grants the sandbox `host` or `home` read-write, the plugin and
-the server use the host's config directory instead (`HOST_XDG_CONFIG_HOME`,
-else `~/.config`), which is the directory a client outside the sandbox reads.
-Without that grant they keep the per-app directory and an outside client needs
+`/.flatpak-info` grants the sandbox `host`, `home`, or the whole of
+`xdg-config` read-write, the plugin and the server use the host's config
+directory instead (`HOST_XDG_CONFIG_HOME`, else `~/.config`), which is the
+directory a client outside the sandbox reads. Without such a grant they keep
+the per-app directory, where an `xdg-config/godot-ai` grant is mounted if the
+sandbox holds one, and otherwise an outside client needs
 `GODOT_AI_CAPABILITY_DIR`
 ([setup guide](steam-capability-directory.md)). On Windows, v4 uses fixed per-user roots
 and rejects detectable reparse traversal, but does not claim secrecy or

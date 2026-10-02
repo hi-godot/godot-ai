@@ -614,7 +614,11 @@ static func configure(id: String, url: String = "", launch_context: Dictionary =
 		return _manual_edit_result(client, "configure")
 	var path_error := _config_path_resolution_error(client)
 	if path_error.is_empty():
+		path_error = _config_write_error(client)
+	if path_error.is_empty():
 		path_error = _config_create_error(client)
+	if path_error.is_empty():
+		path_error = _credentials_error(client)
 	if not path_error.is_empty():
 		return {"status": "error", "message": path_error}
 	## Capture `url` once so a port flip in EditorSettings between write and
@@ -859,6 +863,8 @@ static func remove(id: String, url: String = "", launch_context: Dictionary = {}
 	if not client.automatic_config_edits:
 		return _manual_edit_result(client, "remove")
 	var path_error := _config_path_resolution_error(client)
+	if path_error.is_empty():
+		path_error = _config_write_error(client)
 	if not path_error.is_empty():
 		return {"status": "error", "message": path_error}
 	if url.is_empty():
@@ -907,6 +913,37 @@ static func _config_create_error(client: Client) -> String:
 	if client.config_type == "cli":
 		return ""
 	return str(client.resolved_config_path_details().get("create_error", ""))
+
+
+## Why neither Configure nor Remove may touch this client's file: this editor's
+## Flatpak sandbox does not share it with the host
+## (`McpClient.config_write_error`, or `McpCliStrategy.config_write_error` for a
+## client that writes through its own CLI). Every strategy refuses on it too;
+## checking here puts the refusal ahead of launcher discovery and the lock.
+static func _config_write_error(client: Client) -> String:
+	if client.config_type == "cli":
+		return CliStrategy.config_write_error(client)
+	return client.config_write_error()
+
+
+## Why Configure must not write an attach entry although the client's file is
+## writable: this editor's Flatpak sandbox keeps Godot AI's credentials where
+## the bridge that entry launches does not look. A missing entry is better
+## than one known to be broken. Remove is not held to it.
+static func _credentials_error(client: Client) -> String:
+	if client.command_shape == Client.CommandShape.NONE:
+		return ""
+	if not McpPathTemplate.flatpak_hides_credentials():
+		return ""
+	var app_id := McpPathTemplate.flatpak_app_id()
+	return (
+		"Godot runs in a Flatpak sandbox that keeps Godot AI's credentials to "
+		+ "itself, so the bridge %s starts could not connect and nothing was "
+		+ "changed. Run `flatpak override --user "
+		+ "--filesystem=xdg-config/godot-ai:create %s`, restart Godot, and try "
+		+ "again. docs/steam-capability-directory.md covers the other ways to "
+		+ "share them."
+	) % [client.display_name, app_id if not app_id.is_empty() else "<Godot's Flatpak ID>"]
 
 
 # --- Strategy dispatch + verify (testable seam) --------------------------

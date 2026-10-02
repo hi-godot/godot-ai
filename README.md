@@ -217,6 +217,12 @@ prints the `flatpak override` command that grants access; run it and restart
 Godot. Details:
 [client configuration](docs/client-configuration.md#linux-flatpak-editors-and-flatpak-clients).
 
+If you took that home access away from Godot (Flatseal, or
+`flatpak override --nofilesystem=host`), its sandbox cannot reach the files
+your AI clients read. Configure and Remove then stop and name the
+`flatpak override` that restores access, instead of writing a file only the
+sandbox can see.
+
 Use the [explicit shared-directory guide](docs/steam-capability-directory.md)
 on 4.2.3 and earlier, for a Flatpak editor that does not share your home
 directory, and whenever the startup error still names an untrusted ancestor

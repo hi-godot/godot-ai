@@ -101,11 +101,11 @@ durable lock at the exact path reported by
 directory rather than `user://`, because global client configuration is shared
 by every Godot project for the account. The claim stays held through post-write
 status verification. Status probes and manual instructions remain lock-free.
-A Flatpak editor that shares the home directory takes the lock under the
-host's config directory, the one its client paths resolve to, so it contends
-with editors outside the sandbox for the files they both write. Its own OS
-config directory is the per-app `~/.var/app/<id>/config`; only a sandbox that
-keeps its home to itself still roots the lock there.
+A Flatpak editor that shares the host's config directory (through the home
+directory, or a grant for the whole of `xdg-config`) takes the lock there, so
+it contends with editors outside the sandbox for the files they both write.
+Its own OS config directory is the per-app `~/.var/app/<id>/config`; only a
+sandbox that shares neither still roots the lock there.
 
 An existing or malformed lock fails closed. If a timed-out CLI mutation cannot
 prove that its process tree terminated, the lock deliberately survives plugin
@@ -296,21 +296,84 @@ Flatpak 1.16.6.
 Code, VS Code Insiders, Zed, Cline, Kilo Code, Roo Code, Zoo Code, Trae, Claude
 Desktop) was written, read back, and reported as configured in a directory no
 client reads, and an existing config under `~/.config` was neither detected nor
-migrated. `McpPathTemplate.expand` now asks
-`McpTransportCapability.linux_config_home_variable` which variable holds the
-config home, the same rule that places the capability directory. When
-`/.flatpak-info` grants `host` or `home` read-write, `$XDG_CONFIG_HOME` reads
-`HOST_XDG_CONFIG_HOME`, which Flatpak sets only when the host had
-`XDG_CONFIG_HOME`, and falls back to `~/.config`. `HOST_XDG_CONFIG_HOME` is
-part of the warmed environment snapshot and `/.flatpak-info` is read once
-under the snapshot's mutex, so dock workers resolve the same path as the main
-thread (#691).
+migrated. Inside a sandbox `McpPathTemplate.expand` therefore reads
+`$XDG_CONFIG_HOME` from `HOST_XDG_CONFIG_HOME`, which Flatpak sets only when
+the host had `XDG_CONFIG_HOME`, and falls back to `~/.config`. A template names
+the file the client reads, whatever the sandbox was granted.
+`HOST_XDG_CONFIG_HOME` is part of the warmed environment snapshot and
+`/.flatpak-info` is read once under the snapshot's mutex, so dock workers
+resolve the same path as the main thread (#691).
 
-A sandbox without that grant keeps its own variable, because Flatpak mounts an
-`xdg-config/<dir>` grant inside the per-app directory. Nothing else such a
-sandbox writes is visible outside it: its home directory is a private tmpfs.
-Configure still reports success for those paths, so set clients up by hand in
-that configuration.
+**Whether the sandbox can write that file** is a separate question. The
+Flathub Godot build holds `host`, which shares the home directory. With that
+grant removed (Flatseal, or `flatpak override --nofilesystem=host`) the
+sandbox's home directory is a private tmpfs: Configure wrote
+`~/.cursor/mcp.json` there, read it back, and reported success for a file that
+never existed on the host. Configure and Remove now ask
+`McpClient.unshared_flatpak_config_error` before they touch anything, and
+return its message when the directory that would hold the file is not shared
+read-write with the host. Status does not ask. It keeps reading the path,
+reports `not_configured` for a file it cannot see, and under a read-only grant
+reports the client's real state.
+
+Two sources decide, and both are pure functions in
+`utils/transport_capability.gd`:
+
+- **The grants** in `[Context] filesystems=` of `/.flatpak-info`
+  (`flatpak_grant_over`). `home` and `host` share the home directory. `~/dir`
+  and `/dir` share that location. `xdg-config` and `xdg-config/<dir>` share
+  the host's config directory or one directory in it: Flatpak mounts such a
+  grant at the host's own path, and a `<dir>` grant inside the per-app
+  directory as well. The narrowest grant over a path decides, so a `:ro` grant
+  on a client's directory stays read-only under a writable home. A grant for
+  the file alone is not enough, because a config file is replaced by rename
+  and a rename cannot land on a file Flatpak mounted by itself. The other
+  `xdg-` names share nothing here: where they lie depends on host settings
+  the sandbox cannot read.
+- **The mounts** in `/proc/self/mountinfo` (`flatpak_blocking_mount`), because
+  a grant says what Flatpak was asked for, not what it mounted. Flatpak skips
+  a granted directory that does not exist when the app starts, unless the
+  grant is `:create`. It also leaves denials out of `/.flatpak-info`: a
+  directory hidden with `--nofilesystem` under a `home` grant is an empty
+  tmpfs that only the mounts reveal. A mount list that cannot be read leaves
+  the grant's answer standing.
+
+The refusal names the fix: `flatpak override --user --filesystem=home
+org.godotengine.Godot` when nothing covers the path, the read-only grant when
+one does, the directory to create when a grant was skipped, or the rule to
+remove when one hides it. A narrower grant than the home works too, such as
+`--filesystem=~/.cursor`, or `--filesystem=xdg-config/Code:create` for a
+directory that may not exist yet. Pi, OpenCode and Oh My Pi resolve their
+merge tiers in `_json_strategy.gd`, so the same check runs there on every
+tier, and one unshared tier refuses the whole action. A client configured
+through its own CLI is checked on the JSON-fallback file, whether the CLI or
+the fallback would write it. For Claude Code that covers the `user` and
+`local` scopes, which both write `~/.claude.json`. The `project` scope's entry
+goes into the working directory's `.mcp.json` and is left to the CLI.
+
+**Where the credentials go** follows a narrower rule,
+`McpTransportCapability.linux_config_home_variable`, mirrored by Python's
+`capability_directory()`: the host's config directory when the sandbox holds
+`host`, `home`, or the whole of `xdg-config` read-write, and otherwise the
+per-app directory, which every instance of the app shares. An
+`xdg-config/godot-ai` grant needs no rule of its own, since Flatpak mounts it
+inside the per-app directory.
+
+A sandbox that shares a client's directory but not the credentials would
+write an entry that cannot connect: launched from outside, the bridge found
+no record until the editor was also given
+`--filesystem=xdg-config/godot-ai:create`. Configure therefore refuses there
+too, after the path checks, and names that grant
+(`McpPathTemplate.flatpak_hides_credentials`). A missing entry is better than
+one known to be broken. The check asks whether the host's
+`<config home>/godot-ai/capabilities` is shared read-write, by the same two
+sources as above, and whether the server publishes there: directly when the
+config home is shared, or through an `xdg-config/` grant mounted inside the
+per-app directory. An editor started with `GODOT_AI_CAPABILITY_DIR` publishes
+where this cannot judge and is never refused; its client needs the same
+variable. Remove and status are not held to the check. [The shared-directory
+guide](steam-capability-directory.md#client-configuration-from-a-restricted-flatpak-sandbox)
+has the full setup for such a sandbox.
 
 **What the entry launches.** The entry carries the launcher the sandboxed
 editor resolved, so that path has to exist outside the sandbox too. `uvx` from
@@ -362,10 +425,15 @@ After Godot restarts, Configure writes into that directory. The resolution
 carries this as `create_error`, not `error`: status keeps reading the ordinary
 location and reports `not_configured`, so a client that is simply not
 installed does not turn its row into an error, and the manual instructions
-name both files. The entry works inside the IDE's sandbox when that sandbox
-shares the home directory, because the bridge finds the capability record by
-the same config-home rule; launching the written entry inside VS Code's
-sandbox returned `editor_state` from the sandboxed editor.
+name both files. The write check above comes first: while the ordinary
+location is one the sandbox cannot write, Configure reports that instead. A
+granted app directory has to appear in `/.flatpak-info` like any other grant,
+since `home` and `host` do not bring it.
+
+The entry works inside the IDE's sandbox when that sandbox shares the home
+directory, because the bridge finds the capability record by the same
+config-home rule; launching the written entry inside VS Code's sandbox
+returned `editor_state` from the sandboxed editor.
 
 No Flatpak location is declared for VS Code Insiders, whose Flathub beta
 package no longer installs, or for Trae and Claude Desktop, which have no
