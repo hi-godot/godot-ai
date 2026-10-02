@@ -784,6 +784,24 @@ def test_unsafe_home_ancestry_grants_no_hidden_owner_trust(monkeypatch) -> None:
     assert Path(failure.value.filename) == Path(FAKE_ROOT)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+@pytest.mark.parametrize("home", ["relative/home", None])
+def test_unresolvable_home_grants_no_hidden_owner_trust(monkeypatch, home) -> None:
+    requested = _sandboxed_home(monkeypatch)
+    if home is None:
+
+        def no_home(_cls):
+            raise RuntimeError("Could not determine home directory.")
+
+        monkeypatch.setattr(Path, "home", classmethod(no_home))
+    else:
+        monkeypatch.setenv("HOME", home)
+
+    with pytest.raises(PermissionError, match="owner UID 65534") as failure:
+        capability_module._reject_unsafe_posix_ancestors(requested)
+    assert Path(failure.value.filename) == Path(f"{FAKE_ROOT}/home")
+
+
 @pytest.mark.parametrize(
     "uid_map,overflow,expected",
     [
@@ -874,6 +892,10 @@ def test_flatpak_filesystem_grants_are_read_from_the_context_group_only(
     )
     monkeypatch.setattr(capability_module, "_FLATPAK_INFO", path)
 
+    assert capability_module._flatpak_shares_home() is False
+
+    # An app that never had a filesystem entry has no such key at all.
+    path.write_text("[Application]\nname=org.example.App\n\n[Context]\nshared=network;\n")
     assert capability_module._flatpak_shares_home() is False
 
 

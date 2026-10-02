@@ -339,6 +339,10 @@ func test_flatpak_shares_home_only_with_a_read_write_home_grant() -> void:
 		)
 	assert_false(McpTransportCapability.flatpak_shares_home(""), "not a Flatpak sandbox")
 	assert_false(
+		McpTransportCapability.flatpak_shares_home("[Context]\nshared=network;\n"),
+		"an app that never had a filesystem entry has no such key",
+	)
+	assert_false(
 		McpTransportCapability.flatpak_shares_home(
 			"[Instance]\nfilesystems=host;\n\n[Context]\nfilesystems=xdg-run/app;\n"
 		),
