@@ -102,6 +102,14 @@ static func _root_path() -> String:
 	## Unlike user://, the OS config directory is shared by every Godot
 	## project owned by this account. User-scope client config is shared too,
 	## so a project-specific lock would leave the real cross-editor race open.
+	##
+	## A Flatpak editor that shares the home directory writes the host's client
+	## configs, the same files an editor outside the sandbox writes, while its
+	## own OS config directory is the per-app ~/.var/app/<id>/config. It takes
+	## the lock where those other editors look for it.
+	var host_config_home := McpPathTemplate.flatpak_host_config_home()
+	if not host_config_home.is_empty():
+		return host_config_home.path_join(ROOT_DIR_NAME)
 	return OS.get_config_dir().path_join(ROOT_DIR_NAME)
 
 

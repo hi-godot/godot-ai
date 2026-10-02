@@ -121,6 +121,17 @@ static func flatpak_app_id() -> String:
 	return ""
 
 
+## The host's config directory when this editor is a Flatpak that shares the
+## home directory; "" anywhere else, and when it cannot be resolved. For
+## callers whose own default is `OS.get_config_dir()`, which in that sandbox
+## is the per-app directory that nothing outside it reads.
+static func flatpak_host_config_home() -> String:
+	if not McpTransportCapability.flatpak_shares_home(_flatpak_info_text()):
+		return ""
+	var config_home := expand("$XDG_CONFIG_HOME")
+	return config_home if config_home.is_absolute_path() else ""
+
+
 ## The `~/.var/app/<id>` directory of another Flatpak app that `path` lies in,
 ## when this editor's own Flatpak sandbox does not show it; "" otherwise.
 ## Flatpak mounts only the running app's directory under `~/.var/app`, and a

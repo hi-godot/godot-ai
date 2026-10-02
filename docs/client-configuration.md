@@ -101,9 +101,11 @@ durable lock at the exact path reported by
 directory rather than `user://`, because global client configuration is shared
 by every Godot project for the account. The claim stays held through post-write
 status verification. Status probes and manual instructions remain lock-free.
-Inside a Flatpak editor the OS config directory is the per-app
-`~/.var/app/<id>/config`, so the lock is shared by every Flatpak editor for the
-account but not with an editor running outside the sandbox.
+A Flatpak editor that shares the home directory takes the lock under the
+host's config directory, the one its client paths resolve to, so it contends
+with editors outside the sandbox for the files they both write. Its own OS
+config directory is the per-app `~/.var/app/<id>/config`; only a sandbox that
+keeps its home to itself still roots the lock there.
 
 An existing or malformed lock fails closed. If a timed-out CLI mutation cannot
 prove that its process tree terminated, the lock deliberately survives plugin

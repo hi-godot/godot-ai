@@ -4231,6 +4231,46 @@ func test_global_mutation_claim_allows_one_cross_owner_worker() -> void:
 	assert_false(ClientMutationLock.is_locked(), "the test claim must not leak")
 
 
+func test_mutation_lock_follows_the_host_config_home_in_a_flatpak_editor() -> void:
+	## A Flatpak editor that shares the home directory writes the host's client
+	## configs, the same files an editor outside the sandbox writes. Its own OS
+	## config directory is per-app, so a lock rooted there would serialize it
+	## against other Flatpak editors only.
+	var home := _fresh_scratch("flatpak_lock_home")
+	var own_config := home.path_join(".var/app/org.godotengine.Godot/config")
+	DirAccess.make_dir_recursive_absolute(own_config)
+	DirAccess.make_dir_recursive_absolute(home.path_join(".config"))
+	var saved := _enter_environment({
+		"HOME": home, "XDG_CONFIG_HOME": own_config, "HOST_XDG_CONFIG_HOME": "",
+	})
+	var os_default := OS.get_config_dir().path_join("godot-ai/client_mutation.lock")
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;host;"))
+	var shared := ClientMutationLock.lock_path()
+	var claim := ClientMutationLock.acquire("cursor", "configure")
+	var held := DirAccess.dir_exists_absolute(shared)
+	var released := ClientMutationLock.release(claim)
+	OS.set_environment("HOST_XDG_CONFIG_HOME", "/host/config")
+	var host_named := ClientMutationLock.lock_path()
+	McpPathTemplate._set_flatpak_info_for_test(_flatpak_info("xdg-run/speech-dispatcher;"))
+	var without_home := ClientMutationLock.lock_path()
+	McpPathTemplate._set_flatpak_info_for_test("")
+	var outside := ClientMutationLock.lock_path()
+	_leave_environment(saved)
+
+	assert_eq(shared, home.path_join(".config/godot-ai/client_mutation.lock"))
+	assert_true(bool(claim.get("ok", false)), "the claim must be taken in the host's directory")
+	assert_true(held, "the lock directory must exist while the claim is held")
+	assert_true(released, "the exact claim must release cleanly")
+	assert_false(DirAccess.dir_exists_absolute(shared), "the test claim must not leak")
+	assert_false(DirAccess.dir_exists_absolute(own_config.path_join("godot-ai")),
+		"nothing may be created in the per-app directory")
+	assert_eq(host_named, "/host/config/godot-ai/client_mutation.lock")
+	assert_eq(without_home, os_default,
+		"a sandbox that keeps its home to itself keeps its own lock")
+	assert_eq(outside, os_default, "outside Flatpak the OS config directory is the shared one")
+	_remove_dir_recursive(home)
+
+
 # ----- atomic write: concurrency + symlink targets (#534) -----
 
 ## List leftover files in _scratch_dir whose name starts with `prefix` — used
