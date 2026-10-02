@@ -192,14 +192,25 @@ Godot AI 4.2.2 and later accept root- or current-user-owned links beneath
 protected parents and validates every target ancestor. Other-user ownership,
 writable parents, and symlink loops remain rejected.
 
-Some nested user namespaces expose host-root ancestors as an unmapped owner
-(often UID 65534). Those paths still fail ownership verification. Do not chmod
-system directories or treat UID 65534 as trusted to work around this; a usable
-credential directory must have verifiable ownership and be accessible to both
-the editor and its client bridge.
+Flatpak, Steam's runtime, and rootless containers run in a user namespace that
+does not include the host's root account. Its `/home` (`/var/home` on Fedora
+Atomic, Bazzite, and other ostree systems) then reads back as an owner the
+sandbox cannot name, usually UID 65534, and Godot AI 4.2.3 and earlier refuse
+to start there. Later versions do not test the owner of a directory above
+your home directory when they run inside such a namespace, which is where
+OpenSSH's `StrictModes` stops too. That directory must still be closed to group
+and other writes. Your home directory and everything below it must still belong
+to you or root, and nothing is relaxed outside a user namespace.
+
+A Flatpak editor that shares your home directory, as the Flathub Godot build
+does by default, publishes its credentials under the host's `~/.config/godot-ai`
+(or the host's `XDG_CONFIG_HOME`) instead of Flatpak's per-app config
+directory, so an AI client outside the sandbox finds them without configuration.
+
 Use the [explicit shared-directory guide](docs/steam-capability-directory.md)
-when the startup error names an untrusted ancestor owner. Resolving `/home`
-with `realpath` alone does not fix an untrusted `/var/home` ancestor.
+on 4.2.3 and earlier, for a Flatpak editor that does not share your home
+directory, and whenever the startup error still names an untrusted ancestor
+owner. Do not chmod or chown system directories to work around it.
 
 If the selected credential path has group- or world-writable ancestors (for
 example `775` or `777`), startup remains blocked. The plugin lists the existing

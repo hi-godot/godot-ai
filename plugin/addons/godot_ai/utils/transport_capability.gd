@@ -13,6 +13,7 @@ const _GROUP_OTHER_PERMISSION_MASK := 0x3f  ## 0077
 const _GROUP_OTHER_WRITE_MASK := 0x12  ## 0022
 const _MAX_LINK_HOPS := 8
 const _SYSTEM_TEMP_ROOTS: Array[String] = ["/tmp", "/private/tmp", "/var/tmp"]
+const _FLATPAK_INFO_PATH := "/.flatpak-info"
 const _KEYS: Array[String] = [
 	"version", "http", "websocket", "instance_nonce",
 ]
@@ -322,10 +323,45 @@ static func path_for_http_port(http_port: int) -> String:
 				"Library/Application Support/godot-ai/capabilities"
 			)
 		else:
-			directory = OS.get_environment("XDG_CONFIG_HOME").strip_edges()
-			if directory.is_empty():
-				directory = OS.get_environment("HOME").path_join(".config")
-			directory = directory.path_join("godot-ai/capabilities")
+			directory = linux_config_home(_flatpak_info()).path_join("godot-ai/capabilities")
 	if directory.is_empty() or not directory.is_absolute_path():
 		return ""
 	return directory.simplify_path().path_join("http-%d.json" % http_port)
+
+
+## The config directory a Linux process outside this one would also name.
+## Flatpak points `XDG_CONFIG_HOME` at the app's own `~/.var/app/<id>/config`,
+## which a client outside that sandbox never reads. When the sandbox shares
+## the real home, the host's value is `HOST_XDG_CONFIG_HOME` if the host set
+## one, else the `~/.config` default. Python's `capability_directory` applies
+## the same rule, so the server publishes where this reads.
+static func linux_config_home(flatpak_info: String) -> String:
+	var variable := (
+		"HOST_XDG_CONFIG_HOME" if flatpak_shares_home(flatpak_info) else "XDG_CONFIG_HOME"
+	)
+	var config := OS.get_environment(variable).strip_edges()
+	if config.is_empty():
+		config = OS.get_environment("HOME").path_join(".config")
+	return config
+
+
+## Whether `/.flatpak-info` text describes a sandbox that can write the host's
+## home directory. `host` and `home` expose the real home read-write at its
+## own path; a `:ro` grant, a narrower one, or none leaves the app's private
+## directories as the only ones a process outside the sandbox can also see.
+static func flatpak_shares_home(flatpak_info: String) -> bool:
+	var group := ""
+	for line in flatpak_info.split("\n"):
+		if line.begins_with("["):
+			group = line.strip_edges()
+		elif group == "[Context]" and line.begins_with("filesystems="):
+			var grants := line.trim_prefix("filesystems=").strip_edges().split(";")
+			return grants.has("host") or grants.has("home")
+	return false
+
+
+static func _flatpak_info() -> String:
+	if not FileAccess.file_exists(_FLATPAK_INFO_PATH):
+		return ""
+	var file := FileAccess.open(_FLATPAK_INFO_PATH, FileAccess.READ)
+	return "" if file == null else file.get_as_text()

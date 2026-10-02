@@ -10,6 +10,7 @@ import re
 import secrets
 import stat
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,9 @@ _KEYS = frozenset({"version", "http", "websocket", "instance_nonce"})
 _REPARSE_POINT = 0x400
 # Bound on link components followed while resolving one capability path.
 _MAX_LINK_HOPS = 8
+_FLATPAK_INFO = Path("/.flatpak-info")
+_USER_NAMESPACE_MAP = Path("/proc/self/uid_map")
+_OVERFLOW_UID = Path("/proc/sys/kernel/overflowuid")
 
 
 @dataclass(frozen=True)
@@ -141,11 +145,15 @@ def capability_directory() -> Path:
     elif sys.platform == "darwin":
         directory = Path.home() / "Library" / "Application Support" / "godot-ai" / "capabilities"
     else:
-        config = os.environ.get("XDG_CONFIG_HOME", "").strip()
+        # Flatpak points XDG_CONFIG_HOME at the app's own ~/.var/app/<id>/config,
+        # which a client outside that sandbox never reads. When the sandbox
+        # shares the real home, use the directory the host itself names.
+        name = "HOST_XDG_CONFIG_HOME" if _flatpak_shares_home() else "XDG_CONFIG_HOME"
+        config = os.environ.get(name, "").strip()
         if config:
             base = Path(config).expanduser()
             if not base.is_absolute():
-                raise ValueError("XDG_CONFIG_HOME must be an absolute path")
+                raise ValueError(f"{name} must be an absolute path")
         else:
             base = Path.home() / ".config"
         directory = base / "godot-ai" / "capabilities"
@@ -154,6 +162,29 @@ def capability_directory() -> Path:
             raise ValueError("capability directory must be an absolute path")
         directory = _reject_unsafe_posix_ancestors(directory)
     return directory
+
+
+def _flatpak_shares_home() -> bool:
+    """Whether this is a Flatpak sandbox that can write the host's home directory.
+
+    Flatpak lists the sandbox's filesystem grants in ``/.flatpak-info``. ``host``
+    and ``home`` expose the real home read-write at its own path; a ``:ro``
+    grant, a narrower one, or none leaves the app's private directories as the
+    only ones a process outside the sandbox can also see.
+    """
+
+    try:
+        lines = _FLATPAK_INFO.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    group = ""
+    for line in lines:
+        if line.startswith("["):
+            group = line.strip()
+        elif group == "[Context]" and line.startswith("filesystems="):
+            grants = line.partition("=")[2].split(";")
+            return "host" in grants or "home" in grants
+    return False
 
 
 def record_path(http_port: int, directory: Path | None = None) -> Path:
@@ -186,7 +217,15 @@ def _reject_link_components(path: Path) -> None:
             raise OSError(errno.ELOOP, "capability path traverses a link or reparse point", current)
 
 
-def _is_safe_posix_ancestor(path: Path, info: os.stat_result) -> bool:
+def _is_root_or_self(_path: Path, uid: int) -> bool:
+    return uid in {0, os.getuid()}
+
+
+def _is_safe_posix_ancestor(
+    path: Path,
+    info: os.stat_result,
+    owner_trusted: Callable[[Path, int], bool] = _is_root_or_self,
+) -> bool:
     """Accept private ancestors and only canonical root-owned sticky temp roots."""
 
     mode = stat.S_IMODE(info.st_mode)
@@ -196,11 +235,13 @@ def _is_safe_posix_ancestor(path: Path, info: os.stat_result) -> bool:
         and stat.S_ISDIR(info.st_mode)
         and bool(mode & stat.S_ISVTX)
     )
-    return info.st_uid in {0, os.getuid()} and (mode & 0o022 == 0 or root_sticky_directory)
+    return root_sticky_directory or (owner_trusted(path, info.st_uid) and mode & 0o022 == 0)
 
 
-def _is_trusted_private_directory(path: Path) -> bool:
-    """Root/current-user ownership, no group/other writes or sticky exception."""
+def _is_trusted_private_directory(
+    path: Path, owner_trusted: Callable[[Path, int], bool] = _is_root_or_self
+) -> bool:
+    """Trusted ownership, no group/other writes or sticky exception."""
 
     try:
         info = path.lstat()
@@ -208,9 +249,45 @@ def _is_trusted_private_directory(path: Path) -> bool:
         return False
     return (
         stat.S_ISDIR(info.st_mode)
-        and info.st_uid in {0, os.getuid()}
+        and owner_trusted(path, info.st_uid)
         and stat.S_IMODE(info.st_mode) & 0o022 == 0
     )
+
+
+def _unnameable_owner_uid() -> int | None:
+    """The UID this user namespace reports for an owner it cannot name.
+
+    Flatpak, Steam's pressure-vessel and rootless containers run in a user
+    namespace that does not map the host's root, so a directory it owns reads
+    back as the kernel's overflow UID (65534). ``None`` in the initial
+    namespace, where every reported owner is a real account.
+    """
+
+    try:
+        if _USER_NAMESPACE_MAP.read_text(encoding="ascii").split() == ["0", "0", "4294967295"]:
+            return None
+        return int(_OVERFLOW_UID.read_text(encoding="ascii"))
+    except (OSError, ValueError):
+        return None
+
+
+def _ancestors_of_home(unnameable_uid: int) -> frozenset[Path]:
+    """Every component walked to reach the home directory, excluding it."""
+
+    try:
+        home = Path.home()
+    except RuntimeError:
+        return frozenset()
+    if not home.is_absolute():
+        return frozenset()
+    visited: list[Path] = []
+    try:
+        resolved = _walk_ancestors(
+            home, lambda _path, uid: uid in {0, os.getuid(), unnameable_uid}, visited
+        )
+    except OSError:
+        return frozenset()
+    return frozenset(visited) - {resolved}
 
 
 def _reject_unsafe_posix_ancestors(path: Path) -> Path:
@@ -218,21 +295,46 @@ def _reject_unsafe_posix_ancestors(path: Path) -> Path:
 
     Returns ``path`` with every accepted link component replaced by its
     target, so callers operate on a link-free path. A link is followed only
-    when it and its parent are owned by root or this user, the parent is
-    closed to group/other writes, and every ancestor before it already passed.
+    when it and its parent have a trusted owner, the parent is closed to
+    group/other writes, and every ancestor before it already passed.
     Another account cannot place such a link. Steam's pressure-vessel owns
     its ``/home -> /var/home`` link and namespace root as the invoking user.
     This applies the same account boundary as ordinary directory ancestors.
     Every other link fails closed, as does a chain longer than ``_MAX_LINK_HOPS``.
     The target's own components are walked under the same rules, so lexical
     ``..`` resolution against the already-resolved parent matches the kernel.
+
+    A trusted owner is root or this user. Inside a user namespace that does
+    not map the host's root (Flatpak, pressure-vessel, rootless containers), its
+    ``/home`` reads back as the overflow UID, so there the owner of
+    a directory above the home directory is not tested: that is where sshd's
+    StrictModes stops too, because the administrator chose where homes live.
+    Such a directory must still be closed to group/other writes, and the home
+    directory and everything below it must still be root's or this user's.
+    Outside a user namespace nothing is relaxed.
     """
 
     if os.name == "nt":  # pragma: no cover - overrides are already disabled
         return path
+    unnameable_uid = _unnameable_owner_uid()
+    above_home = _ancestors_of_home(unnameable_uid) if unnameable_uid is not None else frozenset()
+
+    def owner_trusted(component: Path, uid: int) -> bool:
+        return uid in {0, os.getuid()} or (uid == unnameable_uid and component in above_home)
+
+    return _walk_ancestors(path, owner_trusted)
+
+
+def _walk_ancestors(
+    path: Path,
+    owner_trusted: Callable[[Path, int], bool],
+    visited: list[Path] | None = None,
+) -> Path:
     remaining = list(path.parts[1:])
     current = Path(path.anchor)
-    if not _is_trusted_private_directory(current):
+    if visited is not None:
+        visited.append(current)
+    if not _is_trusted_private_directory(current, owner_trusted):
         raise OSError(errno.EACCES, "capability path has an unsafe ancestor", current)
     hops = 0
     while remaining:
@@ -242,11 +344,13 @@ def _reject_unsafe_posix_ancestors(path: Path) -> Path:
         except FileNotFoundError:
             # Nothing below a missing component exists yet; it is created 0700.
             return current.joinpath(*remaining)
+        if visited is not None:
+            visited.append(current)
         if _is_link_or_reparse(info):
             if (
-                info.st_uid not in {0, os.getuid()}
+                not owner_trusted(current, info.st_uid)
                 or hops >= _MAX_LINK_HOPS
-                or not _is_trusted_private_directory(current.parent)
+                or not _is_trusted_private_directory(current.parent, owner_trusted)
             ):
                 raise OSError(
                     errno.ELOOP,
@@ -261,8 +365,8 @@ def _reject_unsafe_posix_ancestors(path: Path) -> Path:
             remaining = list(target.parts[1:]) + remaining
             current = Path(target.anchor)
             continue
-        if not _is_safe_posix_ancestor(current, info):
-            if info.st_uid not in {0, os.getuid()}:
+        if not _is_safe_posix_ancestor(current, info, owner_trusted):
+            if not owner_trusted(current, info.st_uid):
                 raise PermissionError(
                     errno.EACCES,
                     f"capability path has an unsafe ancestor: owner UID {info.st_uid} "

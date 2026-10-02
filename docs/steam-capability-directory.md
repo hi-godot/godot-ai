@@ -1,24 +1,50 @@
-# Shared capability directories across Steam namespaces
+# Shared capability directories for sandboxed editors
 
-Use this guide when startup reports that a capability-path ancestor is owned
-by a UID other than root or your current user. Some nested Steam
-pressure-vessel namespaces show host-root ancestors as an unmapped UID, often
-65534. That is one possible cause; the UID alone does not establish it.
+Godot AI versions after 4.2.3 start without configuration when Godot runs in
+Flatpak or Steam's runtime and shares your home directory with the host. Use
+this guide for:
 
-Godot AI refuses this path because it cannot verify the directory's ownership.
-The checks remain enabled. Do not trust UID 65534 specially, change system
-folder ownership or permissions, or copy capability tokens into client settings.
-The ordinary `/home -> /var/home` symlink fix does not solve an untrusted
-ancestor of the resolved path.
+- Godot AI 4.2.3 and earlier in any Flatpak or Steam sandbox;
+- a Flatpak editor that does not share your home directory;
+- a startup error that still names a capability-path ancestor owned by a UID
+  other than root or your current user.
+
+A sandbox's user namespace does not include the host's root account, so host
+directories it owns read back as an unmapped UID, usually 65534. Versions after 4.2.3
+accept that owner only on directories above your home directory, and only when
+they are closed to group and other writes. Anywhere else Godot AI refuses the
+path because it cannot verify who owns the directory. The checks remain
+enabled. Do not change system folder ownership or permissions, or copy
+capability tokens into client settings. The ordinary `/home -> /var/home`
+symlink fix does not solve an untrusted ancestor of the resolved path.
+
+## Flatpak: the per-app runtime directory
+
+Flatpak shares one private directory per app with the host:
+`$XDG_RUNTIME_DIR/app/<app-id>`. It belongs to your user with mode `0700`, it
+has the same path inside and outside the sandbox, and every ancestor passes
+Godot AI's ownership checks in both views. It needs no extra filesystem
+permission. For the Flathub Godot build:
+
+```sh
+flatpak override --user org.godotengine.Godot \
+  --env=GODOT_AI_CAPABILITY_DIR="$XDG_RUNTIME_DIR/app/org.godotengine.Godot/godot-ai/capabilities"
+```
+
+Give the outside AI client the same value as described under
+[Configure both launch environments](#configure-both-launch-environments).
+Flatpak creates the directory when the app starts, so start Godot before the
+client. `flatpak override --user --show org.godotengine.Godot` lists what is
+set.
 
 ## Choose and verify a shared location
 
-There is no universal replacement directory. Choose a directory whose backing
-files are visible to both the Steam-launched editor and the outside AI client.
-It must be owned by your user and have mode `0700`. Every existing ancestor
-must pass Godot AI's ownership and write-permission checks in both views.
-A matching path string, a host-only permission check, or an `XDG_RUNTIME_DIR`
-variable does not prove shared access.
+Outside Flatpak there is no universal replacement directory. Choose a
+directory whose backing files are visible to both the sandboxed editor and the
+outside AI client. It must be owned by your user and have mode `0700`. Every
+existing ancestor must pass Godot AI's ownership and write-permission checks
+in both views. A matching path string, a host-only permission check, or an
+`XDG_RUNTIME_DIR` variable does not prove shared access.
 
 Create only your chosen private directory beneath a verified parent, as your
 normal user. Replace the example path below; it is a placeholder, not a default:
@@ -75,7 +101,7 @@ capability-directory override into every client's environment. If the same
 backing directory has different paths inside and outside the namespace, each
 side needs its own valid path to those same files.
 
-Start Godot through Steam, then connect with the outside client. Ask the client
+Start the sandboxed Godot, then connect with the outside client. Ask the client
 for `editor_state` and confirm it identifies the intended project/editor.
 This checks the authenticated client-to-backend-to-editor connection. A running
 backend, matching environment strings, or a directory-validation result alone
@@ -85,15 +111,23 @@ does not establish that connection. Do not print or share the capability JSON.
 
 ## Verification and limits
 
-The nested-owner refusal was reproduced using Valve's actual Soldier runtime
-in a controlled Linux container with a Bazzite-style `/home -> var/home`
-layout. A protected explicitly shared directory supported authenticated access
-from an outside client and real editor node creation, property readback, and
-deletion. This verifies the configuration mechanism, not a safe default path
-for every Steam installation. The fixture backend was launched explicitly;
-these results do not claim dock auto-start was tested in native Bazzite.
+Startup without configuration was verified with the Flathub Godot 4.7.2 build
+under Flatpak 1.16.6, on a regular `/home` layout and on an ostree-style
+`/home -> var/home` layout. The editor started its backend, the handler suite
+ran through a driver outside the sandbox, `godot-ai attach` connected from the
+host and from a second Flatpak sandbox, and exact 3.2.1 and 3.2.5 installs
+updated into it. The same checks fail on 4.2.3. The per-app runtime directory
+above was verified with an unmodified 4.2.3 editor and client.
 
-Native Bazzite and the original reporter's exact environment remain unverified.
+The ownership rule was also exercised in a bubblewrap namespace laid out like
+Steam's pressure-vessel. It has not been run against the Steam client itself.
+The earlier nested-owner refusal was reproduced using Valve's actual Soldier
+runtime in a controlled Linux container with a Bazzite-style
+`/home -> var/home` layout; a protected explicitly shared directory supported
+authenticated access from an outside client and real editor node creation,
+property readback, and deletion.
+
+Native Bazzite and the original reporters' exact environments remain unverified.
 See [#1113](https://github.com/hi-godot/godot-ai/issues/1113) for the concrete
 namespace boundary and [#1059](https://github.com/hi-godot/godot-ai/issues/1059)
 for the original Steam report.

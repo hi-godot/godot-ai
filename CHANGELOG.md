@@ -20,6 +20,36 @@ reading. Release engineering: [docs/releasing.md](docs/releasing.md).
   `GODOT_AI_TELEMETRY_FLUSH_INTERVAL` overrides the interval for self-hosters
   and smoke tests. See [docs/TELEMETRY.md](docs/TELEMETRY.md).
 
+### Fixed
+
+- Godot AI starts when Godot runs inside Flatpak, the usual install on
+  Bazzite, Fedora Atomic, and SteamOS. The sandbox hides who owns `/home`
+  (`/var/home` on ostree systems), and 4.0.0 through 4.2.3 refused to start
+  there with `capability path has an unsafe ancestor: owner UID 65534`,
+  including straight after updating from 3.2.x. Inside such a sandbox the
+  owner of a directory above your home directory is no longer tested, which
+  is where OpenSSH's `StrictModes` stops too. Write permissions there, and
+  ownership from your home directory down, are still enforced, and nothing
+  is relaxed outside a sandbox. The same rule covers Steam's runtime and
+  rootless containers
+  ([#1113](https://github.com/hi-godot/godot-ai/issues/1113)).
+- A Flatpak editor that shares your home directory publishes its credentials
+  under the host's `~/.config/godot-ai` instead of Flatpak's per-app config
+  directory, so AI clients outside the sandbox, or in a sandbox of their own,
+  connect without `GODOT_AI_CAPABILITY_DIR`. See the
+  [setup guide](docs/steam-capability-directory.md) for editors that do not
+  share it.
+
+### Known limitations
+
+The Steam path was exercised in a bubblewrap namespace laid out like Steam's
+pressure-vessel, not with the Steam client. Confirmation on a Steam install
+and on native Bazzite is pending in
+[#1113](https://github.com/hi-godot/godot-ai/issues/1113). Automatic client
+configuration from a Flatpak editor still writes clients whose settings live
+under `XDG_CONFIG_HOME` (VS Code, Zed, Cline, and similar) into Flatpak's
+per-app config directory; add `godot-ai attach` to those clients manually.
+
 ### Maintenance
 
 - Upgrade FastMCP and fastmcp-slim from 4.0.5 to 4.0.10, HTTPX2 and HTTPCore2

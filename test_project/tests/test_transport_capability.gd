@@ -300,18 +300,81 @@ func test_linux_rejects_relative_xdg_capability_directory() -> void:
 		return
 	var before_override := OS.get_environment(McpTransportCapability.CAPABILITY_DIR_ENV)
 	var before_xdg := OS.get_environment("XDG_CONFIG_HOME")
+	var before_host := OS.get_environment("HOST_XDG_CONFIG_HOME")
 	OS.unset_environment(McpTransportCapability.CAPABILITY_DIR_ENV)
+	## A Flatpak editor that shares the home reads the host's variable instead.
 	OS.set_environment("XDG_CONFIG_HOME", "relative/config")
+	OS.set_environment("HOST_XDG_CONFIG_HOME", "relative/config")
 	var path := McpTransportCapability.path_for_http_port(8122)
-	if before_override.is_empty():
-		OS.unset_environment(McpTransportCapability.CAPABILITY_DIR_ENV)
-	else:
-		OS.set_environment(McpTransportCapability.CAPABILITY_DIR_ENV, before_override)
-	if before_xdg.is_empty():
-		OS.unset_environment("XDG_CONFIG_HOME")
-	else:
-		OS.set_environment("XDG_CONFIG_HOME", before_xdg)
+	_restore_environment(McpTransportCapability.CAPABILITY_DIR_ENV, before_override)
+	_restore_environment("XDG_CONFIG_HOME", before_xdg)
+	_restore_environment("HOST_XDG_CONFIG_HOME", before_host)
 	assert_eq(path, "")
+
+
+func test_flatpak_shares_home_only_with_a_read_write_home_grant() -> void:
+	## Mirrors tests/unit/test_transport_capability.py: the server must publish
+	## where this plugin reads.
+	var cases := {
+		"xdg-run/speech-dispatcher;host;": true,
+		"home;": true,
+		"xdg-run/speech-dispatcher;": false,
+		"home:ro;xdg-run/speech-dispatcher;": false,
+		"host:ro;": false,
+		"!home;xdg-config/godot-ai;": false,
+		"~/projects;host-os;host-etc;": false,
+		"": false,
+	}
+	for filesystems in cases:
+		assert_eq(
+			McpTransportCapability.flatpak_shares_home(_flatpak_info(filesystems)),
+			cases[filesystems],
+			"filesystems=%s" % filesystems,
+		)
+	assert_false(McpTransportCapability.flatpak_shares_home(""), "not a Flatpak sandbox")
+	assert_false(
+		McpTransportCapability.flatpak_shares_home(
+			"[Instance]\nfilesystems=host;\n\n[Context]\nfilesystems=xdg-run/app;\n"
+		),
+		"only the [Context] group lists the sandbox's grants",
+	)
+
+
+func test_linux_config_home_is_the_host_directory_when_flatpak_shares_home() -> void:
+	var before_xdg := OS.get_environment("XDG_CONFIG_HOME")
+	var before_host := OS.get_environment("HOST_XDG_CONFIG_HOME")
+	var sharing_home := _flatpak_info("xdg-run/speech-dispatcher;host;")
+	var no_home := _flatpak_info("xdg-run/speech-dispatcher;")
+	OS.set_environment("XDG_CONFIG_HOME", "/sandbox/app/config")
+	OS.unset_environment("HOST_XDG_CONFIG_HOME")
+	var host_default := McpTransportCapability.linux_config_home(sharing_home)
+	var sandbox_private := McpTransportCapability.linux_config_home(no_home)
+	var native := McpTransportCapability.linux_config_home("")
+	OS.set_environment("HOST_XDG_CONFIG_HOME", "/host/config")
+	var host_named := McpTransportCapability.linux_config_home(sharing_home)
+	var private_ignores_host := McpTransportCapability.linux_config_home(no_home)
+	_restore_environment("XDG_CONFIG_HOME", before_xdg)
+	_restore_environment("HOST_XDG_CONFIG_HOME", before_host)
+	assert_eq(host_default, OS.get_environment("HOME").path_join(".config"))
+	assert_eq(host_named, "/host/config")
+	assert_eq(sandbox_private, "/sandbox/app/config")
+	assert_eq(private_ignores_host, "/sandbox/app/config")
+	assert_eq(native, "/sandbox/app/config")
+
+
+func _flatpak_info(filesystems: String) -> String:
+	return (
+		"[Application]\nname=org.godotengine.Godot\n\n"
+		+ "[Context]\nshared=network;ipc;\ndevices=all;\nfilesystems=%s\n\n"
+		+ "[Instance]\nflatpak-version=1.16.6\n"
+	) % filesystems
+
+
+func _restore_environment(variable: String, value: String) -> void:
+	if value.is_empty():
+		OS.unset_environment(variable)
+	else:
+		OS.set_environment(variable, value)
 
 
 func _write(raw: String) -> void:

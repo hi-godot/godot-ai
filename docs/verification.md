@@ -110,13 +110,35 @@ For a Steam reproduction, use Valve's actual `SteamLinuxRuntime_soldier`
 launcher, not just its SDK image. Soldier `2.0.20260805.254767` with
 pressure-vessel `0.20260805.0` was exercised under x86-64 Linux: real Godot 4.7
 process/listener checks work without PATH tools, and the lifecycle proof suite
-passes with a protected fixture directory. A Bazzite-style `/home -> var/home`
-also exposes a separate nested-namespace limit: root-owned host bind mounts
-can appear as UID 65534 and are deliberately rejected by the credential
-ownership checks. Do not interpret those fixture results as proof of default
-home-directory startup on every Steam or Flatpak installation. In particular,
-an `XDG_RUNTIME_DIR` environment variable does not prove that its directory is
-shared with host clients.
+passes with a protected fixture directory. Root-owned host bind mounts appear
+as UID 65534 inside any bubblewrap user namespace, Flatpak's included; the
+credential ownership checks accept that owner only above the home directory
+([plugin architecture](plugin-architecture.md#security-model)). Do not
+interpret those fixture results as proof of default home-directory startup on
+every Steam installation. In particular, an `XDG_RUNTIME_DIR` environment
+variable does not prove that its directory is shared with host clients.
+
+For a Flatpak reproduction, use the real Flathub build; its sandbox is what
+hides `/home`'s owner and redirects `XDG_CONFIG_HOME`. A privileged Fedora
+container is enough (`docker run --privileged fedora:42`): install `flatpak`,
+start `dbus-daemon --system` (the app install checks parental controls on the
+system bus), then as an unprivileged user with `XDG_RUNTIME_DIR` set run
+`flatpak --user install flathub org.godotengine.Godot`. For the ostree layout
+move `/home` to `/var/home` and link `/home -> var/home`. Keep the checkout,
+its `.venv`, and pytest's `--basetemp` under the home directory: the sandbox
+has its own `/tmp`, and `.venv/bin/python3` must point at `/usr/bin/python3`
+so the same environment resolves inside and outside. Then:
+
+- `flatpak run --user --env=GODOT_AI_ALLOW_HEADLESS=1 org.godotengine.Godot
+  --headless --editor --path <checkout>/test_project` starts the backend
+  inside the sandbox; `script/ci-godot-tests` and `python -m godot_ai attach`
+  run from outside it and must find the record without
+  `GODOT_AI_CAPABILITY_DIR`.
+- For the updater rows, set `GODOT_BIN` to a wrapper that runs
+  `flatpak run --user --env=HOME="$HOME" org.godotengine.Godot "$@"` with the
+  real home restored for `flatpak` itself. The editor's PID is namespaced, so
+  `run_godot_editor`'s `require_same_editor` comparison with the launcher PID
+  cannot hold there; compare the two editor receipts instead.
 
 1. Run the same Ruff scope as CI — production, tests, the `script/` Python
    package, and the executable Python release/smoke scripts:

@@ -515,7 +515,30 @@ requirements. The target's components are walked under the same rules, the recor
 is never followed, and a chain longer than eight links fails closed. The
 plugin, which cannot see file ownership, follows a link only below a directory
 closed to group/other writes; the server, which publishes the record, is the
-side that verifies root/current-user ownership. On Windows, v4 uses fixed per-user roots
+side that verifies root/current-user ownership.
+
+Flatpak, Steam's pressure-vessel, and rootless containers run in a user
+namespace that does not map the host's root, so its `/home` (`/var/home` on
+ostree) reads back as the kernel's overflow UID (65534). Inside
+a namespace whose `/proc/self/uid_map` is not the initial identity map, the
+owner of a component walked on the way to the home directory is therefore not
+tested when it is that UID. OpenSSH's `StrictModes` stops at the home directory
+for the same reason: where the administrator placed it is the administrator's
+concern. Such a component must still be closed to group/other writes. The home
+directory, everything below it, and any path that does not lead to it keep the
+root/current-user ownership test, and in the initial namespace UID 65534 is
+the real `nobody` account and stays refused. Flatpak and pressure-vessel map
+no other account into the sandbox, so nothing inside it can own or write such
+a directory, and the client outside still applies the full test to the same
+path with real owners.
+
+Flatpak sets `XDG_CONFIG_HOME` to the app's own `~/.var/app/<id>/config`. When
+`/.flatpak-info` grants the sandbox `host` or `home` read-write, the plugin and
+the server use the host's config directory instead (`HOST_XDG_CONFIG_HOME`,
+else `~/.config`), which is the directory a client outside the sandbox reads.
+Without that grant they keep the per-app directory and an outside client needs
+`GODOT_AI_CAPABILITY_DIR`
+([setup guide](steam-capability-directory.md)). On Windows, v4 uses fixed per-user roots
 and rejects detectable reparse traversal, but does not claim secrecy or
 integrity against another local account or malicious code already running as
 the same user.

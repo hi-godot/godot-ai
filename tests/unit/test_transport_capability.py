@@ -620,3 +620,301 @@ def test_trusted_owner_writable_ancestor_keeps_permission_refusal(monkeypatch) -
     assert failure.value.errno == errno.EACCES
     assert Path(failure.value.filename) == Path(f"{FAKE_ROOT}/shared")
     assert failure.value.strerror == "capability path has an unsafe ancestor"
+
+
+HIDDEN_UID = 65534
+
+
+@pytest.fixture(autouse=True)
+def _outside_flatpak(monkeypatch, tmp_path) -> None:
+    """Keep every test independent of whether the suite itself runs in Flatpak."""
+
+    monkeypatch.setattr(capability_module, "_FLATPAK_INFO", tmp_path / "no-flatpak-info")
+
+
+def _sandboxed_home(
+    monkeypatch,
+    *,
+    ostree: bool = False,
+    hidden_uid: int | None = HIDDEN_UID,
+    home_parent: os.stat_result | None = None,
+    extra: dict[str, os.stat_result] | None = None,
+) -> Path:
+    """A bubblewrap view: own tmpfs root, host-owned home parent bind-mounted in.
+
+    Flatpak and Steam's pressure-vessel map only the invoking user, so the
+    host's root-owned ``/home`` (``/var/home`` on ostree) reads as the overflow
+    UID. Returns the capability directory requested through ``$HOME``.
+    """
+
+    me = os.getuid()
+    parent = home_parent if home_parent is not None else _directory(HIDDEN_UID)
+    entries = {FAKE_ROOT: _directory(me)}
+    links = {}
+    if ostree:
+        entries[f"{FAKE_ROOT}/home"] = _link(me)
+        entries[f"{FAKE_ROOT}/var"] = _directory(me)
+        entries[f"{FAKE_ROOT}/var/home"] = parent
+        links[f"{FAKE_ROOT}/home"] = "var/home"
+        real_home = f"{FAKE_ROOT}/var/home/me"
+    else:
+        entries[f"{FAKE_ROOT}/home"] = parent
+        real_home = f"{FAKE_ROOT}/home/me"
+    entries[real_home] = _directory(me, 0o700)
+    entries[f"{real_home}/.config"] = _directory(me, 0o700)
+    entries.update(extra or {})
+    _fake_tree(monkeypatch, entries, links)
+    monkeypatch.setenv("HOME", f"{FAKE_ROOT}/home/me")
+    monkeypatch.setattr(capability_module, "_unnameable_owner_uid", lambda: hidden_uid)
+    return Path(f"{FAKE_ROOT}/home/me/.config/godot-ai/capabilities")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+@pytest.mark.parametrize("ostree", [False, True])
+def test_hidden_owner_above_home_is_accepted_inside_a_user_namespace(monkeypatch, ostree) -> None:
+    requested = _sandboxed_home(monkeypatch, ostree=ostree)
+    home = f"{FAKE_ROOT}/var/home/me" if ostree else f"{FAKE_ROOT}/home/me"
+
+    resolved = capability_module._reject_unsafe_posix_ancestors(requested)
+
+    assert resolved == Path(f"{home}/.config/godot-ai/capabilities")
+    assert record_path(8000, requested) == resolved / "http-8000.json"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+def test_hidden_owner_above_home_stays_refused_outside_a_user_namespace(monkeypatch) -> None:
+    # In the initial namespace 65534 is the real ``nobody`` account.
+    requested = _sandboxed_home(monkeypatch, hidden_uid=None)
+
+    with pytest.raises(PermissionError, match="owner UID 65534") as failure:
+        capability_module._reject_unsafe_posix_ancestors(requested)
+    assert Path(failure.value.filename) == Path(f"{FAKE_ROOT}/home")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+def test_nameable_foreign_owner_above_home_stays_refused_in_a_user_namespace(monkeypatch) -> None:
+    requested = _sandboxed_home(monkeypatch, home_parent=_directory(os.getuid() + 1))
+
+    with pytest.raises(PermissionError, match="unsafe ancestor"):
+        capability_module._reject_unsafe_posix_ancestors(requested)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+@pytest.mark.parametrize("mode", [0o775, 0o757, 0o777, 0o1777])
+def test_hidden_owner_above_home_must_be_closed_to_group_and_other(monkeypatch, mode) -> None:
+    requested = _sandboxed_home(monkeypatch, home_parent=_directory(HIDDEN_UID, mode))
+
+    with pytest.raises(OSError, match="unsafe ancestor") as failure:
+        capability_module._reject_unsafe_posix_ancestors(requested)
+    assert Path(failure.value.filename) == Path(f"{FAKE_ROOT}/home")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+def test_hidden_owner_at_or_below_home_stays_refused(monkeypatch) -> None:
+    home = f"{FAKE_ROOT}/home/me"
+    requested = _sandboxed_home(monkeypatch, extra={f"{home}/.config": _directory(HIDDEN_UID)})
+    with pytest.raises(PermissionError, match="owner UID 65534") as below:
+        capability_module._reject_unsafe_posix_ancestors(requested)
+    assert Path(below.value.filename) == Path(f"{home}/.config")
+
+    requested = _sandboxed_home(monkeypatch, extra={home: _directory(HIDDEN_UID)})
+    with pytest.raises(PermissionError, match="owner UID 65534") as at_home:
+        capability_module._reject_unsafe_posix_ancestors(requested)
+    assert Path(at_home.value.filename) == Path(home)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+def test_hidden_owner_outside_the_home_ancestry_stays_refused(monkeypatch) -> None:
+    _sandboxed_home(
+        monkeypatch,
+        extra={
+            f"{FAKE_ROOT}/srv": _directory(HIDDEN_UID),
+            f"{FAKE_ROOT}/srv/shared": _directory(os.getuid(), 0o700),
+        },
+    )
+
+    with pytest.raises(PermissionError, match="owner UID 65534") as failure:
+        capability_module._reject_unsafe_posix_ancestors(Path(f"{FAKE_ROOT}/srv/shared/records"))
+    assert Path(failure.value.filename) == Path(f"{FAKE_ROOT}/srv")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+def test_hidden_owner_link_is_followed_only_above_home(monkeypatch) -> None:
+    # A plain ``bwrap --bind / /`` shows the host's own root-owned /home link.
+    me = os.getuid()
+    home = f"{FAKE_ROOT}/var/home/me"
+    entries = {
+        FAKE_ROOT: _directory(HIDDEN_UID),
+        f"{FAKE_ROOT}/home": _link(HIDDEN_UID),
+        f"{FAKE_ROOT}/var": _directory(HIDDEN_UID),
+        f"{FAKE_ROOT}/var/home": _directory(HIDDEN_UID),
+        home: _directory(me, 0o700),
+        f"{home}/linked": _link(HIDDEN_UID),
+        f"{home}/real": _directory(me, 0o700),
+    }
+    _fake_tree(
+        monkeypatch,
+        entries,
+        {f"{FAKE_ROOT}/home": "var/home", f"{home}/linked": "real"},
+    )
+    monkeypatch.setenv("HOME", f"{FAKE_ROOT}/home/me")
+    monkeypatch.setattr(capability_module, "_unnameable_owner_uid", lambda: HIDDEN_UID)
+
+    assert capability_module._reject_unsafe_posix_ancestors(
+        Path(f"{FAKE_ROOT}/home/me/real/records")
+    ) == Path(f"{home}/real/records")
+    with pytest.raises(OSError, match="link or reparse"):
+        capability_module._reject_unsafe_posix_ancestors(
+            Path(f"{FAKE_ROOT}/home/me/linked/records")
+        )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX namespace ownership")
+def test_unsafe_home_ancestry_grants_no_hidden_owner_trust(monkeypatch) -> None:
+    # A writable directory on the way home voids the whole ancestry, so the
+    # namespace root does not inherit trust from it.
+    requested = _sandboxed_home(
+        monkeypatch,
+        home_parent=_directory(HIDDEN_UID, 0o777),
+        extra={FAKE_ROOT: _directory(HIDDEN_UID)},
+    )
+
+    with pytest.raises(PermissionError, match="owner UID 65534") as failure:
+        capability_module._reject_unsafe_posix_ancestors(requested)
+    assert Path(failure.value.filename) == Path(FAKE_ROOT)
+
+
+@pytest.mark.parametrize(
+    "uid_map,overflow,expected",
+    [
+        ("         0          0 4294967295\n", "65534\n", None),
+        ("      1000       1000          1\n", "65534\n", 65534),
+        ("      1000          0          1\n", "65533\n", 65533),
+        ("         0     100000      65536\n", "65534\n", 65534),
+        ("      1000       1000          1\n", "not-a-uid\n", None),
+        (None, "65534\n", None),
+        ("      1000       1000          1\n", None, None),
+    ],
+)
+def test_unnameable_owner_uid_exists_only_inside_a_user_namespace(
+    monkeypatch, tmp_path, uid_map, overflow, expected
+) -> None:
+    for name, constant, content in (
+        ("uid_map", "_USER_NAMESPACE_MAP", uid_map),
+        ("overflowuid", "_OVERFLOW_UID", overflow),
+    ):
+        path = tmp_path / name
+        if content is not None:
+            path.write_text(content, encoding="ascii")
+        monkeypatch.setattr(capability_module, constant, path)
+
+    assert capability_module._unnameable_owner_uid() == expected
+
+
+FLATPAK_INFO = """[Application]
+name=org.godotengine.Godot
+runtime=runtime/org.freedesktop.Sdk/x86_64/25.08
+
+[Context]
+shared=network;ipc;
+sockets=x11;pulseaudio;
+devices=all;
+filesystems={filesystems}
+
+[Instance]
+instance-id=1234567890
+flatpak-version=1.16.6
+"""
+
+
+def _flatpak_info(monkeypatch, tmp_path, filesystems: str | None) -> None:
+    path = tmp_path / "flatpak-info"
+    if filesystems is not None:
+        path.write_text(FLATPAK_INFO.format(filesystems=filesystems), encoding="utf-8")
+    monkeypatch.setattr(capability_module, "_FLATPAK_INFO", path)
+
+
+@pytest.mark.parametrize(
+    "filesystems,expected",
+    [
+        ("xdg-run/speech-dispatcher;host;", True),
+        ("home;", True),
+        ("xdg-run/speech-dispatcher;", False),
+        ("home:ro;xdg-run/speech-dispatcher;", False),
+        ("host:ro;", False),
+        ("!home;xdg-config/godot-ai;", False),
+        ("~/projects;host-os;host-etc;", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_flatpak_shares_home_only_with_a_read_write_home_grant(
+    monkeypatch, tmp_path, filesystems, expected
+) -> None:
+    _flatpak_info(monkeypatch, tmp_path, filesystems)
+
+    assert capability_module._flatpak_shares_home() is expected
+
+
+def test_flatpak_filesystem_grants_are_read_from_the_context_group_only(
+    monkeypatch, tmp_path
+) -> None:
+    path = tmp_path / "flatpak-info"
+    path.write_text(
+        "[Instance]\nfilesystems=host;\n\n[Context]\nfilesystems=xdg-run/app;\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(capability_module, "_FLATPAK_INFO", path)
+
+    assert capability_module._flatpak_shares_home() is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX XDG path contract")
+def test_flatpak_sharing_home_publishes_to_the_host_config_directory(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    sandbox_config = home / ".var" / "app" / "org.godotengine.Godot" / "config"
+    sandbox_config.mkdir(parents=True, mode=0o700)
+    monkeypatch.delenv("GODOT_AI_CAPABILITY_DIR", raising=False)
+    monkeypatch.delenv("HOST_XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(sandbox_config))
+    monkeypatch.setattr(capability_module.sys, "platform", "linux")
+    host_default = (home / ".config" / "godot-ai" / "capabilities").resolve()
+
+    _flatpak_info(monkeypatch, tmp_path, "xdg-run/speech-dispatcher;host;")
+    assert capability_directory() == host_default
+
+    # The host's own XDG_CONFIG_HOME reaches the sandbox under another name.
+    host_config = tmp_path / "host-config"
+    monkeypatch.setenv("HOST_XDG_CONFIG_HOME", str(host_config))
+    assert capability_directory() == (host_config / "godot-ai" / "capabilities").resolve()
+    monkeypatch.setenv("HOST_XDG_CONFIG_HOME", "relative/config")
+    with pytest.raises(ValueError, match="HOST_XDG_CONFIG_HOME must be an absolute path"):
+        capability_directory()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX XDG path contract")
+@pytest.mark.parametrize("filesystems", ["xdg-run/speech-dispatcher;", "home:ro;", None])
+def test_flatpak_without_a_writable_home_keeps_its_own_config_directory(
+    monkeypatch, tmp_path, filesystems
+) -> None:
+    sandbox_config = tmp_path / "home" / ".var" / "app" / "org.godotengine.Godot" / "config"
+    sandbox_config.mkdir(parents=True, mode=0o700)
+    monkeypatch.delenv("GODOT_AI_CAPABILITY_DIR", raising=False)
+    monkeypatch.setenv("HOST_XDG_CONFIG_HOME", str(tmp_path / "host-config"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(sandbox_config))
+    monkeypatch.setattr(capability_module.sys, "platform", "linux")
+    _flatpak_info(monkeypatch, tmp_path, filesystems)
+
+    assert capability_directory() == (sandbox_config / "godot-ai" / "capabilities").resolve()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX override contract")
+def test_capability_directory_override_wins_inside_flatpak(monkeypatch, tmp_path) -> None:
+    override = tmp_path / "shared"
+    monkeypatch.setenv("GODOT_AI_CAPABILITY_DIR", str(override))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(capability_module.sys, "platform", "linux")
+    _flatpak_info(monkeypatch, tmp_path, "host;")
+
+    assert capability_directory() == override.resolve()
