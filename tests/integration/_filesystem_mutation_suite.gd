@@ -748,3 +748,68 @@ func test_mutation_owner_scan_checks_cancellation_between_relative_hits() -> voi
 	assert_eq(checks[0], 3, "check cancellation before each target, including relative-path continue branches")
 	assert_eq(hits.size(), 1, "cancelled owner scan must stop before processing the next target")
 	assert_true(job._fault.contains("cancelled"), "cancellation must be reported to the mutation owner")
+
+
+func test_mutation_frame_budget_follows_the_frame_gap() -> void:
+	## A focused editor idles at ~6.9 ms per frame and keeps the floor. An
+	## unfocused one sleeps ~100 ms per frame, where a fixed 2 ms slice left
+	## discovery about half a second of work inside its 25 s deadline (#1120).
+	assert_eq(Mutation._frame_budget(0), Mutation.BUDGET_MIN_USEC, "no observed gap keeps the floor")
+	assert_eq(Mutation._frame_budget(4900), Mutation.BUDGET_MIN_USEC, "a focused editor keeps the floor")
+	assert_true(Mutation._frame_budget(16700) <= 6000, "a 60 Hz frame gives up a few milliseconds at most")
+	var throttled := Mutation._frame_budget(100000)
+	assert_true(throttled >= 20000, "an unfocused editor's frame must carry tens of milliseconds, got %d" % throttled)
+	assert_true(throttled <= 50000, "a slice stays well inside the frame it borrows from, got %d" % throttled)
+	assert_eq(Mutation._frame_budget(10000000), Mutation.BUDGET_MAX_USEC, "a stalled editor cannot stretch one slice past the ceiling")
+
+
+class PacedProbe:
+	extends "res://addons/godot_ai/handlers/filesystem_mutation.gd"
+	var yields := 0
+	var away_usec := 0
+	func _yield_if_needed() -> bool:
+		var resumed := _yield_at
+		var entered := Time.get_ticks_usec()
+		var proceed: bool = await super._yield_if_needed()
+		if _yield_at != resumed:
+			yields += 1
+			away_usec += _yield_at - entered
+		return proceed
+
+
+func test_mutation_throttled_frames_get_proportionate_slices() -> void:
+	## Real frames at the unfocused editor's default cadence. Discovery has to
+	## spend most of the work in slices sized to those frames, not in 2 ms ones.
+	_mutation_cleanup()
+	var folder := MUTATION_ROOT + "_paced"
+	assert_eq(DirAccess.make_dir_absolute(folder), OK)
+	var owner_text := "[gd_resource type=\"Resource\" format=3]\n\n[resource]\n"
+	for line in 100:
+		owner_text += "metadata/note_%03d = \"fixture padding for the paced owner scan %03d\"\n" % [line, line]
+	for index in 200:
+		_mutation_write(folder.path_join("owner_%03d.tres" % index), owner_text)
+	var source := MUTATION_ROOT + ".txt"
+	_mutation_write(source, "keep")
+	var low_processor := OS.low_processor_usage_mode
+	var sleep_usec := OS.low_processor_usage_mode_sleep_usec
+	OS.low_processor_usage_mode = true
+	OS.low_processor_usage_mode_sleep_usec = 100000
+	var job := PacedProbe.new()
+	var started := Time.get_ticks_usec()
+	var result: Dictionary = await job.run({"path": source, "new_path": MUTATION_ROOT + "_moved.txt"}, "move")
+	var elapsed := Time.get_ticks_usec() - started
+	OS.low_processor_usage_mode = low_processor
+	OS.low_processor_usage_mode_sleep_usec = sleep_usec
+	assert_has_key(result, "data", str(result))
+	assert_eq(FileAccess.get_file_as_string(MUTATION_ROOT + "_moved.txt"), "keep")
+	assert_true(job.yields >= 2, "fixture must span several frames, got %d" % job.yields)
+	if job.yields > 0:
+		assert_true(job.away_usec / job.yields >= 50000, "frames must really be throttled, got %d usec between slices" % (job.away_usec / job.yields))
+		# Two frames of slack: the first slice runs at the floor before any
+		# frame gap is known, and the last one is partial.
+		var work_usec := elapsed - job.away_usec
+		assert_true(job.yields <= work_usec / 10000 + 2, "throttled frames must each carry far more than the floor, got %d frames for %d usec of work" % [job.yields, work_usec])
+	for index in 200:
+		DirAccess.remove_absolute(folder.path_join("owner_%03d.tres" % index))
+	DirAccess.remove_absolute(folder)
+	_mutation_cleanup()

@@ -12,13 +12,22 @@ const MAX_TOTAL_BYTES := 64 * 1024 * 1024
 const MAX_TARGETS := 256
 ## Container magic Godot writes for a compressed binary resource.
 const COMPRESSED_MAGIC := "RSCC"
-const BUDGET_USEC := 2000
+## Work allowed between frame yields: a share of how long the editor last took
+## to come back, within these bounds. A fixed slice starves discovery once the
+## editor is unfocused, because its low-processor mode then sleeps ~100 ms per
+## frame (`interface/editor/timers/unfocused_low_processor_mode_sleep_usec`)
+## and the frame count, not the work, reaches the deadline (#1120). The floor is
+## what a focused editor gets; the ceiling bounds one slice on a stalled editor.
+const BUDGET_MIN_USEC := 2000
+const BUDGET_MAX_USEC := 50000
+const BUDGET_GAP_DIVISOR := 3
 const DEADLINE_MSEC := 25000
 static var _busy := false
 
 var _alive: Callable
 var _deadline := 0
 var _yield_at := 0
+var _budget := BUDGET_MIN_USEC
 var _bytes := 0
 var _directories: Dictionary = {}
 var _fingerprints: Dictionary = {}
@@ -63,6 +72,7 @@ func run(params: Dictionary, operation: String, active: Callable = Callable()) -
 	_alive = active
 	_deadline = Time.get_ticks_msec() + DEADLINE_MSEC
 	_yield_at = Time.get_ticks_usec()
+	_budget = BUDGET_MIN_USEC
 	_bytes = 0
 	_directories.clear()
 	_fingerprints.clear()
@@ -211,13 +221,22 @@ func _yield_if_needed() -> bool:
 	if not _active():
 		_set_fault("Filesystem discovery expired or was cancelled; nothing changed", Errors.FILESYSTEM_DISCOVERY_FAILED)
 		return false
-	if Time.get_ticks_usec() - _yield_at >= BUDGET_USEC:
+	var paused := Time.get_ticks_usec()
+	if paused - _yield_at >= _budget:
 		await (Engine.get_main_loop() as SceneTree).process_frame
 		_yield_at = Time.get_ticks_usec()
+		_budget = _frame_budget(_yield_at - paused)
 	if not _active():
 		_set_fault("Filesystem discovery expired or was cancelled; nothing changed", Errors.FILESYSTEM_DISCOVERY_FAILED)
 		return false
 	return true
+
+
+## The next slice for an editor that was away `gap_usec` between two slices.
+## The frame sleep absorbs work shorter than itself, so a third of the gap is a
+## quarter of a sleeping editor's frame and lengthens a busy one by a third.
+static func _frame_budget(gap_usec: int) -> int:
+	return clampi(gap_usec / BUDGET_GAP_DIVISOR, BUDGET_MIN_USEC, BUDGET_MAX_USEC)
 
 
 func _collect_tree(root: String, files: Array[String]) -> bool:
