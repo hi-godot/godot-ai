@@ -248,7 +248,7 @@ class TestPromotedToolsEndToEnd:
         ## The addon's schema is advertised VERBATIM — the whole point of
         ## promotion (agents validate params natively, no custom_manage
         ## indirection). Unpromoted tools stay off the first-class list.
-        assert tools["custom_gdunit_run"].inputSchema == schema
+        assert tools["custom_gdunit_run"].input_schema == schema
         assert "custom_helper" not in tools
 
         async def _answer():
