@@ -839,6 +839,15 @@ def _flatpak_info(monkeypatch, tmp_path, filesystems: str | None) -> None:
     [
         ("xdg-run/speech-dispatcher;host;", True),
         ("home;", True),
+        # Flatpak 1.16.6 writes these for --filesystem=home:create / host:create.
+        ("home:create;xdg-run/speech-dispatcher;", True),
+        ("xdg-run/speech-dispatcher;host:create;", True),
+        # It normalises :rw to the bare name; accept the spelling regardless.
+        ("host:rw;", True),
+        ("home:rw;", True),
+        # The wider of the two grants decides: both combinations stay writable.
+        ("home:ro;xdg-run/speech-dispatcher;host;", True),
+        ("home;xdg-run/speech-dispatcher;host:ro;", True),
         ("xdg-run/speech-dispatcher;", False),
         ("home:ro;xdg-run/speech-dispatcher;", False),
         ("host:ro;", False),

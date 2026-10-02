@@ -318,6 +318,12 @@ func test_flatpak_shares_home_only_with_a_read_write_home_grant() -> void:
 	var cases := {
 		"xdg-run/speech-dispatcher;host;": true,
 		"home;": true,
+		"home:create;xdg-run/speech-dispatcher;": true,
+		"xdg-run/speech-dispatcher;host:create;": true,
+		"host:rw;": true,
+		"home:rw;": true,
+		"home:ro;xdg-run/speech-dispatcher;host;": true,
+		"home;xdg-run/speech-dispatcher;host:ro;": true,
 		"xdg-run/speech-dispatcher;": false,
 		"home:ro;xdg-run/speech-dispatcher;": false,
 		"host:ro;": false,

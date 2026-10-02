@@ -14,6 +14,12 @@ const _GROUP_OTHER_WRITE_MASK := 0x12  ## 0022
 const _MAX_LINK_HOPS := 8
 const _SYSTEM_TEMP_ROOTS: Array[String] = ["/tmp", "/private/tmp", "/var/tmp"]
 const _FLATPAK_INFO_PATH := "/.flatpak-info"
+## Every read-write spelling of the two grants that expose the home directory.
+## Flatpak 1.16 writes plain read-write as the bare name; `:create` is
+## read-write too. `:ro` is absent on purpose.
+const _FLATPAK_HOME_GRANTS: Array[String] = [
+	"host", "host:rw", "host:create", "home", "home:rw", "home:create",
+]
 const _KEYS: Array[String] = [
 	"version", "http", "websocket", "instance_nonce",
 ]
@@ -346,8 +352,8 @@ static func linux_config_home(flatpak_info: String) -> String:
 
 
 ## Whether `/.flatpak-info` text describes a sandbox that can write the host's
-## home directory. `host` and `home` expose the real home read-write at its
-## own path; a `:ro` grant, a narrower one, or none leaves the app's private
+## home directory. A read-write `host` or `home` grant exposes the real home at
+## its own path; a `:ro` grant, a narrower one, or none leaves the app's private
 ## directories as the only ones a process outside the sandbox can also see.
 static func flatpak_shares_home(flatpak_info: String) -> bool:
 	var group := ""
@@ -355,8 +361,10 @@ static func flatpak_shares_home(flatpak_info: String) -> bool:
 		if line.begins_with("["):
 			group = line.strip_edges()
 		elif group == "[Context]" and line.begins_with("filesystems="):
-			var grants := line.trim_prefix("filesystems=").strip_edges().split(";")
-			return grants.has("host") or grants.has("home")
+			for grant in line.trim_prefix("filesystems=").strip_edges().split(";"):
+				if grant in _FLATPAK_HOME_GRANTS:
+					return true
+			return false
 	return false
 
 

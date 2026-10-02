@@ -30,6 +30,12 @@ _REPARSE_POINT = 0x400
 # Bound on link components followed while resolving one capability path.
 _MAX_LINK_HOPS = 8
 _FLATPAK_INFO = Path("/.flatpak-info")
+# Every read-write spelling of the two grants that expose the home directory.
+# Flatpak 1.16 writes plain read-write as the bare name; ``:create`` is
+# read-write too. ``:ro`` is absent on purpose.
+_FLATPAK_HOME_GRANTS = frozenset(
+    {"host", "host:rw", "host:create", "home", "home:rw", "home:create"}
+)
 _USER_NAMESPACE_MAP = Path("/proc/self/uid_map")
 _OVERFLOW_UID = Path("/proc/sys/kernel/overflowuid")
 
@@ -167,10 +173,10 @@ def capability_directory() -> Path:
 def _flatpak_shares_home() -> bool:
     """Whether this is a Flatpak sandbox that can write the host's home directory.
 
-    Flatpak lists the sandbox's filesystem grants in ``/.flatpak-info``. ``host``
-    and ``home`` expose the real home read-write at its own path; a ``:ro``
-    grant, a narrower one, or none leaves the app's private directories as the
-    only ones a process outside the sandbox can also see.
+    Flatpak lists the sandbox's filesystem grants in ``/.flatpak-info``. A
+    read-write ``host`` or ``home`` grant exposes the real home at its own
+    path; a ``:ro`` grant, a narrower one, or none leaves the app's private
+    directories as the only ones a process outside the sandbox can also see.
     """
 
     try:
@@ -182,8 +188,7 @@ def _flatpak_shares_home() -> bool:
         if line.startswith("["):
             group = line.strip()
         elif group == "[Context]" and line.startswith("filesystems="):
-            grants = line.partition("=")[2].split(";")
-            return "host" in grants or "home" in grants
+            return not _FLATPAK_HOME_GRANTS.isdisjoint(line.partition("=")[2].split(";"))
     return False
 
 
