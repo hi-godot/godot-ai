@@ -5,7 +5,7 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
-## Unreleased
+## 4.3.0 (2026-10-03)
 
 ### Changed
 
@@ -69,6 +69,30 @@ reading. Release engineering: [docs/releasing.md](docs/releasing.md).
   the client could not connect, so Configure stops and names that grant.
   Status under a read-only grant shows what the client really has. See the
   [setup guide](docs/steam-capability-directory.md#client-configuration-from-a-restricted-flatpak-sandbox).
+- An idle editor no longer redraws every frame while the dock is open. The
+  Setup section's server row re-applied its colour on every refresh, which
+  Godot treats as a theme change, so an idle editor with Developer mode on
+  kept the GPU busy (75% on an M1 Max with a heavy scene). The label now
+  changes only when its text or state does
+  ([#1121](https://github.com/hi-godot/godot-ai/issues/1121)).
+- `filesystem_manage` remove, move and rename refuse far less often. One
+  binary `.res` or `.scn` owner no longer refuses the whole operation (those
+  owners are followed through Godot's dependency graph instead), environment
+  failures report their own error codes instead of `INVALID_PARAMS`, and
+  reference discovery paces itself by the editor's real frame interval: an
+  unfocused editor sleeps 100 ms per frame, so the old fixed 2 ms slice ran
+  out the 25 s deadline on projects a focused editor finishes in well under a
+  second ([#1120](https://github.com/hi-godot/godot-ai/issues/1120)).
+- Reparenting a node that contains an instanced sub-scene keeps the instance
+  intact. The reparent re-owned every descendant to the scene root, which
+  flattened instanced sub-scenes into local nodes on save and dropped their
+  overrides; intentionally unowned nodes were made scene-owned too
+  ([#1118](https://github.com/hi-godot/godot-ai/issues/1118)).
+- A game run without the editor debugger attached (headless, or from the
+  command line) no longer keeps every log line in memory for the life of the
+  process: the game-side log queue is cleared when nothing can consume it
+  and bounded during bursts, keeping the newest lines
+  ([#1123](https://github.com/hi-godot/godot-ai/issues/1123)).
 
 ### Known limitations
 
@@ -82,6 +106,12 @@ and on native Bazzite is pending in
 - Upgrade FastMCP and fastmcp-slim from 4.0.5 to 4.0.10, HTTPX2 and HTTPCore2
   from 2.13.0 to 2.13.1, Uvicorn from 0.53.0 to 0.54.0, and Starlette from
   1.6.0 to 1.7.0.
+- Failed startup and self-update runs retain which launcher lookup and which
+  process-identity capture failed (`launch`, `first_server` or
+  `final_server`, with a fixed failure category and bounded timing), the
+  evidence the intermittent Windows failures in
+  [#1105](https://github.com/hi-godot/godot-ai/issues/1105) and
+  [#1107](https://github.com/hi-godot/godot-ai/issues/1107) have been missing.
 
 ## 4.2.3 (2026-09-24)
 
