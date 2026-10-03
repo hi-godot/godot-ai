@@ -93,6 +93,14 @@ reading. Release engineering: [docs/releasing.md](docs/releasing.md).
   process: the game-side log queue is cleared when nothing can consume it
   and bounded during bursts, keeping the newest lines
   ([#1123](https://github.com/hi-godot/godot-ai/issues/1123)).
+- `node_set_property` assigns nodes to Node-typed exports
+  (`@export var target: Control`). Any string sent to such a property was
+  read as a resource path and refused with `Path must start with res://`;
+  a scene path (`/Main/Player`) or a node-relative path (`../Player`) now
+  resolves the node, checks its class against the export's type, assigns it
+  with undo, and is reported back as the scene path, as is the readback from
+  `node_get_properties`
+  ([#1144](https://github.com/hi-godot/godot-ai/issues/1144)).
 
 ### Known limitations
 
