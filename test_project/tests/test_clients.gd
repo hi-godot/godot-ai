@@ -1780,7 +1780,8 @@ func test_flatpak_sandbox_without_the_home_refuses_to_write_a_file_only_it_can_s
 	var configured := McpJsonStrategy.configure(client, "godot-ai", url)
 	var status := McpJsonStrategy.check_status_details(client, "godot-ai", url)
 	var removed := McpJsonStrategy.remove(client, "godot-ai")
-	var facade_write := McpClientConfigurator._config_write_error(client)
+	var facade_write := McpClientConfigurator._config_write_error(client, "configure")
+	var facade_remove := McpClientConfigurator._config_write_error(client, "remove")
 	var facade_status := McpClientConfigurator._config_path_resolution_error(client)
 	_leave_environment(saved)
 
@@ -1796,6 +1797,7 @@ func test_flatpak_sandbox_without_the_home_refuses_to_write_a_file_only_it_can_s
 	assert_eq(removed.get("status"), "error", "Remove cannot vouch for a file it cannot see either")
 	assert_eq(removed.get("message"), write_error)
 	assert_eq(facade_write, write_error, "the facade must stop before launcher discovery and the lock")
+	assert_eq(facade_remove, write_error)
 	assert_eq(facade_status, "")
 	assert_eq(status.get("status"), McpClient.Status.NOT_CONFIGURED)
 	assert_eq(status.get("error_msg"), "")
@@ -2187,7 +2189,7 @@ func test_merge_tier_client_refuses_tiers_the_flatpak_sandbox_does_not_share() -
 func test_cli_client_is_gated_on_the_file_its_cli_or_fallback_would_write() -> void:
 	## Claude Code falls back to writing ~/.claude.json when `claude` cannot
 	## run in the sandbox. When it can, the CLI writes the same file from
-	## inside the same sandbox.
+	## inside the same sandbox, and sweeps it at every scope before registering.
 	var es := EditorInterface.get_editor_settings()
 	if es == null:
 		skip("EditorSettings unavailable in test environment")
@@ -2212,17 +2214,30 @@ func test_cli_client_is_gated_on_the_file_its_cli_or_fallback_would_write() -> v
 		"cli configure": McpCliStrategy.configure(runnable, "godot-ai", url, _test_attach_launch()),
 		"cli remove": McpCliStrategy.remove(runnable, "godot-ai"),
 	}
-	var user_scope := McpCliStrategy.config_write_error(scoped)
-	var facade := McpClientConfigurator._config_write_error(scoped)
+	var user_scope := McpCliStrategy.configure_write_error(scoped)
+	var user_remove := McpCliStrategy.remove_write_error(scoped)
+	var facade := McpClientConfigurator._config_write_error(scoped, "configure")
+	var facade_remove := McpClientConfigurator._config_write_error(scoped, "remove")
 	es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, "local")
-	var local_scope := McpCliStrategy.config_write_error(scoped)
+	var local_scope := McpCliStrategy.configure_write_error(scoped)
+	var local_remove := McpCliStrategy.remove_write_error(scoped)
 	es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, "project")
-	var project_scope := McpCliStrategy.config_write_error(scoped)
-	var unscoped_cli := McpCliStrategy.config_write_error(fallback)
-	var detection_only := McpCliStrategy.config_write_error(detected)
+	var project_scope := McpCliStrategy.configure_write_error(scoped)
+	var project_remove := McpCliStrategy.remove_write_error(scoped)
+	var project_facade := McpClientConfigurator._config_write_error(scoped, "configure")
+	var project_facade_remove := McpClientConfigurator._config_write_error(scoped, "remove")
+	var project_cli_configure := McpCliStrategy.configure(
+		runnable, "godot-ai", url, _test_attach_launch()
+	)
+	## Remove at the project scope is left to the CLI: `true` stands in for it.
+	var project_cli_remove := McpCliStrategy.remove(runnable, "godot-ai")
+	var unscoped_cli := McpCliStrategy.configure_write_error(fallback)
+	var unscoped_remove := McpCliStrategy.remove_write_error(fallback)
+	var detection_only := McpCliStrategy.configure_write_error(detected)
 	McpPathTemplate._set_flatpak_info_for_test("")
 	es.set_setting(McpSettings.SETTING_CLIENT_SCOPE, McpSettings.DEFAULT_CLIENT_SCOPE)
-	var outside_flatpak := McpCliStrategy.config_write_error(scoped)
+	var outside_flatpak := McpCliStrategy.configure_write_error(scoped)
+	var outside_flatpak_remove := McpCliStrategy.remove_write_error(scoped)
 	_restore_client_scope()
 	_leave_environment(saved)
 
@@ -2233,13 +2248,28 @@ func test_cli_client_is_gated_on_the_file_its_cli_or_fallback_would_write() -> v
 		assert_contains(str(refusals[action].get("message", "")), _HOME_OVERRIDE, action)
 	assert_contains(user_scope, _HOME_OVERRIDE,
 		"a CLI that runs inside the sandbox writes the same unshared file")
+	assert_eq(user_remove, user_scope)
 	assert_eq(facade, user_scope, "the facade must refuse before launcher discovery and the lock")
+	assert_eq(facade_remove, user_scope)
 	assert_eq(local_scope, user_scope, "the local scope's block goes into the same file")
-	assert_eq(project_scope, "", "the project scope's entry does not go into this file")
+	assert_eq(local_remove, user_scope)
+	assert_eq(project_scope, user_scope,
+		"Configure's pre-cleanup sweep removes from the file at the project scope too (#872)")
+	assert_eq(project_facade, user_scope, "the facade applies Configure's rule to Configure")
+	assert_eq(project_cli_configure.get("status"), "error")
+	assert_eq(project_cli_configure.get("message"), user_scope)
+	assert_eq(project_remove, "",
+		"Remove touches the selected scope only, and the project scope's entry is not in this file")
+	assert_eq(project_facade_remove, "")
+	assert_false(str(project_cli_remove.get("message", "")).contains(_HOME_OVERRIDE),
+		"the CLI is left to remove the project scope's entry")
+	## A different display name, so the message is compared on its grant.
 	assert_contains(unscoped_cli, _HOME_OVERRIDE,
 		"a CLI with one place for its entry is gated whatever the scope setting says")
+	assert_contains(unscoped_remove, _HOME_OVERRIDE)
 	assert_eq(detection_only, "", "a file the entry does not go into decides nothing")
 	assert_eq(outside_flatpak, "")
+	assert_eq(outside_flatpak_remove, "")
 	assert_false(FileAccess.file_exists(home.path_join(".cli-client.json")))
 	_remove_dir_recursive(home)
 
@@ -2390,7 +2420,7 @@ func test_unshared_ordinary_location_outranks_the_hidden_flatpak_ide_refusal() -
 	var resolution := client.resolved_config_path_details()
 	var write_error := client.config_write_error()
 	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://127.0.0.1:8000/mcp")
-	var facade := McpClientConfigurator._config_write_error(client)
+	var facade := McpClientConfigurator._config_write_error(client, "configure")
 	_leave_environment(saved)
 
 	assert_eq(resolution.get("path"), home.path_join(".config/Code/User/mcp.json"))

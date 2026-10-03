@@ -218,7 +218,7 @@ def test_flatpak_write_refusals_precede_launcher_discovery_and_the_claim() -> No
 
     assert (
         configure.index("_config_path_resolution_error(client)")
-        < configure.index("_config_write_error(client)")
+        < configure.index('_config_write_error(client, "configure")')
         < configure.index("_config_create_error(client)")
         < configure.index("_credentials_error(client)")
         < configure.index("capture_launch_context()")
@@ -226,19 +226,24 @@ def test_flatpak_write_refusals_precede_launcher_discovery_and_the_claim() -> No
     )
     assert (
         remove.index("_config_path_resolution_error(client)")
-        < remove.index("_config_write_error(client)")
+        < remove.index('_config_write_error(client, "remove")')
         < remove.index("capture_launch_context()")
         < remove.index("MutationLock.acquire(")
     )
     assert "_credentials_error(" not in remove, (
         "Remove takes an entry away; whether its bridge could connect is beside the point"
     )
-    assert "CliStrategy.config_write_error(client)" in write_error
+    assert "CliStrategy.configure_write_error(client)" in write_error
+    assert "CliStrategy.remove_write_error(client)" in write_error
     for name in ("configure", "remove"):
         strategy = get_func_block(cli_source, f"static func {name}(")
-        assert strategy.index("config_write_error(client)") < strategy.index(
+        assert strategy.index(f"{name}_write_error(client)") < strategy.index(
             "_resolve_cli(client)"
         ), f"{name} must refuse before it looks for a CLI to run"
+    sweep = get_func_block(cli_source, "static func _configure_claimed(")
+    assert "_cleanup_scopes(client)" in sweep, (
+        "the every-scope rule in configure_write_error exists because of this sweep"
+    )
 
 
 def test_client_owner_persists_unproven_mutation_and_blocks_update_quiescence() -> None:

@@ -30,7 +30,7 @@ static func configure(
 	server_url: String,
 	launch: Dictionary = {},
 ) -> Dictionary:
-	var write_error := config_write_error(client)
+	var write_error := configure_write_error(client)
 	if not write_error.is_empty():
 		return {"status": "error", "message": write_error}
 	## Fail closed before any subprocess runs: a command-shape client without a
@@ -187,7 +187,7 @@ static func _status_details(
 
 
 static func remove(client: McpClient, server_name: String) -> Dictionary:
-	var write_error := config_write_error(client)
+	var write_error := remove_write_error(client)
 	if not write_error.is_empty():
 		return {"status": "error", "message": write_error}
 	var cli := _resolve_cli(client)
@@ -446,14 +446,26 @@ static func uses_scope_token(client: McpClient) -> bool:
 	return client.cli_register_template.has(SCOPE_TOKEN)
 
 
-## Why neither Configure nor Remove may run this client's CLI. The CLI runs
-## inside this editor's Flatpak sandbox, so what it puts in the file the client
-## keeps its servers in (the JSON-fallback file) lands where the client outside
-## never reads it. That file takes the `user` scope's entry and the `local`
-## scope's per-project block. Only `project` goes elsewhere, into the working
-## directory's `.mcp.json`, and is left to the CLI. A descriptor that names no
-## such file has nothing to check.
-static func config_write_error(client: McpClient) -> String:
+## Why Configure may not run this client's CLI. The CLI runs inside this
+## editor's Flatpak sandbox, so what it puts in the file the client keeps its
+## servers in (the JSON-fallback file) lands where the client outside never
+## reads it. That file takes the `user` scope's entry and the `local` scope's
+## per-project block, and the pre-cleanup sweep (#872) removes from it at
+## every scope, so the selected scope makes no difference here: at `project`
+## the sweep would miss a stale entry in the host's file and Configure would
+## still report success. A descriptor that names no such file has nothing to
+## check.
+static func configure_write_error(client: McpClient) -> String:
+	if not client.has_json_fallback():
+		return ""
+	return client.config_write_error()
+
+
+## Why Remove may not. It removes from the selected scope only: `user` and
+## `local` keep their entries in the JSON-fallback file, and `project` in the
+## CLI's working directory, which this layer does not resolve and leaves to
+## the CLI.
+static func remove_write_error(client: McpClient) -> String:
 	if not client.has_json_fallback():
 		return ""
 	if uses_scope_token(client) and McpSettings.client_scope() == "project":

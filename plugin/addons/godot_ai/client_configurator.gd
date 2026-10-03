@@ -614,7 +614,7 @@ static func configure(id: String, url: String = "", launch_context: Dictionary =
 		return _manual_edit_result(client, "configure")
 	var path_error := _config_path_resolution_error(client)
 	if path_error.is_empty():
-		path_error = _config_write_error(client)
+		path_error = _config_write_error(client, "configure")
 	if path_error.is_empty():
 		path_error = _config_create_error(client)
 	if path_error.is_empty():
@@ -864,7 +864,7 @@ static func remove(id: String, url: String = "", launch_context: Dictionary = {}
 		return _manual_edit_result(client, "remove")
 	var path_error := _config_path_resolution_error(client)
 	if path_error.is_empty():
-		path_error = _config_write_error(client)
+		path_error = _config_write_error(client, "remove")
 	if not path_error.is_empty():
 		return {"status": "error", "message": path_error}
 	if url.is_empty():
@@ -916,13 +916,15 @@ static func _config_create_error(client: Client) -> String:
 
 
 ## Why neither Configure nor Remove may touch this client's file: this editor's
-## Flatpak sandbox does not share it with the host
-## (`McpClient.config_write_error`, or `McpCliStrategy.config_write_error` for a
-## client that writes through its own CLI). Every strategy refuses on it too;
-## checking here puts the refusal ahead of launcher discovery and the lock.
-static func _config_write_error(client: Client) -> String:
+## Flatpak sandbox does not share it with the host (`McpClient.config_write_error`,
+## or the CLI strategy's own rule for a client that writes through its CLI, where
+## Configure and Remove differ). Every strategy refuses on it too; checking here
+## puts the refusal ahead of launcher discovery and the lock.
+static func _config_write_error(client: Client, action: String) -> String:
 	if client.config_type == "cli":
-		return CliStrategy.config_write_error(client)
+		if action == "configure":
+			return CliStrategy.configure_write_error(client)
+		return CliStrategy.remove_write_error(client)
 	return client.config_write_error()
 
 

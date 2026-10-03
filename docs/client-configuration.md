@@ -347,9 +347,12 @@ directory that may not exist yet. Pi, OpenCode and Oh My Pi resolve their
 merge tiers in `_json_strategy.gd`, so the same check runs there on every
 tier, and one unshared tier refuses the whole action. A client configured
 through its own CLI is checked on the JSON-fallback file, whether the CLI or
-the fallback would write it. For Claude Code that covers the `user` and
-`local` scopes, which both write `~/.claude.json`. The `project` scope's entry
-goes into the working directory's `.mcp.json` and is left to the CLI.
+the fallback would write it. Configure is checked at every scope: `user` and
+`local` both write `~/.claude.json`, and Configure's pre-cleanup sweep
+removes from it at `project` scope too, so there a stale entry in the host's
+file would survive unseen. Remove touches the selected scope only, and at
+`project` scope, whose entry lives in the CLI's working directory, it is left
+to the CLI.
 
 **Where the credentials go** follows a narrower rule,
 `McpTransportCapability.linux_config_home_variable`, mirrored by Python's
