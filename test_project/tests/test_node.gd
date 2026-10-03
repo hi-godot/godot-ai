@@ -1248,6 +1248,116 @@ func test_set_property_nonexistent_property() -> void:
 	assert_is_error(result)
 
 
+# ----- set_property on Node-typed exports (#1144) -----
+
+## Attach a @tool script with one Node-typed export to a fresh Node3D probe
+## under /Main (created through the handler so undo cleanup mirrors the
+## other set_property tests). Returns the live node.
+func _make_node_export_probe(probe_name: String, export_type: String) -> Node:
+	_handler.create_node({"type": "Node3D", "name": probe_name, "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node(probe_name)
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool",
+		"extends Node3D",
+		"@export var target: %s" % export_type,
+	])
+	script.reload()
+	node.set_script(script)
+	return node
+
+
+## Undo `sets` committed set actions, then the probe's create action.
+func _free_node_export_probe(sets: int) -> void:
+	for i in sets:
+		assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_node_export_accepts_scene_path() -> void:
+	## The #1144 headline case: a Node-typed export used to reject every
+	## node path as "Path must start with res://, uid://, or user://".
+	var node := _make_node_export_probe("_McpNodeExport", "Camera3D")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeExport",
+		"property": "target",
+		"value": "/Main/Camera3D",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.value, "/Main/Camera3D")
+	assert_eq(result.data.old_value, null)
+	assert_true(result.data.undoable)
+	var camera := EditorInterface.get_edited_scene_root().get_node("Camera3D")
+	assert_true(node.get("target") == camera, "the export must hold the Camera3D node itself")
+	## The readback reports the same scene path, not Godot's object repr.
+	var props := _handler.get_node_properties({"path": "/Main/_McpNodeExport"})
+	assert_has_key(props, "data")
+	var target_rows: Array = props.data.properties.filter(func(row): return row.name == "target")
+	assert_eq(target_rows.size(), 1, "target must be listed once")
+	assert_eq(target_rows[0].value, "/Main/Camera3D")
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_eq(node.get("target"), null)
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_node_export_accepts_node_relative_path() -> void:
+	## Without a leading "/" the path is relative to the node, as the
+	## Inspector stores it; the response still reports the scene path.
+	var node := _make_node_export_probe("_McpNodeExportRel", "Node3D")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeExportRel",
+		"property": "target",
+		"value": "../World/Ground",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.value, "/Main/World/Ground")
+	var ground := EditorInterface.get_edited_scene_root().get_node("World/Ground")
+	assert_true(node.get("target") == ground, "the export must hold the Ground node")
+	_free_node_export_probe(1)
+
+
+func test_set_property_node_export_rejects_wrong_class() -> void:
+	var node := _make_node_export_probe("_McpNodeExportWrong", "Camera3D")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeExportWrong",
+		"property": "target",
+		"value": "/Main/World",
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_eq(node.get("target"), null)
+	_free_node_export_probe(0)
+
+
+func test_set_property_node_export_missing_node() -> void:
+	_make_node_export_probe("_McpNodeExportMissing", "Node")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeExportMissing",
+		"property": "target",
+		"value": "/Main/Nope",
+	})
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
+	_free_node_export_probe(0)
+
+
+func test_set_property_node_export_empty_string_clears() -> void:
+	var node := _make_node_export_probe("_McpNodeExportClear", "Camera3D")
+	_handler.set_property({
+		"path": "/Main/_McpNodeExportClear",
+		"property": "target",
+		"value": "/Main/Camera3D",
+	})
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeExportClear",
+		"property": "target",
+		"value": "",
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.value, null)
+	assert_eq(result.data.old_value, "/Main/Camera3D")
+	assert_eq(node.get("target"), null)
+	_free_node_export_probe(2)
+
+
 # ----- set_property __class__ shortcut (fresh built-in Resource) -----
 
 func _add_mesh_instance_for_shortcut(node_name: String) -> Node:

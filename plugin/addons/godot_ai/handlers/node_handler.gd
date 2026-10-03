@@ -213,10 +213,14 @@ func set_property(params: Dictionary) -> Dictionary:
 
 	var found := false
 	var prop_type: int = TYPE_NIL
+	var prop_hint: int = PROPERTY_HINT_NONE
+	var prop_hint_string: String = ""
 	for prop in node.get_property_list():
 		if prop.name == property:
 			found = true
 			prop_type = prop.get("type", TYPE_NIL)
+			prop_hint = prop.get("hint", PROPERTY_HINT_NONE)
+			prop_hint_string = prop.get("hint_string", "")
 			break
 	if not found:
 		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS, McpPropertyErrors.build_message(node, property))
@@ -240,7 +244,35 @@ func set_property(params: Dictionary) -> Dictionary:
 
 	var nil_resource_string: bool = target_type == TYPE_NIL and (value == "" or (value is String and value.begins_with("res://")))
 	var resource_string_value: bool = value is String and (target_type == TYPE_OBJECT or nil_resource_string)
-	if resource_string_value:
+	## Node-typed exports (`@export var target: Control`) are TYPE_OBJECT with
+	## PROPERTY_HINT_NODE_TYPE, so a string here is a node path, not a
+	## resource path (#1144): a leading "/" is a clean scene path like `path`;
+	## anything else is relative to the node, which is how the Inspector
+	## stores the reference. "" still clears through the branch below.
+	var node_typed_path: bool = (
+		target_type == TYPE_OBJECT
+		and prop_hint == PROPERTY_HINT_NODE_TYPE
+		and value is String
+		and not (value as String).is_empty()
+	)
+	if node_typed_path:
+		var target: Node = _resolve_node_value(value, node, scene_root)
+		if target == null:
+			return ErrorCodes.make(
+				ErrorCodes.NODE_NOT_FOUND,
+				"value: no node at %s. Paths starting with \"/\" are scene paths (e.g. \"/%s/Player\"); others are relative to %s (e.g. \"../Player\")." % [
+					value, scene_root.name, node_path,
+				],
+			)
+		if not _node_matches_hint(target, prop_hint_string):
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
+				"value: %s is a %s, which is not a %s" % [
+					value, _object_type_label(target.get_class(), target.get_script()), prop_hint_string,
+				],
+			)
+		value = target
+	elif resource_string_value:
 		if value == "":
 			value = null
 		else:
@@ -315,11 +347,54 @@ func set_property(params: Dictionary) -> Dictionary:
 		"data": {
 			"path": node_path,
 			"property": property,
-			"value": _serialize_value(node.get(property)),
-			"old_value": _serialize_value(old_value),
+			"value": _serialize_slot(node.get(property), scene_root),
+			"old_value": _serialize_slot(old_value, scene_root),
 			"undoable": true,
 		}
 	}
+
+
+## Resolve the string value of a Node-typed property (#1144): a leading "/"
+## is a clean scene path with the same forms `path` accepts; anything else
+## is a NodePath relative to `node`.
+static func _resolve_node_value(value: String, node: Node, scene_root: Node) -> Node:
+	if value.begins_with("/"):
+		return McpScenePath.resolve(value, scene_root)
+	return node.get_node_or_null(NodePath(value))
+
+
+## Does `target` satisfy a PROPERTY_HINT_NODE_TYPE hint string? The hint is
+## the exported type's name — a ClassDB class ("Control") or a script
+## class_name ("Player") — and may list several, comma-separated. An empty
+## hint (a plain `Node` export on some engine versions) accepts any node.
+static func _node_matches_hint(target: Node, hint_string: String) -> bool:
+	var any_named := false
+	for hint in hint_string.split(","):
+		var wanted := hint.strip_edges()
+		if wanted.is_empty():
+			continue
+		any_named = true
+		if ClassDB.class_exists(wanted):
+			if target.is_class(wanted):
+				return true
+			continue
+		var script: Variant = target.get_script()
+		while script is Script:
+			if String((script as Script).get_global_name()) == wanted:
+				return true
+			script = (script as Script).get_base_script()
+	return not any_named
+
+
+## set_property's response value: a Node lands as its clean scene path so the
+## agent sees "/Main/Player", not Godot's object repr (#1144); everything
+## else serializes as before.
+static func _serialize_slot(value: Variant, scene_root: Node) -> Variant:
+	if value is Node:
+		var clean := McpScenePath.from_node(value, scene_root)
+		if not clean.is_empty():
+			return clean
+	return _serialize_value(value)
 
 
 func rename_node(params: Dictionary) -> Dictionary:
@@ -1332,7 +1407,7 @@ func get_node_properties(params: Dictionary) -> Dictionary:
 		properties.append({
 			"name": prop.name,
 			"type": type_string(prop.type),
-			"value": _serialize_value(node.get(prop.name)),
+			"value": _serialize_slot(node.get(prop.name), scene_root),
 		})
 	# Requested names that matched no editor-visible property — distinguishes
 	# "you asked for something that doesn't exist" from "exists and is null".

@@ -155,6 +155,10 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         - Vector2/Vector3: dict with x/y/z keys.
         - Color: dict {r,g,b,a} or hex string ("#ff0000").
         - NodePath: string ("../Other/Node").
+        - Node-typed export (``@export var target: Node2D``): node path string,
+          either a scene path ("/Main/Player") or relative to the node
+          ("../Player"); the node's class is checked against the export's
+          type, and the response reports the scene path. null/"" clears.
         - Resource: res:// path string (loads + assigns); null/"" clears.
           ``{"__class__": "BoxMesh", ...}`` creates a built-in resource owned
           by this property. After scene_save it is serialized in-place as a
