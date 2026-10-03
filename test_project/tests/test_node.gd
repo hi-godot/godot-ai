@@ -1328,6 +1328,20 @@ func test_set_property_node_export_rejects_wrong_class() -> void:
 	_free_node_export_probe(0)
 
 
+func test_set_property_node_export_rejects_node_outside_scene() -> void:
+	## "/root" is the SceneTree root, not part of the edited scene: a Node
+	## export must not take it even though it satisfies a plain `Node` hint.
+	var node := _make_node_export_probe("_McpNodeExportOutside", "Node")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeExportOutside",
+		"property": "target",
+		"value": "/root",
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_eq(node.get("target"), null)
+	_free_node_export_probe(0)
+
+
 func test_set_property_node_export_missing_node() -> void:
 	_make_node_export_probe("_McpNodeExportMissing", "Node")
 	var result := _handler.set_property({

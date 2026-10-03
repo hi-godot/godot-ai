@@ -264,6 +264,16 @@ func set_property(params: Dictionary) -> Dictionary:
 					value, scene_root.name, node_path,
 				],
 			)
+		## An absolute editor-tree path ("/root", "/root/@EditorNode@/...") or
+		## a relative path climbing past the root resolves to a node outside
+		## the edited scene; it would commit but can never be saved with it.
+		if target != scene_root and not scene_root.is_ancestor_of(target):
+			return ErrorCodes.make(
+				ErrorCodes.INVALID_PARAMS,
+				"value: %s resolves to a node outside the edited scene; the target must be \"/%s\" or one of its descendants" % [
+					value, scene_root.name,
+				],
+			)
 		if not _node_matches_hint(target, prop_hint_string):
 			return ErrorCodes.make(
 				ErrorCodes.WRONG_TYPE,
