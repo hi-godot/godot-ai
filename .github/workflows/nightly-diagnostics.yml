@@ -70,9 +70,20 @@ jobs:
         shell: bash
         env:
           GODOT_BIN: godot
+          # A failed editor run copies its Godot log and merged stdout/stderr
+          # here, so the artifact below has them even when the job's timeout
+          # kills pytest before it prints the failures (on 2026-10-02 thirteen
+          # Windows scenarios timed out in a row and nothing was retained).
+          GODOT_AI_HARNESS_DIAGNOSTICS_DIR: ${{ github.workspace }}/diagnostics/editor-logs
+          # The launcher-lookup trace that qualification retains (#1133).
+          GODOT_AI_STARTUP_TRACE: "1"
         run: |
           mkdir -p diagnostics
-          pytest_args=(-v -s --durations=0 --basetemp="${RUNNER_TEMP}/pytest-basetemp"
+          # Three failures end the session: on a runner where no editor comes
+          # up, every scenario would otherwise wait out its own deadline,
+          # overrun the job's 45 minutes, and lose the failure report.
+          pytest_args=(-v -s --durations=0 --maxfail=3
+            --basetemp="${RUNNER_TEMP}/pytest-basetemp"
             --junitxml=diagnostics/updater-scenarios.xml
             tests/integration/test_migration_bridge_failures.py
             tests/integration/test_self_update_upgrade_paths.py
