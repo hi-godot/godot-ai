@@ -1657,6 +1657,43 @@ def _godot_log_path(project_dir: Path, phase: str) -> Path:
     return project_dir.parent / f".{project_dir.name}-{phase}.log"
 
 
+HARNESS_DIAGNOSTICS_ENV = "GODOT_AI_HARNESS_DIAGNOSTICS_DIR"
+
+
+def _retain_editor_logs(project_dir: Path, phase: str, capture_path: Path) -> list[Path]:
+    """Copy a failed editor run's logs to where CI uploads them.
+
+    The Godot log and the merged stdout/stderr capture live under pytest's
+    basetemp, and the assertion that quotes the capture is only printed once
+    the session ends. When a runner cannot start any editor, every scenario
+    waits out its own deadline, the job's timeout kills pytest first, and
+    nothing of the failure survives (the 2026-10-02 nightly on Windows). With
+    ``GODOT_AI_HARNESS_DIAGNOSTICS_DIR`` set, each failed run keeps those files,
+    plus the replacement editor's log when a restart wrote one, in its own
+    directory there; a repeated project/phase pair gets a counter.
+    """
+    root = os.environ.get(HARNESS_DIAGNOSTICS_ENV, "")
+    if not root:
+        return []
+    target = Path(root) / f"{project_dir.name}-{phase}"
+    counter = 1
+    while target.exists():
+        counter += 1
+        target = Path(root) / f"{project_dir.name}-{phase}-{counter}"
+    target.mkdir(parents=True)
+    retained: list[Path] = []
+    sources = (
+        (_godot_log_path(project_dir, phase), "godot.log"),
+        (capture_path, "editor-output.log"),
+        (project_dir / "_test_restarted_editor.log", "restarted-editor.log"),
+    )
+    for source, name in sources:
+        if source.is_file():
+            shutil.copyfile(source, target / name)
+            retained.append(target / name)
+    return retained
+
+
 def run_godot_editor(
     project_dir: Path,
     godot_bin: str,
@@ -1797,6 +1834,20 @@ def run_godot_editor(
         output += "\nSELF_UPDATE_HARNESS | replacement editor log:\n"
         output += restarted_log.read_text(encoding="utf-8", errors="replace")
     new_crashes = crash_reports() - crash_baseline
+    failed = (
+        failure is not None
+        or bool(new_crashes)
+        or (live_probe is not None and not probe_ran)
+        or proc.returncode != expected_exit_code
+    )
+    if failed:
+        retained = _retain_editor_logs(project_dir, phase, capture_path)
+        if retained:
+            print(
+                f"SELF_UPDATE_HARNESS | {project_dir.name}/{phase}: retained "
+                + ", ".join(str(path) for path in retained),
+                flush=True,
+            )
     assert not new_crashes, "Godot crash report(s) appeared during the isolated lane: " + ", ".join(
         map(str, sorted(new_crashes))
     )
