@@ -193,6 +193,24 @@ def test_failed_run_retains_logs_only_where_diagnostics_dir_points(
     ]
 
 
+def test_retention_failure_keeps_the_editor_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    now = [0]
+    _hanging_editor(monkeypatch, now)
+    project = tmp_path / "v3-bridge-update"
+    project.mkdir()
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("occupied\n", encoding="utf-8")
+    monkeypatch.setenv(fixture.HARNESS_DIAGNOSTICS_ENV, str(blocker))
+
+    with pytest.raises(AssertionError, match="timed out after 20 seconds"):
+        fixture.run_godot_editor(project, "godot", allow_headless=True, timeout=20)
+    progress = capsys.readouterr().out
+    assert "v3-bridge-update/editor: could not retain editor logs:" in progress
+    assert "retained " not in progress
+
+
 def test_successful_run_retains_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:

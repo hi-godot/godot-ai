@@ -1841,7 +1841,17 @@ def run_godot_editor(
         or proc.returncode != expected_exit_code
     )
     if failed:
-        retained = _retain_editor_logs(project_dir, phase, capture_path)
+        ## Retention is best-effort: an OSError here must never replace the
+        ## editor failure (and its captured output) raised below.
+        try:
+            retained = _retain_editor_logs(project_dir, phase, capture_path)
+        except OSError as retention_error:
+            retained = []
+            print(
+                f"SELF_UPDATE_HARNESS | {project_dir.name}/{phase}: could not retain "
+                f"editor logs: {retention_error}",
+                flush=True,
+            )
         if retained:
             print(
                 f"SELF_UPDATE_HARNESS | {project_dir.name}/{phase}: retained "
