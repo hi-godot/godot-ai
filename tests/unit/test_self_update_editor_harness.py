@@ -143,7 +143,7 @@ def _hanging_editor(monkeypatch: pytest.MonkeyPatch, now: list[int]) -> None:
 
     def popen(command, **kwargs):
         kwargs["stdout"].write("fixture stdout\nfixture stderr\n")
-        Path(command[command.index("--log-file") + 1]).write_text("godot log\n")
+        Path(command[command.index("--log-file") + 1]).write_text("godot log\n", encoding="utf-8")
         return Process()
 
     monkeypatch.setattr(fixture.subprocess, "Popen", popen)
@@ -172,19 +172,22 @@ def test_failed_run_retains_logs_only_where_diagnostics_dir_points(
     monkeypatch.setenv(fixture.HARNESS_DIAGNOSTICS_ENV, str(diagnostics))
     for attempt in ("v3-bridge-update-editor", "v3-bridge-update-editor-2"):
         if attempt.endswith("-2"):
-            (project / "_test_restarted_editor.log").write_text("replacement output\n")
+            (project / "_test_restarted_editor.log").write_text(
+                "replacement output\n", encoding="utf-8"
+            )
         with pytest.raises(AssertionError, match="timed out after 20 seconds"):
             fixture.run_godot_editor(project, "godot", allow_headless=True, timeout=20)
         retained = diagnostics / attempt
-        assert (retained / "godot.log").read_text() == "godot log\n"
-        assert (retained / "editor-output.log").read_text() == "fixture stdout\nfixture stderr\n"
+        assert (retained / "godot.log").read_text(encoding="utf-8") == "godot log\n"
+        assert (retained / "editor-output.log").read_text(encoding="utf-8") == (
+            "fixture stdout\nfixture stderr\n"
+        )
         restarted = retained / "restarted-editor.log"
         assert restarted.exists() == attempt.endswith("-2")
         progress = capsys.readouterr().out
         assert f"v3-bridge-update/editor: retained {retained / 'godot.log'}" in progress
-    assert (diagnostics / "v3-bridge-update-editor-2" / "restarted-editor.log").read_text() == (
-        "replacement output\n"
-    )
+    restarted = diagnostics / "v3-bridge-update-editor-2" / "restarted-editor.log"
+    assert restarted.read_text(encoding="utf-8") == "replacement output\n"
     assert sorted(path.name for path in diagnostics.iterdir()) == [
         "v3-bridge-update-editor", "v3-bridge-update-editor-2",
     ]
