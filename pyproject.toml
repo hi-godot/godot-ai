@@ -43,7 +43,7 @@ dependencies = [
     "anyio==4.15.1",
     "mcp==2.2.0",
     "mcp-types==2.2.0",
-    "websockets==17.1",
+    "websockets==17.2",
     "pydantic==2.13.5",
     # Status and startup probes still use HTTPX; the MCP attach boundary uses HTTPX2.
     "httpx==0.28.1",
