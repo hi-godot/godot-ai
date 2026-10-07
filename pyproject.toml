@@ -42,7 +42,7 @@ dependencies = [
     # contract explicit instead of inheriting FastMCP's transitive choice.
     "anyio==4.15.1",
     "mcp==2.2.0",
-    "mcp-types==2.2.0",
+    "mcp-types==2.3.0",
     "websockets==17.1",
     "pydantic==2.13.5",
     # Status and startup probes still use HTTPX; the MCP attach boundary uses HTTPX2.
