@@ -243,7 +243,7 @@ jobs:
         shell: bash
         run: bash script/verify-worktree
 
-      - uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2
+      - uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2
         with:
           version: ${{ matrix.godot-version }}
           use-dotnet: false
@@ -378,7 +378,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2
+      - uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2
         with:
           version: ${{ matrix.godot-version }}
           use-dotnet: false
@@ -416,7 +416,7 @@ jobs:
         shell: bash
         run: bash script/verify-worktree
 
-      - uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2
+      - uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2
         with:
           version: 4.7.0
           use-dotnet: false
@@ -515,7 +515,7 @@ jobs:
         shell: bash
         run: bash script/verify-worktree
 
-      - uses: chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2 # v2
+      - uses: chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6 # v2
         with:
           version: ${{ matrix.godot-version }}
           use-dotnet: false
