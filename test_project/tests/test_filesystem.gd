@@ -12,10 +12,10 @@ var _handler: FilesystemHandler
 const TEST_FILE_PATH := "res://tests/_mcp_test_file.txt"
 const TEST_FILE_CONTENT := "Hello from MCP test\nLine 2\nLine 3\n"
 
-## #778 fixture: a file that looks imported to the editor. `.dat` has no
-## importer, so the sidecar stays inert (no import runs, no import error is
-## logged) while still exercising the sidecar-based classification.
-const IMPORTED_ASSET_PATH := "res://tests/_mcp_test_imported.dat"
+## Real imported fixture for #778/#1147. The editor's initial filesystem scan
+## imports this SVG and creates its `.import` sidecar before tests run, so the
+## reimport test exercises an actual importer rather than a synthetic marker.
+const IMPORTED_ASSET_PATH := "res://tests/fixtures/reimport.svg"
 
 ## Scratch script specimen for the mixed-batch reimport test. Written and
 ## removed by the test itself; listed in teardown as a safety net for an
@@ -34,12 +34,6 @@ func suite_setup(_ctx: Dictionary) -> void:
 	if file:
 		file.store_string(TEST_FILE_CONTENT)
 		file.close()
-	# Imported-asset fixture: source + its `.import` sidecar (#778).
-	for path in [IMPORTED_ASSET_PATH, IMPORTED_ASSET_PATH + ".import"]:
-		var asset := FileAccess.open(path, FileAccess.WRITE)
-		if asset:
-			asset.store_string("[remap]\n")
-			asset.close()
 
 
 func suite_teardown() -> void:
@@ -49,9 +43,8 @@ func suite_teardown() -> void:
 	var written_path := "res://tests/_mcp_test_written.txt"
 	if FileAccess.file_exists(written_path):
 		DirAccess.remove_absolute(written_path)
-	for path in [IMPORTED_ASSET_PATH, IMPORTED_ASSET_PATH + ".import", SCRATCH_SCRIPT_PATH]:
-		if FileAccess.file_exists(path):
-			DirAccess.remove_absolute(path)
+	if FileAccess.file_exists(SCRATCH_SCRIPT_PATH):
+		DirAccess.remove_absolute(SCRATCH_SCRIPT_PATH)
 
 
 # ----- read_file -----
@@ -275,11 +268,29 @@ func test_reimport_existing_file() -> void:
 
 
 func test_reimport_imported_asset_is_reported_as_reimported() -> void:
-	## The `.import` sidecar is the signal, not the extension (#778).
+	## The `.import` sidecar is the signal, not the extension (#778). Imported
+	## paths are now passed to reimport_files(), so an unchanged source still
+	## receives a real forced-import request instead of the false-positive
+	## update_file() result reported by #1147.
+	assert_true(
+		FileAccess.file_exists(IMPORTED_ASSET_PATH + ".import"),
+		"fixture must have been imported during the editor's initial scan"
+	)
+	var reimporting_paths: Array[String] = []
+	var efs := EditorInterface.get_resource_filesystem()
+	var capture_reimport := func(paths: PackedStringArray) -> void:
+		reimporting_paths.assign(paths)
+	efs.resources_reimporting.connect(capture_reimport)
 	var result := _handler.reimport({"paths": [IMPORTED_ASSET_PATH]})
+	efs.resources_reimporting.disconnect(capture_reimport)
 	assert_has_key(result, "data")
 	assert_eq(result.data.reimported_count, 1)
 	assert_contains(result.data.reimported, IMPORTED_ASSET_PATH)
+	assert_contains(
+		reimporting_paths,
+		IMPORTED_ASSET_PATH,
+		"a reported reimport must reach the editor's real importer"
+	)
 	assert_eq(result.data.skipped_non_imported_count, 0)
 	assert_false(
 		result.data.has("skipped_non_imported_hint"),
