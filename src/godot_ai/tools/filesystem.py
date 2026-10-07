@@ -20,14 +20,15 @@ Ops:
         Newly-created files include ``data.cleanup.rm`` for transient
         smoke tests; overwrite omits the field.
   • reimport(paths)
-        Force-reimport the listed files via ``EditorFileSystem.update_file``.
+        Force-reimport imported assets via ``EditorFileSystem.reimport_files``.
         ``paths`` is a list of res:// paths.
         Intended for imported assets such as textures, models, and audio.
         Paths that are not imported resources (``.gd`` scripts, ``.tscn``,
         hand-written ``.tres``, or an asset the editor has not imported yet)
         report under ``skipped_non_imported`` rather than ``reimported``: their
-        filesystem entry is refreshed, but no import runs, so a success there is
-        not evidence that a script parsed or that diagnostics were produced. Use
+        filesystem entry is refreshed with ``update_file``, but no import runs,
+        so a success there is not evidence that a script parsed or that
+        diagnostics were produced. Use
         ``script_patch``/``script_create`` to save a script and receive fresh
         diagnostics, or ``scan`` for an asset awaiting its first import.
         Returns ``reimported``, ``skipped_non_imported``, ``not_found`` and their

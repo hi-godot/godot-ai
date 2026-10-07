@@ -142,6 +142,7 @@ func reimport(params: Dictionary) -> Dictionary:
 	var reimported: Array[String] = []
 	var skipped_non_imported: Array[String] = []
 	var not_found: Array[String] = []
+	var imported_paths := PackedStringArray()
 
 	for path_variant in paths:
 		var path: String = str(path_variant)
@@ -152,11 +153,22 @@ func reimport(params: Dictionary) -> Dictionary:
 		if not FileAccess.file_exists(path):
 			not_found.append("%s (file does not exist)" % path)
 			continue
-		efs.update_file(path)
 		if _is_imported_resource(path):
 			reimported.append(path)
+			imported_paths.append(path)
 		else:
+			## Non-imported resources still need their editor entry refreshed, but
+			## `update_file()` is not an import and must not be reported as one.
+			efs.update_file(path)
 			skipped_non_imported.append(path)
+
+	## `update_file()` is conditional: for an unchanged imported asset it can
+	## return without running an importer, while the old response still claimed
+	## success. `reimport_files()` is the editor API for an explicit forced
+	## reimport, including unchanged sources and changed post-import scripts.
+	## Batch once so the editor can settle the requested imports together.
+	if not imported_paths.is_empty():
+		efs.reimport_files(imported_paths)
 
 	var data := {
 		"reimported": reimported,
@@ -181,8 +193,9 @@ func reimport(params: Dictionary) -> Dictionary:
 	return {"data": data}
 
 
-## #778: `update_file()` registers a path with the resource pipeline; it only
-## runs an *import* for files that have one. Scripts, scenes and hand-written
+## #778/#1147: `update_file()` registers a path with the resource pipeline; it
+## only runs an *import* when Godot detects a changed imported resource.
+## Scripts, scenes and hand-written
 ## `.tres` are not imported resources, so listing them under `reimported` reads
 ## as proof that a parse or import ran when nothing did.
 ##
@@ -196,9 +209,10 @@ func reimport(params: Dictionary) -> Dictionary:
 ## moment of the call — `update_file()` did not import it either — and the
 ## hint names `scan` as the way through.
 ##
-## Behaviour is unchanged for every path: `update_file()` still runs on all of
-## them, because refreshing an externally-edited `.tscn`/`.tres` is a real use
-## of this op. This splits the report, not the work.
+## Non-imported paths still receive `update_file()` because refreshing an
+## externally-edited `.tscn`/`.tres` is a real use of this op. Imported paths
+## go through `reimport_files()` so every entry under `reimported` corresponds
+## to an explicit forced-import request rather than a conditional refresh.
 static func _is_imported_resource(path: String) -> bool:
 	if path.ends_with(IMPORT_SIDECAR_SUFFIX):
 		return false  ## The sidecar itself is not an imported resource.
