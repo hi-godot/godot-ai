@@ -5,6 +5,14 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## Unreleased
+
+### Added
+
+- An Addons tab in Godot AI Settings lists community addons, including Terrain
+  Tools and Animation Toolkit, with requirements and links to GitHub, releases,
+  and installation instructions. Browse community addons from the Tools tab.
+
 ## 4.3.0 (2026-10-03)
 
 ### Changed

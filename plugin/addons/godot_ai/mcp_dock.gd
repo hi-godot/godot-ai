@@ -4,10 +4,11 @@ extends VBoxContainer
 
 ## Editor dock panel showing MCP connection status, client config, and command log.
 ##
-## Audit-v2 #360 partial extraction. Two cohesive subpanels live in
+## Audit-v2 #360 partial extraction. Cohesive subpanels live in
 ## res://addons/godot_ai/dock_panels/:
 ##   - log_viewer.gd: MCP request/response log (dev-mode only).
 ##   - port_picker_panel.gd: spawn-failure escape hatch nested in the crash panel.
+##   - addons_panel.gd: bundled community addon catalog and browser links.
 ##
 ## The audit also called for ServerStatusPanel and ClientRowController
 ## extractions; those were *deliberately deferred*. Their UI scatters across
@@ -30,6 +31,7 @@ const ClientRegistry := preload("res://addons/godot_ai/clients/_registry.gd")
 const ToolCatalog := preload("res://addons/godot_ai/tool_catalog.gd")
 const LogViewerScript := preload("res://addons/godot_ai/dock_panels/log_viewer.gd")
 const PortPickerPanelScript := preload("res://addons/godot_ai/dock_panels/port_picker_panel.gd")
+const AddonsPanelScript := preload("res://addons/godot_ai/dock_panels/addons_panel.gd")
 const VisionRoutingScript := preload("res://addons/godot_ai/vision_routing.gd")
 
 const DEV_MODE_SETTING := "godot_ai/dev_mode"
@@ -112,6 +114,8 @@ var _tools_saved_excluded: PackedStringArray = PackedStringArray()
 ## tools_changed; per-tool checkboxes apply immediately (no restart).
 var _custom_tools_list: VBoxContainer
 var _custom_tools_count_label: Label
+var _browse_addons_btn: Button
+var _addons_tab: MarginContainer
 var _tools_domain_checkboxes: Dictionary = {}
 var _tools_count_label: Label
 var _tools_apply_btn: Button
@@ -607,7 +611,7 @@ func _build_ui() -> void:
 
 	## Tabbed secondary window: Clients (per-client rows), Tools (domain-
 	## exclusion checkboxes for clients that cap total tool count, like
-	## Antigravity at 100), and Settings (allow-host LAN opt-in, #507).
+	## Antigravity at 100), Settings (allow-host LAN opt-in, #507), and Addons.
 	## Adding another tab is one more _build_*_tab call — no surgery on the
 	## rest of the window.
 	var tabs := TabContainer.new()
@@ -645,6 +649,7 @@ func _build_ui() -> void:
 
 	_build_tools_tab(tabs)
 	_build_settings_tab(tabs)
+	_build_addons_tab(tabs)
 
 	_body.add_child(HSeparator.new())
 
@@ -2090,6 +2095,11 @@ func _build_tools_tab(tabs: TabContainer) -> void:
 	custom_hint.add_theme_color_override("font_color", COLOR_MUTED)
 	custom_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	grid.add_child(custom_hint)
+	_browse_addons_btn = Button.new()
+	_browse_addons_btn.text = "Browse community addons"
+	_browse_addons_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_browse_addons_btn.pressed.connect(_on_browse_addons)
+	grid.add_child(_browse_addons_btn)
 	_custom_tools_list = VBoxContainer.new()
 	_custom_tools_list.add_theme_constant_override("separation", 4)
 	_custom_tools_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2188,11 +2198,28 @@ func _refresh_custom_tools_rows() -> void:
 		_custom_tools_count_label.text = "%d/%d enabled" % [enabled_count, specs.size()]
 	if specs.is_empty():
 		var empty := Label.new()
-		empty.text = "None registered. Addons add tools via McpToolRegistry — see docs/plugin-architecture.md."
+		empty.text = "No custom tools registered. Browse community addons to find tools for this project."
 		empty.add_theme_color_override("font_color", COLOR_MUTED)
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		empty.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_custom_tools_list.add_child(empty)
+
+
+func _build_addons_tab(tabs: TabContainer) -> void:
+	var panel := AddonsPanelScript.new()
+	panel.setup(COLOR_MUTED)
+	panel.link_requested.connect(func(url: String): OS.shell_open(url))
+	_addons_tab = _build_margin_container()
+	_addons_tab.name = "Addons"
+	_addons_tab.add_child(panel)
+	tabs.add_child(_addons_tab)
+
+
+func _on_browse_addons() -> void:
+	if _addons_tab == null:
+		return
+	var tabs := _addons_tab.get_parent() as TabContainer
+	tabs.current_tab = tabs.get_tab_idx_from_control(_addons_tab)
 
 
 func _build_custom_tool_row(registry: McpToolRegistry, spec: McpCustomToolSpec) -> HBoxContainer:
