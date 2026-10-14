@@ -135,7 +135,7 @@ jobs:
         timeout-minutes: 2
         run: bash script/ci-quit-test
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: nightly-updater-scenarios-${{ matrix.label }}
@@ -299,7 +299,7 @@ jobs:
           echo "===== mcp-server.log (last 300 lines) ====="
           tail -n 300 diagnostics/mcp-server.log || echo "(log not found)"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: nightly-storm-baseline
