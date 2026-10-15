@@ -49,7 +49,7 @@ func start(package: Dictionary) -> bool:
 		refusal_reason = "The update handoff requires an installer record Dictionary."
 		return false
 	var record: Dictionary = package.record
-	for key in ["from_version", "to_version", "manifest_sha256", "expected_tree_sha256", "editor_nonce"]:
+	for key: String in ["from_version", "to_version", "manifest_sha256", "expected_tree_sha256", "editor_nonce"]:
 		if not record.get(key) is String or str(record[key]).is_empty():
 			refusal_reason = "The update record requires a nonempty String field: %s." % key
 			return false
@@ -58,14 +58,14 @@ func start(package: Dictionary) -> bool:
 		return false
 	# Copy only values that belong to the existing installer's swap record.
 	_package = {"stage_root": STAGE_ROOT, "record": {}}
-	for key in ["from_version", "to_version", "manifest_sha256", "expected_tree_sha256", "editor_nonce", "replace_owned_mismatches"]:
+	for key: String in ["from_version", "to_version", "manifest_sha256", "expected_tree_sha256", "editor_nonce", "replace_owned_mismatches"]:
 		_package.record[key] = record[key]
 	_installer = ResourceLoader.load(INSTALLER_PATH, "", ResourceLoader.CACHE_MODE_IGNORE_DEEP) as Script
 	_verifier = ResourceLoader.load(VERIFIER_PATH, "", ResourceLoader.CACHE_MODE_IGNORE_DEEP) as Script
 	if _installer == null or _verifier == null:
 		refusal_reason = "The update installer or release verifier script could not be loaded."
 		return false
-	for method in ["swap", "verify_after_restart", "release_lock", "read_lock", "discard_stage"]:
+	for method: String in ["swap", "verify_after_restart", "release_lock", "read_lock", "discard_stage"]:
 		if not _declares(_installer, method):
 			refusal_reason = "The update installer is missing its required %s method." % method
 			return false
@@ -240,7 +240,7 @@ func _user_resources_can_keep_paths() -> bool:
 		var current := EditorInterface.get_edited_scene_root()
 		if current != null:
 			roots.append(current)
-	for root in roots:
+	for root: Node in roots:
 		if not _inspect_user_node(root):
 			return false
 	var inspected := EditorInterface.get_inspector().get_edited_object()
@@ -273,16 +273,16 @@ func _inspect_user_value(value: Variant, depth: int) -> bool:
 		if _inspected_objects.has(identity):
 			return true
 		_inspected_objects[identity] = true
-		for property in value.get_property_list():
+		for property: Dictionary in value.get_property_list():
 			if int(property.usage) & PROPERTY_USAGE_STORAGE:
 				if not _inspect_user_value(value.get(property.name), depth + 1):
 					return false
 	elif value is Array:
-		for entry in value:
+		for entry: Variant in value:
 			if not _inspect_user_value(entry, depth + 1):
 				return false
 	elif value is Dictionary:
-		for key in value:
+		for key: Variant in value:
 			if not _inspect_user_value(key, depth + 1) or not _inspect_user_value(value[key], depth + 1):
 				return false
 	return true
