@@ -1828,20 +1828,23 @@ def test_launch_with_auto_click_reports_the_clicker_outcome(
             self.completed_at = 1.0 if outcome == "completed" else None
             self.report = [] if outcome == "refused" else ["clicked update", "clicked confirm"]
             self.stop = threading.Event()
-            self.done = threading.Event()
+            clicker = self
+
+            class FinishOnWait(threading.Event):
+                """Completes only when the harness waits, after verification."""
+
+                def wait(self, timeout: float | None = None) -> bool:
+                    captured["pending_at_wait"] = clicker.completed_at is None
+                    clicker.completed_at = 2.0
+                    self.set()
+                    return super().wait(timeout)
+
+            self.done = FinishOnWait() if outcome == "completes-late" else threading.Event()
             if outcome != "completes-late":
                 self.done.set()
 
         def start(self) -> None:
             captured["started"] = True
-            if outcome == "completes-late":
-                # Records completion only after verification has passed.
-                def finish() -> None:
-                    time.sleep(0.3)
-                    self.completed_at = 2.0
-                    self.done.set()
-
-                threading.Thread(target=finish, daemon=True).start()
 
         def join(self, timeout: float | None = None) -> None:
             pass
@@ -1891,6 +1894,9 @@ def test_launch_with_auto_click_reports_the_clicker_outcome(
     else:
         assert code == 1
         assert "FAIL: auto-click update: refused" in out
+    if outcome == "completes-late":
+        # The harness waited while completion was still pending.
+        assert captured["pending_at_wait"] is True
 
 
 def test_in_editor_wait_ends_when_auto_click_fails() -> None:
