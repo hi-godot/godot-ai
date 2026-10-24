@@ -157,7 +157,19 @@ def test_every_manage_tool_description_keeps_its_full_op_listing():
     for tool_name, ops in MANAGE_TOOL_HANDLERS.items():
         description = tools[tool_name].description or ""
         assert "Canonical call shape" in description, tool_name
-        missing = [op for op in ops if not re.search(rf"\b{re.escape(op)}\b", description)]
+        ## An op counts only where it is documented: its ``op(`` signature on a
+        ## bullet line (one bullet may carry two, e.g. ``move(...), rename(...)``)
+        ## or the explicit ``op="op"`` form custom_manage uses. A bare word in
+        ## prose (e.g. "delete") would hide a dropped listing.
+        missing = [
+            op
+            for op in ops
+            if not re.search(
+                rf'^[ \t]*[•*-][^\n]*\b{re.escape(op)}\(|\bop="{re.escape(op)}"',
+                description,
+                re.MULTILINE,
+            )
+        ]
         assert not missing, f"{tool_name} description omits ops: {missing}"
 
 
