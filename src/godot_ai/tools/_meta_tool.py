@@ -157,7 +157,10 @@ def register_manage_tool(
         "Flat op parameters are accepted as a compatibility alias when the client "
         "transmits them; ``op`` and ``session_id`` remain top-level."
     )
-    mcp.tool(meta=DEFER_META)(manage)
+    ## Pass the description explicitly: FastMCP >= 4.1 parses docstrings with
+    ## griffe, which reads the ``Ops:`` block as a Google-style section and
+    ## keeps only the text before it — silently dropping every op listing.
+    mcp.tool(meta=DEFER_META, description=manage.__doc__)(manage)
 
 
 def _is_json_shaped(value: str) -> bool:

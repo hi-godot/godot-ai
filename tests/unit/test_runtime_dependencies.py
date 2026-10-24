@@ -29,7 +29,7 @@ def test_build_and_promotion_tooling_is_exactly_pinned() -> None:
     with (ROOT / "pyproject.toml").open("rb") as file:
         configuration = tomllib.load(file)
 
-    assert configuration["build-system"]["requires"] == ["setuptools==84.0.0"]
+    assert configuration["build-system"]["requires"] == ["setuptools==84.2.1"]
     assert configuration["project"]["optional-dependencies"]["build"] == [
         "build==1.6.1",
         "pyinstaller==6.22.3",

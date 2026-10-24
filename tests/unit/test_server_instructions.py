@@ -146,6 +146,21 @@ def test_scene_and_node_descriptions_explain_persistence_and_subresources():
     assert '"resource_path": "res://meshes/box.tres"' in node_description
 
 
+def test_every_manage_tool_description_keeps_its_full_op_listing():
+    """FastMCP >= 4.1 parses docstrings with griffe, which reads an ``Ops:``
+    block as a section and keeps only the text before it. Every rollup must
+    still advertise each op it dispatches and the canonical call shape."""
+    server = create_server()
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+
+    assert MANAGE_TOOL_HANDLERS
+    for tool_name, ops in MANAGE_TOOL_HANDLERS.items():
+        description = tools[tool_name].description or ""
+        assert "Canonical call shape" in description, tool_name
+        missing = [op for op in ops if not re.search(rf"\b{re.escape(op)}\b", description)]
+        assert not missing, f"{tool_name} description omits ops: {missing}"
+
+
 # --- byte-identity with no exclusions ---
 
 

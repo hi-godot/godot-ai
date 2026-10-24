@@ -18,14 +18,14 @@ from typing import Any
 from script import qualification_engine as engine
 from script import release_support as support
 
-BUILD_REQUIREMENTS = ("setuptools==84.0.0", "wheel==0.46.3")
+BUILD_REQUIREMENTS = ("setuptools==84.2.1", "wheel==0.46.3")
 TEST_REQUIREMENTS = (
     "pytest==9.1.1",
     "pytest-xdist==3.8.0",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
     "hypothesis==6.167.1",
-    "pillow==12.3.0",
+    "pillow==13.0.0",
     *BUILD_REQUIREMENTS,
     "pyyaml==6.0.3",
     "psutil==7.2.2",

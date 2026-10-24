@@ -130,7 +130,7 @@ def test_release_workflow_shells_never_interpolate_dispatch_inputs():
                 assert "${{" not in step.get("run", "")
                 if step.get("uses", "").startswith("actions/download-artifact@"):
                     assert step["uses"] == (
-                        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+                        "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
                     )
 
 
@@ -148,7 +148,7 @@ def test_nightly_diagnostics_are_credential_free_and_not_a_release_gate() -> Non
     # release tooling, and nothing that release promotion reads.
     for forbidden in ("secrets.", "environment:", "release_promotion", "release_support sign"):
         assert forbidden not in raw
-    assert "chickensoft-games/setup-godot@c233594225991af5aec714e52457cc76d6df8fa2" in raw
+    assert "chickensoft-games/setup-godot@ac93246ea68518a384c1c280a496e5989341f2f6" in raw
     assert "--measure-baseline" in raw
     assert "script.qualification_resources" in raw
     for name, job in workflow["jobs"].items():
