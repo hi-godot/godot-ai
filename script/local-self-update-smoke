@@ -1568,11 +1568,10 @@ def launch_and_verify(
         child_environment.pop(CAPABILITY_DIR_ENV, None)
     child_environment.update(godot_child_environment(project_dir))
     clicker: AutoClick | None = None
+    targets_path = marker_dir / AUTO_CLICK_TARGETS_NAME
     if auto_click:
-        targets_path = marker_dir / AUTO_CLICK_TARGETS_NAME
         targets_path.unlink(missing_ok=True)
         child_environment[AUTO_CLICK_TARGETS_ENV] = str(targets_path)
-        clicker = AutoClick(targets_path, marker_dir)
     proc = subprocess.Popen(
         [
             str(godot_path),
@@ -1592,7 +1591,11 @@ def launch_and_verify(
     assert proc.stdout is not None
     drain = threading.Thread(target=_drain_editor_output, args=(proc.stdout, lines), daemon=True)
     drain.start()
-    if clicker is not None:
+    if auto_click:
+        # Bound to the editor launched here: a helper left running by an
+        # earlier run can rewrite the same report path. GODOT_BIN must be the
+        # Godot executable itself, not a launcher, for the PIDs to match.
+        clicker = AutoClick(targets_path, marker_dir, editor_pid=proc.pid)
         clicker.start()
 
     def clicker_failure() -> str | None:
@@ -1782,13 +1785,21 @@ class WindowsClicker:
         self._user32.ClientToScreen(window, self._ctypes.byref(point))
         return point.x, point.y
 
+    def _on_window(self, window: int, x: int, y: int, pid: int) -> bool:
+        root = self._root_at(x, y)
+        return bool(root) and root == self._root(window) and self._pid(root) == pid
+
     def click_at(self, window: int, x: int, y: int, pid: int) -> str | None:
         """Click screen (x, y) only when that point shows `window`'s own top-level window."""
-        root = self._root_at(x, y)
-        if not root or root != self._root(window) or self._pid(root) != pid:
-            return f"({x}, {y}) is not on the editor's window (pid {pid}); refusing to click"
+        refusal = f"({x}, {y}) is not on the editor's window (pid {pid}); refusing to click"
+        if not self._on_window(window, x, y, pid):
+            return refusal
         self._user32.SetCursorPos(x, y)
         time.sleep(0.1)
+        # Re-check just before the press: a window that appeared over the point
+        # while the cursor settled would otherwise receive the click.
+        if not self._on_window(window, x, y, pid):
+            return refusal
         self._user32.mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
         time.sleep(0.05)
         self._user32.mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
@@ -1828,6 +1839,7 @@ class AutoClick(threading.Thread):
         targets_path: Path,
         evidence_dir: Path,
         *,
+        editor_pid: int,
         clicker_factory: Callable[[], WindowsClicker] = WindowsClicker,
         timeout: float = AUTO_CLICK_TARGET_TIMEOUT_SECONDS,
         poll: float = POST_UPDATE_STATUS_POLL_SECONDS,
@@ -1836,6 +1848,7 @@ class AutoClick(threading.Thread):
         super().__init__(daemon=True)
         self.targets_path = targets_path
         self.evidence_dir = evidence_dir
+        self.editor_pid = editor_pid
         self.clicker_factory = clicker_factory
         self.timeout = timeout
         self.poll = poll
@@ -1855,7 +1868,9 @@ class AutoClick(threading.Thread):
         since = 0.0
         while not self.stop.is_set() and time.monotonic() < deadline:
             pid, targets = read_click_targets(self.targets_path)
-            current = (pid, targets[name]) if name in targets else None
+            # Reports from any other editor process are ignored.
+            mine = pid == self.editor_pid
+            current = (pid, targets[name]) if mine and name in targets else None
             if current != seen:
                 seen, since = current, time.monotonic()
             if seen is not None and time.monotonic() - since >= self.settle:
@@ -1869,7 +1884,7 @@ class AutoClick(threading.Thread):
             # Only a valid report counts: a read that races the plugin's
             # rename-over returns (0, {}) and must not pass for "closed".
             pid, targets = read_click_targets(self.targets_path)
-            if pid and name not in targets:
+            if pid == self.editor_pid and name not in targets:
                 return True
             time.sleep(self.poll)
         return False

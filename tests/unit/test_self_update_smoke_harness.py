@@ -1489,6 +1489,7 @@ def _auto_click(smoke: ModuleType, tmp_path: Path, clicker: _FakeClicker, monkey
     auto = smoke.AutoClick(
         tmp_path / "targets.json",
         tmp_path,
+        editor_pid=4242,
         clicker_factory=lambda: clicker,
         timeout=kwargs.pop("timeout", 5.0),
         poll=0.01,
@@ -1777,6 +1778,32 @@ def test_windows_clicker_never_clicks_a_point_off_the_target_window(
     assert pointer == []
 
 
+def test_windows_clicker_rechecks_the_point_before_pressing() -> None:
+    """A window that covers the point while the cursor settles gets no click."""
+    smoke = load_smoke_script()
+    under_point = iter([100, 900])
+    clicker = _windows_clicker(smoke, owners={100: EDITOR_PID, 900: 31337}, at_point=None)
+    clicker._root_at = lambda _x, _y: next(under_point)
+
+    error = clicker.click_at(100, 50, 60, EDITOR_PID)
+
+    assert error is not None and "refusing to click" in error
+    assert clicker._user32.calls == ["SetCursorPos(50, 60)"]
+
+
+def test_auto_click_ignores_reports_from_another_editor(tmp_path, monkeypatch) -> None:
+    """A helper left running by an earlier run must not steer the clicks."""
+    smoke = load_smoke_script()
+    clicker = _FakeClicker()
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, timeout=0.2)
+    _write_targets(auto.targets_path, 31337, update=UPDATE, confirm=CONFIRM)
+
+    _run(auto)
+
+    assert clicker.clicks == []
+    assert auto.failure is not None and "no clickable Update button" in auto.failure
+
+
 def test_windows_clicker_clicks_a_point_on_the_target_window() -> None:
     smoke = load_smoke_script()
     clicker = _windows_clicker(smoke, owners={100: EDITOR_PID}, at_point=100)
@@ -1822,8 +1849,9 @@ def test_launch_with_auto_click_reports_the_clicker_outcome(
     captured: dict[str, Any] = {}
 
     class FakeAutoClick:
-        def __init__(self, targets_path: Path, evidence_dir: Path) -> None:
+        def __init__(self, targets_path: Path, evidence_dir: Path, *, editor_pid: int) -> None:
             captured["targets"] = targets_path
+            captured["editor_pid"] = editor_pid
             self.failure = "auto-click update: refused" if outcome == "refused" else None
             self.completed_at = 1.0 if outcome == "completed" else None
             self.report = [] if outcome == "refused" else ["clicked update", "clicked confirm"]
@@ -1887,6 +1915,7 @@ def test_launch_with_auto_click_reports_the_clicker_outcome(
     out = capsys.readouterr().out
 
     assert captured["started"]
+    assert captured["editor_pid"] == FakeGodot.pid
     assert captured["environment"][smoke.AUTO_CLICK_TARGETS_ENV] == str(captured["targets"])
     if succeeded:
         assert code == 0
