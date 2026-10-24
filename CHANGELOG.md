@@ -5,6 +5,74 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## 4.3.1 (2026-10-23)
+
+### Security
+
+- The server's FastMCP pin moves from 4.0.10 to 4.1.3, which fixes two
+  FastMCP advisories: authorization skipped for transformed components
+  ([GHSA-7xgj-8392-5q4r](https://github.com/advisories/GHSA-7xgj-8392-5q4r))
+  and OAuth client-credentials providers without issuer binding
+  ([GHSA-vqqp-x5qm-5qp4](https://github.com/advisories/GHSA-vqqp-x5qm-5qp4)).
+  Godot AI configures neither feature, so its exposure was low, but installs
+  no longer carry the affected code. The `mcp`/`mcp-types` (2.3.0) and
+  `websockets` (17.3) pins move with it ([#1186](https://github.com/hi-godot/godot-ai/pull/1186)).
+- FastMCP 4.1.3 requires `certifi` 2026.10.19 or newer, which drops the emSign
+  root certificates whose intermediate keys were compromised this month
+  ([GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2)).
+  FastMCP 4 trusts your operating system's certificate store by default, and
+  updating Python packages does not change that store: apply your operating
+  system's certificate updates, or distrust the emSign roots yourself until
+  your vendor ships one.
+
+### Added
+
+- `game_manage(op="input_mouse")` holds buttons the way a hand does. A
+  button pressed through `input_mouse` stays held until released, and motion
+  events carry the held buttons in `button_mask` with `relative` set from the
+  previous mouse event, so press, motion, release performs a GUI
+  drag-and-drop. `buttons` overrides the held set for one motion event;
+  wheel steps are never held ([#1181](https://github.com/hi-godot/godot-ai/pull/1181)).
+
+### Fixed
+
+- Self-update works in projects that treat untyped declarations as errors.
+  The update activation runner is compiled from source in the project's own
+  warning settings and failed there with seven untyped loop variables; they
+  are typed now ([#1158](https://github.com/hi-godot/godot-ai/issues/1158)).
+  See [Upgrading](#upgrading) for the update from 4.3.0 itself.
+- `filesystem_manage(op="reimport")` forces a real import. Imported assets go
+  through `EditorFileSystem.reimport_files()`, so an unchanged asset is
+  reimported too, and a path appears under `reimported` only when an import
+  was requested; an unchanged asset used to be reported as reimported when
+  nothing ran ([#1147](https://github.com/hi-godot/godot-ai/issues/1147)).
+- `filesystem_manage` remove, move and rename skip hidden folders and folders
+  holding a `.gdignore` when looking for references. Godot neither imports
+  nor tracks anything there, so art sources or tool links kept in such a
+  folder no longer exceed the discovery limit or refuse every mutation. A
+  mutation whose source or destination lies in such a folder still walks it,
+  link refusal included
+  ([#1120](https://github.com/hi-godot/godot-ai/issues/1120)).
+
+### Maintenance
+
+- Release tooling: the PyPI publish action moves to v1.14.3
+  ([GHSA-5xjx-3w67-w9x9](https://github.com/pypa/gh-action-pypi-publish/security/advisories/GHSA-5xjx-3w67-w9x9))
+  and the release workflows' `uv` to 0.13.5
+  ([GHSA-hq85-5cpj-mr62](https://github.com/advisories/GHSA-hq85-5cpj-mr62)).
+  The build backend pin is `setuptools` 84.2.1, and the development extras
+  require `pytest` 9.0.3, `pillow` 13.0 and `cryptography` 50.0.0 or newer.
+- `<domain>_manage` tools pass their descriptions to FastMCP explicitly.
+  FastMCP 4.1 parses docstrings as Google-style sections and would otherwise
+  cut every op listing at its `Ops:` heading; a test now checks every rollup.
+
+### Upgrading
+
+- From 4.3.0, in a project whose **Debug > GDScript > Untyped Declaration**
+  warning is set to Error: the update to 4.3.1 is still compiled by 4.3.0's
+  runner, so set that warning to Warn, update, then set it back. Later updates
+  need no workaround.
+
 ## 4.3.0 (2026-10-03)
 
 ### Changed
