@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import zipfile
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -1334,3 +1335,639 @@ def test_patch_server_command_rejects_missing_or_ambiguous_source(tmp_path, sour
     with pytest.raises(smoke.HarnessError, match="one supported server-command"):
         smoke.patch_server_command(path, ["fixture-python"])
     assert path.read_text(encoding="utf-8") == source
+
+
+# ----- --auto-click: OS-level clicks on the dock's Update flow (Windows) -----
+
+
+def test_project_files_without_auto_click_enable_only_godot_ai(tmp_path) -> None:
+    smoke = load_smoke_script()
+    smoke.write_project_files(tmp_path)
+
+    text = (tmp_path / "project.godot").read_text(encoding="utf-8")
+    assert 'enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")\n' in text
+    assert not (tmp_path / smoke.AUTO_CLICK_PLUGIN_DIR).exists()
+
+
+def test_auto_click_helper_lives_outside_the_signed_tree_and_never_presses(tmp_path) -> None:
+    smoke = load_smoke_script()
+    smoke.write_project_files(tmp_path, auto_click=True)
+
+    text = (tmp_path / "project.godot").read_text(encoding="utf-8")
+    assert (
+        'enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg", '
+        f'"res://{smoke.AUTO_CLICK_PLUGIN_DIR}/plugin.cfg")'
+    ) in text
+    assert not smoke.AUTO_CLICK_PLUGIN_DIR.startswith("addons/godot_ai")
+    helper = tmp_path / smoke.AUTO_CLICK_PLUGIN_DIR
+    assert 'script="clicker.gd"' in (helper / "plugin.cfg").read_text(encoding="utf-8")
+    source = (helper / "clicker.gd").read_text(encoding="utf-8")
+    assert f'OS.get_environment("{smoke.AUTO_CLICK_TARGETS_ENV}")' in source
+    # It only reports rects: the click itself must come through the OS.
+    for forbidden in ("emit_signal", ".pressed", "push_input", "parse_input_event"):
+        assert forbidden not in source
+
+
+def test_auto_click_helper_matches_the_dock_it_reads() -> None:
+    """The helper finds the dock's controls by these names; keep them in step."""
+    smoke = load_smoke_script()
+    dock = (smoke.PLUGIN_ROOT / "mcp_dock.gd").read_text(encoding="utf-8")
+    for needle in (
+        "var _update_btn: Button",
+        "var _update_confirm: ConfirmationDialog",
+        'ok_button_text = "Update plugin"',
+        'const _UPDATE_ACTION_TEXT := "Update"',
+    ):
+        assert needle in dock
+    assert 'dock.get("_update_btn")' in smoke.AUTO_CLICK_PLUGIN_GD
+    assert 'dock.get("_update_confirm")' in smoke.AUTO_CLICK_PLUGIN_GD
+    assert 'ok_button_text == "Update plugin"' in smoke.AUTO_CLICK_PLUGIN_GD
+
+
+@pytest.mark.parametrize(
+    ("entry", "valid"),
+    [
+        ([7, 1, 2, 3, 4], True),
+        ([7, 1, 2, 0, 4], False),
+        ([7, 1, 2, 3], False),
+        ([0, 1, 2, 3, 4], False),
+        ([True, 1, 2, 3, 4], False),
+        ([7.5, 1, 2, 3, 4], False),
+        ([7, 1, True, 3, 4], False),
+        ([7, 1, "2", 3, 4], False),
+        ({"window": 7}, False),
+    ],
+)
+def test_read_click_targets_accepts_only_well_formed_targets(tmp_path, entry, valid) -> None:
+    smoke = load_smoke_script()
+    path = tmp_path / "targets.json"
+    path.write_text(json.dumps({"pid": 42, "targets": {"update": entry}}), encoding="utf-8")
+    expected = {"update": smoke.ClickTarget(7, 1.0, 2.0, 3.0, 4.0)} if valid else {}
+    assert smoke.read_click_targets(path) == (42, expected)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"pid": 0, "targets": {"update": [7, 1, 2, 3, 4]}},
+        {"pid": True, "targets": {"update": [7, 1, 2, 3, 4]}},
+        {"targets": {"update": [7, 1, 2, 3, 4]}},
+        {"pid": 42, "targets": []},
+        [],
+    ],
+)
+def test_read_click_targets_rejects_reports_without_an_editor_pid(tmp_path, payload) -> None:
+    smoke = load_smoke_script()
+    path = tmp_path / "targets.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert smoke.read_click_targets(path) == (0, {})
+
+
+def test_read_click_targets_tolerates_missing_and_partial_files(tmp_path) -> None:
+    smoke = load_smoke_script()
+    assert smoke.read_click_targets(tmp_path / "missing.json") == (0, {})
+    partial = tmp_path / "partial.json"
+    partial.write_text('{"pid": 42, "targ', encoding="utf-8")
+    assert smoke.read_click_targets(partial) == (0, {})
+    nan = tmp_path / "nan.json"
+    nan.write_text('{"pid": 42, "targets": {"update": [7, NaN, 2, 3, 4]}}', encoding="utf-8")
+    assert smoke.read_click_targets(nan) == (42, {})
+
+
+def test_target_center_rounds_to_the_middle_client_pixel() -> None:
+    smoke = load_smoke_script()
+    assert smoke.target_center(smoke.ClickTarget(7, 10.0, 20.0, 100.0, 30.0)) == (60, 35)
+    assert smoke.target_center(smoke.ClickTarget(7, 0.5, 0.5, 3.0, 3.0)) == (2, 2)
+
+
+class _FakeClicker:
+    """Maps client points to screen by a fixed window offset, like ClientToScreen.
+
+    `on_click(window)` plays the editor: it rewrites the targets report the
+    way the dock would after that click (open the dialog, close it, or not).
+    """
+
+    OFFSET = (1000, 500)
+
+    def __init__(
+        self,
+        focus_refusal: str | None = None,
+        click_refusal: str | None = None,
+        on_click: Callable[[int], None] | None = None,
+    ):
+        self.focused: list[tuple[int, int]] = []
+        self.clicks: list[tuple[int, int, int, int]] = []
+        self.focus_refusal = focus_refusal
+        self.click_refusal = click_refusal
+        self.on_click = on_click
+
+    def focus(self, window: int, pid: int) -> str | None:
+        self.focused.append((window, pid))
+        return self.focus_refusal
+
+    def to_screen(self, _window: int, x: int, y: int) -> tuple[int, int]:
+        return x + self.OFFSET[0], y + self.OFFSET[1]
+
+    def click_at(self, window: int, x: int, y: int, pid: int) -> str | None:
+        self.clicks.append((window, x, y, pid))
+        if self.click_refusal is None and self.on_click is not None:
+            self.on_click(window)
+        return self.click_refusal
+
+
+UPDATE = (11, 10, 20, 100, 30)
+CONFIRM = (22, 200, 300, 80, 24)
+
+
+def _write_targets(path: Path, pid: int, **targets: tuple[float, ...]) -> None:
+    payload = {"pid": pid, "targets": {name: list(rect) for name, rect in targets.items()}}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _auto_click(smoke: ModuleType, tmp_path: Path, clicker: _FakeClicker, monkeypatch, **kwargs):
+    monkeypatch.setattr(smoke, "save_click_evidence", lambda path, _point: str(path))
+    auto = smoke.AutoClick(
+        tmp_path / "targets.json",
+        tmp_path,
+        editor_pid=4242,
+        clicker_factory=lambda: clicker,
+        timeout=kwargs.pop("timeout", 5.0),
+        poll=0.01,
+        settle=kwargs.pop("settle", 0.0),
+    )
+    auto.EFFECT_WAIT_SECONDS = kwargs.pop("effect_wait", 2.0)
+    return auto
+
+
+def _dock(path: Path, *, confirm_closes_on: int = 1) -> Callable[[int], None]:
+    """A dock whose Update opens the dialog and whose dialog closes on the Nth OK."""
+    confirm_clicks = 0
+
+    def on_click(window: int) -> None:
+        nonlocal confirm_clicks
+        if window == UPDATE[0]:
+            _write_targets(path, 4242, update=UPDATE, confirm=CONFIRM)
+        elif window == CONFIRM[0]:
+            confirm_clicks += 1
+            if confirm_clicks >= confirm_closes_on:
+                _write_targets(path, 4242)
+
+    return on_click
+
+
+def _run(auto) -> None:
+    auto.start()
+    auto.join(10)
+    assert auto.done.is_set()
+
+
+def test_auto_click_clicks_update_then_the_confirmation(tmp_path, monkeypatch) -> None:
+    smoke = load_smoke_script()
+    clicker = _FakeClicker(on_click=_dock(tmp_path / "targets.json"))
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch)
+    _write_targets(auto.targets_path, 4242, update=UPDATE)
+
+    _run(auto)
+
+    assert auto.failure is None
+    assert auto.completed_at is not None
+    # Each click focuses the control's own native window, then lands on the
+    # OS mapping of its client-area centre.
+    assert clicker.focused == [(11, 4242), (22, 4242)]
+    assert clicker.clicks == [(11, 1060, 535, 4242), (22, 1240, 812, 4242)]
+    steps = [entry.split(" at ")[0] for entry in auto.report]
+    assert steps == ["clicked update", "clicked confirm"]
+
+
+def test_auto_click_retries_a_confirmation_click_that_did_not_take(tmp_path, monkeypatch) -> None:
+    smoke = load_smoke_script()
+    clicker = _FakeClicker(on_click=_dock(tmp_path / "targets.json", confirm_closes_on=2))
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, effect_wait=0.1)
+    _write_targets(auto.targets_path, 4242, update=UPDATE)
+
+    _run(auto)
+
+    assert auto.failure is None
+    assert [click[0] for click in clicker.clicks] == [11, 22, 22]
+    assert auto.completed_at is not None
+
+
+def test_auto_click_fails_when_the_confirmation_never_closes(tmp_path, monkeypatch) -> None:
+    smoke = load_smoke_script()
+    clicker = _FakeClicker(on_click=_dock(tmp_path / "targets.json", confirm_closes_on=99))
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, effect_wait=0.05)
+    _write_targets(auto.targets_path, 4242, update=UPDATE)
+
+    _run(auto)
+
+    assert auto.failure == "auto-click: the confirmation stayed open after 3 clicks"
+    assert [click[0] for click in clicker.clicks] == [11, 22, 22, 22]
+    assert auto.completed_at is None
+
+
+def test_auto_click_fails_when_update_never_opens_the_dialog(tmp_path, monkeypatch) -> None:
+    smoke = load_smoke_script()
+    clicker = _FakeClicker()
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, effect_wait=0.05)
+    _write_targets(auto.targets_path, 4242, update=UPDATE)
+
+    _run(auto)
+
+    assert auto.failure == "auto-click: 3 Update clicks never opened the confirmation"
+    assert [click[0] for click in clicker.clicks] == [11, 11, 11]
+
+
+def test_auto_click_waits_for_a_moving_dialog_to_settle(tmp_path, monkeypatch) -> None:
+    """Godot re-centres a dialog right after showing it; click where it lands."""
+    smoke = load_smoke_script()
+    path = tmp_path / "targets.json"
+    moved = (22, 240, 330, 80, 24)
+
+    def dock(window: int) -> None:
+        if window == UPDATE[0]:
+            _write_targets(path, 4242, update=UPDATE, confirm=CONFIRM)
+
+            def recentre() -> None:
+                time.sleep(0.1)
+                _write_targets(path, 4242, update=UPDATE, confirm=moved)
+
+            threading.Thread(target=recentre).start()
+        else:
+            _write_targets(path, 4242)
+
+    clicker = _FakeClicker(on_click=dock)
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, settle=0.3)
+    _write_targets(path, 4242, update=UPDATE)
+
+    _run(auto)
+
+    assert auto.failure is None
+    assert clicker.clicks[-1] == (22, 1280, 842, 4242)
+
+
+@pytest.mark.parametrize(
+    ("clicker_kwargs", "clicked"),
+    [
+        ({"focus_refusal": "window 0xb does not belong to the editor (pid 4242)"}, 0),
+        ({"click_refusal": "(1060, 535) is not on the editor's window; refusing to click"}, 1),
+    ],
+)
+def test_auto_click_stops_when_the_os_refuses(tmp_path, monkeypatch, clicker_kwargs, clicked):
+    smoke = load_smoke_script()
+    clicker = _FakeClicker(**clicker_kwargs)
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch)
+    _write_targets(auto.targets_path, 4242, update=UPDATE)
+
+    _run(auto)
+
+    refusal = next(iter(clicker_kwargs.values()))
+    assert auto.failure == f"auto-click update: {refusal}"
+    assert len(clicker.clicks) == clicked
+    assert auto.report == []
+
+
+def test_auto_click_reports_a_dock_that_never_offers_update(tmp_path, monkeypatch) -> None:
+    smoke = load_smoke_script()
+    clicker = _FakeClicker()
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, timeout=0.2)
+
+    _run(auto)
+
+    assert auto.failure is not None and "no clickable Update button" in auto.failure
+    assert clicker.clicks == []
+
+
+def test_auto_click_stopped_early_is_not_a_failure(tmp_path, monkeypatch) -> None:
+    smoke = load_smoke_script()
+    clicker = _FakeClicker()
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, timeout=30.0)
+    auto.stop.set()
+
+    _run(auto)
+
+    assert auto.failure is None
+    assert clicker.clicks == []
+
+
+def test_auto_click_failure_flags_an_update_that_never_starts(tmp_path, monkeypatch) -> None:
+    smoke = load_smoke_script()
+    auto = _auto_click(smoke, tmp_path, _FakeClicker(), monkeypatch)
+    assert smoke.auto_click_failure(auto, [], now=1000.0) is None
+
+    auto.completed_at = 1000.0
+    limit = smoke.AUTO_CLICK_START_TIMEOUT_SECONDS
+    assert smoke.auto_click_failure(auto, [], now=1000.0 + limit - 1) is None
+    assert smoke.auto_click_failure(auto, [], now=1000.0 + limit + 1) == (
+        "auto-click: the confirmation closed but the update never started"
+    )
+    staged = [smoke.SMOKE_STAGED_LOG]
+    assert smoke.auto_click_failure(auto, staged, now=1000.0 + limit + 1) is None
+
+    auto.failure = "auto-click update: refused"
+    assert smoke.auto_click_failure(auto, staged) == "auto-click update: refused"
+
+
+def test_auto_click_does_not_mistake_a_failed_read_for_a_closed_dialog(
+    tmp_path, monkeypatch
+) -> None:
+    """The plugin replaces its report by rename; a read racing that returns
+    (0, {}) and must not count as the confirmation closing."""
+    smoke = load_smoke_script()
+    path = tmp_path / "targets.json"
+
+    def dock(window: int) -> None:
+        if window == UPDATE[0]:
+            _write_targets(path, 4242, update=UPDATE, confirm=CONFIRM)
+        else:
+            path.write_text('{"pid": 4242, "targ', encoding="utf-8")  # mid-replace
+
+    clicker = _FakeClicker(on_click=dock)
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, effect_wait=0.05)
+    _write_targets(path, 4242, update=UPDATE)
+
+    _run(auto)
+
+    assert auto.completed_at is None
+    assert auto.failure is not None
+
+
+def test_click_evidence_keeps_virtual_desktop_coordinates(tmp_path, monkeypatch) -> None:
+    smoke = load_smoke_script()
+    grabbed: list[tuple[int, int, int, int]] = []
+
+    class Shot:
+        def save(self, _path: Path) -> None:
+            raise ValueError("box outside the captured screens")
+
+    class ImageGrab:
+        @staticmethod
+        def grab(bbox, all_screens):
+            grabbed.append(bbox)
+            return Shot()
+
+    monkeypatch.setitem(sys.modules, "PIL", type(sys)("PIL"))
+    sys.modules["PIL"].ImageGrab = ImageGrab
+    note = smoke.save_click_evidence(tmp_path / "shot.png", (-1500, 200))
+
+    assert grabbed == [(-1900, -200, -1100, 600)]
+    assert note.startswith("no screenshot")
+
+
+class _User32:
+    """Records the calls that move the cursor or press the mouse."""
+
+    def __init__(self, foreground: int) -> None:
+        self.calls: list[str] = []
+        self.foreground = foreground
+
+    def IsWindow(self, _hwnd) -> bool:
+        return True
+
+    def SetForegroundWindow(self, hwnd) -> bool:
+        self.calls.append(f"SetForegroundWindow({hwnd})")
+        return True
+
+    def keybd_event(self, *_args) -> None:
+        self.calls.append("keybd_event")
+
+    def GetForegroundWindow(self) -> int:
+        return self.foreground
+
+    def SetCursorPos(self, x, y) -> None:
+        self.calls.append(f"SetCursorPos({x}, {y})")
+
+    def mouse_event(self, flags, *_args) -> None:
+        self.calls.append(f"mouse_event({flags:#x})")
+
+
+def _windows_clicker(smoke: ModuleType, *, owners: dict[int, int], at_point: int | None,
+                     roots: dict[int, int] | None = None, foreground: int = 100):
+    """A WindowsClicker with its OS lookups stubbed: `owners` maps window to
+    pid, `at_point` is the top-level window under any point, `roots` maps a
+    window to its top-level ancestor."""
+    clicker = object.__new__(smoke.WindowsClicker)
+    clicker._user32 = _User32(foreground)
+    clicker._pid = lambda hwnd: owners.get(hwnd, 0)
+    clicker._root = lambda hwnd: (roots or {}).get(hwnd, hwnd)
+    clicker._root_at = lambda _x, _y: at_point
+    return clicker
+
+
+EDITOR_PID = 4242
+
+
+@pytest.mark.parametrize(
+    ("owners", "at_point", "roots", "refusal"),
+    [
+        ({100: EDITOR_PID, 900: 31337}, 900, None, "not on the editor's window"),
+        ({100: EDITOR_PID}, None, None, "not on the editor's window"),
+        ({100: EDITOR_PID, 200: EDITOR_PID}, 200, None, "not on the editor's window"),
+    ],
+    ids=["another-process-covers-the-point", "nothing-at-the-point", "a-different-editor-window"],
+)
+def test_windows_clicker_never_clicks_a_point_off_the_target_window(
+    owners, at_point, roots, refusal
+):
+    smoke = load_smoke_script()
+    clicker = _windows_clicker(smoke, owners=owners, at_point=at_point, roots=roots)
+
+    error = clicker.click_at(100, 50, 60, EDITOR_PID)
+
+    assert error is not None and refusal in error
+    pointer = [c for c in clicker._user32.calls if c.startswith(("SetCursorPos", "mouse_event"))]
+    assert pointer == []
+
+
+def test_windows_clicker_rechecks_the_point_before_pressing() -> None:
+    """A window that covers the point while the cursor settles gets no click."""
+    smoke = load_smoke_script()
+    under_point = iter([100, 900])
+    clicker = _windows_clicker(smoke, owners={100: EDITOR_PID, 900: 31337}, at_point=None)
+    clicker._root_at = lambda _x, _y: next(under_point)
+
+    error = clicker.click_at(100, 50, 60, EDITOR_PID)
+
+    assert error is not None and "refusing to click" in error
+    assert clicker._user32.calls == ["SetCursorPos(50, 60)"]
+
+
+def test_auto_click_ignores_reports_from_another_editor(tmp_path, monkeypatch) -> None:
+    """A helper left running by an earlier run must not steer the clicks."""
+    smoke = load_smoke_script()
+    clicker = _FakeClicker()
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, timeout=0.2)
+    _write_targets(auto.targets_path, 31337, update=UPDATE, confirm=CONFIRM)
+
+    _run(auto)
+
+    assert clicker.clicks == []
+    assert auto.failure is not None and "no clickable Update button" in auto.failure
+
+
+def test_windows_clicker_clicks_a_point_on_the_target_window() -> None:
+    smoke = load_smoke_script()
+    clicker = _windows_clicker(smoke, owners={100: EDITOR_PID}, at_point=100)
+
+    assert clicker.click_at(100, 50, 60, EDITOR_PID) is None
+    assert clicker._user32.calls == ["SetCursorPos(50, 60)", "mouse_event(0x2)", "mouse_event(0x4)"]
+
+
+def test_windows_clicker_will_not_focus_another_process_window() -> None:
+    smoke = load_smoke_script()
+    clicker = _windows_clicker(smoke, owners={900: 31337}, at_point=900)
+
+    error = clicker.focus(900, EDITOR_PID)
+
+    assert error is not None and "does not belong to the editor" in error
+    assert clicker._user32.calls == []
+
+
+def test_windows_clicker_reports_focus_it_could_not_take() -> None:
+    smoke = load_smoke_script()
+    clicker = _windows_clicker(
+        smoke, owners={100: EDITOR_PID, 900: 31337}, at_point=100, foreground=900
+    )
+
+    error = clicker.focus(100, EDITOR_PID)
+
+    assert error is not None and "could not bring the editor" in error
+
+
+@pytest.mark.parametrize("outcome", ["refused", "completed", "completes-late"])
+def test_launch_with_auto_click_reports_the_clicker_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, outcome: str
+) -> None:
+    smoke = load_smoke_script()
+    project = tmp_path / "self-update-smoke"
+    (project / "addons/godot_ai").mkdir(parents=True)
+    (project / "addons/godot_ai/plugin.gd").write_text(
+        'const RUNNER = "update_activation_runner.gd"\n', encoding="utf-8"
+    )
+    (project / ".godot-ai-self-update-smoke").mkdir()
+    godot = tmp_path / "Godot"
+    godot.write_text("not executed\n", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    class FakeAutoClick:
+        def __init__(self, targets_path: Path, evidence_dir: Path, *, editor_pid: int) -> None:
+            captured["targets"] = targets_path
+            captured["editor_pid"] = editor_pid
+            self.failure = "auto-click update: refused" if outcome == "refused" else None
+            self.completed_at = 1.0 if outcome == "completed" else None
+            self.report = [] if outcome == "refused" else ["clicked update", "clicked confirm"]
+            self.stop = threading.Event()
+            clicker = self
+
+            class FinishOnWait(threading.Event):
+                """Completes only when the harness waits, after verification."""
+
+                def wait(self, timeout: float | None = None) -> bool:
+                    captured["pending_at_wait"] = clicker.completed_at is None
+                    clicker.completed_at = 2.0
+                    self.set()
+                    return super().wait(timeout)
+
+            self.done = FinishOnWait() if outcome == "completes-late" else threading.Event()
+            if outcome != "completes-late":
+                self.done.set()
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def join(self, timeout: float | None = None) -> None:
+            pass
+
+    succeeded = outcome != "refused"
+
+    class FakeGodot:
+        pid = 1234
+        stdout = iter(
+            [
+                f"{smoke.SMOKE_STAGED_LOG}\n",
+                f"MCP | update to 4.0.1 {smoke.IN_EDITOR_SWAP_LOG_SUFFIX}\n",
+                f"{smoke.IN_EDITOR_COMPLETED_LOG}1234\n",
+                smoke.SMOKE_MIGRATED_LOG + "\n",
+            ]
+            if succeeded
+            else []
+        )
+
+        @staticmethod
+        def poll() -> int | None:
+            return None
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeGodot:
+        captured["environment"] = kwargs["env"]
+        return FakeGodot()
+
+    monkeypatch.setattr(smoke, "AutoClick", FakeAutoClick)
+    monkeypatch.setattr(smoke.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        smoke, "wait_for_live_status",
+        lambda *_a, **_k: {"name": "godot-ai", "server_version": "4.0.1"},
+    )
+    monkeypatch.setattr(smoke, "verify_post_run", lambda *_args, **_kwargs: True)
+
+    code = smoke.launch_and_verify(
+        project, str(godot), "4.0.1", set(),
+        http_port=18000, next_server_version="4.0.1", auto_click=True,
+    )
+    out = capsys.readouterr().out
+
+    assert captured["started"]
+    assert captured["editor_pid"] == FakeGodot.pid
+    assert captured["environment"][smoke.AUTO_CLICK_TARGETS_ENV] == str(captured["targets"])
+    if succeeded:
+        assert code == 0
+        assert "PASS: auto-click drove the dock Update" in out
+    else:
+        assert code == 1
+        assert "FAIL: auto-click update: refused" in out
+    if outcome == "completes-late":
+        # The harness waited while completion was still pending.
+        assert captured["pending_at_wait"] is True
+
+
+def test_in_editor_wait_ends_when_auto_click_fails() -> None:
+    smoke = load_smoke_script()
+
+    class Editor:
+        pid = 123
+
+        def poll(self) -> None:
+            return None
+
+    started = time.monotonic()
+    refused = smoke.wait_for_in_editor_activation(Editor(), [], abort=lambda: "auto-click: no")
+    assert refused is False
+    assert time.monotonic() - started < 1.0
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (["--auto-click", "--no-launch"], "needs the harness to launch"),
+        (["--auto-click", "--from-v3-tag", "v3.2.5"], "final-v3 dock"),
+    ],
+)
+def test_auto_click_rejects_flows_it_cannot_drive(tmp_path, monkeypatch, capsys, options, message):
+    smoke = load_smoke_script()
+    monkeypatch.setattr(sys, "platform", "win32")
+    marker = tmp_path / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv", [str(SCRIPT), "--project-dir", str(tmp_path), "--force", *options]
+    )
+    assert smoke.main() == 1
+    assert message in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == [marker]
+
+
+def test_auto_click_is_windows_only(tmp_path, monkeypatch, capsys) -> None:
+    smoke = load_smoke_script()
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(
+        sys, "argv", [str(SCRIPT), "--project-dir", str(tmp_path), "--force", "--auto-click"]
+    )
+    assert smoke.main() == 1
+    assert "only implemented on Windows" in capsys.readouterr().err
