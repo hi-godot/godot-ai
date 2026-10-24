@@ -106,6 +106,7 @@ AUTO_CLICK_TARGETS_ENV = "GODOT_AI_SMOKE_CLICK_TARGETS"
 AUTO_CLICK_TARGETS_NAME = "click-targets.json"
 AUTO_CLICK_TARGET_TIMEOUT_SECONDS = 180.0
 AUTO_CLICK_START_TIMEOUT_SECONDS = 60.0
+AUTO_CLICK_FINISH_SECONDS = 30.0
 AUTO_CLICK_PLUGIN_CFG = """\
 [plugin]
 
@@ -1644,6 +1645,10 @@ def launch_and_verify(
         print("FAIL: the original editor exited during verification")
         ok = False
     if clicker is not None:
+        # A verified update means the confirmation closed; let the clicker
+        # record that before stopping it. Failures stop it at once.
+        if ok:
+            clicker.done.wait(timeout=AUTO_CLICK_FINISH_SECONDS)
         clicker.stop.set()
         clicker.join(timeout=5)
         if clicker.failure is None and clicker.completed_at is not None:

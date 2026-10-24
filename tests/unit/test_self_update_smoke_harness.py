@@ -1806,7 +1806,7 @@ def test_windows_clicker_reports_focus_it_could_not_take() -> None:
     assert error is not None and "could not bring the editor" in error
 
 
-@pytest.mark.parametrize("outcome", ["refused", "completed"])
+@pytest.mark.parametrize("outcome", ["refused", "completed", "completes-late"])
 def test_launch_with_auto_click_reports_the_clicker_outcome(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, outcome: str
 ) -> None:
@@ -1825,17 +1825,28 @@ def test_launch_with_auto_click_reports_the_clicker_outcome(
         def __init__(self, targets_path: Path, evidence_dir: Path) -> None:
             captured["targets"] = targets_path
             self.failure = "auto-click update: refused" if outcome == "refused" else None
-            self.completed_at = None if outcome == "refused" else 1.0
+            self.completed_at = 1.0 if outcome == "completed" else None
             self.report = [] if outcome == "refused" else ["clicked update", "clicked confirm"]
             self.stop = threading.Event()
+            self.done = threading.Event()
+            if outcome != "completes-late":
+                self.done.set()
 
         def start(self) -> None:
             captured["started"] = True
+            if outcome == "completes-late":
+                # Records completion only after verification has passed.
+                def finish() -> None:
+                    time.sleep(0.3)
+                    self.completed_at = 2.0
+                    self.done.set()
+
+                threading.Thread(target=finish, daemon=True).start()
 
         def join(self, timeout: float | None = None) -> None:
             pass
 
-    succeeded = outcome == "completed"
+    succeeded = outcome != "refused"
 
     class FakeGodot:
         pid = 1234
