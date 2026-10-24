@@ -251,6 +251,46 @@ func test_write_rejects_dot_suffixed_protected_files() -> void:
 		"a trailing \\. must not bypass the override.cfg guard")
 
 
+func test_write_rejects_windows_aliases_of_protected_files() -> void:
+	## Windows opens one file under several spellings. Each of these reached
+	## the protected file on NTFS through FileAccess while passing every check
+	## that compares names: a `::$DATA` stream, an 8.3 short name, and the
+	## `$INDEX_ALLOCATION` stream of a directory.
+	for path in [
+		"res://project.godot::$DATA",
+		"res://project.godot:alt",
+		"res://override.cfg::$DATA",
+		"res://.godot::$INDEX_ALLOCATION/uid_cache.bin",
+		"res://PROJEC~1.GOD",
+		"res://projec~1.god",
+		"res://OVERRI~1.CFG",
+		"res://GODOT~1/uid_cache.bin",
+		"res://addons/GODOT_~1/plugin.gd",
+		"res://project.godot.",
+		"res://project.godot ",
+		"res://.godot./uid_cache.bin",
+		"res://addons/godot_ai /plugin.gd",
+	]:
+		assert_false(McpPathValidator.validate_resource_path(path, true).is_empty(),
+			"%s must be refused for write" % path)
+
+
+func test_write_alias_guard_spares_ordinary_names() -> void:
+	## Only alias shapes are refused: a tilde without the short-name form, or a
+	## dot inside a name, is an ordinary path.
+	for path in [
+		"res://notes~draft.txt",
+		"res://a~1b.txt",
+		"res://backup~old/level.tscn",
+		"res://v1.2/level.tscn",
+		"res://scenes/level.tscn",
+	]:
+		assert_eq(McpPathValidator.validate_resource_path(path, true), "",
+			"%s must stay writable" % path)
+	## Reads are unaffected: the alias guard is part of the write blocklist.
+	assert_eq(McpPathValidator.validate_resource_path("res://PROJEC~1.GOD"), "")
+
+
 func test_write_still_allows_backslash_paths_outside_the_blocklist() -> void:
 	## Normalization must not turn every backslash path into a rejection —
 	## only the blocked prefixes are affected.

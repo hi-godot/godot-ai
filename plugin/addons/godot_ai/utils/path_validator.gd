@@ -171,6 +171,16 @@ static func _reject_sensitive_write(path: String) -> String:
 	# a POSIX file literally named `addons\godot_ai\x.gd` is not addressable
 	# through `res://` at all, so normalizing costs no legitimate write.
 	var normalized := path.replace("\\", "/").simplify_path()
+	# Windows opens one file under several spellings: `name::$DATA` (any
+	# `:stream`) is the file's own data stream, `PROJEC~1.GOD` its 8.3 short
+	# name, and a trailing dot or space is stripped. Each reached
+	# project.godot, override.cfg or `.godot/` under a name the checks below
+	# do not recognise, so writes refuse those spellings outright. None is a
+	# portable filename (Windows forbids `:` in names), so no legitimate write
+	# is lost.
+	var alias_err := _reject_windows_alias(normalized.trim_prefix("res://"))
+	if not alias_err.is_empty():
+		return alias_err
 	var file_lower := normalized.get_file().to_lower()
 	if file_lower == "project.godot":
 		return "Refusing to write res://project.godot (project manifest)"
@@ -188,6 +198,24 @@ static func _reject_sensitive_write(path: String) -> String:
 	# plugin so the next enable fails to resolve scripts.
 	if segments.size() >= 2 and segments[0].to_lower() == "addons" and segments[1].to_lower() == "godot_ai":
 		return "Refusing to write under res://addons/godot_ai/ (overwriting a loaded plugin script can crash the editor)"
+	return ""
+
+
+## 8.3 short-name shape: up to six characters, `~`, a number, then an optional
+## extension of up to three (`PROJEC~1.GOD`, `GODOT~1`, `GODOT_~1`).
+static var _short_name_regex: RegEx
+
+
+static func _reject_windows_alias(relative: String) -> String:
+	if _short_name_regex == null:
+		_short_name_regex = RegEx.create_from_string("^[^.~]{0,6}~[0-9]+(\\.[^.]{0,3})?$")
+	for segment in relative.split("/", false):
+		if ":" in segment:
+			return "Refusing to write a path containing ':' (Windows stream syntax): %s" % segment
+		if segment.ends_with(".") or segment.ends_with(" "):
+			return "Refusing to write a path segment ending in '.' or ' ' (Windows strips it): %s" % segment
+		if _short_name_regex.search(segment) != null:
+			return "Refusing to write an 8.3 short-name path segment (Windows alias): %s" % segment
 	return ""
 
 
