@@ -1733,9 +1733,11 @@ class WindowsClicker:
             wintypes.HWND,
             ctypes.POINTER(wintypes.DWORD),
         ]
-        # Godot is per-monitor DPI aware and reports physical pixels; an
-        # unaware caller would have its cursor coordinates virtualized.
-        if not self._user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+        # Match the editor's coordinate space: Godot 4.7's windows are
+        # system-DPI aware (GetWindowDpiAwarenessContext reports 1), so a
+        # per-monitor caller would map client points differently on any
+        # monitor whose DPI differs from the system DPI.
+        if not self._user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-2)):
             self._user32.SetProcessDPIAware()
 
     def _pid(self, hwnd: object) -> int:
@@ -1796,10 +1798,11 @@ def save_click_evidence(path: Path, point: tuple[int, int]) -> str:
         return "no screenshot (Pillow is not installed)"
     x, y = point
     margin = 400
-    box = (max(0, x - margin), max(0, y - margin), x + margin, y + margin)
+    # Virtual-desktop coordinates: negative left of or above the primary screen.
+    box = (x - margin, y - margin, x + margin, y + margin)
     try:
         ImageGrab.grab(bbox=box, all_screens=True).save(path)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return f"no screenshot ({exc})"
     return str(path)
 
@@ -1858,7 +1861,10 @@ class AutoClick(threading.Thread):
     def _wait_gone(self, name: str, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
         while not self.stop.is_set() and time.monotonic() < deadline:
-            if name not in read_click_targets(self.targets_path)[1]:
+            # Only a valid report counts: a read that races the plugin's
+            # rename-over returns (0, {}) and must not pass for "closed".
+            pid, targets = read_click_targets(self.targets_path)
+            if pid and name not in targets:
                 return True
             time.sleep(self.poll)
         return False

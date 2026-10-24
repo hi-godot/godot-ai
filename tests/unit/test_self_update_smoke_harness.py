@@ -1666,6 +1666,222 @@ def test_auto_click_failure_flags_an_update_that_never_starts(tmp_path, monkeypa
     assert smoke.auto_click_failure(auto, staged) == "auto-click update: refused"
 
 
+def test_auto_click_does_not_mistake_a_failed_read_for_a_closed_dialog(
+    tmp_path, monkeypatch
+) -> None:
+    """The plugin replaces its report by rename; a read racing that returns
+    (0, {}) and must not count as the confirmation closing."""
+    smoke = load_smoke_script()
+    path = tmp_path / "targets.json"
+
+    def dock(window: int) -> None:
+        if window == UPDATE[0]:
+            _write_targets(path, 4242, update=UPDATE, confirm=CONFIRM)
+        else:
+            path.write_text('{"pid": 4242, "targ', encoding="utf-8")  # mid-replace
+
+    clicker = _FakeClicker(on_click=dock)
+    auto = _auto_click(smoke, tmp_path, clicker, monkeypatch, effect_wait=0.05)
+    _write_targets(path, 4242, update=UPDATE)
+
+    _run(auto)
+
+    assert auto.completed_at is None
+    assert auto.failure is not None
+
+
+def test_click_evidence_keeps_virtual_desktop_coordinates(tmp_path, monkeypatch) -> None:
+    smoke = load_smoke_script()
+    grabbed: list[tuple[int, int, int, int]] = []
+
+    class Shot:
+        def save(self, _path: Path) -> None:
+            raise ValueError("box outside the captured screens")
+
+    class ImageGrab:
+        @staticmethod
+        def grab(bbox, all_screens):
+            grabbed.append(bbox)
+            return Shot()
+
+    monkeypatch.setitem(sys.modules, "PIL", type(sys)("PIL"))
+    sys.modules["PIL"].ImageGrab = ImageGrab
+    note = smoke.save_click_evidence(tmp_path / "shot.png", (-1500, 200))
+
+    assert grabbed == [(-1900, -200, -1100, 600)]
+    assert note.startswith("no screenshot")
+
+
+class _User32:
+    """Records the calls that move the cursor or press the mouse."""
+
+    def __init__(self, foreground: int) -> None:
+        self.calls: list[str] = []
+        self.foreground = foreground
+
+    def IsWindow(self, _hwnd) -> bool:
+        return True
+
+    def SetForegroundWindow(self, hwnd) -> bool:
+        self.calls.append(f"SetForegroundWindow({hwnd})")
+        return True
+
+    def keybd_event(self, *_args) -> None:
+        self.calls.append("keybd_event")
+
+    def GetForegroundWindow(self) -> int:
+        return self.foreground
+
+    def SetCursorPos(self, x, y) -> None:
+        self.calls.append(f"SetCursorPos({x}, {y})")
+
+    def mouse_event(self, flags, *_args) -> None:
+        self.calls.append(f"mouse_event({flags:#x})")
+
+
+def _windows_clicker(smoke: ModuleType, *, owners: dict[int, int], at_point: int | None,
+                     roots: dict[int, int] | None = None, foreground: int = 100):
+    """A WindowsClicker with its OS lookups stubbed: `owners` maps window to
+    pid, `at_point` is the top-level window under any point, `roots` maps a
+    window to its top-level ancestor."""
+    clicker = object.__new__(smoke.WindowsClicker)
+    clicker._user32 = _User32(foreground)
+    clicker._pid = lambda hwnd: owners.get(hwnd, 0)
+    clicker._root = lambda hwnd: (roots or {}).get(hwnd, hwnd)
+    clicker._root_at = lambda _x, _y: at_point
+    return clicker
+
+
+EDITOR_PID = 4242
+
+
+@pytest.mark.parametrize(
+    ("owners", "at_point", "roots", "refusal"),
+    [
+        ({100: EDITOR_PID, 900: 31337}, 900, None, "not on the editor's window"),
+        ({100: EDITOR_PID}, None, None, "not on the editor's window"),
+        ({100: EDITOR_PID, 200: EDITOR_PID}, 200, None, "not on the editor's window"),
+    ],
+    ids=["another-process-covers-the-point", "nothing-at-the-point", "a-different-editor-window"],
+)
+def test_windows_clicker_never_clicks_a_point_off_the_target_window(
+    owners, at_point, roots, refusal
+):
+    smoke = load_smoke_script()
+    clicker = _windows_clicker(smoke, owners=owners, at_point=at_point, roots=roots)
+
+    error = clicker.click_at(100, 50, 60, EDITOR_PID)
+
+    assert error is not None and refusal in error
+    pointer = [c for c in clicker._user32.calls if c.startswith(("SetCursorPos", "mouse_event"))]
+    assert pointer == []
+
+
+def test_windows_clicker_clicks_a_point_on_the_target_window() -> None:
+    smoke = load_smoke_script()
+    clicker = _windows_clicker(smoke, owners={100: EDITOR_PID}, at_point=100)
+
+    assert clicker.click_at(100, 50, 60, EDITOR_PID) is None
+    assert clicker._user32.calls == ["SetCursorPos(50, 60)", "mouse_event(0x2)", "mouse_event(0x4)"]
+
+
+def test_windows_clicker_will_not_focus_another_process_window() -> None:
+    smoke = load_smoke_script()
+    clicker = _windows_clicker(smoke, owners={900: 31337}, at_point=900)
+
+    error = clicker.focus(900, EDITOR_PID)
+
+    assert error is not None and "does not belong to the editor" in error
+    assert clicker._user32.calls == []
+
+
+def test_windows_clicker_reports_focus_it_could_not_take() -> None:
+    smoke = load_smoke_script()
+    clicker = _windows_clicker(
+        smoke, owners={100: EDITOR_PID, 900: 31337}, at_point=100, foreground=900
+    )
+
+    error = clicker.focus(100, EDITOR_PID)
+
+    assert error is not None and "could not bring the editor" in error
+
+
+@pytest.mark.parametrize("outcome", ["refused", "completed"])
+def test_launch_with_auto_click_reports_the_clicker_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, outcome: str
+) -> None:
+    smoke = load_smoke_script()
+    project = tmp_path / "self-update-smoke"
+    (project / "addons/godot_ai").mkdir(parents=True)
+    (project / "addons/godot_ai/plugin.gd").write_text(
+        'const RUNNER = "update_activation_runner.gd"\n', encoding="utf-8"
+    )
+    (project / ".godot-ai-self-update-smoke").mkdir()
+    godot = tmp_path / "Godot"
+    godot.write_text("not executed\n", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    class FakeAutoClick:
+        def __init__(self, targets_path: Path, evidence_dir: Path) -> None:
+            captured["targets"] = targets_path
+            self.failure = "auto-click update: refused" if outcome == "refused" else None
+            self.completed_at = None if outcome == "refused" else 1.0
+            self.report = [] if outcome == "refused" else ["clicked update", "clicked confirm"]
+            self.stop = threading.Event()
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def join(self, timeout: float | None = None) -> None:
+            pass
+
+    succeeded = outcome == "completed"
+
+    class FakeGodot:
+        pid = 1234
+        stdout = iter(
+            [
+                f"{smoke.SMOKE_STAGED_LOG}\n",
+                f"MCP | update to 4.0.1 {smoke.IN_EDITOR_SWAP_LOG_SUFFIX}\n",
+                f"{smoke.IN_EDITOR_COMPLETED_LOG}1234\n",
+                smoke.SMOKE_MIGRATED_LOG + "\n",
+            ]
+            if succeeded
+            else []
+        )
+
+        @staticmethod
+        def poll() -> int | None:
+            return None
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeGodot:
+        captured["environment"] = kwargs["env"]
+        return FakeGodot()
+
+    monkeypatch.setattr(smoke, "AutoClick", FakeAutoClick)
+    monkeypatch.setattr(smoke.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        smoke, "wait_for_live_status",
+        lambda *_a, **_k: {"name": "godot-ai", "server_version": "4.0.1"},
+    )
+    monkeypatch.setattr(smoke, "verify_post_run", lambda *_args, **_kwargs: True)
+
+    code = smoke.launch_and_verify(
+        project, str(godot), "4.0.1", set(),
+        http_port=18000, next_server_version="4.0.1", auto_click=True,
+    )
+    out = capsys.readouterr().out
+
+    assert captured["started"]
+    assert captured["environment"][smoke.AUTO_CLICK_TARGETS_ENV] == str(captured["targets"])
+    if succeeded:
+        assert code == 0
+        assert "PASS: auto-click drove the dock Update" in out
+    else:
+        assert code == 1
+        assert "FAIL: auto-click update: refused" in out
+
+
 def test_in_editor_wait_ends_when_auto_click_fails() -> None:
     smoke = load_smoke_script()
 
