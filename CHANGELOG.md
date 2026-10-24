@@ -24,6 +24,13 @@ reading. Release engineering: [docs/releasing.md](docs/releasing.md).
   updating Python packages does not change that store: apply your operating
   system's certificate updates, or distrust the emSign roots yourself until
   your vendor ships one.
+- On Windows, writes can no longer reach `project.godot`, `override.cfg` or
+  `.godot/` through another spelling of the same file. The write blocklist
+  compared names, but Windows also opens a file through a `::$DATA` stream
+  suffix or its 8.3 short name (`PROJEC~1.GOD`). Write paths with a `:`, a
+  short-name segment, or a trailing dot or space are now refused
+  ([GHSA-57gf-8755-xc98](https://github.com/hi-godot/godot-ai/security/advisories/GHSA-57gf-8755-xc98),
+  [#1189](https://github.com/hi-godot/godot-ai/pull/1189)).
 
 ### Added
 
