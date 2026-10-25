@@ -15,6 +15,7 @@ nodes and scripts, wire signals, and configure UI, materials, animation,
 particles, cameras, and environments.
 
 **21,000+ monthly active installs · 30M+ tool calls in the last three months · 3,200+ GitHub stars**
+<br><sub>Install and tool-call counts come from anonymous telemetry and exclude opted-out installs: the 30 days, and July 27 onward, to October 25, 2026.</sub>
 
 <p align="center">
   <img src="docs/images/huddemo.gif" alt="Cyberpunk HUD demo" width="800"><br>
@@ -51,8 +52,10 @@ Cursor, VS Code, Antigravity, Gemini CLI, and Hermes Agent, and shows a
 - Use the dock-generated command: it pins the matching version, ports, and
   tool domains. v4 clients connect through `godot-ai attach` over stdio; a bare
   `http://127.0.0.1:8000/mcp` entry cannot authenticate.
-- Updates repin owned client entries automatically. Reconfigure after changing
-  ports, telemetry preferences, or tool domains.
+- Updates repin owned client entries automatically. The default scope is
+  global, so this also redirects other projects still on an older version;
+  update them too. Reconfigure after changing ports, telemetry preferences, or
+  tool domains.
 - Pi Coding Agent needs an MCP extension that reads `~/.pi/agent/mcp.json`.
   Cherry Studio is not supported in v4; remove stale v3 entries in Cherry
   Studio itself.
