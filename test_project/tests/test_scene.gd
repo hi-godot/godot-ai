@@ -42,6 +42,7 @@ class FakeSceneTabs:
 	var unsaved: PackedStringArray = PackedStringArray()
 	var current := ""
 	var switch_lands := true
+	var ignored_switches: PackedStringArray = PackedStringArray()
 	var close_err := OK
 	var switched: Array[String] = []
 	var closed: Array[String] = []
@@ -57,7 +58,7 @@ class FakeSceneTabs:
 
 	func switch_to(path: String) -> void:
 		switched.append(path)
-		if switch_lands and open.has(path):
+		if switch_lands and open.has(path) and not ignored_switches.has(path):
 			current = path
 
 	func close_current() -> int:
@@ -533,6 +534,19 @@ func test_close_scene_other_tab_restores_previous_current() -> void:
 	assert_eq(tabs.switched, ["res://scratch.tscn", "res://main.tscn"] as Array[String])
 	assert_eq(tabs.closed, ["res://scratch.tscn"] as Array[String])
 	assert_eq(result.data.current_scene, "res://main.tscn")
+	assert_true(result.data.previous_scene_restored)
+
+
+func test_close_scene_ignored_switch_back_reports_not_restored() -> void:
+	## The close already happened, so an ignored switch back is reported in
+	## the result instead of as an error.
+	var tabs := _tabs(["res://main.tscn", "res://a.tscn", "res://scratch.tscn"], "res://main.tscn")
+	tabs.ignored_switches = PackedStringArray(["res://main.tscn"])
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_has_key(result, "data")
+	assert_eq(tabs.closed, ["res://scratch.tscn"] as Array[String])
+	assert_false(result.data.previous_scene_restored)
+	assert_eq(result.data.current_scene, "res://a.tscn")
 
 
 func test_close_scene_switch_that_does_not_land_closes_nothing() -> void:

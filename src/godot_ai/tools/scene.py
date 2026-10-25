@@ -31,7 +31,8 @@ Ops:
         Close an open scene tab, e.g. a scratch/preview scene, so its file can
         then be moved or removed. Refused when the tab has unsaved changes
         unless discard_changes=True (those edits are lost). Closing another
-        tab keeps the current (saved) one in front. Accepts res:// or uid://.
+        tab brings the current one back to the front; previous_scene_restored
+        in the result says whether that worked. Accepts res:// or uid://.
         Not undoable.
   • get_roots()
         List scenes currently open in the editor; flag the edited one.

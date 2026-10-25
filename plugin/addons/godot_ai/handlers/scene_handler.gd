@@ -472,14 +472,19 @@ func close_scene(params: Dictionary) -> Dictionary:
 			_scene_tabs.switch_to(previous_path)
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to close scene %s: %s" % [path, error_string(err)])
 
+	## The close already happened and cannot be undone, so a switch back that
+	## the editor ignored is reported in the result rather than as an error.
+	var previous_scene_restored := false
 	if previous_path != path and _scene_tabs.open_scenes().has(previous_path):
 		_scene_tabs.switch_to(previous_path)
+		previous_scene_restored = _scene_tabs.current_path() == previous_path
 
 	return {
 		"data": {
 			"path": path,
 			"discarded_changes": had_unsaved_changes,
 			"current_scene": _scene_tabs.current_path(),
+			"previous_scene_restored": previous_scene_restored,
 			"open_scenes": _scene_tabs.open_scenes(),
 			"undoable": false,
 			"reason": "Closing a scene tab cannot be undone via editor undo",
