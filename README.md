@@ -28,8 +28,14 @@ You need **Godot 4.7+**, [uv](https://docs.astral.sh/uv/getting-started/installa
 (it runs the Python server), and an MCP client.
 
 1. **Install uv** (once):
-   `curl -LsSf https://astral.sh/uv/install.sh | sh` on macOS/Linux, or
-   `irm https://astral.sh/uv/install.ps1 | iex` in Windows PowerShell.
+   - macOS/Linux:
+     ```sh
+     curl -LsSf https://astral.sh/uv/install.sh | sh
+     ```
+   - Windows (PowerShell):
+     ```powershell
+     irm https://astral.sh/uv/install.ps1 | iex
+     ```
 2. **Install the add-on** from the Asset Store (Godot's **AssetLib** tab), or
    from a [GitHub release](https://github.com/hi-godot/godot-ai/releases) into
    `your-project/addons/godot_ai/`.
