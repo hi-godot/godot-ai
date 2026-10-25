@@ -468,6 +468,8 @@ func close_scene(params: Dictionary) -> Dictionary:
 
 	var err := _scene_tabs.close_current()
 	if err != OK:
+		if previous_path != path and _scene_tabs.open_scenes().has(previous_path):
+			_scene_tabs.switch_to(previous_path)
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to close scene %s: %s" % [path, error_string(err)])
 
 	if previous_path != path and _scene_tabs.open_scenes().has(previous_path):

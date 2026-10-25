@@ -563,6 +563,15 @@ func test_close_scene_reports_editor_close_failure() -> void:
 	assert_contains(result.error.message, error_string(ERR_DOES_NOT_EXIST))
 
 
+func test_close_scene_other_tab_close_failure_restores_previous_current() -> void:
+	var tabs := _tabs(["res://main.tscn", "res://scratch.tscn"], "res://main.tscn")
+	tabs.close_err = ERR_DOES_NOT_EXIST
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
+	assert_eq(tabs.switched, ["res://scratch.tscn", "res://main.tscn"] as Array[String])
+	assert_eq(tabs.current, "res://main.tscn")
+
+
 func test_close_scene_last_tab_leaves_untitled_tab() -> void:
 	var tabs := _tabs(["res://scratch.tscn"], "res://scratch.tscn")
 	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
