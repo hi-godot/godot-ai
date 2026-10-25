@@ -106,12 +106,24 @@ a .NET-enabled editor build. [C# support](docs/TOOLS.md#c-support).
 
 ## Security
 
-Every release is signed. The in-editor updater verifies the signature and
-every file before it installs anything. **Update promptly:** 4.3.1, for
-example, replaces the emSign root certificates compromised in October 2026 and
-fixes [published advisories](https://github.com/hi-godot/godot-ai/security/advisories).
+Godot AI has prioritized security from the start. Today that includes:
 
-Attacks on open-source supply chains are increasing, and more critical
+- **Signed releases.** The in-editor updater verifies the signature and every
+  file before it installs anything.
+- **Authenticated local connections.** The server and the editor accept only
+  connections that present rotating credentials, and the editor connection is
+  loopback-only.
+- **Project confinement.** Writes stay inside your project, and
+  `project.godot`, `override.cfg`, and `.godot/` are off-limits.
+- **A guarded release pipeline.** Pinned dependencies, qualification on Linux,
+  macOS, and Windows, and a human approval before anything is published.
+- **Open disclosure.** Vulnerabilities are fixed and published as
+  [security advisories](https://github.com/hi-godot/godot-ai/security/advisories).
+
+**Update promptly.** 4.3.1, for example, removes the emSign root certificates
+compromised in October 2026.
+
+That said, attacks on open-source supply chains are increasing, and more critical
 vulnerabilities will appear in Godot AI, its dependencies, and the tools
 around it. Following advisories and the wider security landscape is your
 responsibility. Godot AI is MIT-licensed open source, provided as is; you use
