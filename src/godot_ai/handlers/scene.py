@@ -56,6 +56,18 @@ async def scene_save_as(runtime: DirectRuntime, path: str) -> dict:
     return await runtime.send_command("save_scene_as", {"path": path})
 
 
+async def scene_close(
+    runtime: DirectRuntime,
+    path: str,
+    discard_changes: bool = False,
+) -> dict:
+    await require_writable_async(runtime)
+    params: dict = {"path": path}
+    if discard_changes:
+        params["discard_changes"] = True
+    return await runtime.send_command("close_scene", params)
+
+
 async def current_scene_resource_data(runtime: DirectRuntime) -> dict:
     state = await runtime.send_command("get_editor_state")
     return {

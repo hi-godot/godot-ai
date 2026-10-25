@@ -42,7 +42,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "  project_run, test_run, batch_execute, logs_read\n"
     "  editor_screenshot, editor_reload_plugin, animation_create\n\n"
     "Domain rollups (one tool per domain; pass `op=` + a `params` dict):\n"
-    "  scene_manage     create, save_as, get_roots\n"
+    "  scene_manage     create, save_as, close, get_roots\n"
     "  node_manage      get_children, get_groups, delete, duplicate, rename,\n"
     "                   move, reparent, add_to_group, remove_from_group\n"
     "  script_manage    read, detach, find_symbols\n"
