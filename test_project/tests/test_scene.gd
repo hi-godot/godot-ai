@@ -516,6 +516,14 @@ func test_close_scene_current_tab_does_not_switch() -> void:
 	assert_eq(result.data.open_scenes, PackedStringArray(["res://main.tscn"]))
 
 
+func test_close_scene_matches_unsimplified_path() -> void:
+	var tabs := _tabs(["res://main.tscn", "res://scratch.tscn"], "res://scratch.tscn")
+	var result := _close_with(tabs, {"path": "res://./scratch.tscn"})
+	assert_has_key(result, "data")
+	assert_eq(result.data.path, "res://scratch.tscn")
+	assert_eq(tabs.closed, ["res://scratch.tscn"] as Array[String])
+
+
 func test_close_scene_other_tab_restores_previous_current() -> void:
 	## Closing a tab to the right of the edited one: the editor would land on
 	## its left neighbour, so close_scene must bring main.tscn back.

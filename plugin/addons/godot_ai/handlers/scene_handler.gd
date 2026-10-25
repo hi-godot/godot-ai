@@ -433,6 +433,8 @@ func close_scene(params: Dictionary) -> Dictionary:
 	var path_err = McpPathValidator.path_error(path, "path")
 	if path_err != null:
 		return path_err
+	## Tabs hold the canonical spelling; `res://./a.tscn` must still match.
+	path = path.simplify_path()
 
 	if not open_scenes.has(path):
 		return ErrorCodes.make(
