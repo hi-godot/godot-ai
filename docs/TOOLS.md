@@ -229,7 +229,7 @@ Calls take the form:
 
 | Tool | Ops |
 |------|-----|
-| `scene_manage` | `create`, `save_as`, `get_roots` |
+| `scene_manage` | `create`, `save_as`, `close`, `get_roots` |
 | `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `add_to_group`, `remove_from_group` |
 | `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |

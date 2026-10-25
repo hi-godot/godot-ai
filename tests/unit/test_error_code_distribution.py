@@ -36,7 +36,10 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## misses mirroring script_patch, and the shader_path-vs-code mutual
 ## exclusion mirroring McpResourceIO.validate_home), so the ceiling moved
 ## 110 -> 115.
-INVALID_PARAMS_CEILING = 115
+##
+## scene_manage op="close" (#1171) added one state conflict: refusing to close
+## a tab with unsaved changes unless discard_changes is set, so 115 -> 116.
+INVALID_PARAMS_CEILING = 116
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

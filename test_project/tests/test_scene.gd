@@ -32,6 +32,46 @@ class SaveSpy:
 		save_as_path = path
 
 
+## Stands in for the editor's scene tabs so close_scene's switch/close/restore
+## flow runs without touching the test runner's real tabs. close_current mirrors
+## EditorNode::_remove_edited_scene: the tab to the left becomes current.
+class FakeSceneTabs:
+	extends SceneHandler.SceneTabs
+
+	var open: PackedStringArray = PackedStringArray()
+	var unsaved: PackedStringArray = PackedStringArray()
+	var current := ""
+	var switch_lands := true
+	var close_err := OK
+	var switched: Array[String] = []
+	var closed: Array[String] = []
+
+	func open_scenes() -> PackedStringArray:
+		return open.duplicate()
+
+	func unsaved_scenes() -> PackedStringArray:
+		return unsaved.duplicate()
+
+	func current_path() -> String:
+		return current
+
+	func switch_to(path: String) -> void:
+		switched.append(path)
+		if switch_lands and open.has(path):
+			current = path
+
+	func close_current() -> int:
+		if close_err != OK:
+			return close_err
+		var idx := open.find(current)
+		closed.append(current)
+		open.remove_at(idx)
+		if open.is_empty():
+			open.append("")  # Godot replaces the last tab with an empty untitled one.
+		current = open[maxi(idx - 1, 0)]
+		return OK
+
+
 func suite_name() -> String:
 	return "scene"
 
@@ -404,3 +444,129 @@ func test_save_scene_as_missing_path() -> void:
 func test_save_scene_as_invalid_path_prefix() -> void:
 	var result := _handler.save_scene_as({"path": "/tmp/bad.tscn"})
 	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+# ----- close_scene (#1171) — driven through FakeSceneTabs; closing real tabs would close the runner's scene -----
+
+func _close_with(tabs: FakeSceneTabs, params: Dictionary) -> Dictionary:
+	var original: SceneHandler.SceneTabs = _handler._scene_tabs
+	_handler._scene_tabs = tabs
+	var result := _handler.close_scene(params)
+	_handler._scene_tabs = original
+	return result
+
+
+func _tabs(open: Array[String], current: String) -> FakeSceneTabs:
+	var tabs := FakeSceneTabs.new()
+	tabs.open = PackedStringArray(open)
+	tabs.current = current
+	return tabs
+
+
+func test_close_scene_missing_path() -> void:
+	var tabs := _tabs(["res://main.tscn"], "res://main.tscn")
+	var result := _close_with(tabs, {})
+	assert_is_error(result, ErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_eq(tabs.closed.size(), 0, "nothing closed without a path")
+
+
+func test_close_scene_invalid_path_prefix() -> void:
+	var result := _close_with(_tabs(["res://main.tscn"], "res://main.tscn"), {"path": "/tmp/scratch.tscn"})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+func test_close_scene_not_open_lists_open_tabs() -> void:
+	var tabs := _tabs(["res://main.tscn"], "res://main.tscn")
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
+	assert_contains(result.error.message, "res://main.tscn")
+	assert_eq(tabs.switched.size(), 0, "no tab switch for a scene that is not open")
+	assert_eq(tabs.closed.size(), 0, "nothing closed for a scene that is not open")
+
+
+func test_close_scene_refuses_unsaved_without_discard() -> void:
+	var tabs := _tabs(["res://main.tscn", "res://scratch.tscn"], "res://main.tscn")
+	tabs.unsaved = PackedStringArray(["res://scratch.tscn"])
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "discard_changes=true")
+	assert_eq(tabs.switched.size(), 0, "refusal must not switch tabs")
+	assert_eq(tabs.closed.size(), 0, "refusal must not close the tab")
+	assert_eq(tabs.current, "res://main.tscn")
+
+
+func test_close_scene_discards_unsaved_when_asked() -> void:
+	var tabs := _tabs(["res://main.tscn", "res://scratch.tscn"], "res://scratch.tscn")
+	tabs.unsaved = PackedStringArray(["res://scratch.tscn"])
+	var result := _close_with(tabs, {"path": "res://scratch.tscn", "discard_changes": true})
+	assert_has_key(result, "data")
+	assert_eq(tabs.closed, ["res://scratch.tscn"] as Array[String])
+	assert_eq(result.data.discarded_changes, true)
+	assert_eq(result.data.undoable, false)
+
+
+func test_close_scene_current_tab_does_not_switch() -> void:
+	var tabs := _tabs(["res://main.tscn", "res://scratch.tscn"], "res://scratch.tscn")
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_has_key(result, "data")
+	assert_eq(tabs.switched.size(), 0, "closing the edited tab needs no switch")
+	assert_eq(tabs.closed, ["res://scratch.tscn"] as Array[String])
+	assert_eq(result.data.discarded_changes, false)
+	assert_eq(result.data.current_scene, "res://main.tscn")
+	assert_eq(result.data.open_scenes, PackedStringArray(["res://main.tscn"]))
+
+
+func test_close_scene_other_tab_restores_previous_current() -> void:
+	## Closing a tab to the right of the edited one: the editor would land on
+	## its left neighbour, so close_scene must bring main.tscn back.
+	var tabs := _tabs(["res://main.tscn", "res://a.tscn", "res://scratch.tscn"], "res://main.tscn")
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_has_key(result, "data")
+	assert_eq(tabs.switched, ["res://scratch.tscn", "res://main.tscn"] as Array[String])
+	assert_eq(tabs.closed, ["res://scratch.tscn"] as Array[String])
+	assert_eq(result.data.current_scene, "res://main.tscn")
+
+
+func test_close_scene_switch_that_does_not_land_closes_nothing() -> void:
+	var tabs := _tabs(["res://main.tscn", "res://scratch.tscn"], "res://main.tscn")
+	tabs.switch_lands = false
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_is_error(result, ErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_eq(tabs.closed.size(), 0, "must not close whatever tab happens to be current")
+	assert_eq(tabs.current, "res://main.tscn")
+
+
+func test_close_scene_reports_editor_close_failure() -> void:
+	var tabs := _tabs(["res://main.tscn", "res://scratch.tscn"], "res://scratch.tscn")
+	tabs.close_err = ERR_DOES_NOT_EXIST
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_is_error(result, ErrorCodes.INTERNAL_ERROR)
+	assert_contains(result.error.message, error_string(ERR_DOES_NOT_EXIST))
+
+
+func test_close_scene_last_tab_leaves_untitled_tab() -> void:
+	var tabs := _tabs(["res://scratch.tscn"], "res://scratch.tscn")
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_has_key(result, "data")
+	assert_eq(tabs.closed, ["res://scratch.tscn"] as Array[String])
+	assert_eq(result.data.current_scene, "")
+	assert_eq(result.data.open_scenes, PackedStringArray([""]), "same shape get_roots reports")
+
+
+func test_close_scene_resolves_uid_path() -> void:
+	var uid := ResourceLoader.get_resource_uid("res://main.tscn")
+	if uid == ResourceUID.INVALID_ID:
+		skip("res://main.tscn has no uid in this project")
+		return
+	var tabs := _tabs(["res://main.tscn", "res://scratch.tscn"], "res://main.tscn")
+	var result := _close_with(tabs, {"path": ResourceUID.id_to_text(uid)})
+	assert_has_key(result, "data")
+	assert_eq(result.data.path, "res://main.tscn")
+	assert_eq(tabs.closed, ["res://main.tscn"] as Array[String])
+
+
+func test_close_scene_unknown_uid() -> void:
+	var tabs := _tabs(["res://main.tscn"], "res://main.tscn")
+	var result := _close_with(tabs, {"path": "uid://notarealuid000"})
+	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
+	assert_eq(tabs.closed.size(), 0, "nothing closed for an unknown uid")

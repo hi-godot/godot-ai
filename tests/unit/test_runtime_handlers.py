@@ -379,6 +379,8 @@ class StubClient:
             return {"path": "res://main.tscn", "undoable": False}
         if command == "save_scene_as":
             return {"path": params.get("path", ""), "undoable": False}
+        if command == "close_scene":
+            return {"path": params.get("path", ""), "undoable": False}
         if command == "search_filesystem":
             return {"files": [{"path": f"res://file_{i}.gd"} for i in range(3)]}
         if command == "run_tests":
@@ -2563,6 +2565,22 @@ async def test_scene_save_as_handler():
     result = await scene_handlers.scene_save_as(runtime, path="res://copy.tscn")
     assert result["path"] == "res://copy.tscn"
     assert client.calls[-1]["params"] == {"path": "res://copy.tscn"}
+
+
+async def test_scene_close_handler_omits_default_discard_flag():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await scene_handlers.scene_close(runtime, path="res://scratch.tscn")
+    assert result["path"] == "res://scratch.tscn"
+    assert client.calls[-1]["command"] == "close_scene"
+    assert client.calls[-1]["params"] == {"path": "res://scratch.tscn"}
+
+
+async def test_scene_close_handler_forwards_discard_changes():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await scene_handlers.scene_close(runtime, path="res://scratch.tscn", discard_changes=True)
+    assert client.calls[-1]["params"] == {"path": "res://scratch.tscn", "discard_changes": True}
 
 
 # ---------------------------------------------------------------------------

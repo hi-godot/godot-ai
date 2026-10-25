@@ -1,7 +1,7 @@
 """MCP tools for scene authoring.
 
 Top-level: ``scene_get_hierarchy`` (core read), ``scene_open``, ``scene_save``.
-Everything else (create, save_as, get_roots) collapses into ``scene_manage``.
+Everything else (create, save_as, close, get_roots) collapses into ``scene_manage``.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from godot_ai.tools import DEFER_META
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
-Scene authoring (create, save_as, list open roots).
+Scene authoring (create, save_as, close a scene tab, list open roots).
 
 Resource form: ``godot://scene/current`` and ``godot://scene/hierarchy``
 — prefer for active-session reads.
@@ -27,6 +27,12 @@ Ops:
         in editor memory until scene_save or save_as is called.
   • save_as(path)
         Save the currently edited scene to a new file path.
+  • close(path, discard_changes=False)
+        Close an open scene tab, e.g. a scratch/preview scene, so its file can
+        then be moved or removed. Refused when the tab has unsaved changes
+        unless discard_changes=True (those edits are lost). Closing another
+        tab keeps the current (saved) one in front. Accepts res:// or uid://.
+        Not undoable.
   • get_roots()
         List scenes currently open in the editor; flag the edited one.
 """
@@ -119,6 +125,7 @@ def register_scene_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None
         ops={
             "create": scene_handlers.scene_create,
             "save_as": scene_handlers.scene_save_as,
+            "close": scene_handlers.scene_close,
             "get_roots": scene_handlers.scene_get_roots,
         },
         read_resource_forms={

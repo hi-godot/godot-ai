@@ -220,7 +220,7 @@ _NAMED_VERB_LINES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 ## blank line before the tilemap/tileset pair (kept for byte-stability of
 ## the no-exclusion output).
 _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
-    ("scene", "  scene_manage     create, save_as, get_roots\n"),
+    ("scene", "  scene_manage     create, save_as, close, get_roots\n"),
     (
         "node",
         "  node_manage      get_children, get_groups, delete, duplicate, rename,\n"
