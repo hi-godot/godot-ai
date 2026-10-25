@@ -544,6 +544,17 @@ func test_close_scene_switch_that_does_not_land_closes_nothing() -> void:
 	assert_eq(tabs.current, "res://main.tscn")
 
 
+func test_close_scene_untitled_current_tab_closes_nothing() -> void:
+	## An untitled tab has no path to restore, so the editor would be left on
+	## whichever tab Godot picks next.
+	var tabs := _tabs(["", "res://scratch.tscn"], "")
+	var result := _close_with(tabs, {"path": "res://scratch.tscn"})
+	assert_is_error(result, ErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_eq(tabs.switched.size(), 0, "must not leave the untitled tab")
+	assert_eq(tabs.closed.size(), 0)
+	assert_eq(tabs.current, "")
+
+
 func test_close_scene_reports_editor_close_failure() -> void:
 	var tabs := _tabs(["res://main.tscn", "res://scratch.tscn"], "res://scratch.tscn")
 	tabs.close_err = ERR_DOES_NOT_EXIST

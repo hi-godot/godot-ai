@@ -408,7 +408,8 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 ## Close an open scene tab (#1171). Godot's close drops unsaved edits without
 ## asking, so a tab with unsaved changes is refused unless discard_changes is
 ## set. A tab that is not the edited one is switched to, closed, and the
-## caller's previous (saved) tab is brought back to the front.
+## caller's previous tab is brought back to the front; that is refused when
+## the edited tab is untitled, since it has no path to switch back to.
 func close_scene(params: Dictionary) -> Dictionary:
 	var path: String = params.get("path", "")
 	var discard_changes: bool = params.get("discard_changes", false)
@@ -450,6 +451,13 @@ func close_scene(params: Dictionary) -> Dictionary:
 		)
 
 	var previous_path := _scene_tabs.current_path()
+	## An untitled tab has no path to switch back to, so closing another tab
+	## would leave the editor on whichever scene Godot selects next.
+	if previous_path.is_empty():
+		return ErrorCodes.make(
+			ErrorCodes.EDITED_SCENE_MISMATCH,
+			"The edited tab is an untitled scene, which cannot be brought back to the front after closing %s; nothing was closed. Save the untitled scene first, or switch to %s (scene_open) and close it from there." % [path, path]
+		)
 	if previous_path != path:
 		_scene_tabs.switch_to(path)
 		if _scene_tabs.current_path() != path:
@@ -462,7 +470,7 @@ func close_scene(params: Dictionary) -> Dictionary:
 	if err != OK:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to close scene %s: %s" % [path, error_string(err)])
 
-	if previous_path != path and not previous_path.is_empty() and _scene_tabs.open_scenes().has(previous_path):
+	if previous_path != path and _scene_tabs.open_scenes().has(previous_path):
 		_scene_tabs.switch_to(previous_path)
 
 	return {
