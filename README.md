@@ -38,6 +38,10 @@ You need **Godot 4.7+**, [uv](https://docs.astral.sh/uv/getting-started/installa
    to your client, or **Configure all**. Restart the client if it doesn't
    notice the change.
 
+<p align="center">
+  <img src="docs/images/dock-v4.png" alt="Godot AI dock showing a connected server and configured clients" width="396">
+</p>
+
 **Already installed?** Click **Update** in the dock. Never extract a new
 version over an existing `addons/godot_ai/`. From v3, the same button migrates
 you to v4 ([migration guide](docs/v4-migration.md)).
