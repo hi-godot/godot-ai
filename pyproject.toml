@@ -58,7 +58,7 @@ dependencies = [
     # own floor is starlette>=1.0.1), but this package's declared floor is
     # what a *constrained* resolve is allowed to pick, so it must not name a
     # version with a known advisory against it.
-    "starlette==1.7.0",
+    "starlette==1.10.0",
     # BoundedH11Protocol inherits Uvicorn's h11 implementation directly.
     "h11==0.16.0",
 ]
