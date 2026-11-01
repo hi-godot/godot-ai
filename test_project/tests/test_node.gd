@@ -12,6 +12,7 @@ var _undo_redo: EditorUndoRedoManager
 
 const TEST_MATERIAL_PATH := "res://tests/_mcp_test_material.tres"
 const TEST_NODE_SCRIPT_PATH := "res://tests/_mcp_test_node_script.gd"
+const TEST_NODE_ARRAY_SCENE_PATH := "res://tests/_mcp_test_node_array_scene.tscn"
 
 
 func suite_name() -> String:
@@ -37,6 +38,8 @@ func suite_teardown() -> void:
 		DirAccess.remove_absolute(TEST_NODE_SCRIPT_PATH)
 	if FileAccess.file_exists(TEST_NODE_SCRIPT_PATH + ".uid"):
 		DirAccess.remove_absolute(TEST_NODE_SCRIPT_PATH + ".uid")
+	if FileAccess.file_exists(TEST_NODE_ARRAY_SCENE_PATH):
+		DirAccess.remove_absolute(TEST_NODE_ARRAY_SCENE_PATH)
 
 
 # ----- get_children -----
@@ -1419,6 +1422,36 @@ func test_set_property_node_array_accepts_scene_and_relative_paths() -> void:
 	assert_true(editor_undo(_undo_redo), "undo set should succeed")
 	assert_eq((node.get("targets") as Array).size(), 0)
 	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_node_array_survives_scene_save_and_reload() -> void:
+	## #1175 asks for Inspector-compatible saving: the elements must pack as
+	## node references and resolve again in a freshly loaded copy of the scene.
+	## Cleanup of the temp scene is guaranteed by suite_teardown() even if an
+	## assertion below fails.
+	_make_node_array_probe("_McpNodeArraySave", "Node3D")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeArraySave",
+		"property": "targets",
+		"value": ["/Main/World", "../World/Ground"],
+	})
+	assert_has_key(result, "data")
+	var packed := PackedScene.new()
+	assert_eq(packed.pack(EditorInterface.get_edited_scene_root()), OK)
+	assert_eq(ResourceSaver.save(packed, TEST_NODE_ARRAY_SCENE_PATH), OK)
+	var reloaded := ResourceLoader.load(
+		TEST_NODE_ARRAY_SCENE_PATH, "", ResourceLoader.CACHE_MODE_IGNORE
+	) as PackedScene
+	assert_true(reloaded != null, "the saved scene must load back")
+	var copy := reloaded.instantiate()
+	var stored: Variant = copy.get_node("_McpNodeArraySave").get("targets")
+	assert_true(stored is Array and (stored as Array).is_typed(), "the reloaded slot must keep its typing")
+	assert_eq((stored as Array).size(), 2, "both elements must survive the save")
+	assert_true(stored[0] == copy.get_node("World"), "element 0 must be the reloaded World node")
+	assert_true(stored[1] == copy.get_node("World/Ground"), "element 1 must be the reloaded Ground node")
+	copy.free()
+	DirAccess.remove_absolute(TEST_NODE_ARRAY_SCENE_PATH)
+	_free_node_export_probe(1)
 
 
 func test_set_property_node_array_rejects_wrong_class_naming_index() -> void:
