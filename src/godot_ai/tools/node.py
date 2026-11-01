@@ -182,6 +182,10 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
           "resource_path": "res://meshes/box.tres"})``, then pass that res://
           path here (or use resource_manage(op="assign")).
         - StringName: plain string. Array/Dictionary: JSON list/object.
+        - PackedByteArray: JSON list of whole numbers 0..255, at most 65,536
+          bytes per value. [] clears. Strings, booleans, fractions and
+          out-of-range values are rejected before mutation. Also supported
+          inside typed containers and resource constructor properties.
 
         Args:
             path: Scene path relative to the edited scene root (e.g.

@@ -44,6 +44,8 @@ Ops:
         Inline {"__class__": ...} constructors require Resource-typed slots
         or typed Resource collections. Untyped collections that discard a
         nested constructor are refused before saving or assigning.
+        PackedByteArray properties accept lists of whole numbers 0..255,
+        at most 65,536 bytes per value; [] clears.
   • curve_set_points(points, path="", property="", resource_path="")
         Replace all points on a Curve / Curve2D / Curve3D. Auto-creates
         the curve resource if the slot is empty (curve_created flag).

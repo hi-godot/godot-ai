@@ -2255,9 +2255,7 @@ func test_create_node_scene_file_matching_active_scene_passes() -> void:
 # ----- honest failure for un-coercible writes -----
 
 func test_check_coerced_rejects_unsupported_struct() -> void:
-	# PackedByteArray is intentionally never coerced (base64-vs-int design gap),
-	# so it is a durable stand-in for "a type with no coercion branch".
-	var result: Variant = NodeHandler._check_coerced([1, 2, 3], TYPE_PACKED_BYTE_ARRAY)
+	var result: Variant = NodeHandler._check_coerced("not a callable", TYPE_CALLABLE)
 	assert_is_error(result, ErrorCodes.WRONG_TYPE)
 
 

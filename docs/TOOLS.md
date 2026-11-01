@@ -34,6 +34,15 @@ not the MCP tool names.
 | `editor_reload_plugin` | Reload the plugin and wait for reconnect (works with external and plugin-managed servers) |
 | `animation_create` | Create an Animation clip (auto-creates AnimationPlayer + library if missing) |
 
+`node_set_property` accepts a `PackedByteArray` value as a JSON list of whole
+numbers from 0 to 255, with at most 65,536 bytes per value. For example,
+`value=[0,128,255]` writes three bytes and `value=[]` clears the array.
+The same conversion applies to typed containers and resource constructor
+properties, including `resource_manage(op="create")`. Strings, booleans,
+fractions, nonfinite numbers, and out-of-range bytes are rejected before the
+property is assigned. `TileMapLayer.tile_map_data` still requires Godot's
+valid binary cell format; this conversion does not generate tile data.
+
 `logs_read` also accepts `include_details=true` for `source="editor"`,
 `source="game"`, and `source="all"`. Detailed entries include the original
 Godot `_log_error` code/rationale when available, error type, resolved source

@@ -7,6 +7,7 @@ const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializ
 ## Handles node creation and manipulation with undo/redo support.
 
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
+const MAX_PACKED_BYTE_ARRAY_SIZE := 65536
 
 var _undo_redo: EditorUndoRedoManager
 
@@ -734,6 +735,11 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 			ok = value is Vector3
 		TYPE_COLOR:
 			ok = value is Color
+		TYPE_PACKED_BYTE_ARRAY:
+			var byte_err := _packed_byte_array_error(value)
+			if byte_err != null:
+				return ErrorCodes.prefix_message(byte_err, prefix)
+			ok = value is PackedByteArray
 		TYPE_PACKED_VECTOR2_ARRAY:
 			ok = value is PackedVector2Array
 		TYPE_PACKED_VECTOR3_ARRAY:
@@ -800,6 +806,8 @@ static func _check_coerced(value: Variant, target_type: int, prefix: String = ""
 ## targets short-circuit to a literal list-shaped hint.
 static func _shape_hint(target_type: int) -> String:
 	match target_type:
+		TYPE_PACKED_BYTE_ARRAY:
+			return "a list of whole numbers 0..255 (at most %d bytes)" % MAX_PACKED_BYTE_ARRAY_SIZE
 		TYPE_PACKED_VECTOR2_ARRAY:
 			return "[{\"x\":0,\"y\":0}, ...]"
 		TYPE_PACKED_VECTOR3_ARRAY:
@@ -883,6 +891,9 @@ static func _check_dict_coerce_failed(value: Variant, target_type: int) -> Varia
 ## `dict.get(key, 0)` defaults silently zero-filled missing axes.
 static func _coerce_value(value: Variant, target_type: int) -> Variant:
 	match target_type:
+		TYPE_PACKED_BYTE_ARRAY:
+			if value is Array and _packed_byte_array_error(value) == null:
+				return PackedByteArray(value)
 		## Vector2/Vector3/Color route through the canonical strict parser
 		## (#714): same dict/array/string shapes as every other handler, and
 		## non-numeric components fall through (returning the original
@@ -1075,9 +1086,22 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 				var pw: Variant = _coerce_value(value["w"], TYPE_VECTOR4)
 				if px is Vector4 and py is Vector4 and pz is Vector4 and pw is Vector4:
 					return Projection(px, py, pz, pw)
-		# PackedByteArray intentionally unhandled — needs design decision
-		# (base64 string vs. raw int list); JSON has no native byte type.
 	return value
+
+
+static func _packed_byte_array_error(value: Variant) -> Variant:
+	if not (value is Array or value is PackedByteArray):
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "PackedByteArray requires %s; got %s" % [_shape_hint(TYPE_PACKED_BYTE_ARRAY), type_string(typeof(value))])
+	if value.size() > MAX_PACKED_BYTE_ARRAY_SIZE:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "PackedByteArray exceeds the %d-byte limit (got %d)" % [MAX_PACKED_BYTE_ARRAY_SIZE, value.size()])
+	if value is Array:
+		for i in value.size():
+			var item: Variant = value[i]
+			if not (item is int or item is float):
+				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "PackedByteArray element %d must be a whole number 0..255; got %s" % [i, type_string(typeof(item))])
+			if not is_finite(float(item)) or item < 0 or item > 255 or float(item) != floorf(float(item)):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "PackedByteArray element %d must be a whole number 0..255; got %s" % [i, str(item)])
+	return null
 
 
 ## Fill a typed `Array[T]` slot from a JSON list (#612 stage 1: value-element
