@@ -8,6 +8,7 @@ import pytest
 
 from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.handlers import editor as editor_handlers
+from godot_ai.handlers import project as project_handlers
 from godot_ai.handlers._readiness import (
     _IMPORTING_HOLD_CAP_SECONDS,
     _IMPORTING_HOLD_PROBE_INTERVAL_SECONDS,
@@ -103,6 +104,50 @@ def _runtime_with_stub(
     registry.register(session)
     client = _EditorStateClient(plugin_reports, raise_on_probe=raise_on_probe)
     return DirectRuntime(registry=registry, client=client), session, client
+
+
+async def test_project_run_reaches_idempotent_handler_while_playing():
+    class PlayingClient(_EditorStateClient):
+        runs = 0
+
+        async def send(self, command, params=None, **kwargs):
+            if command == "run_project":
+                self.runs += 1
+                return {"was_already_running": True, "scene": "res://main.tscn"}
+            return await super().send(command, params, **kwargs)
+
+    registry = SessionRegistry()
+    registry.register(_make_session("playing"))
+    client = PlayingClient("playing")
+    runtime = DirectRuntime(registry=registry, client=client)
+    result = await project_handlers.project_run(runtime)
+    assert result == {"was_already_running": True, "scene": "res://main.tscn"}
+    assert client.probe_calls == 1
+    assert client.runs == 1
+    with pytest.raises(GodotCommandError, match="EDITOR_NOT_READY"):
+        await require_writable_async(runtime)
+
+
+async def test_project_run_does_not_bypass_failed_playing_probe():
+    runtime, _, client = _runtime_with_stub("playing", "playing", raise_on_probe=True)
+    with pytest.raises(GodotCommandError, match="EDITOR_NOT_READY"):
+        await project_handlers.project_run(runtime)
+    assert client.probe_calls == 1
+
+
+async def test_project_run_does_not_bypass_probe_without_readiness():
+    runtime, _, client = _runtime_with_stub("playing", None)
+    with pytest.raises(GodotCommandError, match="EDITOR_NOT_READY"):
+        await project_handlers.project_run(runtime)
+    assert client.probe_calls == 1
+
+
+async def test_project_run_noop_exception_does_not_bypass_importing():
+    runtime, _, client = _runtime_with_stub("playing", "importing")
+    ticks = iter([0.0, _IMPORTING_HOLD_CAP_SECONDS + 1.0])
+    with pytest.raises(GodotCommandError, match="EDITOR_NOT_READY"):
+        await require_writable_async(runtime, allow_playing_noop=True, clock=lambda: next(ticks))
+    assert client.probe_calls == 1
 
 
 # --- editor_state self-heal — issue #262 ---

@@ -108,6 +108,7 @@ async def _probe_readiness(runtime: "DirectRuntime", session_id: str) -> dict | 
 async def require_writable_async(
     runtime: "DirectRuntime",
     *,
+    allow_playing_noop: bool = False,
     clock: "Callable[[], float]" = time.monotonic,
     sleep: "Callable[[float], Awaitable[None]]" = asyncio.sleep,
 ) -> None:
@@ -178,8 +179,18 @@ async def require_writable_async(
             if session.readiness != "importing":
                 break
 
+    session = runtime.get_session(session_id) or session
+    # project_run may inspect an existing run without changing it. Require a
+    # successful live probe before granting that narrow exception.
+    if (
+        allow_playing_noop
+        and probe is not None
+        and probe.get("readiness") == "playing"
+        and session.readiness == "playing"
+    ):
+        return
     game_status = probe.get("game_status") if probe is not None else None
-    _enforce_blocking_state(runtime.get_session(session_id) or session, game_status)
+    _enforce_blocking_state(session, game_status)
 
 
 def _enforce_blocking_state(session: "Session | None", game_status: object = None) -> None:
