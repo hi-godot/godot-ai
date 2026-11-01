@@ -70,6 +70,25 @@ can_debug, pre_live}`. The run cannot continue on its own — call
 `"stopped"`). `is_playing` remains raw editor play-state for compatibility; use
 `game_status.status` for liveness decisions.
 
+`game_status` also reports `started_by` (`"mcp"` or `"editor"`),
+`started_at` (Unix seconds observed by the plugin), and `elapsed_s` (monotonic
+elapsed time). An already-running session keeps its original attribution when
+`project_run` is called again. Stopped sessions return null origin/start time.
+Adopting a run after the plugin loads records the adoption time.
+
+`last_input_age_s` estimates time since the game helper observed input, or
+since helper startup if there has been none. `input_sample_age_s` says how old
+the latest helper report is. Reports arrive at most once per second; both
+fields are null until one arrives, and stale samples do not prove the game is
+idle. Another node can consume input before the helper observes it, so even a
+fresh report is not authoritative device idle time. Godot AI's injected input
+is excluded. Other game scripts may synthesize
+input that cannot be distinguished from device input. Only timing is sent,
+not keys, mouse positions or other input contents. These facts inform caller
+policy; Godot AI does not automatically stop an idle game. A confirmed
+`EDITOR_PLAYING` refusal carries the latest probed `game_status` when available.
+
+
 For game logs, `logs_read(source="game")` returns lines from the current game
 run only. Each play-start creates a new `run_id`, even if the game never reaches
 the `_mcp_game_helper` hello beacon; prior run lines stay retained but do not

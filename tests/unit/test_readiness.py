@@ -510,3 +510,31 @@ async def test_require_writable_async_pins_session_across_slow_path():
     assert runtime.active_session_id == "sess-a"
     assert registry.active_session_id == "sess-b"
     assert registry.get("sess-a").readiness == "ready"
+
+
+@pytest.mark.parametrize(
+    "game_status",
+    [{"started_by": "editor", "elapsed_s": 12.5, "last_input_age_s": 4.0}, None, "invalid"],
+)
+async def test_playing_refusal_carries_only_fresh_game_status(game_status):
+    class MetadataClient(_EditorStateClient):
+        async def send(self, *args, **kwargs):
+            result = await super().send(*args, **kwargs)
+            result["game_status"] = game_status
+            return result
+
+    registry = SessionRegistry()
+    registry.register(_make_session("playing"))
+    client = MetadataClient("playing")
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError) as exc_info:
+        await require_writable_async(runtime)
+    assert exc_info.value.data["sub_code"] == "EDITOR_PLAYING"
+    if isinstance(game_status, dict):
+        assert exc_info.value.data["game_status"] == game_status
+    else:
+        assert "game_status" not in exc_info.value.data
+    client._raise = True
+    with pytest.raises(GodotCommandError) as disconnected:
+        await require_writable_async(runtime)
+    assert "game_status" not in disconnected.value.data

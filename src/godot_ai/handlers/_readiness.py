@@ -82,13 +82,13 @@ def sync_readiness_from_snapshot(runtime: "DirectRuntime", value: object) -> boo
     return runtime.record_session_readiness(session_id, value)
 
 
-async def _probe_readiness(runtime: "DirectRuntime", session_id: str) -> bool:
+async def _probe_readiness(runtime: "DirectRuntime", session_id: str) -> dict | None:
     """One ``get_editor_state`` round trip that heals cached readiness.
 
     Production replies self-heal the cache via the WebSocket transport's
     envelope sync; the explicit table transition here
     covers in-process tests that wire a custom client and bypass the
-    transport. Returns False when the probe itself failed (timeout,
+    transport. Returns None when the probe itself failed (timeout,
     disconnect, plugin error) — the caller then enforces against the
     cached value rather than escalating the failure mode from "blocked"
     to "connection error"; the actual write would have failed anyway.
@@ -100,9 +100,9 @@ async def _probe_readiness(runtime: "DirectRuntime", session_id: str) -> bool:
             hint_policy="retain",
         )
     except Exception:
-        return False
+        return None
     runtime.record_session_readiness(session_id, result.get("readiness"))
-    return True
+    return result
 
 
 async def require_writable_async(
@@ -159,9 +159,9 @@ async def require_writable_async(
     if _READINESS_INFO.get(session.readiness) is None:
         return  # cache says writable — fast path, no probe
 
-    probed = await _probe_readiness(runtime, session_id)
+    probe = await _probe_readiness(runtime, session_id)
     session = runtime.get_session(session_id) or session
-    if probed and session.readiness == "importing":
+    if probe is not None and session.readiness == "importing":
         ## Live-confirmed import in flight — hold instead of bouncing the
         ## write back for the caller to blind-retry. A failed initial
         ## probe skips the hold entirely: waiting can't fix a dead link.
@@ -171,16 +171,18 @@ async def require_writable_async(
             ## when cap isn't an exact multiple of the interval — the last
             ## re-probe then lands exactly at the deadline.
             await sleep(min(_IMPORTING_HOLD_PROBE_INTERVAL_SECONDS, remaining))
-            if not await _probe_readiness(runtime, session_id):
+            probe = await _probe_readiness(runtime, session_id)
+            if probe is None:
                 break
             session = runtime.get_session(session_id) or session
             if session.readiness != "importing":
                 break
 
-    _enforce_blocking_state(runtime.get_session(session_id) or session)
+    game_status = probe.get("game_status") if probe is not None else None
+    _enforce_blocking_state(runtime.get_session(session_id) or session, game_status)
 
 
-def _enforce_blocking_state(session: "Session | None") -> None:
+def _enforce_blocking_state(session: "Session | None", game_status: object = None) -> None:
     if session is None:
         return
     info = _READINESS_INFO.get(session.readiness)
@@ -198,6 +200,8 @@ def _enforce_blocking_state(session: "Session | None") -> None:
         "retryable": retryable,
         "hint": hint,
     }
+    if session.readiness == "playing" and isinstance(game_status, dict):
+        data["game_status"] = game_status
     sub_code = _READINESS_SUB_CODE.get(session.readiness)
     if sub_code is not None:
         data = {"sub_code": sub_code.value, **data}

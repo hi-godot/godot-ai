@@ -78,6 +78,11 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         (status not in {"not_live", "stopped"}) mirrored from the same fields
         inside ``game_status``. ``is_playing`` remains raw editor play-state;
         use ``game_status.status`` for liveness decisions.
+        ``started_by`` identifies MCP versus editor launches; ``elapsed_s``
+        reports run age. ``last_input_age_s`` is a sampled idle estimate,
+        with ``input_sample_age_s`` for freshness; null means unknown.
+        Godot AI injected input is excluded. Other nodes may consume input
+        before the helper sees it; even fresh samples do not prove device idle.
         ``game_status.status="break"`` means the game process is parked in a
         remote-debugger break (boot-time parse errors do this before the game
         helper registers); it will not resume on its own — call
