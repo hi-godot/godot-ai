@@ -66,3 +66,11 @@ async def resource_inspect(
     return await runtime.send_command(
         "inspect_resource", {"node_path": node_path, "property": property, "depth": depth}
     )
+
+
+async def resource_set_properties(runtime: DirectRuntime, path: str, properties: dict) -> dict:
+    """Persist a native resource patch and refresh its held instance without scene undo."""
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "set_resource_properties", {"path": path, "properties": properties}
+    )

@@ -8197,3 +8197,28 @@ class TestManageRollupHintsOnOpTypo:
         assert "'get_childen'" in msg
         assert "did you mean" in msg.lower()
         assert "'get_children'" in msg
+
+
+async def test_resource_set_properties_public_mcp_dispatch(mcp_stack):
+    client, plugin = mcp_stack
+    properties = {"background_energy_multiplier": 2.0}
+
+    async def respond():
+        command = await plugin.recv_command()
+        assert command["command"] == "set_resource_properties"
+        assert command["params"] == {"path": "res://environment.tres", "properties": properties}
+        await plugin.send_response(command["request_id"], {
+            "path": "res://environment.tres", "properties_applied": 1,
+            "live_refreshed": True, "undoable": False,
+        })
+
+    task = asyncio.create_task(respond())
+    result = await client.call_tool("resource_manage", {
+        "op": "set_properties",
+        "params": {"path": "res://environment.tres", "properties": properties},
+    })
+    await task
+    assert result.data["path"] == "res://environment.tres"
+    assert result.data["properties_applied"] == 1
+    assert result.data["live_refreshed"] is True
+    assert result.data["undoable"] is False

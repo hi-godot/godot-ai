@@ -248,7 +248,7 @@ Calls take the form:
 | `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `set_stylebox_texture`, `set_font`, `set_icon`, `stylebox_override`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `set_richtext`, `build_layout`, `draw_recipe` |
-| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
+| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `set_properties`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
 | `api_manage` | `get_class` |
 | `client_manage` | `status`, `configure`, `remove` |
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
@@ -432,6 +432,22 @@ their nested resources. For example, an inline texture inside
 failing property path when Godot would discard it. The operation does not save
 or assign the incomplete resource. Construct such collections through Godot's
 API. Ordinary dictionaries that retain a literal `__class__` key remain data.
+
+### Patch a saved resource
+
+`resource_manage(op="set_properties", params={"path":"res://environment.tres","properties":{"background_energy_multiplier":2.0}})`
+patches a saved engine built-in resource without resetting omitted properties or replacing
+its cached identity. Nested resources must also be engine built-in and unscripted;
+GDExtension resources and cyclic resource graphs are refused. The file
+must be an existing, non-imported `.tres` or `.res` beneath `res://`; UID aliases,
+subresource paths and script/path replacement are refused. Validation and staged
+save failures leave the original file and live object unchanged. The edit preserves
+its UID and immediately refreshes existing references. Windows replacement retains
+a backup and restores it if the staged move fails; it is recoverable, not crash-atomic.
+If restoration fails, the error includes `recovery_backup` and `staged_resource` paths. This persistent file edit
+is **not scene-undoable**. Native setters that reject or normalize a requested value
+are refused during validation. A post-save cache refresh failure explicitly reports
+`disk_committed: true` and `live_refreshed: false`; reload before further edits.
 
 ### Inspect a live native resource
 

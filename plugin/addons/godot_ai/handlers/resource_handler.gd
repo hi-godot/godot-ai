@@ -196,6 +196,131 @@ func create_resource(params: Dictionary) -> Dictionary:
 	return _assign_created_resource(res, type_str, node_path, property, properties.size())
 
 
+## Persist a patch to an existing native resource while retaining its cached identity.
+## Staging owns its containers but retains nested Resource references. Nested
+## resources are replaced only when explicitly supplied as property values.
+func set_resource_properties(params: Dictionary) -> Dictionary:
+	var path: String = params.get("path", "")
+	if path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+	var path_error: Variant = McpPathValidator.path_error(path, "path", true)
+	if path_error != null:
+		return path_error
+	path = path.simplify_path()
+	if path.contains("::") or path.get_extension() not in ["tres", "res"] or FileAccess.file_exists(path + ".import"):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "set_properties requires an existing, non-imported res:// .tres or .res file: %s" % path)
+	if not FileAccess.file_exists(path):
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Resource file not found: %s" % path)
+	var properties: Dictionary = params.get("properties", {})
+	if properties.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Provide at least one property in properties")
+	for key in properties:
+		if key in ["script", "resource_path"]:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "set_properties cannot change %s" % key)
+	var input_error: Variant = _edit_constructor_error(properties)
+	if input_error != null:
+		return input_error
+	var original := ResourceLoader.load(path)
+	if original == null:
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Could not load resource: %s" % path)
+	var original_resources := {}
+	var graph_error: Variant = _edit_graph_error(original, original_resources)
+	if graph_error != null:
+		return graph_error
+	var stage := original.duplicate_deep(Resource.DEEP_DUPLICATE_NONE)
+	if stage == null:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource cannot be duplicated for validation: %s" % path)
+	var staged_resources := {}
+	graph_error = _edit_graph_error(stage, staged_resources)
+	if graph_error != null:
+		return graph_error
+	for id in staged_resources:
+		if id != stage.get_instance_id() and not original_resources.has(id):
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "This resource forces nested duplication; set_properties cannot preserve its omitted nested resource identities")
+	var apply_error: Variant = _apply_resource_properties(stage, properties, 0, true)
+	if apply_error != null:
+		return apply_error
+	graph_error = _edit_graph_error(stage, {})
+	if graph_error != null:
+		return graph_error
+	return McpResourceIO.save_to_disk(stage, path, true, "Resource", {
+		"path": path,
+		"properties_applied": properties.size(),
+		"live_refreshed": true,
+		"reason": "Resource file edits are persistent and are not part of scene undo",
+	}, _connection, true, true)
+
+
+static func _edit_constructor_error(value: Variant, depth: int = 0) -> Variant:
+	if depth > MAX_NESTED_RESOURCE_DEPTH:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Resource edit input exceeds the supported nesting depth")
+	if value is Dictionary:
+		if value.has("__class__"):
+			var type_name := str(value["__class__"])
+			if ClassDB.class_exists(type_name) and ClassDB.is_parent_class(type_name, "Resource"):
+				var class_error: Variant = _edit_class_error(type_name)
+				if class_error != null:
+					return class_error
+				if value.has("script") or value.has("resource_path"):
+					return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Resource edit constructors cannot set script or resource_path")
+			else:
+				for entry in ProjectSettings.get_global_class_list():
+					if entry.get("class", "") == type_name:
+						return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "set_properties only supports engine built-in resources without custom scripts")
+		for item in value.values():
+			var error: Variant = _edit_constructor_error(item, depth + 1)
+			if error != null:
+				return error
+	elif value is Array:
+		for item in value:
+			var error: Variant = _edit_constructor_error(item, depth + 1)
+			if error != null:
+				return error
+	return null
+
+
+static func _edit_class_error(type_name: String) -> Variant:
+	if ClassDB.class_get_api_type(type_name) not in [ClassDB.API_CORE, ClassDB.API_EDITOR]:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "set_properties only supports engine built-in resources; GDExtension resources are not supported")
+	return null
+
+
+## Repeated Resource references are visited once; active recursion is refused. Container recursion is bounded,
+## so cyclic metadata is refused before duplicate_deep can recurse into it.
+static func _edit_graph_error(value: Variant, resources: Dictionary, depth: int = 0) -> Variant:
+	if depth > MAX_NESTED_RESOURCE_DEPTH or resources.size() > 1024:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Resource edit graph is too deep, cyclic through containers, or exceeds 1024 resources")
+	if value is Resource:
+		if resources.has(value.get_instance_id()):
+			if not resources[value.get_instance_id()]:
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "set_properties does not support cyclic resource graphs")
+			return null
+		if value is Script or value.get_script() != null:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "set_properties only supports engine built-in resources without custom scripts, including nested resources")
+		var class_error: Variant = _edit_class_error(value.get_class())
+		if class_error != null:
+			return class_error
+		resources[value.get_instance_id()] = false
+		for property in value.get_property_list():
+			if property.usage & PROPERTY_USAGE_STORAGE:
+				var error: Variant = _edit_graph_error(value.get(property.name), resources, depth + 1)
+				if error != null:
+					return error
+		resources[value.get_instance_id()] = true
+	elif value is Array:
+		for item in value:
+			var error: Variant = _edit_graph_error(item, resources, depth + 1)
+			if error != null:
+				return error
+	elif value is Dictionary:
+		for key in value:
+			for item in [key, value[key]]:
+				var error: Variant = _edit_graph_error(item, resources, depth + 1)
+				if error != null:
+					return error
+	return null
+
+
 ## Validate that `type_str` names a concrete Resource subclass that we can
 ## instantiate. Returns an error dict on failure, or null on success.
 static func _validate_resource_class(type_str: String) -> Variant:
@@ -301,7 +426,7 @@ const MAX_NESTED_RESOURCE_DEPTH := 32
 ## Returns null on success or an error dict on failure.
 ## `depth` is internal recursion bookkeeping for the nested {"__class__": ...}
 ## shortcut — external callers use the default of 0.
-static func _apply_resource_properties(res: Resource, properties: Dictionary, depth: int = 0) -> Variant:
+static func _apply_resource_properties(res: Resource, properties: Dictionary, depth: int = 0, verify_setters: bool = false) -> Variant:
 	if depth > MAX_NESTED_RESOURCE_DEPTH:
 		return ErrorCodes.make(
 			ErrorCodes.INVALID_PARAMS,
@@ -368,7 +493,7 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 			var remaining: Dictionary = (v as Dictionary).duplicate()
 			remaining.erase("__class__")
 			if not remaining.is_empty():
-				var nested_err := _apply_resource_properties(sub_res, remaining, depth + 1)
+				var nested_err := _apply_resource_properties(sub_res, remaining, depth + 1, verify_setters)
 				if nested_err != null:
 					return nested_err
 			v = sub_res
@@ -409,6 +534,10 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 		if v is Array or v is Dictionary:
 			constructors = _nested_constructor_paths(v, str(key))
 		res.set(key, v)
+		var readback: Variant = res.get(key) if verify_setters else v
+		var matches: bool = is_equal_approx(readback, v) if readback is float and v is float else readback == v
+		if verify_setters and not matches:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Property '%s' rejected or normalized the requested value; original resource was not changed" % key)
 		if not constructors.is_empty():
 			var readback_err: Variant = _nested_constructor_readback_error(constructors, res.get(key))
 			if readback_err != null:

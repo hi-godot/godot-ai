@@ -3696,7 +3696,8 @@ async def test_physics_shape_generate_requires_writable():
         await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
 
 
-async def test_resource_create_requires_writable():
+@pytest.mark.parametrize("operation", ["create", "set_properties"])
+async def test_resource_create_requires_writable(operation):
     """Write tools must raise EDITOR_NOT_READY when editor is importing."""
     from godot_ai.godot_client.client import GodotCommandError
     from godot_ai.sessions.registry import Session
@@ -3715,12 +3716,14 @@ async def test_resource_create_requires_writable():
     runtime = DirectRuntime(registry=registry, client=client)
 
     with pytest.raises(GodotCommandError):
-        await resource_handlers.resource_create(
-            runtime,
-            type="BoxMesh",
-            path="/Main/Mesh",
-            property="mesh",
-        )
+        if operation == "set_properties":
+            await resource_handlers.resource_set_properties(
+                runtime, path="res://mesh.tres", properties={"size": {"x": 2, "y": 2, "z": 2}}
+            )
+        else:
+            await resource_handlers.resource_create(
+                runtime, type="BoxMesh", path="/Main/Mesh", property="mesh"
+            )
 
 
 # ---------------------------------------------------------------------------
