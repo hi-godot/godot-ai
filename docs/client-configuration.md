@@ -596,3 +596,33 @@ The suggested fresh entry sets `timeout: 300000` milliseconds because omp's
 preserved on reconfigure. `OMP_MCP_TIMEOUT_MS` takes precedence over this
 per-server value. See the [upstream MCP configuration
 guide](https://github.com/can1357/oh-my-pi/blob/main/docs/mcp-config.md).
+
+
+## Qoder and Qoder CN
+
+Choose **Qoder** or **Qoder CN** in the Godot AI dock and use **Configure**.
+Both use the existing authenticated `godot-ai attach` launcher. Their user
+configuration files are `~/.qoder/settings.json` and
+`~/.qoder-cn/settings.json`, respectively. On Windows these directories are
+under `%USERPROFILE%`. The generated `mcpServers.godot-ai` entry contains
+`command`, `args`, and `type: "stdio"`. Use the dock's manual configuration
+output for the exact executable and version appropriate to this installation.
+
+Configure preserves unrelated settings and servers, environment variables,
+working directory, disabled state, timeouts and tool permissions. It removes
+remote transport fields, including `qoder_url`, when converting a Godot AI
+entry to stdio. It does not enable a deliberately disabled entry or change
+Qoder's tool approval policy.
+
+Both editions can override user configuration with project
+`.qoder/settings.json`, `.mcp.json`, and `.qoder/settings.local.json` files.
+Godot AI refuses automatic writes when it detects a project definition of the
+same server; resolve that override explicitly. Client command-line overrides,
+plugin configuration and a different working directory are not observable
+from Godot. If a configured server is missing, check those sources and the
+client's server allow/exclude settings. Run `/mcp reload` in an existing CLI
+session, or restart the client, after changing configuration.
+
+The paths, stdio fields and precedence follow the official
+[Qoder MCP reference](https://docs.qoder.com/cli/mcp-reference) and
+[Qoder CN MCP reference](https://docs.qoder.cn/cli/mcp-reference).

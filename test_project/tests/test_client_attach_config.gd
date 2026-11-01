@@ -671,6 +671,8 @@ func test_registry_wide_attach_shape_declarations() -> void:
 		"antigravity": [McpClient.CommandShape.FLAT, null, ["serverUrl"]],
 		"gemini_cli": [McpClient.CommandShape.FLAT, null, ["httpUrl", "url"]],
 		"qwen_code": [McpClient.CommandShape.FLAT, null, ["httpUrl", "url"]],
+		"qoder": [McpClient.CommandShape.FLAT, "stdio", ["url", "headers", "qoder_url", "tcp", "oauth"]],
+		"qoder_cn": [McpClient.CommandShape.FLAT, "stdio", ["url", "headers", "qoder_url", "tcp", "oauth"]],
 		"kiro": [McpClient.CommandShape.FLAT, null, ["url"]],
 		"kimi_code": [McpClient.CommandShape.FLAT, null, ["url", "transport"]],
 		"windsurf": [McpClient.CommandShape.FLAT, null, ["serverUrl"]],
