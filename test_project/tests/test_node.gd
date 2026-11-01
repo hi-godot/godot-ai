@@ -1443,13 +1443,12 @@ func test_set_property_node_array_survives_scene_save_and_reload() -> void:
 		TEST_NODE_ARRAY_SCENE_PATH, "", ResourceLoader.CACHE_MODE_IGNORE
 	) as PackedScene
 	assert_true(reloaded != null, "the saved scene must load back")
-	var copy := reloaded.instantiate()
+	var copy := track(reloaded.instantiate()) as Node
 	var stored: Variant = copy.get_node("_McpNodeArraySave").get("targets")
 	assert_true(stored is Array and (stored as Array).is_typed(), "the reloaded slot must keep its typing")
 	assert_eq((stored as Array).size(), 2, "both elements must survive the save")
 	assert_true(stored[0] == copy.get_node("World"), "element 0 must be the reloaded World node")
 	assert_true(stored[1] == copy.get_node("World/Ground"), "element 1 must be the reloaded Ground node")
-	copy.free()
 	DirAccess.remove_absolute(TEST_NODE_ARRAY_SCENE_PATH)
 	_free_node_export_probe(1)
 
