@@ -307,10 +307,11 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 			ErrorCodes.INVALID_PARAMS,
 			"Nested resource properties exceed the maximum depth of %d — flatten the {\"__class__\": ...} nesting or create the deep sub-resources in separate calls" % MAX_NESTED_RESOURCE_DEPTH
 		)
-	var prop_types := {}
-	for prop in res.get_property_list():
-		prop_types[prop.name] = prop.get("type", TYPE_NIL)
 	for key in properties.keys():
+		# Earlier setters can add, remove, or change the type of later properties.
+		var prop_types := {}
+		for prop in res.get_property_list():
+			prop_types[prop.name] = prop.get("type", TYPE_NIL)
 		if not prop_types.has(key):
 			var valid: Array[String] = []
 			for prop in res.get_property_list():
