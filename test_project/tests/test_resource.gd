@@ -623,6 +623,69 @@ func test_create_resource_undo_survives_interleaving() -> void:
 	_remove_node(mi)
 
 
+# ----- regression: count-dependent resource properties -----
+
+func test_create_resource_dynamic_stream_properties_persist() -> void:
+	var output := "res://tests/_mcp_dynamic_streams_1173.tres"
+	assert_false(FileAccess.file_exists(output), "output fixture must not exist")
+	var result := _handler.create_resource({
+		"type": "AudioStreamRandomizer",
+		"resource_path": output,
+		"properties": {
+			"streams_count": 2,
+			"stream_0/stream": {"__class__": "AudioStreamWAV", "mix_rate": 22050},
+			"stream_0/weight": 0.25,
+			"stream_1/stream": {"__class__": "AudioStreamWAV", "mix_rate": 11025},
+			"stream_1/weight": 0.75,
+		},
+	})
+	assert_has_key(result, "data", "count-dependent properties should apply: %s" % result)
+	if not result.has("data"):
+		return
+	var saved := ResourceLoader.load(output, "", ResourceLoader.CACHE_MODE_IGNORE) as AudioStreamRandomizer
+	assert_true(saved is AudioStreamRandomizer, "saved resource must reload as AudioStreamRandomizer")
+	if saved != null:
+		assert_eq(saved.streams_count, 2)
+		assert_true(saved.get_stream(0) is AudioStreamWAV, "first stream must be a real resource")
+		assert_true(saved.get_stream(1) is AudioStreamWAV, "second stream must be a real resource")
+		if saved.get_stream(0) is AudioStreamWAV:
+			assert_eq(saved.get_stream(0).mix_rate, 22050)
+		if saved.get_stream(1) is AudioStreamWAV:
+			assert_eq(saved.get_stream(1).mix_rate, 11025)
+		assert_eq(saved.get_stream_probability_weight(0), 0.25)
+		assert_eq(saved.get_stream_probability_weight(1), 0.75)
+	DirAccess.remove_absolute(output)
+
+
+func test_create_resource_dynamic_invalid_stream_does_not_write() -> void:
+	var output := "res://tests/_mcp_dynamic_invalid_stream_1173.tres"
+	assert_false(FileAccess.file_exists(output), "output fixture must not exist")
+	var result := _handler.create_resource({
+		"type": "AudioStreamRandomizer",
+		"resource_path": output,
+		"properties": {
+			"streams_count": 1,
+			"stream_0/weight": 0.25,
+			"stream_1/weight": 0.75,
+		},
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_1/weight")
+	assert_false(FileAccess.file_exists(output), "invalid dynamic property must not create output")
+
+
+func test_apply_resource_properties_dynamic_removed_stream_is_rejected() -> void:
+	var stream := AudioStreamRandomizer.new()
+	stream.streams_count = 1
+	var result: Variant = ResourceHandler._apply_resource_properties(stream, {
+		"streams_count": 0,
+		"stream_0/weight": 0.25,
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_0/weight")
+	assert_eq(stream.streams_count, 0)
+
+
 # ----- regression: properties dict __class__ shortcut for nested Resource slots -----
 
 func test_create_resource_missing_nested_resource_does_not_write() -> void:
