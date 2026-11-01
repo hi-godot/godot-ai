@@ -283,3 +283,31 @@ async def animation_preset_pulse(
     if overwrite:
         params["overwrite"] = True
     return await runtime.send_command("animation_preset_pulse", params)
+
+
+async def animation_library_add(
+    runtime: DirectRuntime,
+    player_path: str,
+    resource_path: str,
+    library_name: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_library_add",
+        {"player_path": player_path, "resource_path": resource_path, "library_name": library_name},
+    )
+
+
+async def animation_library_remove(
+    runtime: DirectRuntime,
+    player_path: str,
+    library_name: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_library_remove", {"player_path": player_path, "library_name": library_name},
+    )
+
+
+async def animation_library_list(runtime: DirectRuntime, player_path: str) -> dict:
+    return await runtime.send_command("animation_library_list", {"player_path": player_path})

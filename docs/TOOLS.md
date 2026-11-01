@@ -236,7 +236,7 @@ Calls take the form:
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
-| `animation_manage` | `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
+| `animation_manage` | `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
 | `audio_manage` | `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
@@ -482,3 +482,19 @@ revalidate against intervening edits, then commit one undo action. Each returned
 
 The 4 ms budget applies to cooperative preparation. Final validation and the
 atomic undo action cannot yield; a maximum-size batch can exceed that budget.
+
+
+### Animation libraries
+
+`animation_manage library_add` attaches an existing AnimationLibrary with
+`player_path`, `resource_path`, and optional `library_name` (empty selects the
+default library). Library operations accept AnimationPlayer and AnimationTree.
+Duplicate names and attaching the same resource twice to one mixer are refused;
+remove the old library explicitly before replacing it. Adding/removing a library
+is undoable and the attachment persists when the scene is saved. The source
+library file is not modified. Removing a library also clears autoplay when it
+refers to that library; undo restores both.
+
+`library_list` returns each library's name, resource path and animation names,
+plus `autoplay` for AnimationPlayer. Existing `list` also includes library
+metadata and autoplay alongside its clip details.

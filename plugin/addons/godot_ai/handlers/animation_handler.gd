@@ -835,3 +835,110 @@ func _resolve_animation(player: AnimationPlayer, anim_name: String) -> Dictionar
 			return {"animation": lib2.get_animation(anim_name), "library": lib2, "library_key": lib_name}
 	# Fallback — shouldn't happen if has_animation returned true.
 	return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Animation found by player but not in any library")
+
+
+func _resolve_mixer(player_path: String, for_write: bool = false) -> Dictionary:
+	var resolved := McpNodeValidator.resolve_or_error(player_path, "player_path", "", for_write)
+	if resolved.has("error"):
+		return resolved
+	if not resolved.node is AnimationMixer:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"Node at %s is not an AnimationMixer (got %s)" % [player_path, resolved.node.get_class()])
+	return resolved
+
+
+func library_add(params: Dictionary) -> Dictionary:
+	var player_path: String = params.get("player_path", "")
+	var library_name: String = params.get("library_name", "")
+	var resource_path: String = params.get("resource_path", "")
+	var path_error = McpPathValidator.loadable_error(resource_path, "resource_path")
+	if path_error != null:
+		return path_error
+	for forbidden in ["/", ":", ",", "["]:
+		if library_name.contains(forbidden):
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"library_name cannot contain '/', ':', ',' or '['")
+	var resolved := _resolve_mixer(player_path, true)
+	if resolved.has("error"):
+		return resolved
+	var mixer: AnimationMixer = resolved.node
+	if mixer.has_animation_library(library_name):
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+			"Library '%s' already exists; remove it first." % library_name)
+	if not ResourceLoader.exists(resource_path):
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Resource not found: %s" % resource_path)
+	var resource := ResourceLoader.load(resource_path)
+	if resource == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to load resource: %s" % resource_path)
+	if not resource is AnimationLibrary:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"Expected AnimationLibrary at %s (got %s)" % [resource_path, resource.get_class()])
+	for existing_name in mixer.get_animation_library_list():
+		if mixer.get_animation_library(existing_name) == resource:
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+				"Resource is already attached as library '%s'." % existing_name)
+	_create_scene_pinned_action("MCP: Add animation library %s" % library_name)
+	_undo_redo.add_do_method(mixer, "add_animation_library", library_name, resource)
+	_undo_redo.add_undo_method(mixer, "remove_animation_library", library_name)
+	_undo_redo.add_do_reference(resource)
+	_undo_redo.commit_action()
+	return {"data": {
+		"player_path": player_path, "library_name": library_name,
+		"resource_path": resource.resource_path, "undoable": true,
+	}}
+
+
+func library_remove(params: Dictionary) -> Dictionary:
+	var player_path: String = params.get("player_path", "")
+	var library_name: String = params.get("library_name", "")
+	var resolved := _resolve_mixer(player_path, true)
+	if resolved.has("error"):
+		return resolved
+	var mixer: AnimationMixer = resolved.node
+	if not mixer.has_animation_library(library_name):
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Library not found: %s" % library_name)
+	var library := mixer.get_animation_library(library_name)
+	var old_autoplay := ""
+	if mixer is AnimationPlayer:
+		old_autoplay = String(mixer.autoplay)
+	var clears_autoplay: bool = not old_autoplay.is_empty() and (
+		(library_name.is_empty() and not old_autoplay.contains("/"))
+		or (not library_name.is_empty() and old_autoplay.contains("/") and old_autoplay.get_slice("/", 0) == library_name)
+	)
+	_create_scene_pinned_action("MCP: Remove animation library %s" % library_name)
+	if clears_autoplay:
+		_undo_redo.add_do_property(mixer, "autoplay", "")
+	_undo_redo.add_do_method(mixer, "remove_animation_library", library_name)
+	_undo_redo.add_undo_method(mixer, "add_animation_library", library_name, library)
+	if clears_autoplay:
+		_undo_redo.add_undo_property(mixer, "autoplay", old_autoplay)
+	_undo_redo.add_undo_reference(library)
+	_undo_redo.commit_action()
+	return {"data": {
+		"player_path": player_path, "library_name": library_name,
+		"autoplay_cleared": clears_autoplay, "undoable": true,
+	}}
+
+
+func library_list(params: Dictionary) -> Dictionary:
+	var player_path: String = params.get("player_path", "")
+	var resolved := _resolve_mixer(player_path)
+	if resolved.has("error"):
+		return resolved
+	var mixer: AnimationMixer = resolved.node
+	var libraries := library_metadata(mixer)
+	var data := {"player_path": player_path, "libraries": libraries, "count": libraries.size()}
+	if mixer is AnimationPlayer:
+		data["autoplay"] = String(mixer.autoplay)
+	return {"data": data}
+
+
+static func library_metadata(mixer: AnimationMixer) -> Array[Dictionary]:
+	var libraries: Array[Dictionary] = []
+	for library_name in mixer.get_animation_library_list():
+		var library := mixer.get_animation_library(library_name)
+		libraries.append({
+			"name": String(library_name), "resource_path": library.resource_path,
+			"animations": Array(PackedStringArray(library.get_animation_list())),
+		})
+	return libraries

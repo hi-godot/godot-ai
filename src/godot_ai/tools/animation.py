@@ -20,6 +20,13 @@ AnimationPlayer authoring (player, tracks, autoplay, presets, playback).
 Ops:
   • player_create(parent_path, name="AnimationPlayer")
         Create an AnimationPlayer with empty default library.
+  • library_add(player_path, resource_path, library_name="")
+        Attach a saved AnimationLibrary to an AnimationPlayer or AnimationTree. Undoable.
+        Empty library_name selects the default library. Existing names/resources are refused.
+  • library_remove(player_path, library_name="")
+        Detach a library; clears autoplay if it points into that library. Undoable.
+  • library_list(player_path)
+        List library names, resource paths and clip names. Includes autoplay for AnimationPlayer.
   • delete(player_path, animation_name)
         Delete an animation clip from the default library. Undoable.
   • validate(player_path, animation_name)
@@ -37,7 +44,7 @@ Ops:
   • stop(player_path)
         Stop editor preview. Not saved with scene.
   • list(player_path)
-        List animations with length, loop_mode, track_count.
+        List animations with length, loop_mode, track_count, plus libraries and autoplay.
   • get(player_path, animation_name)
         Inspect a clip's tracks and keyframes in detail.
   • create_simple(player_path, name, tweens, length=None, loop_mode="none",
@@ -112,6 +119,9 @@ def register_animation_tools(mcp: FastMCP) -> None:
         description=_DESCRIPTION,
         ops={
             "player_create": animation_handlers.animation_player_create,
+            "library_add": animation_handlers.animation_library_add,
+            "library_remove": animation_handlers.animation_library_remove,
+            "library_list": animation_handlers.animation_library_list,
             "delete": animation_handlers.animation_delete,
             "validate": animation_handlers.animation_validate,
             "add_property_track": animation_handlers.animation_add_property_track,
@@ -131,6 +141,7 @@ def register_animation_tools(mcp: FastMCP) -> None:
             ## No `godot://animations` resource exists. Animation reads are
             ## stateful (per-player, per-clip) and don't fit the single-URL
             ## resource shape; agents fetch via the rollup ops.
+            "library_list": None,
             "validate": None,
             "play": None,
             "stop": None,

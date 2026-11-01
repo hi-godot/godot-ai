@@ -45,7 +45,9 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## collisions, script class collisions, and native registration rejection.
 ## Non-Node resources use WRONG_TYPE separately. Together these six reviewed
 ## semantic conflicts move the ceiling from 115 to 121.
-INVALID_PARAMS_CEILING = 121
+## Animation library attachment adds two duplicate conflicts: an occupied
+## library name and a resource already attached under another name.
+INVALID_PARAMS_CEILING = 123
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of
