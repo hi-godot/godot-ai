@@ -4209,6 +4209,58 @@ class TestEditorScreenshotTool:
         # When include_image=True, result contains both text and image content blocks
         assert len(result.content) >= 2
 
+    @pytest.mark.parametrize("coverage", [False, True])
+    @pytest.mark.parametrize("oversized", [False, True])
+    async def test_screenshot_wire_budget(self, mcp_stack, coverage, oversized):
+        import base64
+
+        from mcp.types import JSONRPCResponse
+
+        from godot_ai.handlers.editor import SCREENSHOT_RESULT_MAX_BYTES
+
+        client, plugin = mcp_stack
+        count = 2 if coverage else 1
+        png_budget = (SCREENSHOT_RESULT_MAX_BYTES - 64 * 1024) * 3 // 4
+        payload = base64.b64encode(b"x" * (800_000 if oversized else png_budget // count)).decode()
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            image = {
+                "source": "viewport",
+                "width": 512,
+                "height": 512,
+                "original_width": 1024,
+                "original_height": 1024,
+                "format": "png",
+                "image_base64": payload,
+            }
+            data = image
+            if coverage:
+                data = {
+                    "source": "viewport",
+                    "coverage": True,
+                    "images": [
+                        dict(image, label="establishing", elevation=25, azimuth=20, fov=50),
+                        dict(image, label="top", elevation=90, azimuth=0, fov=50),
+                    ],
+                }
+            await plugin.send_response(cmd["request_id"], data)
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool_mcp("editor_screenshot", {"coverage": coverage})
+        await task
+        wire = JSONRPCResponse(
+            jsonrpc="2.0", id="request-123", result=result.model_dump(by_alias=True)
+        ).model_dump_json(by_alias=True)
+        assert len(wire.encode()) < 1024 * 1024
+        assert result.is_error is oversized
+        if oversized:
+            assert "lower max_resolution" in result.content[0].text
+        else:
+            images = [block for block in result.content if block.type == "image"]
+            assert len(images) == count
+            assert all(block.data == payload for block in images)
+
     async def test_screenshot_metadata_only(self, mcp_stack):
         client, plugin = mcp_stack
 
