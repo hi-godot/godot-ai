@@ -7,6 +7,7 @@ const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
 const PhysicsHandler := preload("res://addons/godot_ai/handlers/physics_shape_handler.gd")
 const CurveHandler := preload("res://addons/godot_ai/handlers/curve_handler.gd")
+const CameraHandler := preload("res://addons/godot_ai/handlers/camera_handler.gd")
 const UiHandler := preload("res://addons/godot_ai/handlers/ui_handler.gd")
 const Fixture := preload("res://tests/fixtures/instance_editing.tscn")
 
@@ -15,6 +16,7 @@ var _undo_redo: EditorUndoRedoManager
 var _root: Node
 var _instance: Node3D
 var _path: String
+var _files: Array[String] = []
 
 
 func suite_name() -> String:
@@ -36,6 +38,11 @@ func setup() -> void:
 
 
 func teardown() -> void:
+	for path in _files:
+		DirAccess.remove_absolute(path)
+		if FileAccess.file_exists(path + ".uid"):
+			DirAccess.remove_absolute(path + ".uid")
+	_files.clear()
 	_root.set_editable_instance(_instance.get_node("Nested"), false)
 	_root.set_editable_instance(_instance, false)
 	_root.remove_child(_instance)
@@ -65,6 +72,104 @@ func test_specialized_assignments_refuse_locked_instance() -> void:
 	assert_eq(_instance.get_node("Mesh").material_override, null)
 	assert_eq(_instance.get_node("Mesh").get_script(), null)
 	assert_eq(_instance.get_node("Label").text, "Original")
+
+
+func test_camera_follow_refuses_source_structure_but_allows_existing_parent_override() -> void:
+	_root.set_editable_instance(_instance, true)
+	var camera: Camera2D = _instance.get_node("Canvas/Camera")
+	var parent := camera.get_parent()
+	var handler := CameraHandler.new(_undo_redo)
+	var history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root))
+	var version := history.get_version()
+	var rejected := handler.follow_2d({"camera_path": _path + "/Canvas/Camera", "target_path": McpScenePath.from_node(_root, _root)})
+	assert_is_error(rejected, McpErrorCodes.INVALID_PARAMS)
+	assert_eq(camera.get_parent(), parent)
+	assert_eq(camera.owner, _instance)
+	assert_false(camera.position_smoothing_enabled)
+	assert_eq(history.get_version(), version)
+	if not rejected.has("error"):
+		camera.reparent(parent)
+		camera.owner = _instance
+		return
+	var accepted := handler.follow_2d({"camera_path": _path + "/Canvas/Camera", "target_path": _path + "/Canvas", "smoothing_speed": 8.0})
+	assert_eq(accepted.get("data", {}).get("reparented", true), false)
+	assert_eq(camera.position_smoothing_speed, 8.0)
+	var restored := _roundtrip()
+	assert_eq(restored.get_node(str(_instance.name) + "/Canvas/Camera").position_smoothing_speed, 8.0)
+	restored.free()
+	assert_true(editor_undo(_undo_redo))
+	assert_false(camera.position_smoothing_enabled)
+
+
+func test_camera_follow_checks_destination_and_persists_editable_local_attachment() -> void:
+	var camera := Camera2D.new()
+	camera.name = "LocalCamera"
+	camera.enabled = false
+	camera.position = Vector2(12, 34)
+	_instance.add_child(camera)
+	camera.owner = _root
+	var handler := CameraHandler.new(_undo_redo)
+	var history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root))
+	var version := history.get_version()
+	var params := {"camera_path": _path + "/LocalCamera", "target_path": _path + "/Canvas"}
+	var rejected := handler.follow_2d(params)
+	_assert_locked(rejected)
+	assert_eq(camera.get_parent(), _instance)
+	assert_eq(camera.position, Vector2(12, 34))
+	assert_false(camera.position_smoothing_enabled)
+	assert_eq(history.get_version(), version)
+	if not rejected.has("error"):
+		camera.reparent(_instance)
+		camera.owner = _root
+		return
+	_root.set_editable_instance(_instance, true)
+	var accepted := handler.follow_2d(params)
+	assert_eq(accepted.get("data", {}).get("reparented", false), true)
+	assert_eq(camera.get_parent(), _instance.get_node("Canvas"))
+	assert_eq(camera.owner, _root)
+	var restored := _roundtrip()
+	assert_true(restored.get_node(str(_instance.name) + "/Canvas/LocalCamera") is Camera2D)
+	restored.free()
+	assert_true(editor_undo(_undo_redo))
+	assert_eq(camera.get_parent(), _instance)
+	assert_eq(camera.position, Vector2(12, 34))
+	assert_true(editor_redo(_undo_redo))
+	assert_eq(camera.get_parent(), _instance.get_node("Canvas"))
+
+
+func test_material_preset_refusals_leave_disk_node_and_undo_unchanged() -> void:
+	var handler := MaterialHandler.new(_undo_redo)
+	var history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root))
+	var version := history.get_version()
+	for target in [{"node_path": _path + "/Mesh"}, {"node_path": _path + "/Missing"}, {"node_path": _path, "slot": "surface_99"}]:
+		var path := "res://tests/_preset_refusal_%d.tres" % Time.get_ticks_usec()
+		_files.append(path)
+		var params := {"preset": "metal", "path": path}
+		params.merge(target)
+		assert_is_error(handler.apply_preset(params))
+		assert_false(FileAccess.file_exists(path), "invalid target must not create a material")
+		var original := StandardMaterial3D.new()
+		original.albedo_color = Color.BLUE
+		assert_eq(ResourceSaver.save(original, path), OK)
+		var bytes := FileAccess.get_file_as_bytes(path)
+		params.overwrite = true
+		assert_is_error(handler.apply_preset(params))
+		assert_eq(FileAccess.get_file_as_bytes(path), bytes, "invalid target must not overwrite a material")
+	assert_eq(_instance.get_node("Mesh").material_override, null)
+	assert_eq(history.get_version(), version)
+	_root.set_editable_instance(_instance, true)
+	var accepted_path := "res://tests/_preset_accepted_%d.tres" % Time.get_ticks_usec()
+	_files.append(accepted_path)
+	var accepted := handler.apply_preset({"preset": "glass", "path": accepted_path, "node_path": _path + "/Mesh"})
+	assert_eq(accepted.get("data", {}).get("assigned", false), true)
+	var material: Material = _instance.get_node("Mesh").material_override
+	assert_true(material is StandardMaterial3D)
+	assert_eq(material.metallic, 0.0)
+	assert_true(is_equal_approx(material.roughness, 0.05))
+	assert_eq(material.resource_path, accepted_path)
+	assert_true(editor_undo(_undo_redo))
+	assert_eq(_instance.get_node("Mesh").material_override, null)
+	assert_true(FileAccess.file_exists(accepted_path), "undo reverts assignment, not the saved file")
 
 
 func test_structural_operations_and_reparent_destination_refuse_locked_nodes() -> void:

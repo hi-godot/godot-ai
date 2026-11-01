@@ -17,3 +17,8 @@ text = "Original"
 [node name="Nested" parent="." instance=ExtResource("1")]
 
 [node name="Path" type="Path3D" parent="."]
+
+[node name="Canvas" type="Node2D" parent="."]
+
+[node name="Camera" type="Camera2D" parent="Canvas"]
+enabled = false

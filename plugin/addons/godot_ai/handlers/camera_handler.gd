@@ -813,6 +813,13 @@ func follow_2d(params: Dictionary) -> Dictionary:
 
 	var already_child: bool = old_parent == target
 	var reparented: bool = not already_child
+	if reparented:
+		var structure_error := McpNodeValidator.structure_error(node, scene_root)
+		if not structure_error.is_empty():
+			return structure_error
+		var target_error := McpNodeValidator.writable_error(target, scene_root)
+		if not target_error.is_empty():
+			return target_error
 
 	_undo_redo.create_action("MCP: Camera follow %s" % target.name)
 	if reparented:
