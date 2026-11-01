@@ -1049,7 +1049,9 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 ## instantiates, and each landed element is conformance-checked against the
 ## slot's element class/script so a wrong-class Resource errors naming the
 ## index instead of being rejected wholesale by `assign`.
-static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: String = "") -> Variant:
+static func _coerce_typed_array(
+	value: Variant, slot_value: Array, prefix: String = "", depth: int = 0,
+) -> Variant:
 	var elem_label := _typed_array_element_label(slot_value)
 	if not (value is Array):
 		var err := ErrorCodes.make(
@@ -1066,7 +1068,7 @@ static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: Strin
 		var elem_prefix := ("element %d" % i) if prefix.is_empty() else "%s element %d" % [prefix, i]
 		var coerced: Variant
 		if elem_type == TYPE_OBJECT:
-			coerced = _coerce_object_element(in_list[i], elem_prefix)
+			coerced = _coerce_object_element(in_list[i], elem_prefix, depth)
 			if coerced is Dictionary:
 				## Object elements are never legit Dictionaries (a dict input
 				## is either {"__class__"} — consumed above — or an error), so
@@ -1129,7 +1131,7 @@ static func _typed_array_element_label(slot_value: Array) -> String:
 ## "" / null store a null entry (typed object arrays allow them). Returns
 ## the Object (or null), or a make(...)-shaped error Dictionary with
 ## `elem_prefix` already folded in.
-static func _coerce_object_element(elem: Variant, elem_prefix: String) -> Variant:
+static func _coerce_object_element(elem: Variant, elem_prefix: String, depth: int = 0) -> Variant:
 	if elem == null:
 		return null
 	if elem is Object:
@@ -1165,7 +1167,7 @@ static func _coerce_object_element(elem: Variant, elem_prefix: String) -> Varian
 		var remaining: Dictionary = (elem as Dictionary).duplicate()
 		remaining.erase("__class__")
 		if not remaining.is_empty():
-			var apply_err: Variant = ResourceHandler._apply_resource_properties(res, remaining)
+			var apply_err: Variant = ResourceHandler._apply_resource_properties(res, remaining, depth + 1)
 			if apply_err != null:
 				return ErrorCodes.prefix_message(apply_err, elem_prefix)
 		return res
@@ -1211,7 +1213,7 @@ static func _object_conforms(elem: Object, cls_name: StringName, script: Variant
 ## `is_typed()`, since a success result is always a duplicate of the typed
 ## slot and error envelopes are plain dicts.
 static func _coerce_typed_dictionary(
-	value: Variant, slot_value: Dictionary, prefix: String = ""
+	value: Variant, slot_value: Dictionary, prefix: String = "", depth: int = 0,
 ) -> Dictionary:
 	var label := _typed_dictionary_label(slot_value)
 	if not (value is Dictionary):
@@ -1245,7 +1247,7 @@ static func _coerce_typed_dictionary(
 			## Untyped value side (e.g. Dictionary[String, Variant]).
 			coerced = raw_value
 		elif value_type == TYPE_OBJECT:
-			coerced = _coerce_object_element(raw_value, key_prefix)
+			coerced = _coerce_object_element(raw_value, key_prefix, depth)
 			if coerced is Dictionary:
 				return coerced
 			if coerced != null and not _object_conforms(

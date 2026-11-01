@@ -420,6 +420,19 @@ preloaded GDScript dependencies can remain stale after edits in the same
 editor. Restart the editor before validating dependency changes; see the
 [freshness contract](tool-surface.md#test-run-freshness-after-dependency-edits).
 
+### Create resources with nested values
+
+`resource_manage(op="create")` accepts `{"__class__": "AtlasTexture", ...}`
+in Resource-typed properties and typed Resource arrays or dictionaries.
+The 32-level nesting limit includes those typed containers.
+
+Untyped engine collections may not expose enough type information to construct
+their nested resources. For example, an inline texture inside
+`SpriteFrames.animations[].frames[]` is refused with `WRONG_TYPE` and the
+failing property path when Godot would discard it. The operation does not save
+or assign the incomplete resource. Construct such collections through Godot's
+API. Ordinary dictionaries that retain a literal `__class__` key remain data.
+
 ### Inspect a live native resource
 
 `resource_manage(op="inspect", params={"node_path":"/Main/Collider","property":"shape","depth":2})`

@@ -378,7 +378,7 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 				## the generic passthrough would hand an untyped Array to the
 				## typed setter, which drops it silently while we report success.
 				var typed_out: Variant = NodeHandler._coerce_typed_array(
-					v, slot_value, "Property '%s'" % key
+					v, slot_value, "Property '%s'" % key, depth + 1,
 				)
 				if typed_out is Dictionary:
 					return typed_out
@@ -391,7 +391,7 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 				## Typed Dictionary[K, V] slot (#612 stage 3): success is a
 				## typed duplicate of the slot; the error envelope is untyped.
 				var typed_dict_out: Dictionary = NodeHandler._coerce_typed_dictionary(
-					v, slot_value, "Property '%s'" % key
+					v, slot_value, "Property '%s'" % key, depth + 1,
 				)
 				if not typed_dict_out.is_typed():
 					return typed_dict_out
@@ -404,7 +404,63 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 				var coerce_err := NodeHandler._check_coerced(v, target_type, "Property '%s'" % key)
 				if coerce_err != null:
 					return coerce_err
+		var constructors: Array[Dictionary] = []
+		if v is Array or v is Dictionary:
+			constructors = _nested_constructor_paths(v, str(key))
 		res.set(key, v)
+		if not constructors.is_empty():
+			var readback_err: Variant = _nested_constructor_readback_error(constructors, res.get(key))
+			if readback_err != null:
+				return readback_err
+	return null
+
+
+## Capture paths before a setter can mutate the supplied containers. The
+## iterative walk does not add recursive calls for arbitrary dictionary data.
+static func _nested_constructor_paths(value: Variant, path: String) -> Array[Dictionary]:
+	var constructors: Array[Dictionary] = []
+	var pending: Array[Dictionary] = [{"value": value, "keys": [], "path": path}]
+	while not pending.is_empty():
+		var item: Dictionary = pending.pop_back()
+		var supplied: Variant = item.value
+		if supplied is Dictionary:
+			if supplied.has("__class__"):
+				constructors.append({"keys": item.keys, "path": item.path})
+			for key in supplied:
+				pending.append({
+					"value": supplied[key], "keys": item.keys + [key],
+					"path": "%s.%s" % [item.path, key],
+				})
+		elif supplied is Array:
+			for i in range(supplied.size() - 1, -1, -1):
+				pending.append({
+					"value": supplied[i], "keys": item.keys + [i],
+					"path": "%s[%d]" % [item.path, i],
+				})
+	return constructors
+
+
+## Untyped native setters can silently replace constructor dictionaries with
+## null. Refuse that loss before saving or assigning the new resource. A
+## dictionary that retains __class__ as ordinary data stays a dictionary.
+static func _nested_constructor_readback_error(constructors: Array[Dictionary], stored: Variant) -> Variant:
+	for constructor in constructors:
+		var actual: Variant = stored
+		for key in constructor.keys:
+			if actual is Resource:
+				break
+			if actual is Dictionary:
+				actual = actual.get(key)
+			elif actual is Array and key is int and key >= 0 and key < actual.size():
+				actual = actual[key]
+			else:
+				actual = null
+				break
+		if not (actual is Dictionary) and not (actual is Resource):
+			return ErrorCodes.make(
+				ErrorCodes.WRONG_TYPE,
+				"Nested resource constructor at '%s' was not retained. This untyped collection does not support inline resources; use a typed Resource property or construct the resource with Godot's API." % constructor.path,
+			)
 	return null
 
 

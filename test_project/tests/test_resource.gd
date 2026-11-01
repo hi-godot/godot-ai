@@ -799,6 +799,154 @@ func test_apply_properties_accepts_reasonable_nesting_depth() -> void:
 		cursor = cursor.sub
 
 
+func test_nested_container_sprite_frames_refuses_silent_texture_loss() -> void:
+	var output := "res://tests/_mcp_nested_frames_1182.tres"
+	var result := _handler.create_resource({
+		"type": "SpriteFrames", "resource_path": output,
+		"properties": {"animations": [{
+			"name": "idle", "speed": 5.0, "loop": true,
+			"frames": [{"duration": 1.0, "texture": {
+				"__class__": "AtlasTexture",
+				"atlas": {"__class__": "GradientTexture2D", "width": 16, "height": 16},
+				"region": {"position": {"x": 2, "y": 3}, "size": {"x": 4, "y": 5}},
+			}}],
+		}]},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	if result.has("error"):
+		assert_contains(result.error.message, "animations[0].frames[0].texture")
+	assert_false(FileAccess.file_exists(output), "a refused constructor must not save null textures")
+	if FileAccess.file_exists(output):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(output))
+
+
+func test_nested_container_preserves_literal_class_marker_data() -> void:
+	var host := MyTestResource.new()
+	var data := {"groups": [{"__class__": "ordinary-data", "value": 17}]}
+	var error: Variant = ResourceHandler._apply_resource_properties(host, {"data": data})
+	assert_eq(error, null)
+	assert_eq(host.data, data, "untyped dictionary data must not become resource constructors")
+
+
+func test_nested_container_invalid_constructors_preserve_existing_file() -> void:
+	var output := "res://tests/_mcp_nested_existing_1182.tres"
+	assert_eq(ResourceSaver.save(SpriteFrames.new(), output), OK)
+	var original := FileAccess.get_file_as_bytes(output)
+	for constructor in [
+		{"__class__": "NotARealResource1182"},
+		{"__class__": 17},
+		{"__class__": "BoxMesh"},
+		{"__class__": "AtlasTexture", "atlas": "res://tests/_missing_atlas_1182.tres"},
+	]:
+		var result := _handler.create_resource({
+			"type": "SpriteFrames", "resource_path": output, "overwrite": true,
+			"properties": {"animations": [{
+				"name": "idle", "speed": 5.0, "loop": true,
+				"frames": [{"duration": 1.0, "texture": constructor}],
+			}]},
+		})
+		assert_is_error(result, ErrorCodes.WRONG_TYPE)
+		assert_eq(FileAccess.get_file_as_bytes(output), original, "refused constructors must not overwrite")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(output))
+
+
+func test_nested_container_detects_in_place_constructor_loss() -> void:
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+		"\tset(value):", "\t\tvalue[\"texture\"] = null", "\t\tdata = value",
+	])
+	assert_eq(script.reload(), OK)
+	var resource: Resource = script.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"data": {"texture": {"__class__": "AtlasTexture"}},
+	})
+	assert_true(error is Dictionary, "mutating the input must not conceal constructor loss")
+	if error is Dictionary:
+		assert_is_error(error, ErrorCodes.WRONG_TYPE)
+		assert_contains(error.error.message, "data.texture")
+
+
+func test_nested_container_refusal_keeps_existing_node_resource() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var sprite := AnimatedSprite2D.new()
+	sprite.name = "TestNestedConstructor1182"
+	root.add_child(sprite)
+	sprite.owner = root
+	var original := SpriteFrames.new()
+	sprite.sprite_frames = original
+	var result := _handler.create_resource({
+		"type": "SpriteFrames", "path": str(sprite.get_path()), "property": "sprite_frames",
+		"properties": {"animations": [{
+			"name": "idle", "speed": 5.0, "loop": true,
+			"frames": [{"duration": 1.0, "texture": {"__class__": "AtlasTexture"}}],
+		}]},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_true(sprite.sprite_frames == original, "a refused constructor must not assign a partial resource")
+	_remove_node(sprite)
+
+
+func test_nested_container_typed_resources_survive_save_reload() -> void:
+	var output := "res://tests/_mcp_nested_typed_1182.tres"
+	var result := _handler.create_resource({
+		"type": "MyTestResource", "resource_path": output,
+		"properties": {"children": [{
+			"__class__": "MyTestResource", "named_children": {"frame": {
+				"__class__": "AtlasTexture",
+				"atlas": {"__class__": "GradientTexture2D", "width": 16, "height": 16},
+				"region": {"position": {"x": 2, "y": 3}, "size": {"x": 4, "y": 5}},
+			}},
+		}]},
+	})
+	assert_has_key(result, "data")
+	assert_false(result.get("data", {}).get("undoable", true))
+	var loaded := ResourceLoader.load(output, "", ResourceLoader.CACHE_MODE_IGNORE) as MyTestResource
+	assert_true(loaded != null)
+	if loaded != null:
+		assert_eq(loaded.children.size(), 1)
+		if loaded.children.size() == 1:
+			var child := loaded.children[0] as MyTestResource
+			assert_true(child != null)
+			if child != null:
+				var texture: Variant = child.named_children.get("frame")
+				assert_true(texture is AtlasTexture)
+				if texture is AtlasTexture:
+					assert_eq(texture.region, Rect2(2, 3, 4, 5))
+					assert_true(texture.atlas is GradientTexture2D)
+					if texture.atlas is GradientTexture2D:
+						assert_eq(texture.atlas.width, 16)
+						assert_eq(texture.atlas.height, 16)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(output))
+
+
+func test_nested_container_typed_arrays_keep_depth_bound() -> void:
+	var payload := {"__class__": "MyTestResource", "label": "leaf"}
+	for i in ResourceHandler.MAX_NESTED_RESOURCE_DEPTH + 2:
+		payload = {"__class__": "MyTestResource", "children": [payload]}
+	var host := MyTestResource.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(host, {"children": [payload]})
+	assert_true(error is Dictionary, "typed-array nesting must retain the resource depth limit")
+	if error is Dictionary:
+		assert_is_error(error, ErrorCodes.INVALID_PARAMS)
+	assert_eq(host.children.size(), 0, "an over-depth array must not partially apply")
+
+
+func test_nested_container_typed_dictionaries_keep_depth_bound() -> void:
+	var payload := {"__class__": "MyTestResource", "label": "leaf"}
+	for i in ResourceHandler.MAX_NESTED_RESOURCE_DEPTH + 2:
+		payload = {"__class__": "MyTestResource", "named_children": {"next": payload}}
+	var host := MyTestResource.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(host, {"named_children": {"next": payload}})
+	assert_true(error is Dictionary, "typed-dictionary nesting must retain the resource depth limit")
+	if error is Dictionary:
+		assert_is_error(error, ErrorCodes.INVALID_PARAMS)
+	assert_eq(host.named_children.size(), 0, "an over-depth dictionary must not partially apply")
+
+
 func test_instantiate_resource_non_instantiable_project_class_is_wrong_type() -> void:
 	# A project class_name whose can_instantiate() is false (here a non-@tool
 	# script, non-instantiable in the editor) must return WRONG_TYPE — mirroring
