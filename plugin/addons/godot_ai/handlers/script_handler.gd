@@ -261,7 +261,7 @@ func read_script(params: Dictionary) -> Dictionary:
 ## calls bind lexically — see test_script.gd. filesystem_handler shares
 ## this by instantiating a bare ScriptHandler (#714).
 func _attach_gdscript_diagnostics(data: Dictionary, path: String, content: String) -> void:
-	var validation := _validate_gdscript_source(content)
+	var validation := _validate_gdscript_source(content, path)
 	var diagnostics: Array = []
 	var diagnostics_detail := "none"
 	var diagnostics_status := "checked"
@@ -349,15 +349,16 @@ static func _refresh_loaded_gdscript(data: Dictionary, path: String, content: St
 	data["reloaded"] = true
 
 
-static func _validate_gdscript_source(content: String) -> Dictionary:
+static func _validate_gdscript_source(content: String, path: String) -> Dictionary:
 	var script := GDScript.new()
+	## Give analysis its real path without taking over a live ResourceCache entry.
+	script.set_path_cache(path)
 	script.source_code = content
-	## Keep validation off the live cached resource: assigning resource_path to
-	## this ephemeral Script can collide with loaded instances. reload() still
-	## performs normal GDScript analysis, including static initializer work, so
-	## this check is intentionally scoped to `.gd` writes where the editor would
-	## compile the file on scan anyway.
 	var err := script.reload()
+	## reload() can retain a previously unloaded script in GDScriptCache. Clear
+	## its path so a later ResourceLoader.load() can register it in ResourceCache:
+	## Resource.set_path() skips registration when the path already matches.
+	script.set_path_cache("")
 	return {
 		"ok": err == OK,
 		"error_code": err,
