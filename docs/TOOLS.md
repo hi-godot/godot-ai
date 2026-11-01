@@ -236,7 +236,7 @@ Calls take the form:
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
-| `animation_manage` | `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
+| `animation_manage` | `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
 | `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
@@ -515,3 +515,31 @@ Godot's audio editor may automatically save changes to its active bus layout.
 `.tres` or `.res` file. It does not switch the editor's active layout, alter
 `audio/buses/default_bus_layout`, or clear undo history. Replacing an existing
 snapshot requires `overwrite=True`. File export itself is not undoable.
+
+### AnimationTree graphs
+
+`animation_manage tree_create` creates an inactive AnimationTree linked to an
+existing AnimationPlayer. Choose `root_type="state_machine"` or `"blend_tree"`.
+Use `tree_node_add` with a native AnimationNode class and its editable properties
+to build the graph. State-machine children must be AnimationRootNodes.
+
+Every graph operation takes `tree_path` and an optional `graph_path`. An empty
+graph path selects the tree root; `"Locomotion/Blend"` selects a nested child.
+`tree_get` returns nodes, positions, native property values, input names, edges
+and current tree parameters. `tree_node_set` edits the selected node's properties.
+Variable input counts must be configured when adding a node, with a limit of 256
+inputs per node to bound work on the editor thread; changing them later
+could drop existing connections, so that edit is refused.
+
+`tree_connect` and `tree_disconnect` operate on blend-tree input ports. Each output
+can feed one input, matching Godot; occupied inputs, reused outputs and cycles
+are refused. `tree_transition_add`, `tree_transition_set` and
+`tree_transition_remove` edit state-machine edges and their native transition
+properties, including `xfade_time`, `switch_mode`, `advance_mode` and conditions.
+
+`tree_node_remove` removes a child and its edges. Undo restores the original
+resource identities, edge order and stored tree parameters. Graph edits preserve
+shared resources, so other trees using the same graph see those edits too. Scene
+instance ownership rules apply. Save the scene to persist embedded graphs.
+Enable the finished tree and set parameters through `node_set_property`, for
+example `active=true` or `parameters/Locomotion/Blend/blend_amount=0.5`.
