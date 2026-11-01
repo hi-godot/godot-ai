@@ -1154,6 +1154,81 @@ func test_pi_load_merge_tiers_accepts_bom_prefixed_valid_object() -> void:
 	assert_ne(original_text, "", "original_text must capture non-empty source for rollback")
 
 
+func test_pi_json_strategy_accepts_shared_project_stdio_entry() -> void:
+	var global_path := _scratch_dir.path_join("pi_shared_global.json")
+	var project_path := _scratch_dir.path_join("pi_shared_project.json")
+	var client := _pi_clone(global_path)
+	client.config_merge_path_templates = {"unix": PackedStringArray([global_path]), "windows": PackedStringArray([global_path])}
+	client.config_merge_project_paths = PackedStringArray([project_path])
+	var launch := _uvx_launch()
+	var entry := {"command": launch.command, "args": launch.args, "env": {}}
+	_write(global_path, JSON.stringify({"mcpServers": {}}))
+	for typed in [false, true]:
+		if typed:
+			entry["type"] = "stdio"
+		var original := JSON.stringify({"mcpServers": {"godot-ai": entry}})
+		_write(project_path, original)
+		assert_eq(
+			McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch),
+			McpClient.Status.CONFIGURED,
+			"Pi must accept the matching project stdio entry, including Claude's optional type",
+		)
+		assert_eq(_read(project_path), original, "status must not rewrite the shared project file")
+
+
+func test_pi_json_strategy_rejects_conflicting_project_transport() -> void:
+	var global_path := _scratch_dir.path_join("pi_conflict_global.json")
+	var project_path := _scratch_dir.path_join("pi_conflict_project.json")
+	var client := _pi_clone(global_path)
+	client.config_merge_path_templates = {"unix": PackedStringArray([global_path]), "windows": PackedStringArray([global_path])}
+	client.config_merge_project_paths = PackedStringArray([project_path])
+	var launch := _uvx_launch()
+	_write(global_path, JSON.stringify({"mcpServers": {}}))
+	for fields in [
+		{"type": "http"}, {"type": "sse"}, {"type": null}, {"type": 1},
+		{"type": true}, {"type": ["stdio"]}, {"type": {"value": "stdio"}},
+		{"type": "stdio", "url": "http://legacy/mcp"},
+		{"type": "stdio", "headers": {}},
+		{"type": "stdio", "command": "stale"},
+		{"type": "stdio", "args": []},
+	]:
+		var entry := {"command": launch.command, "args": launch.args, "env": {}}
+		entry.merge(fields, true)
+		var original := JSON.stringify({"mcpServers": {"godot-ai": entry}})
+		_write(project_path, original)
+		assert_eq(
+			McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch),
+			McpClient.Status.CONFIGURED_MISMATCH,
+			"a conflicting project transport must remain a mismatch: %s" % str(fields),
+		)
+		assert_eq(_read(project_path), original, "status must preserve the conflicting project entry")
+
+
+func test_pi_stdio_exception_does_not_change_other_clients() -> void:
+	var launch := _uvx_launch()
+	var entry := {"command": launch.command, "args": launch.args, "type": "stdio"}
+	for id in ["kilo_code", "omp"]:
+		assert_false(
+			McpJsonStrategy.verify_entry(McpClientRegistry.get_by_id(id), entry, "http://unused", launch),
+			"%s must still reject its legacy type field" % id,
+		)
+	assert_true(
+		McpJsonStrategy.verify_entry(McpClientRegistry.get_by_id("claude_code"), entry, "http://unused", launch),
+		"Claude's required stdio discriminator remains valid",
+	)
+	entry.erase("type")
+	assert_false(
+		McpJsonStrategy.verify_entry(McpClientRegistry.get_by_id("claude_code"), entry, "http://unused", launch),
+		"Claude's transport discriminator is still required",
+	)
+	var migrated := McpJsonStrategy.build_entry(
+		McpClientRegistry.get_by_id("pi"), "http://unused",
+		{"type": "http", "url": "http://legacy/mcp", "headers": {}, "env": {"CUSTOM": "keep"}}, launch,
+	)
+	assert_eq(migrated, {"command": launch.command, "args": launch.args, "env": {"CUSTOM": "keep"}},
+		"Pi migration must still remove legacy transport fields and preserve custom environment")
+
+
 func test_pi_json_strategy_fails_closed_on_project_override() -> void:
 	var global_path := _scratch_dir.path_join("pi_global.json")
 	var project_path := _scratch_dir.path_join("pi_project.json")
@@ -1379,6 +1454,7 @@ func _pi_clone(path: String) -> McpClient:
 	client.command_transport_value = registered.command_transport_value
 	client.command_initial_fields = registered.command_initial_fields.duplicate(true)
 	client.command_legacy_keys = registered.command_legacy_keys
+	client.command_legacy_key_exceptions = registered.command_legacy_key_exceptions.duplicate(true)
 	client.command_user_fields = registered.command_user_fields
 	client.command_timeout_fields = registered.command_timeout_fields
 	client.command_env_legacy_keys = registered.command_env_legacy_keys

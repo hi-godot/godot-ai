@@ -234,6 +234,10 @@ var needs_consoleless_launcher: bool = true
 ## launch fields.
 var command_legacy_keys: PackedStringArray = PackedStringArray()
 
+## Exact compatible values for fields otherwise removed during migration.
+## Status accepts these values; Configure still removes the legacy keys.
+var command_legacy_key_exceptions: Dictionary = {}
+
 ## Keys inside a preserved JSON `env` object that belonged to a legacy launch
 ## shape and must be removed during migration. Other environment values remain
 ## user-owned and survive Configure. Currently consumed by the JSON strategy.

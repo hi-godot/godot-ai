@@ -49,6 +49,8 @@ func _init() -> void:
 	# any redundant `type` field so the generated stdio entry stays canonical.
 	command_shape = McpClient.CommandShape.FLAT
 	command_legacy_keys = PackedStringArray(["url", "headers", "type"])
+	# Claude Code shares .mcp.json and writes this harmless discriminator.
+	command_legacy_key_exceptions = {"type": "stdio"}
 	# `env` is the only user-mutable field pi's docs surface. Future
 	# fields still survive — the strategy deep-copies unknown keys.
 	command_user_fields = PackedStringArray(["env"])
