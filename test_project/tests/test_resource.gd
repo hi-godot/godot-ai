@@ -681,6 +681,9 @@ func test_apply_resource_properties_dynamic_removed_stream_is_rejected() -> void
 		"streams_count": 0,
 		"stream_0/weight": 0.25,
 	})
+	assert_true(result is Dictionary, "removed requested property must be rejected")
+	if not result is Dictionary:
+		return
 	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
 	assert_contains(result.error.message, "stream_0/weight")
 	assert_eq(stream.streams_count, 0)
@@ -1082,3 +1085,39 @@ func test_create_resource_unknown_assign_property_enriches_error() -> void:
 	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
 	assert_contains(result.error.message, "available:",
 		"assign-property errors must use McpPropertyErrors.build_message enrichment")
+
+
+func test_resource_dynamic_properties_accept_reverse_key_order() -> void:
+	var resource := AudioStreamRandomizer.new()
+	var result: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"stream_0/weight": 0.25,
+		"stream_0/stream": {"__class__": "AudioStreamWAV", "mix_rate": 22050},
+		"streams_count": 1,
+	})
+	assert_eq(result, null, str(result))
+	assert_eq(resource.streams_count, 1)
+	assert_eq(resource.get("stream_0/weight"), 0.25)
+	assert_true(resource.get("stream_0/stream") is AudioStreamWAV)
+
+
+func test_resource_dynamic_unknown_property_still_fails_after_setters() -> void:
+	var resource := AudioStreamRandomizer.new()
+	var result: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"stream_9/weight": 0.25, "streams_count": 1,
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_9/weight")
+	assert_eq(resource.streams_count, 1)
+
+
+func test_resource_dynamic_property_removed_by_later_setter_is_rejected() -> void:
+	var resource := AudioStreamRandomizer.new()
+	resource.streams_count = 1
+	var result: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"stream_0/weight": 0.25, "streams_count": 0,
+	})
+	assert_true(result is Dictionary, "removed requested property must be rejected")
+	if not result is Dictionary:
+		return
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_0/weight")

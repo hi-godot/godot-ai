@@ -307,31 +307,20 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 			ErrorCodes.INVALID_PARAMS,
 			"Nested resource properties exceed the maximum depth of %d — flatten the {\"__class__\": ...} nesting or create the deep sub-resources in separate calls" % MAX_NESTED_RESOURCE_DEPTH
 		)
-	for key in properties.keys():
-		# Earlier setters can add, remove, or change the type of later properties.
+	var pending := properties.keys()
+	while not pending.is_empty():
+		# Counts and modes can expose dependent fields regardless of JSON key order.
 		var prop_types := {}
 		for prop in res.get_property_list():
 			prop_types[prop.name] = prop.get("type", TYPE_NIL)
+		var key: Variant = pending[0]
+		for candidate in pending:
+			if prop_types.has(candidate):
+				key = candidate
+				break
 		if not prop_types.has(key):
-			var valid: Array[String] = []
-			for prop in res.get_property_list():
-				if prop.get("usage", 0) & PROPERTY_USAGE_EDITOR:
-					valid.append(prop.name)
-			valid.sort()
-			# Name the script's class_name (e.g. MyTestResource) rather than the
-			# native base (Resource) so the hint names the type the agent created,
-			# and point at the real MCP verb — resource_manage(op="get_info") now
-			# answers for project class_name Resources too.
-			var type_label := res.get_class()
-			var res_script: Variant = res.get_script()
-			if res_script is Script and not String(res_script.get_global_name()).is_empty():
-				type_label = String(res_script.get_global_name())
-			var err := ErrorCodes.make(
-				ErrorCodes.PROPERTY_NOT_ON_CLASS,
-				"Property '%s' not found on %s. Call resource_manage(op=\"get_info\", params={\"type\": \"%s\"}) to list available properties." % [key, type_label, type_label]
-			)
-			err["error"]["data"] = {"valid_properties": valid}
-			return err
+			return _missing_resource_property(res, key)
+		pending.erase(key)
 		var target_type: int = prop_types[key]
 		if target_type == TYPE_NIL:
 			target_type = typeof(res.get(key))
@@ -406,7 +395,35 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 				if coerce_err != null:
 					return coerce_err
 		res.set(key, v)
+	var final_properties := {}
+	for prop in res.get_property_list():
+		final_properties[prop.name] = true
+	for key in properties:
+		if not final_properties.has(key):
+			return _missing_resource_property(res, key)
 	return null
+
+
+static func _missing_resource_property(res: Resource, key: Variant) -> Dictionary:
+	var valid: Array[String] = []
+	for prop in res.get_property_list():
+		if prop.get("usage", 0) & PROPERTY_USAGE_EDITOR:
+			valid.append(prop.name)
+	valid.sort()
+	# Name the script's class_name (e.g. MyTestResource) rather than the
+	# native base (Resource) so the hint names the type the agent created,
+	# and point at the real MCP verb — resource_manage(op="get_info") now
+	# answers for project class_name Resources too.
+	var type_label := res.get_class()
+	var res_script: Variant = res.get_script()
+	if res_script is Script and not String(res_script.get_global_name()).is_empty():
+		type_label = String(res_script.get_global_name())
+	var err := ErrorCodes.make(
+		ErrorCodes.PROPERTY_NOT_ON_CLASS,
+		"Property '%s' not found on %s. Call resource_manage(op=\"get_info\", params={\"type\": \"%s\"}) to list available properties." % [key, type_label, type_label]
+	)
+	err["error"]["data"] = {"valid_properties": valid}
+	return err
 
 
 func _assign_created_resource(res: Resource, type_str: String, node_path: String, property: String, applied_count: int) -> Dictionary:
