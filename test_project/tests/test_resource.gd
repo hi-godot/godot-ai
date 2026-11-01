@@ -627,6 +627,8 @@ func test_create_resource_undo_survives_interleaving() -> void:
 
 func test_resource_overwrite_refreshes_live_cache() -> void:
 	var path := "res://tests/_mcp_overwrite_cache_1172.tres"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 	var created := _handler.create_resource({
 		"type": "Environment", "resource_path": path,
 		"properties": {"background_mode": 1, "background_color": "#ff0000", "background_energy_multiplier": 3.0},
@@ -665,6 +667,8 @@ func test_resource_overwrite_refreshes_live_cache() -> void:
 
 func test_resource_overwrite_rejects_cached_type_change_before_writing() -> void:
 	var path := "res://tests/_mcp_overwrite_type_1172.tres"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 	var created := _handler.create_resource({"type": "Environment", "resource_path": path})
 	assert_has_key(created, "data", str(created))
 	if not created.has("data"):
@@ -681,6 +685,8 @@ func test_resource_overwrite_rejects_cached_type_change_before_writing() -> void
 
 func test_resource_overwrite_rejects_cached_script_change_before_writing() -> void:
 	var path := "res://tests/_mcp_overwrite_script_1172.tres"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 	var first_script := GDScript.new()
 	first_script.source_code = "@tool\nextends Resource\n"
 	assert_eq(first_script.reload(), OK)
