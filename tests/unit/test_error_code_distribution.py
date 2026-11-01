@@ -36,7 +36,11 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## misses mirroring script_patch, and the shader_path-vs-code mutual
 ## exclusion mirroring McpResourceIO.validate_home), so the ceiling moved
 ## 110 -> 115.
-INVALID_PARAMS_CEILING = 115
+## Autoload registration adds four semantic refusals: malformed identifiers,
+## built-in type/name collisions, script class collisions, and native rejection.
+## These are valid strings/resources that cannot define the requested singleton;
+## non-Node resources use WRONG_TYPE separately.
+INVALID_PARAMS_CEILING = 119
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

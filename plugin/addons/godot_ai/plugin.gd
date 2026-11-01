@@ -357,7 +357,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("api", HANDLERS_DIR + "api_handler.gd", [])
 	_dispatcher.register_lazy_handler("filesystem", HANDLERS_DIR + "filesystem_handler.gd", [_connection])
 	_dispatcher.register_lazy_handler("signal", HANDLERS_DIR + "signal_handler.gd", [undo])
-	_dispatcher.register_lazy_handler("autoload", HANDLERS_DIR + "autoload_handler.gd", [])
+	_dispatcher.register_lazy_handler("autoload", HANDLERS_DIR + "autoload_handler.gd", [self])
 	_dispatcher.register_lazy_handler("input", HANDLERS_DIR + "input_handler.gd", [])
 	_dispatcher.register_lazy_handler("test", HANDLERS_DIR + "test_handler.gd", [undo, _log_buffer, _dispatcher, _connection])
 	_dispatcher.register_lazy_handler("batch", HANDLERS_DIR + "batch_handler.gd", [_dispatcher, undo])
