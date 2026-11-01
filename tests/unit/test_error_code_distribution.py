@@ -47,7 +47,8 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## semantic conflicts move the ceiling from 115 to 121.
 ## Animation library attachment adds two duplicate conflicts: an occupied
 ## library name and a resource already attached under another name.
-INVALID_PARAMS_CEILING = 123
+## Audio buses add a duplicate-name conflict and an incoming-send conflict.
+INVALID_PARAMS_CEILING = 125
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

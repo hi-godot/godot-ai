@@ -369,6 +369,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("visual_shader", HANDLERS_DIR + "visual_shader_handler.gd", [])
 	_dispatcher.register_lazy_handler("particle", HANDLERS_DIR + "particle_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("camera", HANDLERS_DIR + "camera_handler.gd", [undo])
+	_dispatcher.register_lazy_handler("audio_bus", HANDLERS_DIR + "audio_bus_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("audio", HANDLERS_DIR + "audio_handler.gd", [undo])
 	_dispatcher.register_lazy_handler(
 		"physics_shape", HANDLERS_DIR + "physics_shape_handler.gd", [undo, _connection]
@@ -528,6 +529,15 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("audio_play", "audio", &"play")
 	_dispatcher.register_lazy("audio_stop", "audio", &"stop")
 	_dispatcher.register_lazy("audio_list", "audio", &"list_streams")
+	_dispatcher.register_lazy("audio_bus_list", "audio_bus", &"bus_list")
+	_dispatcher.register_lazy("audio_bus_add", "audio_bus", &"bus_add")
+	_dispatcher.register_lazy("audio_bus_remove", "audio_bus", &"bus_remove")
+	_dispatcher.register_lazy("audio_bus_set", "audio_bus", &"bus_set")
+	_dispatcher.register_lazy("audio_bus_effect_add", "audio_bus", &"bus_effect_add")
+	_dispatcher.register_lazy("audio_bus_effect_set", "audio_bus", &"bus_effect_set")
+	_dispatcher.register_lazy("audio_bus_effect_remove", "audio_bus", &"bus_effect_remove")
+	_dispatcher.register_lazy("audio_bus_layout_save", "audio_bus", &"bus_layout_save")
+
 	_dispatcher.register_lazy("physics_shape_autofit", "physics_shape", &"autofit")
 	_dispatcher.register_lazy("physics_shape_generate", "physics_shape", &"generate")
 	_dispatcher.register_lazy("environment_create", "environment", &"create_environment")

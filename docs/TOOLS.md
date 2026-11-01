@@ -238,7 +238,7 @@ Calls take the form:
 | `test_manage` | `results_get` |
 | `animation_manage` | `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
-| `audio_manage` | `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
+| `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
 | `signal_manage` | `list`, `connect`, `disconnect` |
@@ -498,3 +498,20 @@ refers to that library; undo restores both.
 `library_list` returns each library's name, resource path and animation names,
 plus `autoplay` for AnimationPlayer. Existing `list` also includes library
 metadata and autoplay alongside its clip details.
+
+
+### Audio bus layouts
+
+`audio_manage` exposes native AudioServer buses and effects. Bus/effect edits
+use global editor undo and do not require an open scene. Master cannot be
+removed; sends must target an existing earlier bus. Before removing a bus,
+reroute incoming bus sends and compressor sidechain references. Bus names must be unique. Effect operations
+accept unscripted native AudioEffect classes and editor-visible properties, including
+compressor sidechain bus names. They preserve effect identity through edits
+and restore effect order and enabled state on undo.
+
+Godot's audio editor may automatically save changes to its active bus layout.
+`bus_layout_save(path, overwrite=False)` explicitly exports a snapshot to a
+`.tres` or `.res` file. It does not switch the editor's active layout, alter
+`audio/buses/default_bus_layout`, or clear undo history. Replacing an existing
+snapshot requires `overwrite=True`. File export itself is not undoable.
