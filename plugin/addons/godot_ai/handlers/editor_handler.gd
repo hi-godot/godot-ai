@@ -703,6 +703,9 @@ func _take_cinematic_screenshot(max_resolution: int) -> Dictionary:
 	cam.far = scene_camera.far
 	cam.projection = scene_camera.projection
 	cam.size = scene_camera.size
+	cam.frustum_offset = scene_camera.frustum_offset
+	cam.h_offset = scene_camera.h_offset
+	cam.v_offset = scene_camera.v_offset
 	cam.keep_aspect = scene_camera.keep_aspect
 	cam.cull_mask = scene_camera.cull_mask
 	cam.environment = scene_camera.environment
@@ -864,25 +867,29 @@ func _finalize_image(image: Image, source: String, max_resolution: int, use_hdr_
 	}
 
 
-## Recursively compute the visual bounding box of a Node3D and its children.
+## Prefer geometry bounds over light ranges and helper/effect volumes.
 func _get_visual_aabb(node: Node3D) -> AABB:
-	var aabb := AABB()
-	var found := false
-	if node is VisualInstance3D:
-		aabb = node.global_transform * node.get_aabb()
-		found = true
-	for child in node.get_children():
-		if child is Node3D:
-			var child_aabb := _get_visual_aabb(child)
-			if child_aabb.size != Vector3.ZERO:
-				if found:
-					aabb = aabb.merge(child_aabb)
+	var geometry_bounds: Variant = null
+	var visual_bounds: Variant = null
+	var pending: Array[Node3D] = [node]
+	while not pending.is_empty():
+		var current: Node3D = pending.pop_back()
+		if current is VisualInstance3D:
+			var local_bounds: AABB = current.get_aabb()
+			if local_bounds.size != Vector3.ZERO:
+				var bounds: AABB = current.global_transform * local_bounds
+				if current is GeometryInstance3D and not (current is GPUParticles3D or current is CPUParticles3D):
+					geometry_bounds = bounds if geometry_bounds == null else geometry_bounds.merge(bounds)
 				else:
-					aabb = child_aabb
-					found = true
-	if not found:
-		aabb = AABB(node.global_position - Vector3(0.5, 0.5, 0.5), Vector3(1, 1, 1))
-	return aabb
+					visual_bounds = bounds if visual_bounds == null else visual_bounds.merge(bounds)
+		for child in current.get_children():
+			if child is Node3D:
+				pending.append(child)
+	if geometry_bounds != null:
+		return geometry_bounds
+	if visual_bounds != null:
+		return visual_bounds
+	return AABB(node.global_position - Vector3(0.5, 0.5, 0.5), Vector3.ONE)
 
 
 ## Calculate a camera Transform3D that frames the given AABB nicely.
