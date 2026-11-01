@@ -341,6 +341,45 @@ class TestSceneSaveAsTool:
 
 
 # ---------------------------------------------------------------------------
+# scene_manage close
+# ---------------------------------------------------------------------------
+
+
+class TestSceneCloseTool:
+    async def test_close_scene(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "close_scene"
+            assert cmd["params"] == {"path": "res://scratch/preview.tscn", "discard_changes": True}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://scratch/preview.tscn",
+                    "discarded_changes": True,
+                    "current_scene": "res://main.tscn",
+                    "open_scenes": ["res://main.tscn"],
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_manage",
+            {
+                "op": "close",
+                "params": {"path": "res://scratch/preview.tscn", "discard_changes": True},
+            },
+        )
+        await task
+
+        assert result.data["discarded_changes"] is True
+        assert result.data["current_scene"] == "res://main.tscn"
+        assert result.data["undoable"] is False
+
+
+# ---------------------------------------------------------------------------
 # editor_state
 # ---------------------------------------------------------------------------
 
