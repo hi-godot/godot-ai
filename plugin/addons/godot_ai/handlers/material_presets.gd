@@ -9,7 +9,7 @@ extends RefCounted
 
 const _PRESETS := {
 	"metal": {
-		"type": "orm",
+		"type": "standard",
 		"params": {
 			"metallic": 1.0,
 			"roughness": 0.25,
