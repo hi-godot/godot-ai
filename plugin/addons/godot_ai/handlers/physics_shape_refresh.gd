@@ -87,7 +87,7 @@ func _disconnect() -> void:
 
 
 func _plan(path: String, validated: Dictionary) -> Dictionary:
-	var resolved := McpNodeValidator.resolve_or_error(path, "paths", str(validated.scene_file))
+	var resolved := McpNodeValidator.resolve_or_error(path, "paths", str(validated.scene_file), true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node

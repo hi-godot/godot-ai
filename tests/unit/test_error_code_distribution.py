@@ -36,7 +36,12 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## misses mirroring script_patch, and the shader_path-vs-code mutual
 ## exclusion mirroring McpResourceIO.validate_home), so the ceiling moved
 ## 110 -> 115.
-INVALID_PARAMS_CEILING = 115
+## #1167 adds two scene-state conflicts: modifying a descendant of a locked
+## instance, and rearranging an instance-owned node even with Editable Children.
+## The nodes, properties, types, and values are valid; scene ownership prevents
+## these edits from surviving serialization. None of the six specific codes
+## describes that conflict, so the reviewed ceiling moves 115 -> 117.
+INVALID_PARAMS_CEILING = 117
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

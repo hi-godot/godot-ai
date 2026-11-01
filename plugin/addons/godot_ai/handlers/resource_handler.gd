@@ -121,7 +121,7 @@ func assign_resource(params: Dictionary) -> Dictionary:
 	if rpath_err != null:
 		return rpath_err
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
@@ -409,7 +409,7 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 
 
 func _assign_created_resource(res: Resource, type_str: String, node_path: String, property: String, applied_count: int) -> Dictionary:
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node

@@ -557,7 +557,7 @@ static func _resolve_dimension(params: Dictionary) -> Dictionary:
 ## class. Success shape: `{node, dimension, path, scene_root}`.
 func _resolve_region(params: Dictionary) -> Dictionary:
 	var resolved := McpNodeValidator.resolve_or_error(
-		params.get("path", ""), "path", params.get("scene_file", "")
+		params.get("path", ""), "path", params.get("scene_file", ""), true
 	)
 	if resolved.has("error"):
 		return resolved

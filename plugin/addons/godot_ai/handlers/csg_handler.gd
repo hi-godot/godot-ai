@@ -65,6 +65,10 @@ func create(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
 			"CSG parent must be a Node3D (got %s)" % parent.get_class())
 
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var node: CSGShape3D = ClassDB.instantiate(shape_class)
 	if node == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % shape_class)
@@ -99,7 +103,7 @@ func set_operation(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
 			"Unknown operation: %s. Valid operations: %s" % [operation, ", ".join(OPERATIONS.keys())])
 	var resolved := McpNodeValidator.resolve_or_error(
-		params.get("path", ""), "path", params.get("scene_file", ""))
+		params.get("path", ""), "path", params.get("scene_file", ""), true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node

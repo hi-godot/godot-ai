@@ -29,7 +29,7 @@ func control_draw_recipe(params: Dictionary) -> Dictionary:
 	if typeof(ops_raw) != TYPE_ARRAY:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "ops must be an Array")
 
-	var _resolved := McpNodeValidator.resolve_or_error(path, "path")
+	var _resolved := McpNodeValidator.resolve_or_error(path, "path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node

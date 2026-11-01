@@ -141,7 +141,7 @@ static func _apply_preset(env: Environment, sky_material: ProceduralSkyMaterial,
 
 
 func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSkyMaterial, node_path: String, preset: String) -> Dictionary:
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node

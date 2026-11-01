@@ -469,6 +469,10 @@ func create_camera(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var node := _instantiate_camera(type_str)
 	if node == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate camera")
@@ -995,6 +999,10 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var node := _instantiate_camera(type_str)
 	node.name = node_name
 
@@ -1075,7 +1083,7 @@ static func _camera_type_str(node: Node) -> String:
 
 func _resolve_camera(params: Dictionary) -> Dictionary:
 	var resolved := McpNodeValidator.resolve_or_error(
-		params.get("camera_path", ""), "camera_path",
+		params.get("camera_path", ""), "camera_path", "", true,
 	)
 	if resolved.has("error"):
 		return resolved

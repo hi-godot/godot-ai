@@ -354,7 +354,7 @@ func assign_material(params: Dictionary) -> Dictionary:
 	if node_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
@@ -449,7 +449,7 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 			"Invalid material type '%s'. Valid: %s" % [type_str, ", ".join(_TYPE_TO_CLASS.keys())]
 		)
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
@@ -615,7 +615,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 
 	var assigned := false
 	if not node_path.is_empty():
-		var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+		var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 		if _resolved.has("error"):
 			return _resolved
 		var node: Node = _resolved.node

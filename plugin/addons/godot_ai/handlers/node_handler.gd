@@ -32,6 +32,10 @@ func create_node(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var new_node: Node
 
 	if not scene_path.is_empty():
@@ -86,12 +90,15 @@ func create_node(params: Dictionary) -> Dictionary:
 
 
 func delete_node(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_node(params)
+	var resolved := _resolve_node(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
 	var node_path: String = resolved.path
 	var scene_root: Node = resolved.scene_root
+	var structure_error := McpNodeValidator.structure_error(node, scene_root)
+	if not structure_error.is_empty():
+		return structure_error
 
 	var root_err := _reject_if_scene_root(node, scene_root, "delete")
 	if root_err != null:
@@ -117,12 +124,15 @@ func delete_node(params: Dictionary) -> Dictionary:
 
 
 func reparent_node(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_node(params)
+	var resolved := _resolve_node(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
 	var node_path: String = resolved.path
 	var scene_root: Node = resolved.scene_root
+	var structure_error := McpNodeValidator.structure_error(node, scene_root)
+	if not structure_error.is_empty():
+		return structure_error
 
 	var new_parent_path: String = params.get("new_parent", "")
 	if new_parent_path.is_empty():
@@ -135,6 +145,10 @@ func reparent_node(params: Dictionary) -> Dictionary:
 	var root_err := _reject_if_scene_root(node, scene_root, "reparent")
 	if root_err != null:
 		return root_err
+
+	var write_error := McpNodeValidator.writable_error(new_parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
 
 	# Prevent reparenting a node to itself or to one of its own descendants.
 	# Godot's `A.is_ancestor_of(B)` returns true iff B is a descendant of A, so
@@ -195,7 +209,7 @@ func reparent_node(params: Dictionary) -> Dictionary:
 
 
 func set_property(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_node(params)
+	var resolved := _resolve_node(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
@@ -205,6 +219,10 @@ func set_property(params: Dictionary) -> Dictionary:
 	var property: String = params.get("property", "")
 	if property.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: property")
+	if property == "name":
+		var structure_error := McpNodeValidator.structure_error(node, scene_root)
+		if not structure_error.is_empty():
+			return structure_error
 
 	if not "value" in params:
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: value")
@@ -408,12 +426,15 @@ static func _serialize_slot(value: Variant, scene_root: Node) -> Variant:
 
 
 func rename_node(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_node(params)
+	var resolved := _resolve_node(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
 	var node_path: String = resolved.path
 	var scene_root: Node = resolved.scene_root
+	var structure_error := McpNodeValidator.structure_error(node, scene_root)
+	if not structure_error.is_empty():
+		return structure_error
 
 	var new_name: String = params.get("new_name", "")
 	if new_name.is_empty():
@@ -477,6 +498,10 @@ func duplicate_node(params: Dictionary) -> Dictionary:
 		return root_err
 
 	var parent := node.get_parent()
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var dup: Node = node.duplicate()
 	if dup == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to duplicate node")
@@ -513,12 +538,15 @@ func duplicate_node(params: Dictionary) -> Dictionary:
 
 
 func move_node(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_node(params)
+	var resolved := _resolve_node(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
 	var node_path: String = resolved.path
 	var scene_root: Node = resolved.scene_root
+	var structure_error := McpNodeValidator.structure_error(node, scene_root)
+	if not structure_error.is_empty():
+		return structure_error
 
 	var root_err := _reject_if_scene_root(node, scene_root, "reorder")
 	if root_err != null:
@@ -551,7 +579,7 @@ func move_node(params: Dictionary) -> Dictionary:
 
 
 func add_to_group(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_node(params)
+	var resolved := _resolve_node(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
@@ -583,7 +611,7 @@ func add_to_group(params: Dictionary) -> Dictionary:
 
 
 func remove_from_group(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_node(params)
+	var resolved := _resolve_node(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
@@ -1491,9 +1519,9 @@ func get_groups(params: Dictionary) -> Dictionary:
 ## Validate path param, resolve to node. Returns dict with node/path/scene_root
 ## on success, or an error dict (has "error" key) on failure. Thin wrapper
 ## around the shared `McpNodeValidator.resolve_or_error` helper (audit-v2 #20).
-func _resolve_node(params: Dictionary) -> Dictionary:
+func _resolve_node(params: Dictionary, for_write: bool = false) -> Dictionary:
 	return McpNodeValidator.resolve_or_error(
-		params.get("path", ""), "path", params.get("scene_file", ""),
+		params.get("path", ""), "path", params.get("scene_file", ""), for_write,
 	)
 
 

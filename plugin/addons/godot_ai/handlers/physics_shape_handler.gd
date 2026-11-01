@@ -259,7 +259,7 @@ static func _auto_generate_shape(mesh: Mesh) -> String:
 static func _plan_generate_mesh(
 	mesh_path: String, scene_file: String, scene_root: Node, shape_type: String, reparent_mesh: bool
 ) -> Dictionary:
-	var resolved := McpNodeValidator.resolve_or_error(mesh_path, "paths", scene_file)
+	var resolved := McpNodeValidator.resolve_or_error(mesh_path, "paths", scene_file, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
@@ -274,6 +274,10 @@ static func _plan_generate_mesh(
 			"Node at %s is %s — must be MeshInstance3D" % [mesh_path, node.get_class()]
 		)
 	var mesh := node as MeshInstance3D
+	if reparent_mesh:
+		var structure_error := McpNodeValidator.structure_error(mesh, scene_root)
+		if not structure_error.is_empty():
+			return structure_error
 	if mesh.has_meta(Refresh.MARKER):
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Mesh at %s already has a collider sibling or generated collider provenance; use overwrite=true to refresh its shape" % mesh_path)
 	var parent := mesh.get_parent()
@@ -874,7 +878,7 @@ func autofit(params: Dictionary) -> Dictionary:
 	if node_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node

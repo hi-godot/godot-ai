@@ -66,6 +66,9 @@ func set_points(params: Dictionary) -> Dictionary:
 		node = McpScenePath.resolve(node_path, scene_root)
 		if node == null:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+		var write_error := McpNodeValidator.writable_error(node, scene_root)
+		if not write_error.is_empty():
+			return write_error
 		if not (property in node):
 			return ErrorCodes.make(
 				ErrorCodes.PROPERTY_NOT_ON_CLASS,

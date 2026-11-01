@@ -82,7 +82,7 @@ func set_anchor_preset(params: Dictionary) -> Dictionary:
 
 	var margin: int = int(params.get("margin", 0))
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
@@ -153,7 +153,7 @@ func set_text(params: Dictionary) -> Dictionary:
 	if typeof(text_value) != TYPE_STRING:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "text must be a string")
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
@@ -222,7 +222,7 @@ func set_richtext(params: Dictionary) -> Dictionary:
 	if typeof(text_value) != TYPE_STRING:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "text must be a string")
 
-	var resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
@@ -295,6 +295,10 @@ func build_layout(params: Dictionary) -> Dictionary:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
 	# Validate + build in memory first; if anything fails, free and bail.
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var built := _build_subtree(tree)
 	if built.has("error"):
 		return built

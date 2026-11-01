@@ -154,7 +154,7 @@ func _finalize(tex: Resource, sub_resources: Array, params: Dictionary, label: S
 
 
 func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, property: String, label: String, extra: Dictionary) -> Dictionary:
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
