@@ -19,9 +19,10 @@ Animation authoring (players, libraries, tracks and AnimationTree graphs).
 
 Ops:
   • tree_create(parent_path, player_path, name="AnimationTree", root_type="state_machine")
-        Create an inactive AnimationTree linked to the player. root_type: state_machine|blend_tree.
+        Create an inactive AnimationTree linked to the player.
+        root_type: state_machine|blend_tree|blend_space_1d|blend_space_2d.
   • tree_get(tree_path, graph_path="")
-        Read graph nodes, properties, connections/transitions and tree parameters.
+        Read graph nodes/points, properties, edges, triangles and tree parameters.
   • tree_node_add(tree_path, name, node_type="AnimationNodeAnimation", properties=None,
                   position=None, graph_path="")
         Add a native node. position: {x,y}. State machines accept AnimationRootNodes.
@@ -35,12 +36,23 @@ Ops:
         Connect a blend-tree input port. Occupied ports/outputs and cycles are refused.
   • tree_disconnect(tree_path, input_node, input_index, graph_path="")
         Disconnect a blend-tree input port.
+  • tree_point_add(tree_path, name, position, node_type="AnimationNodeAnimation",
+                   properties=None, at_index=-1, graph_path="")
+        Add a named blend-space point (native limit: 64). Names cannot contain '.' or '/'.
+        position: number for 1D, {x,y} for 2D. at_index=-1 appends.
+  • tree_point_set(tree_path, name, position, graph_path="")
+        Move a blend-space point. Use tree_node_set at graph_path="Space/Point" for its properties.
+  • tree_point_remove(tree_path, name, graph_path="")
+        Remove a point. Undo restores its resource, name, index and manual triangles.
   • tree_transition_add(tree_path, from_state, to_state, graph_path="", properties=None)
   • tree_transition_set(tree_path, from_state, to_state, graph_path="", properties=None)
   • tree_transition_remove(tree_path, from_state, to_state, graph_path="")
         State-machine transitions. Properties include xfade_time, switch_mode, advance_mode,
         advance_condition and advance_expression. Start/End follow native restrictions.
 
+Blend-space node properties include min_space, max_space, snap, labels, blend_mode,
+sync_mode and cyclic_length. 2D triangulation is automatic; a subsequent tree_get
+reads generated triangles after the editor updates them.
 Graph paths select nested resource names, e.g. "Locomotion/Blend"; empty selects tree_root.
 Graph writes are undoable and preserve shared resource identity. Enable a completed tree or
 set parameters with node_set_property (e.g. property="parameters/Blend/blend_amount").
@@ -146,6 +158,9 @@ def register_animation_tools(mcp: FastMCP) -> None:
         description=_DESCRIPTION,
         ops={
             "player_create": animation_handlers.animation_player_create,
+            "tree_point_add": animation_handlers.animation_tree_point_add,
+            "tree_point_remove": animation_handlers.animation_tree_point_remove,
+            "tree_point_set": animation_handlers.animation_tree_point_set,
             "tree_create": animation_handlers.animation_tree_create,
             "tree_get": animation_handlers.animation_tree_get,
             "tree_node_add": animation_handlers.animation_tree_node_add,

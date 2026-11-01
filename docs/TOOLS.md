@@ -236,7 +236,7 @@ Calls take the form:
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
-| `animation_manage` | `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
+| `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
 | `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
@@ -519,7 +519,8 @@ snapshot requires `overwrite=True`. File export itself is not undoable.
 ### AnimationTree graphs
 
 `animation_manage tree_create` creates an inactive AnimationTree linked to an
-existing AnimationPlayer. Choose `root_type="state_machine"` or `"blend_tree"`.
+existing AnimationPlayer. Choose `root_type="state_machine"`, `"blend_tree"`, `"blend_space_1d"` or
+`"blend_space_2d"`.
 Use `tree_node_add` with a native AnimationNode class and its editable properties
 to build the graph. State-machine children must be AnimationRootNodes.
 
@@ -543,3 +544,19 @@ shared resources, so other trees using the same graph see those edits too. Scene
 instance ownership rules apply. Save the scene to persist embedded graphs.
 Enable the finished tree and set parameters through `node_set_property`, for
 example `active=true` or `parameters/Locomotion/Blend/blend_amount=0.5`.
+
+`tree_point_add`, `tree_point_set` and `tree_point_remove` edit named blend-space
+points. A 1D position is a number; a 2D position is `{x, y}`. Names must be unique
+within the space and cannot contain `.` or `/`. Add accepts `at_index` for
+insertion, with `-1` appending, and the same native node type/properties as
+`tree_node_add`. Godot permits at most 64 points per space. Nested graph paths
+can traverse a point by its name. Use `tree_node_set` there to edit its animation
+or nested graph; use `tree_point_set` to move its position.
+
+Blend-space bounds, snap, labels, blend mode and sync settings are available
+through `tree_node_set` and `tree_get`. Godot generates 2D triangles automatically;
+a mutation response may precede that editor-frame update, so use a subsequent
+`tree_get` for triangle readback. Removing a point queues native retriangulation.
+For existing manually triangulated spaces, point insertion/removal adjusts
+native indices, and undo restores the original triangles. These tools do not
+switch triangulation mode or author manual triangles.

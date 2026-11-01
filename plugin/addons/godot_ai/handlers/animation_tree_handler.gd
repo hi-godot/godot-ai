@@ -5,7 +5,8 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
 const Serializer := preload("res://addons/godot_ai/utils/variant_serializer.gd")
 const MAX_TRANSITION_INPUTS := 256
-const ROOT_TYPES := {"state_machine": "AnimationNodeStateMachine", "blend_tree": "AnimationNodeBlendTree"}
+const MAX_BLEND_POINTS := 64
+const ROOT_TYPES := {"state_machine": "AnimationNodeStateMachine", "blend_tree": "AnimationNodeBlendTree", "blend_space_1d": "AnimationNodeBlendSpace1D", "blend_space_2d": "AnimationNodeBlendSpace2D"}
 
 var _undo_redo: EditorUndoRedoManager
 
@@ -50,6 +51,8 @@ func _resolve(params: Dictionary, write := true) -> Dictionary:
 		for part in graph_path.split("/", true):
 			if (graph is AnimationNodeStateMachine or graph is AnimationNodeBlendTree) and graph.has_node(part):
 				graph = graph.get_node(part)
+			elif (graph is AnimationNodeBlendSpace1D or graph is AnimationNodeBlendSpace2D) and graph.find_blend_point_by_name(part) >= 0:
+				graph = graph.get_blend_point_node(graph.find_blend_point_by_name(part))
 			else:
 				return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Graph node not found: %s" % graph_path)
 	if graph == null:
@@ -95,14 +98,28 @@ func _commit(ctx: Dictionary, before: Array) -> Dictionary:
 	return {"data": {"undoable": true, "graph": _graph_data(ctx.graph)}}
 
 
+func _editable_property(resource: Resource, prop: Dictionary) -> bool:
+	if prop.name == "script" or prop.usage & PROPERTY_USAGE_READ_ONLY:
+		return false
+	if prop.usage & PROPERTY_USAGE_EDITOR:
+		return true
+	if resource is AnimationNodeBlendSpace1D or resource is AnimationNodeBlendSpace2D:
+		return prop.name in ["min_space", "max_space", "snap", "value_label", "x_label", "y_label", "blend_mode", "sync_mode", "cyclic_length"]
+	return false
+
+
 func _properties(resource: Resource, properties: Variant) -> Variant:
 	if not properties is Dictionary:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "properties must be a dictionary")
 	for key in properties:
 		var found := false
 		for prop in resource.get_property_list():
-			if prop.name == key and prop.usage & PROPERTY_USAGE_EDITOR and not prop.usage & PROPERTY_USAGE_READ_ONLY and key != "script":
+			if prop.name == key and _editable_property(resource, prop):
 				found = true
+				if prop.type == TYPE_VECTOR2:
+					var position: Variant = _position(properties[key])
+					if position is Dictionary:
+						return position
 				if prop.type == TYPE_BOOL and not properties[key] is bool:
 					return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a boolean" % key)
 				if prop.type in [TYPE_INT, TYPE_FLOAT]:
@@ -138,6 +155,8 @@ func _properties(resource: Resource, properties: Variant) -> Variant:
 		var stored: Variant = resource.get(key)
 		if stored is int and (properties[key] is int or properties[key] is float) and float(stored) != float(properties[key]):
 			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "%s exceeds the native integer range" % key)
+		if stored is Vector2 and not stored.is_finite():
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "%s exceeds the native finite Vector2 range" % key)
 		if stored is float and not is_finite(stored):
 			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "%s exceeds the native finite range" % key)
 	return null
@@ -155,7 +174,7 @@ func _new_node(params: Dictionary, root_only: bool) -> Variant:
 func _property_data(resource: Resource) -> Dictionary:
 	var data := {}
 	for prop in resource.get_property_list():
-		if prop.usage & PROPERTY_USAGE_EDITOR and prop.type != TYPE_NIL and prop.name != "script":
+		if (prop.usage & PROPERTY_USAGE_EDITOR or _editable_property(resource, prop)) and prop.type != TYPE_NIL and prop.name != "script":
 			data[prop.name] = Serializer.serialize(resource.get(prop.name))
 	return data
 
@@ -215,6 +234,14 @@ func _graph_data(graph: AnimationNode) -> Dictionary:
 		var connections: Array = graph.get("node_connections")
 		for i in range(0, connections.size(), 3):
 			data.connections.append({"input_node": String(connections[i]), "input_index": connections[i + 1], "output_node": String(connections[i + 2])})
+	if graph is AnimationNodeBlendSpace1D or graph is AnimationNodeBlendSpace2D:
+		data.points = []
+		for index in graph.get_blend_point_count():
+			var point: AnimationRootNode = graph.get_blend_point_node(index)
+			data.points.append({"index": index, "name": String(graph.get_blend_point_name(index)), "class": point.get_class(), "position": Serializer.serialize(graph.get_blend_point_position(index)), "properties": _property_data(point)})
+		if graph is AnimationNodeBlendSpace2D:
+			data.auto_triangles = graph.auto_triangles
+			data.triangles = _triangles(graph)
 	return data
 
 
@@ -241,7 +268,7 @@ func tree_create(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid or existing node name: %s" % name)
 	var root_type: String = params.get("root_type", "state_machine")
 	if not ROOT_TYPES.has(root_type):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "root_type must be state_machine or blend_tree")
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "root_type must be one of: %s" % ", ".join(ROOT_TYPES.keys()))
 	var player_path: String = params.get("player_path", "")
 	var player := McpScenePath.resolve(player_path, check.scene_root) as AnimationPlayer
 	if player == null:
@@ -463,4 +490,106 @@ func tree_transition_set(params: Dictionary) -> Dictionary:
 		_undo_redo.add_do_property(transition, key, updated.get(key))
 		_undo_redo.force_fixed_history()
 		_undo_redo.add_undo_property(transition, key, transition.get(key))
+	return _commit(ctx, before)
+
+
+func _blend_space_context(params: Dictionary) -> Dictionary:
+	var ctx := _resolve(params)
+	if ctx.has("error"):
+		return ctx
+	if not ctx.graph is AnimationNodeBlendSpace1D and not ctx.graph is AnimationNodeBlendSpace2D:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "graph_path must select a 1D or 2D blend space")
+	ctx.name = params.get("name", "")
+	var error := _name_error(ctx.name)
+	if not error.is_empty():
+		return error
+	if String(ctx.name).contains("."):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Blend point names must not contain '.'")
+	ctx.index = ctx.graph.find_blend_point_by_name(ctx.name)
+	return ctx
+
+
+func _point_position(graph: AnimationNode, value: Variant) -> Variant:
+	if graph is AnimationNodeBlendSpace2D:
+		return _position(value)
+	if not (value is int or value is float) or not is_finite(float(value)) or not is_finite(PackedFloat32Array([float(value)])[0]):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "1D blend position must be a finite native float")
+	return float(value)
+
+
+func _triangles(graph: AnimationNodeBlendSpace2D) -> Array:
+	var packed: PackedInt32Array = graph.get("triangles")
+	var triangles := []
+	for index in range(0, packed.size(), 3):
+		triangles.append([packed[index], packed[index + 1], packed[index + 2]])
+	return triangles
+
+
+func _restore_triangles(graph: AnimationNodeBlendSpace2D, triangles: Array) -> void:
+	if graph.auto_triangles:
+		return
+	while graph.get_triangle_count() > 0:
+		graph.remove_triangle(0)
+	for triangle in triangles:
+		graph.add_triangle(triangle[0], triangle[1], triangle[2])
+
+
+func _remove_point(graph: AnimationNode, index: int) -> void:
+	graph.remove_blend_point(index)
+	if graph is AnimationNodeBlendSpace2D and graph.auto_triangles and graph.get_blend_point_count() > 0:
+		# Native removal drops incident triangles but does not queue retriangulation.
+		graph.set_blend_point_position(0, graph.get_blend_point_position(0))
+
+
+func tree_point_add(params: Dictionary) -> Dictionary:
+	var ctx := _blend_space_context(params)
+	if ctx.has("error"):
+		return ctx
+	if ctx.index >= 0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Blend point already exists: %s" % ctx.name)
+	var count: int = ctx.graph.get_blend_point_count()
+	if count >= MAX_BLEND_POINTS:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Godot blend spaces support at most %d points" % MAX_BLEND_POINTS)
+	var at: Variant = params.get("at_index", -1)
+	if not (at is int or at is float) or not is_finite(float(at)) or float(at) != floor(float(at)) or at < -1 or at > count:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "at_index must be -1 or an integer between 0 and %d" % count)
+	var index := count if at == -1 else int(at)
+	var position: Variant = _point_position(ctx.graph, params.get("position"))
+	if position is Dictionary:
+		return position
+	var node: Variant = _new_node(params, true)
+	if node is Dictionary:
+		return node
+	var before := _begin(ctx, "Add animation blend point %s" % ctx.name)
+	_undo_redo.add_do_method(ctx.graph, "add_blend_point", node, position, index, ctx.name)
+	_undo_redo.add_undo_method(self, "_remove_point", ctx.graph, index)
+	return _commit(ctx, before)
+
+
+func tree_point_remove(params: Dictionary) -> Dictionary:
+	var ctx := _blend_space_context(params)
+	if ctx.has("error"):
+		return ctx
+	if ctx.index < 0:
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Blend point not found: %s" % ctx.name)
+	var before := _begin(ctx, "Remove animation blend point %s" % ctx.name)
+	_undo_redo.add_do_method(self, "_remove_point", ctx.graph, ctx.index)
+	_undo_redo.add_undo_method(ctx.graph, "add_blend_point", ctx.graph.get_blend_point_node(ctx.index), ctx.graph.get_blend_point_position(ctx.index), ctx.index, ctx.name)
+	if ctx.graph is AnimationNodeBlendSpace2D:
+		_undo_redo.add_undo_method(self, "_restore_triangles", ctx.graph, _triangles(ctx.graph))
+	return _commit(ctx, before)
+
+
+func tree_point_set(params: Dictionary) -> Dictionary:
+	var ctx := _blend_space_context(params)
+	if ctx.has("error"):
+		return ctx
+	if ctx.index < 0:
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Blend point not found: %s" % ctx.name)
+	var position: Variant = _point_position(ctx.graph, params.get("position"))
+	if position is Dictionary:
+		return position
+	var before := _begin(ctx, "Move animation blend point %s" % ctx.name)
+	_undo_redo.add_do_method(ctx.graph, "set_blend_point_position", ctx.index, position)
+	_undo_redo.add_undo_method(ctx.graph, "set_blend_point_position", ctx.index, ctx.graph.get_blend_point_position(ctx.index))
 	return _commit(ctx, before)

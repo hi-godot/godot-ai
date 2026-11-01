@@ -68,6 +68,40 @@ for op in ("tree_transition_add", "tree_transition_remove", "tree_transition_set
     CASES.append((op, params, expected))
 
 
+CASES.extend(
+    [
+        (
+            "tree_point_add",
+            {"tree_path": "/Main/Tree", "name": "Idle", "position": 0.5},
+            {
+                "tree_path": "/Main/Tree",
+                "name": "Idle",
+                "position": 0.5,
+                "node_type": "AnimationNodeAnimation",
+                "properties": {},
+                "at_index": -1,
+                "graph_path": "",
+            },
+        ),
+        (
+            "tree_point_set",
+            {"tree_path": "/Main/Tree", "name": "Idle", "position": {"x": 1, "y": 2}},
+            {
+                "tree_path": "/Main/Tree",
+                "name": "Idle",
+                "position": {"x": 1, "y": 2},
+                "graph_path": "",
+            },
+        ),
+        (
+            "tree_point_remove",
+            {"tree_path": "/Main/Tree", "name": "Idle"},
+            {"tree_path": "/Main/Tree", "name": "Idle", "graph_path": ""},
+        ),
+    ]
+)
+
+
 @pytest.mark.parametrize(("op", "params", "expected"), CASES)
 async def test_animation_tree_route(mcp_stack, op, params, expected):
     client, plugin = mcp_stack
