@@ -874,7 +874,7 @@ func _get_visual_aabb(node: Node3D) -> AABB:
 	var pending: Array[Node3D] = [node]
 	while not pending.is_empty():
 		var current: Node3D = pending.pop_back()
-		if current is VisualInstance3D:
+		if current is VisualInstance3D and current.is_visible_in_tree():
 			var local_bounds: AABB = current.get_aabb()
 			if local_bounds.size != Vector3.ZERO:
 				var bounds: AABB = current.global_transform * local_bounds
