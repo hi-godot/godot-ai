@@ -4218,6 +4218,25 @@ async def test_editor_screenshot_handler_without_image():
     assert "image_base64" not in result
 
 
+@pytest.mark.parametrize("readiness", ["importing", "playing"])
+async def test_editor_screenshot_file_write_requires_writable(readiness):
+    client = StubClient()
+    client.live_readiness = readiness
+    registry = SessionRegistry()
+    registry.register(_make_session(readiness=readiness))
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError) as error:
+        await editor_handlers.editor_screenshot(
+            runtime, source="cinematic", save_to="res://captures/frame.png"
+        )
+    assert error.value.code == "EDITOR_NOT_READY"
+    assert not any(call["command"] == "take_screenshot" for call in client.calls)
+
+    result = await editor_handlers.editor_screenshot(runtime, include_image=False)
+    assert result["source"] == "viewport"
+    assert client.calls[-1]["command"] == "take_screenshot"
+
+
 async def test_editor_screenshot_handler_passes_source():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

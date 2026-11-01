@@ -106,7 +106,13 @@ async def editor_screenshot(
     azimuth: float | None = None,
     fov: float | None = None,
     user_prompt: str = "",
+    width: int | None = None,
+    height: int | None = None,
+    save_to: str = "",
+    overwrite: bool = False,
 ) -> dict | list:
+    if save_to:
+        await require_writable_async(runtime)
     params: dict = {"source": source}
     if max_resolution > 0:
         params["max_resolution"] = max_resolution
@@ -122,6 +128,15 @@ async def editor_screenshot(
         params["fov"] = fov
     if user_prompt:
         params["user_prompt"] = user_prompt
+    if width is not None:
+        params["width"] = width
+    if height is not None:
+        params["height"] = height
+    if save_to:
+        params["save_to"] = save_to
+        params["include_image"] = include_image
+    if overwrite:
+        params["overwrite"] = True
 
     timeout = GAME_SCREENSHOT_TIMEOUT_SEC if source == "game" else SCREENSHOT_TIMEOUT_SEC
     result = await runtime.send_command(
@@ -195,6 +210,15 @@ async def editor_screenshot(
         "aabb_size",
         "aabb_longest_ground_axis",
         "camera_path",
+        "saved_path",
+        "saved_width",
+        "saved_height",
+        "saved_bytes",
+        "backup_path",
+        "backup_cleanup_failed",
+        "preview_error",
+        "undoable",
+        "reason",
         # #777: source="game" staleness metadata — a capture taken while the
         # game's main loop was frozen (backgrounded window) returns the last
         # rendered frame with stale_frame=true and an explanatory note.
@@ -210,7 +234,7 @@ async def editor_screenshot(
         if key in result:
             metadata[key] = result[key]
 
-    if not include_image:
+    if not include_image or (result.get("saved_path") and not result.get("image_base64")):
         return metadata
 
     # Routed captures: the plugin already converted the screenshot into a text
@@ -224,12 +248,18 @@ async def editor_screenshot(
     image_bytes = base64.b64decode(image_b64)
     fmt = result.get("format", "png")
 
-    return _bounded_screenshot_content(
-        [
-            TextContent(type="text", text=json.dumps(metadata)),
-            McpImage(data=image_bytes, format=fmt),
-        ]
-    )
+    try:
+        return _bounded_screenshot_content(
+            [
+                TextContent(type="text", text=json.dumps(metadata)),
+                McpImage(data=image_bytes, format=fmt),
+            ]
+        )
+    except GodotCommandError as exc:
+        if not result.get("saved_path"):
+            raise
+        metadata["preview_error"] = {"code": exc.code, "message": str(exc)}
+        return metadata
 
 
 async def performance_monitors_get(

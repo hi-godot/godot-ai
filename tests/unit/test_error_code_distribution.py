@@ -45,7 +45,9 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## collisions, script class collisions, and native registration rejection.
 ## Non-Node resources use WRONG_TYPE separately. Together these six reviewed
 ## semantic conflicts move the ceiling from 115 to 121.
-INVALID_PARAMS_CEILING = 121
+## Cinematic PNG output adds one existing-file conflict: a valid path needs
+## explicit overwrite permission. It is not a missing, malformed or out-of-range value.
+INVALID_PARAMS_CEILING = 122
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

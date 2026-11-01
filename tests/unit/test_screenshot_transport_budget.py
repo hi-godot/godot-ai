@@ -79,3 +79,31 @@ async def test_oversized_screenshot_returns_actionable_error(coverage, oversized
         )
     assert error.value.data["response_bytes"] > SCREENSHOT_RESULT_MAX_BYTES
     assert error.value.data["max_bytes"] == SCREENSHOT_RESULT_MAX_BYTES
+
+
+@pytest.mark.parametrize("plugin_failure", [False, True])
+async def test_saved_file_survives_preview_failure_in_response(plugin_failure):
+    capture = _capture(800_000, False)
+    capture.update(
+        source="cinematic",
+        saved_path="res://captures/frame.png",
+        saved_width=1024,
+        saved_height=1024,
+        saved_bytes=3_000_000,
+        undoable=False,
+        reason="File write",
+        backup_path="res://captures/.old.png",
+        backup_cleanup_failed=True,
+    )
+    if plugin_failure:
+        del capture["image_base64"]
+        capture["preview_error"] = {"code": "INTERNAL_ERROR", "message": "Encoding failed"}
+    runtime = SimpleNamespace(send_command=AsyncMock(return_value=capture))
+    metadata = await editor_screenshot(runtime, source="cinematic")
+    assert metadata["saved_path"] == capture["saved_path"]
+    assert metadata["saved_width"] == 1024
+    assert metadata["saved_bytes"] == 3_000_000
+    assert metadata["preview_error"]["code"] == "INTERNAL_ERROR"
+    assert metadata["backup_path"] == capture["backup_path"]
+    assert metadata["backup_cleanup_failed"] is True
+    assert "image_base64" not in metadata
