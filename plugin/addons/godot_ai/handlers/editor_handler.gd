@@ -557,7 +557,8 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 		## --- Coverage path: multi-angle sweep ---
 		if coverage:
 			var images: Array[Dictionary] = []
-			for preset in _compute_coverage_angles(combined_aabb):
+			var angles := _compute_coverage_angles(combined_aabb)
+			for preset in angles:
 				if preset.get("ortho", false):
 					## Orthographic top-down view
 					var ortho_size := combined_aabb.size.length() * 1.8
@@ -576,7 +577,7 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 				RenderingServer.force_draw(false)
 				var img: Image = viewport.get_texture().get_image()
 				if img != null and not img.is_empty():
-					var entry := _finalize_image(img, "viewport", max_resolution)
+					var entry := _finalize_image(img, "viewport", max_resolution, false, McpScreenshotEncode.MAX_PNG_BYTES / angles.size())
 					entry.data["label"] = preset.label
 					entry.data["elevation"] = preset.elevation
 					entry.data["azimuth"] = preset.azimuth
@@ -851,9 +852,9 @@ func _find_current_camera_3d(root: Node) -> Camera3D:
 	return first
 
 
-func _finalize_image(image: Image, source: String, max_resolution: int, use_hdr_2d := false) -> Dictionary:
+func _finalize_image(image: Image, source: String, max_resolution: int, use_hdr_2d := false, max_png_bytes: int = McpScreenshotEncode.MAX_PNG_BYTES) -> Dictionary:
 	## Shared with the game-process copy in runtime/game_helper.gd (#716).
-	var encoded := McpScreenshotEncode.downscale_and_encode(image, max_resolution, use_hdr_2d)
+	var encoded := McpScreenshotEncode.downscale_and_encode(image, max_resolution, use_hdr_2d, max_png_bytes)
 	return {
 		"data": {
 			"source": source,

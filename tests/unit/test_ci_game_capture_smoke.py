@@ -425,7 +425,7 @@ def test_main_preserves_failure_artifacts_and_never_replays_writes(smoke, monkey
     def tool(session, name, args, request_id, **kwargs):
         calls.append(name)
         if name == "test_run":
-            return {"passed": 2}
+            return {"passed": 5}
         if name == phase:
             raise TimeoutError(f"{name} expired")
         return {}
@@ -657,7 +657,7 @@ def test_cancelled_response_keeps_artifacts_and_single_stop(real_http_smoke, mon
         calls.append(name)
         if name == "project_manage":
             assert args == {"op": "stop"}
-        return {"passed": 2} if name == "test_run" else {}
+        return {"passed": 5} if name == "test_run" else {}
     monkeypatch.setattr(module, "_tool_call", tool_call)
     def capture(*args, deadline):
         module._post("session", {}, deadline=deadline)

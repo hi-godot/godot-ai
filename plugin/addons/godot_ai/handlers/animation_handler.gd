@@ -63,6 +63,10 @@ func create_player(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var player := AnimationPlayer.new()
 	if not node_name.is_empty():
 		player.name = node_name
@@ -435,7 +439,7 @@ func play(params: Dictionary) -> Dictionary:
 	if player_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
-	var resolved := _resolve_player(player_path)
+	var resolved := _resolve_player(player_path, false, false)
 	if resolved.has("error"):
 		return resolved
 	var player: AnimationPlayer = resolved.player
@@ -466,7 +470,7 @@ func stop(params: Dictionary) -> Dictionary:
 	if player_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: player_path")
 
-	var resolved := _resolve_player(player_path)
+	var resolved := _resolve_player(player_path, false, false)
 	if resolved.has("error"):
 		return resolved
 	var player: AnimationPlayer = resolved.player
@@ -728,7 +732,7 @@ func _create_scene_pinned_action(action_label: String) -> void:
 ## add_child step into their undo action via `_commit_animation_add`.
 ## If the resolved node exists but isn't an AnimationPlayer, that's still an
 ## error — we don't clobber an existing node of a different type.
-func _resolve_player(player_path: String, create_if_missing: bool = false) -> Dictionary:
+func _resolve_player(player_path: String, create_if_missing: bool = false, for_write: bool = true) -> Dictionary:
 	var _scene_check := McpNodeValidator.require_scene_or_error()
 	if _scene_check.has("error"):
 		return _scene_check
@@ -741,6 +745,10 @@ func _resolve_player(player_path: String, create_if_missing: bool = false) -> Di
 	if not node is AnimationPlayer:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
 			"Node at %s is not an AnimationPlayer (got %s)" % [player_path, node.get_class()])
+	if for_write:
+		var write_error := McpNodeValidator.writable_error(node, scene_root)
+		if not write_error.is_empty():
+			return write_error
 	var player := node as AnimationPlayer
 	var lib: AnimationLibrary = null
 	if player.has_animation_library(""):
@@ -773,6 +781,10 @@ func _instantiate_player(player_path: String, scene_root: Node) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
 			"Cannot auto-create AnimationPlayer at %s: %s" % [
 				player_path, McpScenePath.format_parent_error(parent_path, scene_root)])
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var new_player := AnimationPlayer.new()
 	new_player.name = player_name
 	var lib := AnimationLibrary.new()

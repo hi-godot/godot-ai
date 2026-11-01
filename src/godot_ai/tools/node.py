@@ -46,6 +46,11 @@ Ops:
 All write ops accept the optional ``scene_file`` guard — if non-empty, the
 mutation fails with EDITED_SCENE_MISMATCH when the editor's current scene
 doesn't match.
+
+Writes inside non-editable scene instances are rejected before mutation.
+Enable Editable Children in Godot or edit the source scene. Deleting,
+renaming, reparenting, or reordering instance-owned nodes requires editing
+the source scene even when Editable Children is enabled.
 """
 
 
@@ -110,6 +115,9 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         instantiates a PackedScene from ``scene_path``. type and scene_path
         are mutually exclusive — when scene_path is given, type is ignored.
 
+        Creating below an instance's internal nodes requires Editable Children
+        to be enabled in Godot. Attaching directly to its root is supported.
+
         Args:
             type: Godot node class (e.g. "Node3D", "MeshInstance3D").
             name: Optional name; Godot auto-names if empty.
@@ -142,6 +150,9 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         session_id: str = "",
     ) -> dict:
         """Set a property on a node.
+
+        Overrides on an instance's internal nodes require Editable Children
+        to be enabled in Godot; otherwise the call fails before mutation.
 
         Verify the property name first — call ``node_get_properties`` (or read
         ``godot://node/{path}/properties``) to confirm the exact name and type

@@ -224,7 +224,9 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
 
         Args:
             source: "viewport" | "viewport_2d" | "cinematic" | "game". Default "viewport".
-            max_resolution: Longest-edge resolution. Default 640. 0 = full res.
+            max_resolution: Maximum longest edge. Default 640. 0 removes the requested
+                cap. Large PNGs are downscaled further to fit the MCP transport;
+                metadata reports the actual and original dimensions.
             include_image: Return image data. Default True.
             view_target: Node3D scene path(s) to frame, comma-separated.
             coverage: With view_target, capture two reference shots + AABB.

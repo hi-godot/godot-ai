@@ -510,7 +510,7 @@ func attach_script(params: Dictionary) -> Dictionary:
 			+ "(CSharpScript is unavailable). Run a .NET-enabled Godot build, or attach a .gd script.",
 		)
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
@@ -565,7 +565,7 @@ func detach_script(params: Dictionary) -> Dictionary:
 	if node_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node

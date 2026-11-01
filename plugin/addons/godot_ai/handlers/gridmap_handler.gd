@@ -22,7 +22,7 @@ func _init(undo_redo: EditorUndoRedoManager) -> void:
 ## params: {path, item, map_x, map_y, map_z, orientation=0}
 ## Returns: {map_x, map_y, map_z, item, orientation, undoable}
 func set_item(params: Dictionary) -> Dictionary:
-	var gm := _resolve_gridmap(params)
+	var gm := _resolve_gridmap(params, true)
 	if gm.has("error"): return gm
 	var node: GridMap = gm.node
 	var pos := Vector3i(int(params.get("map_x", 0)), int(params.get("map_y", 0)), int(params.get("map_z", 0)))
@@ -44,7 +44,7 @@ func set_item(params: Dictionary) -> Dictionary:
 ## params: {path, item, rect_x, rect_y, rect_z, rect_w, rect_h, rect_d, orientation=0}
 ## Returns: {cells_filled, rect: {x, y, z, w, h, d}}
 func fill(params: Dictionary) -> Dictionary:
-	var gm := _resolve_gridmap(params)
+	var gm := _resolve_gridmap(params, true)
 	if gm.has("error"): return gm
 	var node: GridMap = gm.node
 	var item := int(params.get("item", 0))
@@ -83,7 +83,7 @@ func fill(params: Dictionary) -> Dictionary:
 ## params: {path}
 ## Returns: {cleared: true}
 func clear_layer(params: Dictionary) -> Dictionary:
-	var gm := _resolve_gridmap(params)
+	var gm := _resolve_gridmap(params, true)
 	if gm.has("error"): return gm
 	var node: GridMap = gm.node
 	var used := node.get_used_cells()
@@ -140,10 +140,10 @@ func list_library_items(params: Dictionary) -> Dictionary:
 
 ## Resolve a GridMap node from params["path"] in the currently edited
 ## scene. Returns {"node": GridMap} on success, or an error dict.
-func _resolve_gridmap(params: Dictionary) -> Dictionary:
+func _resolve_gridmap(params: Dictionary, for_write: bool = false) -> Dictionary:
 	var path: String = params.get("path", "")
 	var scene_file: String = params.get("scene_file", "")
-	var resolved := McpNodeValidator.resolve_or_error(path, "path", scene_file)
+	var resolved := McpNodeValidator.resolve_or_error(path, "path", scene_file, for_write)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node

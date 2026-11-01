@@ -403,7 +403,12 @@ static func verify_entry(
 			return false
 		for key in client.command_legacy_keys:
 			if entry.has(String(key)):
-				return false
+				if not client.command_legacy_key_exceptions.has(String(key)):
+					return false
+				var accepted: Variant = client.command_legacy_key_exceptions[String(key)]
+				var stored: Variant = entry[String(key)]
+				if typeof(stored) != typeof(accepted) or stored != accepted:
+					return false
 		var env = entry.get("env", null)
 		if env is Dictionary:
 			for key in client.command_env_legacy_keys:

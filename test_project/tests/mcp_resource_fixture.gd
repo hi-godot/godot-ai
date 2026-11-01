@@ -12,6 +12,9 @@ extends Resource
 ## Sub-resource slot used by the nested-`__class__` shortcut tests: a generic
 ## Resource slot so a custom class_name Resource can be nested under it.
 @export var sub: Resource = null
+@export var children: Array[Resource] = []
+@export var named_children: Dictionary[String, Resource] = {}
+@export var data: Dictionary = {}
 
 ## Side-effect probe: get_resource_info must resolve a custom Resource's metadata
 ## WITHOUT constructing it, so _init() must never run on the get_info path.

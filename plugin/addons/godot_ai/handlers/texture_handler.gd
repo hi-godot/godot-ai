@@ -149,12 +149,12 @@ func _finalize(tex: Resource, sub_resources: Array, params: Dictionary, label: S
 	var overwrite: bool = params.get("overwrite", false)
 
 	if not resource_path.is_empty():
-		return McpResourceIO.save_to_disk(tex, resource_path, overwrite, label, extra, _connection)
+		return McpResourceIO.save_to_disk(tex, resource_path, overwrite, label, extra, _connection, true)
 	return _assign_texture(tex, sub_resources, node_path, property, label, extra)
 
 
 func _assign_texture(tex: Resource, sub_resources: Array, node_path: String, property: String, label: String, extra: Dictionary) -> Dictionary:
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
