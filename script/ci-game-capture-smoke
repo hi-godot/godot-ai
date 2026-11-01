@@ -779,7 +779,7 @@ def main() -> int:
             or encoding_tests.get("failed", 0)
             or encoding_tests.get("skipped", 0)
             or encoding_tests.get("load_errors")
-            or encoding_tests.get("passed", 0) != 2
+            or encoding_tests.get("passed", 0) != 5
         ):
             raise RuntimeError(f"Screenshot encoder suite did not pass: {encoding_tests}")
         print("Running project (current scene)")
