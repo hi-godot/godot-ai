@@ -45,7 +45,12 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## collisions, script class collisions, and native registration rejection.
 ## Non-Node resources use WRONG_TYPE separately. Together these six reviewed
 ## semantic conflicts move the ceiling from 115 to 121.
-INVALID_PARAMS_CEILING = 121
+## #1166 adds two revision conflicts: a stale caller snapshot and an external
+## sidecar change during staging. Both requests have valid keys, types and
+## values; concurrent state prevents committing the edit. These are genuine
+## state conflicts, not range/type errors. Other import refusals use specific
+## codes, so only these two sites increase the reviewed ceiling to 123.
+INVALID_PARAMS_CEILING = 123
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

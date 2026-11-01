@@ -439,6 +439,8 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("get_class_info", "api", &"get_class_info")
 	_dispatcher.register_lazy("read_file", "filesystem", &"read_file")
 	_dispatcher.register_lazy("write_file", "filesystem", &"write_file")
+	_dispatcher.register_lazy("import_get", "filesystem", &"import_get")
+	_dispatcher.register_lazy("import_set", "filesystem", &"import_set")
 	_dispatcher.register_lazy("reimport", "filesystem", &"reimport")
 	_dispatcher.register_lazy("scan_filesystem", "filesystem", &"scan_filesystem")
 	_dispatcher.register_lazy("move_file", "filesystem", &"move_file")

@@ -122,7 +122,212 @@ func write_file(params: Dictionary) -> Dictionary:
 	return {"data": data}
 
 
+func import_get(params: Dictionary) -> Dictionary:
+	var ctx := _read_import_config(params.get("path", ""))
+	if ctx.has("error"):
+		return ctx
+	return {"data": _import_description(ctx)}
+
+
+func import_set(params: Dictionary) -> Dictionary:
+	var result := _set_import_config(params)
+	if result.has("error"):
+		var outcome: Dictionary = result.error.get("data", {})
+		if not outcome.has("settings_committed"):
+			outcome["settings_committed"] = false
+			outcome["import_attempted"] = false
+		result.error["data"] = outcome
+	return result
+
+
+func _set_import_config(params: Dictionary) -> Dictionary:
+	for key in params:
+		if key not in ["path", "options", "reimport", "expected_revision", "_request_id"]:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unsupported import_set parameter: %s" % str(key))
+	var busy := _import_busy_error()
+	if not busy.is_empty():
+		return busy
+	var ctx := _read_import_config(params.get("path", ""), true)
+	if ctx.has("error"):
+		return ctx
+	var options: Variant = params.get("options", {})
+	if not options is Dictionary:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "options must be a dictionary")
+	if options.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Provide at least one import option")
+	var reimport_now: Variant = params.get("reimport", true)
+	var expected: Variant = params.get("expected_revision", "")
+	if not reimport_now is bool or not expected is String:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "reimport must be a boolean and expected_revision must be a string")
+	if not expected.is_empty() and expected != ctx.revision:
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Import settings revision changed; call import_get before editing again")
+	if _import_validity(ctx.path) == null:
+		return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_IMPORTING, "Asset is not indexed by EditorFileSystem; run scan before editing import settings", true)
+	for key in options:
+		if not key is String:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Import option names must be strings")
+		if key == "_subresources":
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Subresource import options are read-only; no public native schema is available")
+		if not ctx.config.has_section_key("params", key):
+			return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS, "Unknown stored import option: %s" % key)
+		var old: Variant = ctx.config.get_value("params", key)
+		var converted: Variant = _import_option_value(options[key], typeof(old))
+		if converted == null:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Option '%s' requires stored scalar type %s; complex/nil options are read-only" % [key, type_string(typeof(old))])
+		ctx.config.set_value("params", key, converted)
+	var stage: String = ctx.sidecar.get_base_dir().path_join(".godot_ai_import_%s.tmp" % Time.get_ticks_usec())
+	if FileAccess.file_exists(stage):
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Import staging path already exists: %s" % stage)
+	var write_error: Variant = McpResourceIO.write_text_to_disk(stage, ctx.config.encode_to_text())
+	if write_error != null:
+		DirAccess.remove_absolute(stage)
+		return write_error
+	# An external editor can change the sidecar while this request is staging.
+	busy = _import_busy_error()
+	if not busy.is_empty() or FileAccess.get_sha256(ctx.sidecar) != ctx.revision:
+		DirAccess.remove_absolute(stage)
+		return busy if not busy.is_empty() else ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Import settings changed during staging; original was not replaced")
+	var replacement := McpResourceIO._replace_staged_file(stage, ctx.sidecar, OS.get_name() == "Windows")
+	if replacement.has("error"):
+		return replacement
+	var valid: Variant = _import_validity(ctx.path)
+	var imported := {"error_count": 0, "diagnostics": []}
+	if reimport_now:
+		imported = _reimport_paths(EditorInterface.get_resource_filesystem(), PackedStringArray([ctx.path]))
+		valid = imported.validity.get(ctx.path)
+	var data := {
+		"path": ctx.path, "settings_committed": true, "import_attempted": reimport_now,
+		"import_valid": valid, "import_pending": not reimport_now or valid != true or imported.error_count > 0,
+		"import_succeeded": valid == true and imported.error_count == 0 if reimport_now else null,
+		"import_diagnostics": imported.diagnostics, "import_error_count": imported.error_count,
+		"diagnostics_scope": "editor_during_reimport",
+		"revision": FileAccess.get_sha256(ctx.sidecar),
+		"schema_source": "stored_import_config", "undoable": false,
+		"reason": "Import settings and generated files are persistent; restore the prior options and reimport to revert",
+	}
+	data.merge(replacement)
+	if reimport_now and (valid != true or imported.error_count > 0):
+		var failure := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Import settings were committed, but native reimport reported errors or an invalid asset. Inspect import_get and editor errors before retrying.")
+		failure.error["data"] = data
+		return failure
+	return {"data": data}
+
+
+func _read_import_config(path: Variant, for_write := false) -> Dictionary:
+	if not path is String:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "path must be a string")
+	var path_error: Variant = McpPathValidator.path_error(path, "path", for_write)
+	if path_error != null:
+		return path_error
+	var sidecar: String = path + IMPORT_SIDECAR_SUFFIX
+	path_error = McpPathValidator.path_error(sidecar, "import sidecar", for_write)
+	if path_error != null:
+		return path_error
+	if not FileAccess.file_exists(path) or not FileAccess.file_exists(sidecar):
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Asset has no import settings: %s. Run scan for a new asset." % path)
+	var file := FileAccess.open(sidecar, FileAccess.READ)
+	if file == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not read import settings: %s" % sidecar)
+	var bytes := file.get_buffer(file.get_length())
+	file.close()
+	var hash := HashingContext.new()
+	hash.start(HashingContext.HASH_SHA256)
+	hash.update(bytes)
+	var revision := hash.finish().hex_encode()
+	var config := ConfigFile.new()
+	var parse_error := config.parse(bytes.get_string_from_utf8())
+	if parse_error != OK:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Invalid import settings at %s: %s" % [sidecar, error_string(parse_error)])
+	if not config.has_section_key("remap", "importer") or not config.has_section("params"):
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Import settings at %s require a [remap] importer and [params] section" % sidecar)
+	return {"path": path, "sidecar": sidecar, "config": config, "revision": revision}
+
+
+func _import_description(ctx: Dictionary) -> Dictionary:
+	var options := {}
+	var types := {}
+	var writable: Array[String] = []
+	for key in ctx.config.get_section_keys("params"):
+		var value: Variant = ctx.config.get_value("params", key)
+		options[key] = preload("res://addons/godot_ai/utils/variant_serializer.gd").serialize(value)
+		types[key] = type_string(typeof(value))
+		if key != "_subresources" and typeof(value) in [TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_STRING_NAME]:
+			writable.append(key)
+	return {
+		"path": ctx.path, "importer": ctx.config.get_value("remap", "importer"),
+		"options": options, "option_types": types, "writable_options": writable,
+		"revision": ctx.revision, "import_valid": _import_validity(ctx.path),
+		"schema_source": "stored_import_config",
+		"validation_limits": "Stored keys and scalar types only; native importer enum/range schemas are not exposed. Importer switching and subresource writes are unsupported.",
+	}
+
+
+static func _import_option_value(value: Variant, expected_type: int) -> Variant:
+	match expected_type:
+		TYPE_BOOL:
+			return value if value is bool else null
+		TYPE_INT:
+			if value is int:
+				return value
+			if value is float and is_finite(value) and value == floor(value) and value >= -9223372036854775808.0 and value < 9223372036854775808.0:
+				return int(value)
+		TYPE_FLOAT:
+			if (value is int or value is float) and is_finite(float(value)):
+				return float(value)
+		TYPE_STRING:
+			return value if value is String else null
+		TYPE_STRING_NAME:
+			return StringName(value) if value is String else null
+	return null
+
+
+static func _import_busy_error() -> Dictionary:
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs == null:
+		return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_UNAVAILABLE, "EditorFileSystem is unavailable", false)
+	if efs.is_importing() or efs.is_scanning() or _has_pending_scan():
+		return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_IMPORTING, "Wait for the current import or scan before changing import settings", true)
+	return {}
+
+
+static func _import_validity(path: String) -> Variant:
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs == null:
+		return null
+	var directory := efs.get_filesystem_path(path.get_base_dir())
+	if directory == null:
+		return null
+	var index := directory.find_file_index(path.get_file())
+	return directory.get_file_import_is_valid(index) if index >= 0 else null
+
+
+func _reimport_paths(efs: EditorFileSystem, paths: PackedStringArray) -> Dictionary:
+	# Native reimport is synchronous but pumps frames for its progress dialog.
+	# A paired pause preserves an existing outer pause instead of clearing it.
+	if _connection != null:
+		_connection.pause()
+	# Some native importers return OK despite load/save errors (WAV in 4.7).
+	# Validity alone can therefore describe the previous generated output.
+	var buffer := McpEditorLogBuffer.new()
+	var logger := preload("res://addons/godot_ai/runtime/validation_logger.gd").new(buffer)
+	OS.add_logger(logger)
+	efs.reimport_files(paths)
+	OS.remove_logger(logger)
+	if _connection != null:
+		_connection.resume()
+	var statuses := {}
+	for path in paths:
+		statuses[path] = _import_validity(path)
+	var diagnostics: Array[Dictionary] = []
+	for entry in buffer.get_recent(20):
+		diagnostics.append({"level": entry.level, "text": entry.text.left(2048), "path": entry.path, "line": entry.line})
+	return {"validity": statuses, "diagnostics": diagnostics, "error_count": buffer.error_appended_total()}
+
+
 func reimport(params: Dictionary) -> Dictionary:
+	var busy := _import_busy_error()
+	if not busy.is_empty():
+		return busy
 	var paths: Array = params.get("paths", [])
 
 	if paths.is_empty():
@@ -162,11 +367,26 @@ func reimport(params: Dictionary) -> Dictionary:
 	## success. `reimport_files()` is the editor API for an explicit forced
 	## reimport, including unchanged sources and changed post-import scripts.
 	## Batch once so the editor can settle the requested imports together.
+	var imported := {"validity": {}, "diagnostics": [], "error_count": 0}
+	var failed_imports: Array[String] = []
+	var unconfirmed_imports: Array[String] = []
 	if not imported_paths.is_empty():
-		efs.reimport_files(imported_paths)
+		imported = _reimport_paths(efs, imported_paths)
+		for path in imported_paths:
+			if imported.validity[path] != true:
+				reimported.erase(path)
+				failed_imports.append(path)
+			elif imported.error_count > 0:
+				reimported.erase(path)
+				unconfirmed_imports.append(path)
 
 	var data := {
 		"reimported": reimported,
+		"failed_imports": failed_imports,
+		"import_status": imported.validity,
+		"unconfirmed_imports": unconfirmed_imports,
+		"import_diagnostics": imported.diagnostics, "import_error_count": imported.error_count,
+		"diagnostics_scope": "editor_during_reimport",
 		"skipped_non_imported": skipped_non_imported,
 		"not_found": not_found,
 		"reimported_count": reimported.size(),

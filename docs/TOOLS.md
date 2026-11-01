@@ -245,7 +245,7 @@ Calls take the form:
 | `input_map_manage` | `list`, `add_action`, `ensure_action`, `remove_action`, `bind_event`, `ensure_binding` |
 | `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `suspend`, `resume`, `next_frame`, `debug_status`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_sequence`, `input_state` |
 | `autoload_manage` | `list`, `add`, `remove` |
-| `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
+| `filesystem_manage` | `read_text`, `write_text`, `import_get`, `import_set`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `set_stylebox_texture`, `set_font`, `set_icon`, `stylebox_override`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `set_richtext`, `build_layout`, `draw_recipe` |
 | `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `set_properties`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
@@ -276,6 +276,45 @@ Composed motion effects that are not built-in presets — bounce, orbit, sweep,
 drift — are documented as keyframe recipes in
 [animation-recipes.md](animation-recipes.md), including a custom-tool addon
 example for wrapping project-specific recipes.
+
+`filesystem_manage.import_get(path)` reads one already-imported asset's importer,
+current options, stored Variant types, writable option names, sidecar revision,
+and native import validity. `import_set(path, options, reimport=True,
+expected_revision="")` patches existing scalar options and optionally reimports.
+Pass the revision from `import_get` to reject stale edits. Busy imports/scans and
+stale revisions refuse before writing. File writes are not undoable; restore the
+prior options and reimport to revert. ConfigFile preserves other sections and
+UIDs while normalizing text formatting. Windows replacement retains a recovery
+backup until commit or restoration; this is not crash-atomic.
+
+Validation reports `schema_source=stored_import_config`: stored keys and scalar
+types are available, but built-in importer enum/range schemas are not exposed to
+GDScript. Unknown keys, complex/nil options, importer switching and `_subresources`
+writes are unsupported. Subresource values remain readable. Godot's public
+`EditorImportPlugin.append_import_external_resource` requires an import already
+in progress; it cannot switch an arbitrary asset's importer. These remaining
+parts of #1166 need a supported schema/importer-selection API.
+
+Results distinguish `settings_committed`, `import_attempted`, `import_pending`
+and `import_valid` (null when native status is unknown). A native import failure
+after a successful settings write is an error with committed outcome metadata.
+Some native importers (WAV in Godot 4.7) return OK despite load/save errors and
+leave native validity true. `import_succeeded` therefore also requires no errors
+captured during the import. `import_diagnostics` includes up to 20 recent editor
+diagnostics, with message text capped at 2,048 characters, and
+`import_error_count` counts all captured errors. `diagnostics_scope` is
+`editor_during_reimport`: background errors may be unrelated to the requested
+asset. A failure leaves `import_pending=True`; do not blindly retry.
+With `reimport=False`, native validity describes the previous import and
+`import_pending=True`. Imports are synchronous and may exceed the 120-second
+command budget; a timeout cannot cancel native work. Inspect current settings
+and editor state before retrying.
+
+For batch `reimport`, `failed_imports` contains paths with false/unknown native
+validity. Valid paths become `unconfirmed_imports` if any editor errors occurred
+during the batch, since errors cannot reliably be attributed to individual assets.
+Only confirmed paths are listed in `reimported`; `import_status` preserves the
+native validity reported for every requested imported path.
 
 `filesystem_manage.reimport` is intended for imported assets such as textures,
 models, and audio. Godot scripts (`.gd`) are not imported resources: a successful

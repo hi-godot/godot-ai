@@ -6188,3 +6188,44 @@ async def test_resource_inspect_handler_preserves_graph_and_routes_read():
     runtime.send_command.assert_awaited_once_with(
         "inspect_resource", {"node_path": "/Main/Collider", "property": "shape", "depth": 1}
     )
+
+
+async def test_import_settings_forward_revision_and_native_import_budget():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await filesystem_handlers.filesystem_import_get(runtime, path="res://sound.wav")
+    assert client.calls[-1]["command"] == "import_get"
+    assert client.calls[-1]["params"] == {"path": "res://sound.wav"}
+    await filesystem_handlers.filesystem_import_set(
+        runtime,
+        path="res://sound.wav",
+        options={"edit/loop_mode": 2},
+        reimport=False,
+        expected_revision="revision",
+    )
+    call = client.calls[-1]
+    assert call["command"] == "import_set"
+    assert call["params"] == {
+        "path": "res://sound.wav",
+        "options": {"edit/loop_mode": 2},
+        "reimport": False,
+        "expected_revision": "revision",
+    }
+    assert call["timeout"] == 120.0
+    await filesystem_handlers.filesystem_reimport(runtime, paths=["res://sound.wav"])
+    assert client.calls[-1]["timeout"] == 120.0
+
+
+async def test_import_settings_write_requires_ready_editor():
+    client = StubClient()
+    client.live_readiness = "importing"
+    registry = SessionRegistry()
+    registry.register(_make_session("importing-1", readiness="importing"))
+    runtime = DirectRuntime(registry=registry, client=client)
+    await filesystem_handlers.filesystem_import_get(runtime, path="res://sound.wav")
+    assert client.calls[-1]["command"] == "import_get"
+    with pytest.raises(GodotCommandError, match="EDITOR_NOT_READY"):
+        await filesystem_handlers.filesystem_import_set(
+            runtime, path="res://sound.wav", options={"edit/loop_mode": 2}
+        )
+    assert not any(call["command"] == "import_set" for call in client.calls)
