@@ -6,13 +6,8 @@ const ScriptHandler := preload("res://addons/godot_ai/handlers/script_handler.gd
 
 ## Handles file read/write operations and reimport within the Godot project.
 
-## Bounds for the deferred scan wait. `write_file`/`reimport` register single
-## files with `update_file()` (cheap, no global-class rebuild); `scan_filesystem`
-## is the heavier, explicit "rebuild the class registry" path agents call after
-## adding `class_name` scripts headlessly (no window focus to trigger it).
 ## Kept under the dispatcher's "scan_filesystem" deferred timeout (30s) so we
 ## always send a real reply before a DEFERRED_TIMEOUT is synthesised.
-const _SCAN_START_GRACE_MSEC := 750
 const _SCAN_SETTLE_MAX_MSEC := 28000
 
 ## Sidecar the editor writes next to every imported resource. `reimport` reads
@@ -20,16 +15,16 @@ const _SCAN_SETTLE_MAX_MSEC := 28000
 ## (see `_is_imported_resource`).
 const IMPORT_SIDECAR_SUFFIX := ".import"
 
-## Shared single-flight latch for scan_filesystem. `is_scanning()` alone can't
-## enforce single-flight: `EditorFileSystem.scan()` doesn't flip `is_scanning()`
-## for a frame or two (hence _SCAN_START_GRACE_MSEC), so a second request landing
-## in that window would observe `false` and stack another scan() — the exact
-## stacked-worker SIGABRT this op exists to avoid (dsarno/godot#6). The latch is
-## set before the first scan() and cleared when its settle coroutine finishes;
-## concurrent requests coalesce onto the running scan instead of starting one.
-## `static` so it's shared across handler instances; it resets on plugin reload
-## (script re-parse), which self-heals any latch orphaned by a mid-await teardown.
-static var _scan_in_flight := false
+class ScanCompletion extends RefCounted:
+	var completed := false
+
+
+## Godot clears is_scanning() before full-scan script registration finishes.
+## Its progress dialog can pump nested frames, so polling that flag can release
+## callers into reentrant updates of the live registration map (Godot #119505).
+## Keep this shared across handler instances and request timeouts: only a
+## deferred native completion signal permits another scan to start.
+static var _active_scan: ScanCompletion = null
 
 var _connection: McpConnection
 
@@ -219,14 +214,9 @@ static func _is_imported_resource(path: String) -> bool:
 	return FileAccess.file_exists(path + IMPORT_SIDECAR_SUFFIX)
 
 
-## Force a full EditorFileSystem scan and wait for it to settle. This is the
-## headless equivalent of the editor regaining window focus: `update_file()`
-## (used by write_file/reimport/script_create) registers a single file with the
-## resource pipeline but does NOT rebuild the global `class_name` table, so a
-## freshly-created `class_name MyThing extends Resource` stays invisible to
-## `ClassDB`/`ProjectSettings.get_global_class_list()` until a scan runs. Agents
-## driving the editor without focus call this once after a batch of script
-## creates to make new types instantiable/referenceable. See issue #83.
+## A full scan makes newly authored resources visible to tools that reference
+## them immediately afterward (#83). Completion must include native script
+## registration and scan actions, not just the worker's filesystem discovery.
 func scan_filesystem(params: Dictionary) -> Dictionary:
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs == null:
@@ -243,14 +233,10 @@ func scan_filesystem(params: Dictionary) -> Dictionary:
 		_finish_scan_deferred(_connection, request_id, efs)
 		return McpDispatcher.DEFERRED_RESPONSE
 
-	# Synchronous fallback: batch_execute (no request_id) and unit-test contexts
-	# (no connection) can't await, so kick a single-flight scan and return
-	# immediately without the settle confirmation. Respect the latch so we don't
-	# stack onto a deferred scan; don't set it (there's no coroutine here to
-	# clear it — the brief is_scanning() window covers the rest).
-	var already := _scan_in_flight or efs.is_scanning()
-	if not already:
-		efs.scan()
+	# Synchronous callers cannot await, but must share the same native lifecycle
+	# barrier as deferred callers rather than allowing another scan to overlap.
+	var already := _has_pending_scan() or efs.is_scanning()
+	_get_or_start_scan(efs)
 	return {
 		"data": {
 			"scan_completed": false,
@@ -264,6 +250,32 @@ func scan_filesystem(params: Dictionary) -> Dictionary:
 			"reason": "Filesystem scan is an editor operation",
 		}
 	}
+
+
+static func _has_pending_scan() -> bool:
+	return _active_scan != null and not _active_scan.completed
+
+
+static func _get_or_start_scan(efs: EditorFileSystem) -> ScanCompletion:
+	if _has_pending_scan():
+		return _active_scan
+
+	var completion := ScanCompletion.new()
+	_active_scan = completion
+	# Connect before scan(): non-threaded scans may finish inside that call.
+	# sources_changed is emitted after scan actions; deferred delivery also
+	# leaves the native completion callback before a caller can launch or edit.
+	# A caller timeout must not permit plugin reload while native work is pending.
+	var work := ScriptWork.begin("scan_filesystem")
+	efs.sources_changed.connect(_on_scan_completed.bind(completion, work), CONNECT_ONE_SHOT | CONNECT_DEFERRED)
+	if not efs.is_scanning():
+		efs.scan()
+	return completion
+
+
+static func _on_scan_completed(_exist: bool, completion: ScanCompletion, work: int) -> void:
+	completion.completed = true
+	ScriptWork.finish(work)
 
 
 ## `static` is load-bearing for the same reason as ScriptHandler's deferred
@@ -289,37 +301,19 @@ static func _settle_scan(
 	if tree == null:
 		return
 	var classes_before := ProjectSettings.get_global_class_list().size()
-	# Single-flight via the shared `_scan_in_flight` latch (NOT is_scanning(),
-	# which lags scan() by a frame or two — see the latch declaration). Only the
-	# request that sets the latch calls scan(); concurrent requests coalesce and
-	# just await the running scan. This is what actually prevents the stacked
-	# scan() SIGABRT (dsarno/godot#6), even within the start-grace window.
-	var was_already_scanning := _scan_in_flight or efs.is_scanning()
-	var we_started := not was_already_scanning
-	if we_started:
-		_scan_in_flight = true
-		efs.scan()
+	var was_already_scanning := _has_pending_scan() or efs.is_scanning()
+	var deadline_ms := Time.get_ticks_msec() + _SCAN_SETTLE_MAX_MSEC
+	var completion := _get_or_start_scan(efs)
 	# Hand back a frame so _dispatch() registers this request as deferred before
 	# the coroutine can push a reply (mirrors McpResourceIO.finish_text_write_deferred).
 	await tree.process_frame
-	var deadline_ms := Time.get_ticks_msec() + _SCAN_SETTLE_MAX_MSEC
-	var start_grace_ms := Time.get_ticks_msec() + _SCAN_START_GRACE_MSEC
-	var saw_scanning := efs.is_scanning()
-	while Time.get_ticks_msec() < deadline_ms:
-		if efs.is_scanning():
-			saw_scanning = true
-		elif saw_scanning or Time.get_ticks_msec() > start_grace_ms:
-			# Either the scan ran and finished, or it never flipped is_scanning()
-			# within the grace window (a no-op scan because nothing changed).
-			break
+	while not completion.completed and Time.get_ticks_msec() < deadline_ms:
+		if not is_instance_valid(connection):
+			return
 		await tree.process_frame
-	# Clear the latch in all paths (no try/finally in GDScript): do it before the
-	# is_instance_valid early-return so a freed connection can't orphan it.
-	if we_started:
-		_scan_in_flight = false
 	if not is_instance_valid(connection):
 		return
-	var completed := not efs.is_scanning()
+	var completed := completion.completed
 	var classes_after := ProjectSettings.get_global_class_list().size()
 	connection.send_deferred_response(request_id, {
 		"data": {

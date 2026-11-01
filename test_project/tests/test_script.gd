@@ -241,9 +241,10 @@ func test_headless_mcp_write_parse_failure_does_not_ring_watermark() -> void:
 	# (b) filesystem_manage(op="scan") — sync fallback with the single-flight
 	# latch pre-set so the call coalesces instead of kicking a real editor
 	# scan mid-suite (see test_filesystem.gd).
-	FilesystemHandler._scan_in_flight = true
+	var previous_scan = FilesystemHandler._active_scan
+	FilesystemHandler._active_scan = FilesystemHandler.ScanCompletion.new()
 	var scan_result := FilesystemHandler.new().scan_filesystem({})
-	FilesystemHandler._scan_in_flight = false
+	FilesystemHandler._active_scan = previous_scan
 	assert_has_key(scan_result, "data")
 	assert_true(scan_result.data.was_already_scanning, "Latch set → coalesced, no new scan() kicked")
 
