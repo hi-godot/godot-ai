@@ -1460,6 +1460,50 @@ func test_set_property_node_array_rejects_node_outside_scene() -> void:
 	_free_node_export_probe(0)
 
 
+## Create /Main/<target_name> carrying the McpToolNodeFixture script, then an
+## Array[McpToolNodeFixture] probe. Pair with `_free_script_class_array_probe`.
+func _make_script_class_array_probe(probe_name: String, target_name: String) -> Node:
+	_handler.create_node({"type": "Node", "name": target_name, "parent_path": "/Main"})
+	EditorInterface.get_edited_scene_root().get_node(target_name).set_script(McpToolNodeFixture)
+	return _make_node_array_probe(probe_name, "McpToolNodeFixture")
+
+
+func _free_script_class_array_probe(sets: int) -> void:
+	_free_node_export_probe(sets)
+	assert_true(editor_undo(_undo_redo), "undo target create should succeed")
+
+
+func test_set_property_node_array_accepts_script_class_element() -> void:
+	## Array[MyNodeClass]: the slot's element type is a script, so string
+	## elements must still resolve as node paths and pass is_instance_of.
+	var node := _make_script_class_array_probe("_McpNodeArrayScript", "_McpFixtureTarget")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeArrayScript",
+		"property": "targets",
+		"value": ["/Main/_McpFixtureTarget"],
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.value, ["/Main/_McpFixtureTarget"])
+	var stored: Variant = node.get("targets")
+	assert_eq((stored as Array).size(), 1, "the element must land")
+	assert_true(stored[0] == EditorInterface.get_edited_scene_root().get_node("_McpFixtureTarget"),
+		"element 0 must be the fixture node")
+	_free_script_class_array_probe(1)
+
+
+func test_set_property_node_array_rejects_wrong_script_class_naming_index() -> void:
+	var node := _make_script_class_array_probe("_McpNodeArrayScriptWrong", "_McpFixtureTarget")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeArrayScriptWrong",
+		"property": "targets",
+		"value": ["/Main/_McpFixtureTarget", "/Main/World"],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "element 1")
+	assert_eq((node.get("targets") as Array).size(), 0, "nothing may be written on error")
+	_free_script_class_array_probe(0)
+
+
 # ----- set_property __class__ shortcut (fresh built-in Resource) -----
 
 func _add_mesh_instance_for_shortcut(node_name: String) -> Node:
