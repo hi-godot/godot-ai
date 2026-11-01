@@ -159,6 +159,9 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
           either a scene path ("/Main/Player") or relative to the node
           ("../Player"); the node's class is checked against the export's
           type, and the response reports the scene path. null/"" clears.
+        - Typed node array (``@export var targets: Array[Node2D]``): JSON list
+          of node path strings, each resolved and class-checked the same way;
+          errors name the element index.
         - Resource: res:// path string (loads + assigns); null/"" clears.
           ``{"__class__": "BoxMesh", ...}`` creates a built-in resource owned
           by this property. After scene_save it is serialized in-place as a

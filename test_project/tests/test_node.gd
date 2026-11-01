@@ -1372,6 +1372,94 @@ func test_set_property_node_export_empty_string_clears() -> void:
 	_free_node_export_probe(2)
 
 
+# ----- set_property on typed Array[Node] exports (#1175) -----
+
+## Attach a @tool script with one typed node-array export to a fresh Node3D
+## probe under /Main. Returns the live node.
+func _make_node_array_probe(probe_name: String, element_type: String) -> Node:
+	_handler.create_node({"type": "Node3D", "name": probe_name, "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node(probe_name)
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool",
+		"extends Node3D",
+		"@export var targets: Array[%s] = []" % element_type,
+	])
+	script.reload()
+	node.set_script(script)
+	return node
+
+
+func test_set_property_node_array_accepts_scene_and_relative_paths() -> void:
+	## The #1175 headline case: every element of an Array[Node3D] export went
+	## through the resource loader and failed with "Path must start with
+	## res://, uid://, or user://". Elements follow the #1144 rules: a leading
+	## "/" is a scene path, anything else is relative to the node.
+	var node := _make_node_array_probe("_McpNodeArray", "Node3D")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeArray",
+		"property": "targets",
+		"value": ["/Main/World", "../World/Ground"],
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.value, ["/Main/World", "/Main/World/Ground"])
+	assert_eq(result.data.old_value, [])
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var stored: Variant = node.get("targets")
+	assert_true(stored is Array and (stored as Array).is_typed(), "the slot must keep its typing")
+	assert_eq((stored as Array).size(), 2, "both elements must land")
+	assert_true(stored[0] == scene_root.get_node("World"), "element 0 must be the World node")
+	assert_true(stored[1] == scene_root.get_node("World/Ground"), "element 1 must be the Ground node")
+	## The readback reports scene paths, not Godot's object repr.
+	var props := _handler.get_node_properties({"path": "/Main/_McpNodeArray"})
+	assert_has_key(props, "data")
+	var rows: Array = props.data.properties.filter(func(row): return row.name == "targets")
+	assert_eq(rows.size(), 1, "targets must be listed once")
+	assert_eq(rows[0].value, ["/Main/World", "/Main/World/Ground"])
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_eq((node.get("targets") as Array).size(), 0)
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_node_array_rejects_wrong_class_naming_index() -> void:
+	var node := _make_node_array_probe("_McpNodeArrayWrong", "Camera3D")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeArrayWrong",
+		"property": "targets",
+		"value": ["/Main/Camera3D", "/Main/World"],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "element 1")
+	assert_eq((node.get("targets") as Array).size(), 0, "nothing may be written on error")
+	_free_node_export_probe(0)
+
+
+func test_set_property_node_array_missing_node_names_index() -> void:
+	var node := _make_node_array_probe("_McpNodeArrayMissing", "Node")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeArrayMissing",
+		"property": "targets",
+		"value": ["/Main/World", "/Main/Nope"],
+	})
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
+	assert_contains(result.error.message, "element 1")
+	assert_eq((node.get("targets") as Array).size(), 0, "nothing may be written on error")
+	_free_node_export_probe(0)
+
+
+func test_set_property_node_array_rejects_node_outside_scene() -> void:
+	var node := _make_node_array_probe("_McpNodeArrayOutside", "Node")
+	var result := _handler.set_property({
+		"path": "/Main/_McpNodeArrayOutside",
+		"property": "targets",
+		"value": ["/root"],
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "element 0")
+	assert_eq((node.get("targets") as Array).size(), 0, "nothing may be written on error")
+	_free_node_export_probe(0)
+
+
 # ----- set_property __class__ shortcut (fresh built-in Resource) -----
 
 func _add_mesh_instance_for_shortcut(node_name: String) -> Node:

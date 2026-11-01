@@ -256,24 +256,10 @@ func set_property(params: Dictionary) -> Dictionary:
 		and not (value as String).is_empty()
 	)
 	if node_typed_path:
-		var target: Node = _resolve_node_value(value, node, scene_root)
-		if target == null:
-			return ErrorCodes.make(
-				ErrorCodes.NODE_NOT_FOUND,
-				"value: no node at %s. Paths starting with \"/\" are scene paths (e.g. \"/%s/Player\"); others are relative to %s (e.g. \"../Player\")." % [
-					value, scene_root.name, node_path,
-				],
-			)
-		## An absolute editor-tree path ("/root", "/root/@EditorNode@/...") or
-		## a relative path climbing past the root resolves to a node outside
-		## the edited scene; it would commit but can never be saved with it.
-		if target != scene_root and not scene_root.is_ancestor_of(target):
-			return ErrorCodes.make(
-				ErrorCodes.INVALID_PARAMS,
-				"value: %s resolves to a node outside the edited scene; the target must be \"/%s\" or one of its descendants" % [
-					value, scene_root.name,
-				],
-			)
+		var resolved_target: Variant = _resolve_node_reference(value, node, scene_root, node_path, "value")
+		if resolved_target is Dictionary:
+			return resolved_target
+		var target: Node = resolved_target
 		if not _node_matches_hint(target, prop_hint_string):
 			return ErrorCodes.make(
 				ErrorCodes.WRONG_TYPE,
@@ -319,7 +305,7 @@ func set_property(params: Dictionary) -> Dictionary:
 		## wholesale and leaves the slot at its default — with success still
 		## reported. Route through the element-aware coercer instead; errors
 		## name the offending element index.
-		var typed_out: Variant = _coerce_typed_array(value, old_value)
+		var typed_out: Variant = _coerce_typed_array(value, old_value, "", node, scene_root, node_path)
 		if typed_out is Dictionary:
 			return typed_out
 		value = typed_out
@@ -373,6 +359,34 @@ static func _resolve_node_value(value: String, node: Node, scene_root: Node) -> 
 	return node.get_node_or_null(NodePath(value))
 
 
+## Resolve a node path aimed at a Node-typed slot — a Node export (#1144) or
+## an element of a typed Array[Node] export (#1175) — and refuse targets the
+## edited scene does not own. Returns the Node, or a make(...)-shaped error
+## Dictionary whose message starts with `label` ("value", "element 1").
+static func _resolve_node_reference(
+	value: String, node: Node, scene_root: Node, node_path: String, label: String
+) -> Variant:
+	var target: Node = _resolve_node_value(value, node, scene_root)
+	if target == null:
+		return ErrorCodes.make(
+			ErrorCodes.NODE_NOT_FOUND,
+			"%s: no node at %s. Paths starting with \"/\" are scene paths (e.g. \"/%s/Player\"); others are relative to %s (e.g. \"../Player\")." % [
+				label, value, scene_root.name, node_path,
+			],
+		)
+	## An absolute editor-tree path ("/root", "/root/@EditorNode@/...") or
+	## a relative path climbing past the root resolves to a node outside
+	## the edited scene; it would commit but can never be saved with it.
+	if target != scene_root and not scene_root.is_ancestor_of(target):
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			"%s: %s resolves to a node outside the edited scene; the target must be \"/%s\" or one of its descendants" % [
+				label, value, scene_root.name,
+			],
+		)
+	return target
+
+
 ## Does `target` satisfy a PROPERTY_HINT_NODE_TYPE hint string? The hint is
 ## the exported type's name — a ClassDB class ("Control") or a script
 ## class_name ("Player") — and may list several, comma-separated. An empty
@@ -397,13 +411,19 @@ static func _node_matches_hint(target: Node, hint_string: String) -> bool:
 
 
 ## set_property's response value: a Node lands as its clean scene path so the
-## agent sees "/Main/Player", not Godot's object repr (#1144); everything
-## else serializes as before.
+## agent sees "/Main/Player", not Godot's object repr (#1144), including the
+## elements of an Array[Node] slot (#1175); everything else serializes as
+## before.
 static func _serialize_slot(value: Variant, scene_root: Node) -> Variant:
 	if value is Node:
 		var clean := McpScenePath.from_node(value, scene_root)
 		if not clean.is_empty():
 			return clean
+	if value is Array:
+		var out: Array = []
+		for item in value:
+			out.append(_serialize_slot(item, scene_root))
+		return out
 	return _serialize_value(value)
 
 
@@ -1049,7 +1069,19 @@ static func _coerce_value(value: Variant, target_type: int) -> Variant:
 ## instantiates, and each landed element is conformance-checked against the
 ## slot's element class/script so a wrong-class Resource errors naming the
 ## index instead of being rejected wholesale by `assign`.
-static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: String = "") -> Variant:
+##
+## Node elements (Array[Node3D], Array[MyNodeClass], ...) take node paths
+## instead (#1175), resolved per element with the #1144 rules when the
+## caller passes the owning `node` (set_property does; resource writes
+## don't, since a Resource can't hold scene node references).
+static func _coerce_typed_array(
+	value: Variant,
+	slot_value: Array,
+	prefix: String = "",
+	node: Node = null,
+	scene_root: Node = null,
+	node_path: String = "",
+) -> Variant:
 	var elem_label := _typed_array_element_label(slot_value)
 	if not (value is Array):
 		var err := ErrorCodes.make(
@@ -1060,13 +1092,18 @@ static func _coerce_typed_array(value: Variant, slot_value: Array, prefix: Strin
 		)
 		return ErrorCodes.prefix_message(err, prefix)
 	var elem_type := slot_value.get_typed_builtin()
+	var node_elements := node != null and scene_root != null and _typed_array_holds_nodes(slot_value)
 	var staging: Array = []
 	var in_list: Array = value
 	for i in in_list.size():
 		var elem_prefix := ("element %d" % i) if prefix.is_empty() else "%s element %d" % [prefix, i]
 		var coerced: Variant
 		if elem_type == TYPE_OBJECT:
-			coerced = _coerce_object_element(in_list[i], elem_prefix)
+			var elem: Variant = in_list[i]
+			if node_elements and elem is String and not (elem as String).is_empty():
+				coerced = _resolve_node_reference(elem, node, scene_root, node_path, elem_prefix)
+			else:
+				coerced = _coerce_object_element(elem, elem_prefix)
 			if coerced is Dictionary:
 				## Object elements are never legit Dictionaries (a dict input
 				## is either {"__class__"} — consumed above — or an error), so
@@ -1120,6 +1157,19 @@ static func _typed_array_element_label(slot_value: Array) -> String:
 	if slot_value.get_typed_builtin() == TYPE_OBJECT:
 		return _object_type_label(slot_value.get_typed_class_name(), slot_value.get_typed_script())
 	return type_string(slot_value.get_typed_builtin())
+
+
+## True when an object-typed Array slot holds Nodes (Array[Node3D], or a
+## script class extending Node), so its string elements are node paths
+## (#1175) rather than resource paths.
+static func _typed_array_holds_nodes(slot_value: Array) -> bool:
+	if slot_value.get_typed_builtin() != TYPE_OBJECT:
+		return false
+	var cls := String(slot_value.get_typed_class_name())
+	var script: Variant = slot_value.get_typed_script()
+	if script is Script:
+		cls = String((script as Script).get_instance_base_type())
+	return not cls.is_empty() and ClassDB.is_parent_class(cls, "Node")
 
 
 ## Coerce one element of an object-typed Array (#612 stage 2). Mirrors the
