@@ -293,7 +293,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
     (
         "resource",
         "  resource_manage  search, load, inspect, assign, get_info, create, set_properties,\n"
-        "                   curve_set_points, environment_create,\n"
+        "                   sprite_frames_create, curve_set_points, environment_create,\n"
         "                   physics_shape_autofit, physics_shape_generate,\n"
         "                   gradient_texture_create,\n"
         "                   noise_texture_create\n",
@@ -306,7 +306,11 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "  tilemap_manage   tilemap_set_cell, tilemap_set_cells_rect,\n"
         "                   tilemap_clear, tilemap_get_cells\n",
     ),
-    ("tileset", "  tileset_manage   tileset_get_atlas_tiles, tileset_get_atlas_image\n"),
+    (
+        "tileset",
+        "  tileset_manage   tileset_create_atlas, tileset_get_atlas_tiles, "
+        "tileset_get_atlas_image\n",
+    ),
     (
         "gridmap",
         "  gridmap_manage   gridmap_set_item, gridmap_fill, gridmap_clear,\n"

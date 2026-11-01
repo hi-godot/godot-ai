@@ -248,11 +248,11 @@ Calls take the form:
 | `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `set_stylebox_texture`, `set_font`, `set_icon`, `stylebox_override`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `set_richtext`, `build_layout`, `draw_recipe` |
-| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `set_properties`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
+| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `set_properties`, `sprite_frames_create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
 | `api_manage` | `get_class` |
 | `client_manage` | `status`, `configure`, `remove` |
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
-| `tileset_manage` | `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
+| `tileset_manage` | `tileset_create_atlas`, `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
 | `gridmap_manage` | `gridmap_set_item`, `gridmap_fill`, `gridmap_clear`, `gridmap_get_used_cells`, `gridmap_list_library_items` |
 | `navigation_manage` | `bake`, `path_get` |
 | `csg_manage` | `csg_create`, `csg_set_operation` |
@@ -432,6 +432,31 @@ their nested resources. For example, an inline texture inside
 failing property path when Godot would discard it. The operation does not save
 or assign the incomplete resource. Construct such collections through Godot's
 API. Ordinary dictionaries that retain a literal `__class__` key remain data.
+
+### Build explicit SpriteFrames and atlas TileSets
+
+`resource_manage(op="sprite_frames_create", params={"resource_path":"res://walk.tres","animations":[{"name":"walk","fps":8,"loop_mode":"linear","frames":[{"texture_path":"res://sheet.png","region":{"x":0,"y":0,"width":16,"height":16},"duration":1}]}]})`
+creates native SpriteFrames. Each frame supplies an existing Texture2D path. An
+explicit `region` creates an AtlasTexture; omitting it uses the whole texture.
+`fps` defaults to 5, `duration` to 1, and `loop_mode` to `linear` (`none` and
+`pingpong` are also supported). Animation names must be unique. Regions must fit
+inside the texture. Animations and total frames are each limited to 4096.
+
+`tileset_manage(op="tileset_create_atlas", params={"resource_path":"res://tiles.tres","texture_path":"res://sheet.png","tile_size":{"x":16,"y":16},"tiles":[{"coords":{"x":0,"y":0}}]})`
+creates a TileSet with one TileSetAtlasSource. `tile_size` sets the TileSet and
+atlas cell size in pixels. Each tile has grid `coords` and optional `size`
+(default one cell). `source_id` defaults to 0; pixel `margins` and `separation`
+default to `{x:0,y:0}`. At most 4096 nonoverlapping tiles are accepted, all inside
+the texture. Terrain, collision, animated tiles and alternatives require other
+engine operations. Existing atlas read operations inspect the saved result.
+
+Both builders reject unknown nested fields and report the offending field path.
+They accept explicit fields, without interpreting `__class__` markers. They
+validate and construct the complete resource before saving. Writes require a
+non-imported `res://` `.tres` or `.res` path and are not scene-undoable.
+`overwrite=true` replaces the **whole resource**, retains its UID and refreshes
+cached references; it does not patch omitted fields. Overwrites use the same
+staged replacement and Windows recovery contract as `set_properties` below.
 
 ### Patch a saved resource
 

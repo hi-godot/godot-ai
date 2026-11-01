@@ -149,7 +149,7 @@ static func save_to_disk(
 		)
 	var replacement_fields := {}
 	if staged_replace:
-		replacement_fields = _replace_staged_file(save_path, resource_path, OS.get_name() == "Windows")
+		replacement_fields = _replace_staged_file(save_path, resource_path, existed_before and OS.get_name() == "Windows")
 		if replacement_fields.has("error"):
 			return replacement_fields
 	if cached != null:

@@ -3696,7 +3696,9 @@ async def test_physics_shape_generate_requires_writable():
         await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
 
 
-@pytest.mark.parametrize("operation", ["create", "set_properties"])
+@pytest.mark.parametrize(
+    "operation", ["create", "set_properties", "sprite_frames_create", "tileset_create_atlas"]
+)
 async def test_resource_create_requires_writable(operation):
     """Write tools must raise EDITOR_NOT_READY when editor is importing."""
     from godot_ai.godot_client.client import GodotCommandError
@@ -3716,7 +3718,15 @@ async def test_resource_create_requires_writable(operation):
     runtime = DirectRuntime(registry=registry, client=client)
 
     with pytest.raises(GodotCommandError):
-        if operation == "set_properties":
+        if operation == "sprite_frames_create":
+            await resource_handlers.sprite_frames_create(runtime, "res://frames.tres", [])
+        elif operation == "tileset_create_atlas":
+            from godot_ai.handlers import tileset as tileset_handlers
+
+            await tileset_handlers.tileset_create_atlas(
+                runtime, "res://tiles.tres", "res://atlas.png", {"x": 16, "y": 16}, []
+            )
+        elif operation == "set_properties":
             await resource_handlers.resource_set_properties(
                 runtime, path="res://mesh.tres", properties={"size": {"x": 2, "y": 2, "z": 2}}
             )

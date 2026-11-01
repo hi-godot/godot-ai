@@ -44,6 +44,15 @@ Ops:
         Inline {"__class__": ...} constructors require Resource-typed slots
         or typed Resource collections. Untyped collections that discard a
         nested constructor are refused before saving or assigning.
+  • sprite_frames_create(resource_path, animations, overwrite=False)
+        Build saved SpriteFrames with native animations and textures. animations:
+        [{"name":"walk","fps":8,"loop_mode":"linear","frames":[
+          {"texture_path":"res://sheet.png","region":{"x":0,"y":0,
+           "width":16,"height":16},"duration":1}]}]. Omit region for a whole
+        texture; otherwise an AtlasTexture is built explicitly. loop_mode is
+        none, linear, or pingpong. At most 4096 animations/total frames.
+        Unknown fields and invalid regions fail before saving. Persistent,
+        not scene-undoable; overwrite replaces the whole resource, retaining UID.
   • set_properties(path, properties)
         Patch an existing non-imported res:// .tres/.res without resetting
         omitted values. Refreshes held references while preserving identity
@@ -130,6 +139,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
             "get_info": resource_handlers.resource_get_info,
             "create": resource_handlers.resource_create,
             "set_properties": resource_handlers.resource_set_properties,
+            "sprite_frames_create": resource_handlers.sprite_frames_create,
             "curve_set_points": curve_handlers.curve_set_points,
             "environment_create": environment_handlers.environment_create,
             "physics_shape_autofit": physics_shape_handlers.physics_shape_autofit,

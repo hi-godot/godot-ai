@@ -74,3 +74,13 @@ async def resource_set_properties(runtime: DirectRuntime, path: str, properties:
     return await runtime.send_command(
         "set_resource_properties", {"path": path, "properties": properties}
     )
+
+
+async def sprite_frames_create(
+    runtime: DirectRuntime, resource_path: str, animations: list[dict], overwrite: bool = False
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "create_sprite_frames",
+        {"resource_path": resource_path, "animations": animations, "overwrite": overwrite},
+    )

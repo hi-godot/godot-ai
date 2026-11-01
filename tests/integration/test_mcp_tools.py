@@ -8222,3 +8222,40 @@ async def test_resource_set_properties_public_mcp_dispatch(mcp_stack):
     assert result.data["properties_applied"] == 1
     assert result.data["live_refreshed"] is True
     assert result.data["undoable"] is False
+
+
+@pytest.mark.parametrize(
+    ("tool", "operation", "command_name", "params", "defaults"),
+    [
+        (
+            "resource_manage", "sprite_frames_create", "create_sprite_frames",
+            {"resource_path": "res://frames.tres", "animations": [{"name": "idle", "frames": []}]},
+            {"overwrite": False},
+        ),
+        (
+            "tileset_manage", "tileset_create_atlas", "tileset_create_atlas",
+            {"resource_path": "res://tiles.tres", "texture_path": "res://atlas.png",
+             "tile_size": {"x": 16, "y": 16}, "tiles": [{"coords": {"x": 0, "y": 0}}]},
+            {"source_id": 0, "margins": {"x": 0, "y": 0},
+             "separation": {"x": 0, "y": 0}, "overwrite": False},
+        ),
+    ],
+)
+async def test_explicit_resource_builders_public_mcp_dispatch(
+    mcp_stack, tool, operation, command_name, params, defaults
+):
+    client, plugin = mcp_stack
+
+    async def respond():
+        command = await plugin.recv_command()
+        assert command["command"] == command_name
+        assert command["params"] == params | defaults
+        await plugin.send_response(command["request_id"], {
+            "resource_path": params["resource_path"], "undoable": False,
+        })
+
+    task = asyncio.create_task(respond())
+    result = await client.call_tool(tool, {"op": operation, "params": params})
+    await task
+    assert result.data["resource_path"] == params["resource_path"]
+    assert result.data["undoable"] is False

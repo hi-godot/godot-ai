@@ -6,8 +6,26 @@ extends "res://addons/godot_ai/handlers/command_handler.gd"
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 
-func _init() -> void:
-	pass
+var _connection: McpConnection
+
+
+func _init(connection: McpConnection = null) -> void:
+	_connection = connection
+
+
+func create_atlas(params: Dictionary) -> Dictionary:
+	var builder := preload("res://addons/godot_ai/utils/resource_builders.gd")
+	var path: String = params.get("resource_path", "")
+	var overwrite: bool = params.get("overwrite", false)
+	var error: Variant = builder.output_error(path, overwrite)
+	if error != null:
+		return error
+	var built := builder.tileset_atlas(params)
+	if built.has("error"):
+		return built
+	return McpResourceIO.save_to_disk(built.resource, path, overwrite, "TileSet", {
+		"source_id": built.source_id, "tile_count": built.tile_count,
+	}, _connection, true, true)
 
 
 ## Query all occupied atlas tile positions for a single source.

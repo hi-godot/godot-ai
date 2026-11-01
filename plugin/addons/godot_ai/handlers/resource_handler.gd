@@ -196,6 +196,21 @@ func create_resource(params: Dictionary) -> Dictionary:
 	return _assign_created_resource(res, type_str, node_path, property, properties.size())
 
 
+func create_sprite_frames(params: Dictionary) -> Dictionary:
+	var builder := preload("res://addons/godot_ai/utils/resource_builders.gd")
+	var path: String = params.get("resource_path", "")
+	var overwrite: bool = params.get("overwrite", false)
+	var error: Variant = builder.output_error(path, overwrite)
+	if error != null:
+		return error
+	var built := builder.sprite_frames(params.get("animations", []))
+	if built.has("error"):
+		return built
+	return McpResourceIO.save_to_disk(built.resource, path, overwrite, "SpriteFrames", {
+		"animation_count": built.animation_count, "frame_count": built.frame_count,
+	}, _connection, true, true)
+
+
 ## Persist a patch to an existing native resource while retaining its cached identity.
 ## Staging owns its containers but retains nested Resource references. Nested
 ## resources are replaced only when explicitly supplied as property values.
