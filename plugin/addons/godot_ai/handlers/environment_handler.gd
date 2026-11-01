@@ -178,4 +178,4 @@ func _assign_environment(env: Environment, sky: Sky, sky_material: ProceduralSky
 func _save_environment(env: Environment, _sky: Sky, _sky_material: ProceduralSkyMaterial, resource_path: String, overwrite: bool, preset: String) -> Dictionary:
 	return McpResourceIO.save_to_disk(env, resource_path, overwrite, "Environment", {
 		"preset": preset,
-	}, _connection)
+	}, _connection, true)

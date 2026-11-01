@@ -63,6 +63,8 @@ static func validate_home(params: Dictionary, require_property: bool = true) -> 
 ## (`resource_path`, `overwritten`, `undoable: false`, `reason`). Passing
 ## a `reason` key in `extra_fields` overrides the default — useful for
 ## tools that edit existing files rather than creating fresh ones.
+## `refresh_cached` updates existing references after a successful overwrite.
+## Keep it disabled for disk-only edits that deliberately preserve live objects.
 ##
 ## `pause_target` should be the handler's `McpConnection`. When supplied,
 ## `pause_processing` is flipped on around `ResourceSaver.save()` so the
@@ -84,6 +86,7 @@ static func save_to_disk(
 	label: String,
 	extra_fields: Dictionary = {},
 	pause_target: McpConnection = null,
+	refresh_cached: bool = false,
 ) -> Dictionary:
 	var path_err = McpPathValidator.path_error(resource_path, "resource_path", true)
 	if path_err != null:
@@ -94,6 +97,12 @@ static func save_to_disk(
 		return ErrorCodes.make(
 			ErrorCodes.INVALID_PARAMS,
 			"%s already exists at %s (pass overwrite=true to replace)" % [label, resource_path]
+		)
+	var cached: Resource = ResourceLoader.get_cached_ref(resource_path) if existed_before and refresh_cached else null
+	if cached != null and (cached.get_class() != res.get_class() or cached.get_script() != res.get_script()):
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Cannot overwrite cached %s at %s with a different resource class or script: existing references cannot change type. Save to a different path and reassign it instead." % [cached.get_class(), resource_path]
 		)
 	# Captured BEFORE the overwrite below so a resave of an already-uid'd file
 	# (overwrite=true) can restore its own uid instead of losing it — see
@@ -124,6 +133,19 @@ static func save_to_disk(
 			ErrorCodes.INTERNAL_ERROR,
 			"%s saved to %s but failed to write its uid: %s" % [label, resource_path, error_string(uid_err)]
 		)
+	if cached != null:
+		# Copy all stored values, including defaults omitted from the saved file.
+		# CACHE_MODE_REPLACE only reloads serialized fields and leaves old defaults.
+		if pause_target != null:
+			pause_target.pause_processing = true
+		var refresh_err := cached.copy_from_resource(res)
+		if pause_target != null:
+			pause_target.pause_processing = false
+		if refresh_err != OK:
+			return ErrorCodes.make(
+				ErrorCodes.INTERNAL_ERROR,
+				"%s saved to %s but failed to refresh its cached resource: %s" % [label, resource_path, error_string(refresh_err)]
+			)
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs != null:

@@ -623,6 +623,86 @@ func test_create_resource_undo_survives_interleaving() -> void:
 	_remove_node(mi)
 
 
+# ----- regression: overwrites refresh resources already held by scene nodes -----
+
+func test_resource_overwrite_refreshes_live_cache() -> void:
+	var path := "res://tests/_mcp_overwrite_cache_1172.tres"
+	var created := _handler.create_resource({
+		"type": "Environment", "resource_path": path,
+		"properties": {"background_mode": 1, "background_color": "#ff0000", "background_energy_multiplier": 3.0},
+	})
+	assert_has_key(created, "data", str(created))
+	if not created.has("data"):
+		return
+	var held := ResourceLoader.load(path) as Environment
+	assert_true(held != null, "created Environment should load")
+	if held == null:
+		DirAccess.remove_absolute(path)
+		return
+	assert_true(held.has_method("copy_from_resource"), "supported engine exposes native resource replacement")
+	var world := WorldEnvironment.new()
+	world.environment = held
+	var uid := ResourceLoader.get_resource_uid(path)
+	var replaced := _handler.create_resource({
+		"type": "Environment", "resource_path": path, "overwrite": true,
+		"properties": {"background_mode": 1, "background_color": "#00ff00"},
+	})
+	assert_has_key(replaced, "data", str(replaced))
+	assert_eq(world.environment.background_color, Color.GREEN, "already assigned references must see replacement values")
+	assert_eq(world.environment.background_energy_multiplier, 1.0, "omitted properties must reset to replacement defaults")
+	assert_true(world.environment == held, "scene nodes must retain their resource instance")
+	var cached := ResourceLoader.load(path) as Environment
+	assert_true(cached == held, "refresh should preserve the cached instance")
+	assert_eq(cached.resource_path, path, "refresh must preserve the cached path")
+	var disk := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE) as Environment
+	assert_true(disk != null, "overwritten Environment should reload from disk")
+	if disk != null:
+		assert_eq(disk.background_color, Color.GREEN)
+	assert_eq(ResourceLoader.get_resource_uid(path), uid, "overwrite must preserve UID")
+	world.free()
+	DirAccess.remove_absolute(path)
+
+
+func test_resource_overwrite_rejects_cached_type_change_before_writing() -> void:
+	var path := "res://tests/_mcp_overwrite_type_1172.tres"
+	var created := _handler.create_resource({"type": "Environment", "resource_path": path})
+	assert_has_key(created, "data", str(created))
+	if not created.has("data"):
+		return
+	var held := ResourceLoader.load(path) as Environment
+	assert_true(held != null)
+	var original := FileAccess.get_file_as_string(path)
+	var replaced := _handler.create_resource({"type": "SphereMesh", "resource_path": path, "overwrite": true})
+	assert_is_error(replaced, ErrorCodes.WRONG_TYPE)
+	assert_eq(FileAccess.get_file_as_string(path), original, "refusal must preserve the original file and UID")
+	assert_true(ResourceLoader.load(path) == held, "refusal must preserve the cache")
+	DirAccess.remove_absolute(path)
+
+
+func test_resource_overwrite_rejects_cached_script_change_before_writing() -> void:
+	var path := "res://tests/_mcp_overwrite_script_1172.tres"
+	var first_script := GDScript.new()
+	first_script.source_code = "@tool\nextends Resource\n"
+	assert_eq(first_script.reload(), OK)
+	var second_script := GDScript.new()
+	second_script.source_code = "@tool\nextends Resource\n"
+	assert_eq(second_script.reload(), OK)
+	var original_resource: Resource = first_script.new()
+	var replacement_resource: Resource = second_script.new()
+	var created := McpResourceIO.save_to_disk(original_resource, path, false, "Resource")
+	assert_has_key(created, "data", str(created))
+	if not created.has("data"):
+		return
+	var held := ResourceLoader.load(path)
+	assert_true(held != null)
+	var original := FileAccess.get_file_as_string(path)
+	var replaced := McpResourceIO.save_to_disk(replacement_resource, path, true, "Resource", {}, null, true)
+	assert_is_error(replaced, ErrorCodes.WRONG_TYPE)
+	assert_eq(FileAccess.get_file_as_string(path), original)
+	assert_true(ResourceLoader.load(path) == held)
+	DirAccess.remove_absolute(path)
+
+
 # ----- regression: properties dict __class__ shortcut for nested Resource slots -----
 
 func test_create_resource_missing_nested_resource_does_not_write() -> void:

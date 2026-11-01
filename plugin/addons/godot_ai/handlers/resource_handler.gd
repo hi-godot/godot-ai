@@ -458,7 +458,7 @@ func _save_created_resource(res: Resource, type_str: String, resource_path: Stri
 		"type": type_str,
 		"resource_class": res.get_class(),
 		"properties_applied": applied_count,
-	}, _connection)
+	}, _connection, true)
 
 
 ## Introspect a Resource class — return its editor-visible properties, parent,

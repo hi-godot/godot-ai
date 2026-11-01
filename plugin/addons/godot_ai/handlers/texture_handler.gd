@@ -149,7 +149,7 @@ func _finalize(tex: Resource, sub_resources: Array, params: Dictionary, label: S
 	var overwrite: bool = params.get("overwrite", false)
 
 	if not resource_path.is_empty():
-		return McpResourceIO.save_to_disk(tex, resource_path, overwrite, label, extra, _connection)
+		return McpResourceIO.save_to_disk(tex, resource_path, overwrite, label, extra, _connection, true)
 	return _assign_texture(tex, sub_resources, node_path, property, label, extra)
 
 
