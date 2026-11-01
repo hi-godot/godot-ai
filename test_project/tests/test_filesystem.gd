@@ -365,9 +365,10 @@ func test_scan_filesystem_sync_shape_and_coalesces_when_latch_set() -> void:
 	## scan mid-suite — this also asserts the documented response shape, which
 	## must match the deferred path's keys. The deferred settle path itself is
 	## covered by the Python tests + live verification.
-	FilesystemHandler._scan_in_flight = true
+	var previous_scan = FilesystemHandler._active_scan
+	FilesystemHandler._active_scan = FilesystemHandler.ScanCompletion.new()
 	var result := _handler.scan_filesystem({})
-	FilesystemHandler._scan_in_flight = false
+	FilesystemHandler._active_scan = previous_scan
 	assert_has_key(result, "data")
 	assert_eq(result.data.scan_settle, "not_waited")
 	assert_true(result.data.was_already_scanning, "latch set → coalesced, no new scan() kicked")
