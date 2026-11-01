@@ -16,6 +16,72 @@ func _init(undo_redo: EditorUndoRedoManager) -> void:
 	_undo_redo = undo_redo
 
 
+func set_editable_children(params: Dictionary) -> Dictionary:
+	if not params.has("editable"):
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: editable")
+	if not params.editable is bool:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "editable must be a boolean")
+	var resolved := McpNodeValidator.resolve_or_error(params.get("path", ""), "path", params.get("scene_file", ""), true)
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var root: Node = resolved.scene_root
+	if node == root or node.scene_file_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Editable Children requires an instanced scene root beneath the active scene root: %s" % resolved.path)
+	var previous := root.is_editable_instance(node)
+	var editable: bool = params.editable
+	var changed := previous != editable
+	if changed and not editable:
+		var disable_error := _editable_children_disable_error(node, root)
+		if not disable_error.is_empty():
+			return disable_error
+	if changed:
+		_undo_redo.create_action("MCP: Set Editable Children on %s" % node.name)
+		_undo_redo.add_do_method(root, "set_editable_instance", node, editable)
+		_undo_redo.add_undo_method(root, "set_editable_instance", node, previous)
+		_undo_redo.commit_action()
+	return {"data": {"path": resolved.path, "editable": root.is_editable_instance(node), "previous_editable": previous, "changed": changed, "undoable": changed}}
+
+
+## Disabling makes PackedScene skip source-owned children and their subtrees.
+## Inspect the saved overrides without temporarily changing the live flag.
+static func _editable_children_disable_error(instance: Node, root: Node) -> Dictionary:
+	var packed := PackedScene.new()
+	var err := packed.pack(root)
+	if err != OK:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Cannot inspect scene overrides before disabling Editable Children: %s" % error_string(err))
+	var state := packed.get_state()
+	for i in state.get_node_count():
+		var node := root.get_node_or_null(state.get_node_path(i))
+		if _depends_on_editable_instance(node, instance):
+			return _editable_children_has_edits(node, root)
+	for i in state.get_connection_count():
+		var source := root.get_node_or_null(state.get_connection_source(i))
+		if _depends_on_editable_instance(source, instance):
+			return _editable_children_has_edits(source, root)
+	var pending: Array[Node] = [instance]
+	while not pending.is_empty():
+		var parent: Node = pending.pop_back()
+		for child in parent.get_children():
+			if root.is_editable_instance(child) and _depends_on_editable_instance(child, instance):
+				return _editable_children_has_edits(child, root)
+			pending.append(child)
+	return {}
+
+
+static func _depends_on_editable_instance(node: Node, instance: Node) -> bool:
+	var current := node
+	while current != null and current != instance:
+		if current.owner == instance:
+			return true
+		current = current.get_parent()
+	return false
+
+
+static func _editable_children_has_edits(node: Node, root: Node) -> Dictionary:
+	return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Cannot disable Editable Children: %s has saved child overrides, attachments, signals, or nested Editable Children that would be lost. Revert those edits or disable nested instances first; this operation never discards them." % McpScenePath.from_node(node, root))
+
+
 func create_node(params: Dictionary) -> Dictionary:
 	var node_type: String = params.get("type", "")
 	var node_name: String = params.get("name", "")

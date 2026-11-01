@@ -43,6 +43,23 @@ fractions, nonfinite numbers, and out-of-range bytes are rejected before the
 property is assigned. `TileMapLayer.tile_map_data` still requires Godot's
 valid binary cell format; this conversion does not generate tile data.
 
+`node_manage(op="set_editable_children", params={"path":"/Main/Model",
+"editable":true})` explicitly enables child overrides for a scene instance.
+The target must be an instance root beneath the active scene root, and its
+ancestors must already permit editing. The optional `scene_file` guard checks
+the active scene. The response reports `editable`, `previous_editable`,
+`changed`, and `undoable`; repeating the current state creates no undo action.
+Use `scene_save` to persist the flag. Structural edits to source-owned nodes
+still require editing their source scene.
+
+Disabling is allowed only when it will preserve saved edits. Child overrides,
+groups, persistent signals, attachments beneath source-owned children, or
+nested Editable Children cause a refusal because Godot would drop them on
+save/reload. Revert those edits or disable nested instances first. Overrides
+on the instance root and direct local attachments remain safe and do not
+prevent disabling. The operation never enables ancestors or discards edits
+implicitly.
+
 `logs_read` also accepts `include_details=true` for `source="editor"`,
 `source="game"`, and `source="all"`. Detailed entries include the original
 Godot `_log_error` code/rationale when available, error type, resolved source
@@ -239,7 +256,7 @@ Calls take the form:
 | Tool | Ops |
 |------|-----|
 | `scene_manage` | `create`, `save_as`, `get_roots` |
-| `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `add_to_group`, `remove_from_group` |
+| `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `set_editable_children`, `add_to_group`, `remove_from_group` |
 | `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |

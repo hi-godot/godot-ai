@@ -396,6 +396,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("delete_node", "node", &"delete_node")
 	_dispatcher.register_lazy("reparent_node", "node", &"reparent_node")
 	_dispatcher.register_lazy("set_property", "node", &"set_property")
+	_dispatcher.register_lazy("set_editable_children", "node", &"set_editable_children")
 	_dispatcher.register_lazy("rename_node", "node", &"rename_node")
 	_dispatcher.register_lazy("duplicate_node", "node", &"duplicate_node")
 	_dispatcher.register_lazy("move_node", "node", &"move_node")

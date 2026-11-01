@@ -45,7 +45,9 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## collisions, script class collisions, and native registration rejection.
 ## Non-Node resources use WRONG_TYPE separately. Together these six reviewed
 ## semantic conflicts move the ceiling from 115 to 121.
-INVALID_PARAMS_CEILING = 121
+## Explicit Editable Children adds two scene-state conflicts: a target that
+## is not an instance root, and disabling that would discard saved overrides.
+INVALID_PARAMS_CEILING = 123
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

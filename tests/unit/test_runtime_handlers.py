@@ -2724,6 +2724,32 @@ async def test_node_move_handler():
     assert client.calls[-1]["params"] == {"path": "/Main/Camera3D", "index": 2}
 
 
+async def test_node_set_editable_children_forwards_explicit_state_and_scene_guard():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await node_handlers.node_set_editable_children(
+        runtime, path="/Main/Model", editable=False, scene_file="res://main.tscn",
+    )
+    assert client.calls[-1]["command"] == "set_editable_children"
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Model", "editable": False, "scene_file": "res://main.tscn",
+    }
+
+
+async def test_node_set_editable_children_requires_writable():
+    client = StubClient()
+    client.live_readiness = "importing"
+    registry = SessionRegistry()
+    registry.register(Session(
+        session_id="editable-test", godot_version="4.7", project_path="/tmp/p",
+        plugin_version="4.3.1", readiness="importing",
+    ))
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await node_handlers.node_set_editable_children(runtime, path="/Main/Model", editable=True)
+    assert not any(call["command"] == "set_editable_children" for call in client.calls)
+
+
 async def test_node_add_to_group_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

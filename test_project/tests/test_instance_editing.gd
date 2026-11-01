@@ -9,6 +9,7 @@ const PhysicsHandler := preload("res://addons/godot_ai/handlers/physics_shape_ha
 const CurveHandler := preload("res://addons/godot_ai/handlers/curve_handler.gd")
 const UiHandler := preload("res://addons/godot_ai/handlers/ui_handler.gd")
 const Fixture := preload("res://tests/fixtures/instance_editing.tscn")
+const SAVED_INSTANCE_PATH := "res://tests/_editable_children_roundtrip.tscn"
 
 var _handler: NodeHandler
 var _undo_redo: EditorUndoRedoManager
@@ -40,6 +41,8 @@ func teardown() -> void:
 	_root.set_editable_instance(_instance, false)
 	_root.remove_child(_instance)
 	_instance.queue_free()
+	if FileAccess.file_exists(SAVED_INSTANCE_PATH):
+		DirAccess.remove_absolute(SAVED_INSTANCE_PATH)
 
 
 func test_locked_instance_refuses_edits_without_undo_or_mutation() -> void:
@@ -206,3 +209,130 @@ func test_physics_reparent_refuses_source_mesh_but_allows_editable_sibling_colli
 	restored.free()
 	assert_true(editor_undo(_undo_redo))
 	assert_eq(_instance.get_node_or_null("MeshCollider"), null)
+
+
+func _toggle(editable: bool, path: String = "") -> Dictionary:
+	return _handler.set_editable_children({"path": _path if path.is_empty() else path, "editable": editable})
+
+
+func test_explicit_editable_children_toggle_undo_redo_and_noop() -> void:
+	var history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root))
+	var enabled := _toggle(true)
+	assert_eq(enabled.data.editable, true)
+	assert_eq(enabled.data.previous_editable, false)
+	assert_true(enabled.data.changed)
+	assert_true(enabled.data.undoable)
+	assert_true(_root.is_editable_instance(_instance))
+	assert_true(editor_undo(_undo_redo))
+	assert_false(_root.is_editable_instance(_instance))
+	assert_true(editor_redo(_undo_redo))
+	assert_true(_root.is_editable_instance(_instance))
+	var version := history.get_version()
+	var unchanged := _toggle(true)
+	assert_false(unchanged.data.changed)
+	assert_false(unchanged.data.undoable)
+	assert_eq(history.get_version(), version)
+	var disabled := _toggle(false)
+	assert_eq(disabled.data.editable, false)
+	assert_true(editor_undo(_undo_redo))
+	assert_true(_root.is_editable_instance(_instance))
+	assert_true(editor_redo(_undo_redo))
+	assert_false(_root.is_editable_instance(_instance))
+
+
+func test_editable_children_validation_does_not_mutate() -> void:
+	var history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root))
+	var version := history.get_version()
+	assert_is_error(_handler.set_editable_children({"path": _path}), McpErrorCodes.MISSING_REQUIRED_PARAM)
+	for value in [1, "true", null]:
+		assert_is_error(_handler.set_editable_children({"path": _path, "editable": value}), McpErrorCodes.WRONG_TYPE)
+	assert_is_error(_toggle(true, McpScenePath.from_node(_root, _root)), McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(_toggle(true, "/Main/Camera3D"), McpErrorCodes.INVALID_PARAMS)
+	assert_is_error(_toggle(true, "/Main/DoesNotExist"), McpErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(_handler.set_editable_children({"path": _path, "editable": true, "scene_file": "res://wrong_scene.tscn"}), McpErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_false(_root.is_editable_instance(_instance))
+	assert_eq(history.get_version(), version)
+
+
+func test_nested_editable_children_never_enables_ancestors() -> void:
+	var nested := _instance.get_node("Nested")
+	_assert_locked(_toggle(true, _path + "/Nested"))
+	assert_false(_root.is_editable_instance(_instance))
+	assert_false(_root.is_editable_instance(nested))
+	assert_eq(_toggle(true).data.editable, true)
+	assert_eq(_toggle(true, _path + "/Nested").data.editable, true)
+	var refused := _toggle(false)
+	assert_is_error(refused, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(refused.error.message, "would be lost")
+	assert_true(_root.is_editable_instance(_instance))
+	assert_true(_root.is_editable_instance(nested))
+	assert_eq(_toggle(false, _path + "/Nested").data.editable, false)
+	assert_eq(_toggle(false).data.editable, false)
+
+
+func test_editable_children_enable_and_overrides_survive_disk_reload() -> void:
+	assert_eq(_toggle(true).data.editable, true)
+	assert_eq(_handler.set_property({"path": _path + "/Mesh", "property": "visible", "value": false}).data.value, false)
+	var history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root))
+	var version := history.get_version()
+	var refused := _toggle(false)
+	assert_is_error(refused, McpErrorCodes.INVALID_PARAMS)
+	assert_contains(refused.error.message, _path + "/Mesh")
+	assert_eq(history.get_version(), version)
+	assert_true(_root.is_editable_instance(_instance))
+	var packed := PackedScene.new()
+	assert_eq(packed.pack(_root), OK)
+	assert_eq(ResourceSaver.save(packed, SAVED_INSTANCE_PATH), OK)
+	var loaded: PackedScene = ResourceLoader.load(SAVED_INSTANCE_PATH, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE)
+	var restored := loaded.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
+	var child := restored.get_node(str(_instance.name))
+	assert_true(restored.is_editable_instance(child))
+	assert_false(child.get_node("Mesh").visible)
+	restored.free()
+	assert_true(editor_undo(_undo_redo), "refusal must leave the property edit as the latest undo")
+	assert_true(_instance.get_node("Mesh").visible)
+	assert_eq(_toggle(false).data.editable, false)
+
+
+func test_disabling_preserves_safe_instance_root_and_direct_local_edits() -> void:
+	assert_eq(_toggle(true).data.editable, true)
+	assert_eq(_handler.set_property({"path": _path, "property": "visible", "value": false}).data.value, false)
+	var created := _handler.create_node({"type": "Node3D", "name": "DirectLocal", "parent_path": _path})
+	assert_eq(created.data.path, _path + "/DirectLocal")
+	assert_eq(_toggle(false).data.editable, false)
+	var restored := _roundtrip()
+	var child := restored.get_node(str(_instance.name))
+	assert_false(restored.is_editable_instance(child))
+	assert_false(child.visible)
+	assert_true(child.has_node("DirectLocal"))
+	restored.free()
+
+
+func test_disabling_refuses_local_attachment_beneath_source_owned_child() -> void:
+	assert_eq(_toggle(true).data.editable, true)
+	assert_eq(_handler.create_node({"type": "Node3D", "name": "NestedLocal", "parent_path": _path + "/Mesh"}).data.path, _path + "/Mesh/NestedLocal")
+	var refused := _toggle(false)
+	assert_is_error(refused, McpErrorCodes.INVALID_PARAMS)
+	assert_true(_root.is_editable_instance(_instance))
+	var restored := _roundtrip()
+	assert_true(restored.has_node(str(_instance.name) + "/Mesh/NestedLocal"))
+	restored.free()
+	assert_true(editor_undo(_undo_redo))
+	assert_false(_instance.has_node("Mesh/NestedLocal"))
+	assert_eq(_toggle(false).data.editable, false)
+
+
+func test_disabling_refuses_persistent_child_signal_and_group() -> void:
+	assert_eq(_toggle(true).data.editable, true)
+	var mesh := _instance.get_node("Mesh")
+	mesh.connect("visibility_changed", _instance.hide, CONNECT_PERSIST)
+	assert_is_error(_toggle(false), McpErrorCodes.INVALID_PARAMS)
+	assert_true(mesh.is_connected("visibility_changed", _instance.hide))
+	assert_true(_root.is_editable_instance(_instance))
+	mesh.disconnect("visibility_changed", _instance.hide)
+	mesh.add_to_group("editable_probe_group", true)
+	assert_is_error(_toggle(false), McpErrorCodes.INVALID_PARAMS)
+	assert_true(mesh.is_in_group("editable_probe_group"))
+	assert_true(_root.is_editable_instance(_instance))
+	mesh.remove_from_group("editable_probe_group")
+	assert_eq(_toggle(false).data.editable, false)

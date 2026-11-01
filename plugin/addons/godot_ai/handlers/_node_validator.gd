@@ -76,7 +76,7 @@ static func writable_error(node: Node, scene_root: Node) -> Dictionary:
 		var owner := current.owner
 		if owner != null and owner != scene_root and not scene_root.is_editable_instance(owner):
 			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
-				"Cannot edit %s: changes beneath instance %s (%s) would be lost on save. Enable Editable Children on that instance in Godot, or edit its source scene." % [
+				"Cannot edit %s: changes beneath instance %s (%s) would be lost on save. Enable Editable Children explicitly with node_manage(op=\"set_editable_children\") on that instance, or edit its source scene." % [
 					ScenePath.from_node(node, scene_root), ScenePath.from_node(owner, scene_root), owner.scene_file_path,
 				])
 		current = current.get_parent()
