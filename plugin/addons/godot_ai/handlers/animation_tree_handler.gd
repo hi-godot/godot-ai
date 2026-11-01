@@ -33,6 +33,12 @@ func _position(value: Variant) -> Variant:
 	return result
 
 
+func _resource_write_error(resource: Resource) -> Dictionary:
+	if resource.get_script() != null or ClassDB.class_get_api_type(resource.get_class()) not in [ClassDB.API_CORE, ClassDB.API_EDITOR]:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Graph edits require engine built-in resources without scripts or GDExtension classes")
+	return {}
+
+
 func _resolve(params: Dictionary, write := true) -> Dictionary:
 	var check := McpNodeValidator.require_scene_or_error()
 	if check.has("error"):
@@ -46,6 +52,12 @@ func _resolve(params: Dictionary, write := true) -> Dictionary:
 		if not error.is_empty():
 			return error
 	var graph: AnimationNode = tree.tree_root
+	if graph == null:
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "AnimationTree has no tree_root")
+	if write:
+		var error := _resource_write_error(graph)
+		if not error.is_empty():
+			return error
 	var graph_path: String = params.get("graph_path", "")
 	if not graph_path.is_empty():
 		for part in graph_path.split("/", true):
@@ -55,10 +67,10 @@ func _resolve(params: Dictionary, write := true) -> Dictionary:
 				graph = graph.get_blend_point_node(graph.find_blend_point_by_name(part))
 			else:
 				return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Graph node not found: %s" % graph_path)
-	if graph == null:
-		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "AnimationTree has no tree_root")
-	if write and graph.get_script() != null:
-		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Graph edits require native unscripted AnimationNodes")
+			if write:
+				var error := _resource_write_error(graph)
+				if not error.is_empty():
+					return error
 	return {"scene_root": check.scene_root, "tree": tree, "graph": graph}
 
 
@@ -166,6 +178,8 @@ func _new_node(params: Dictionary, root_only: bool) -> Variant:
 	var type: String = params.get("node_type", "AnimationNodeAnimation")
 	if not ClassDB.class_exists(type) or not ClassDB.is_parent_class(type, "AnimationRootNode" if root_only else "AnimationNode") or not ClassDB.can_instantiate(type) or type in ["AnimationNode", "AnimationRootNode", "AnimationNodeOutput", "AnimationNodeStartState", "AnimationNodeEndState"]:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Unsupported native animation node type: %s" % type)
+	if ClassDB.class_get_api_type(type) not in [ClassDB.API_CORE, ClassDB.API_EDITOR]:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Graph nodes must be engine built-in classes, not GDExtensions")
 	var node: AnimationNode = ClassDB.instantiate(type)
 	var error: Variant = _properties(node, params.get("properties", {}))
 	return node if error == null else error
@@ -473,8 +487,9 @@ func tree_transition_set(params: Dictionary) -> Dictionary:
 	if ctx.index < 0:
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Transition does not exist")
 	var transition: AnimationNodeStateMachineTransition = ctx.graph.get_transition(ctx.index)
-	if transition.get_script() != null:
-		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Transition edits require native unscripted resources")
+	var resource_error := _resource_write_error(transition)
+	if not resource_error.is_empty():
+		return resource_error
 	var updated := transition.duplicate(false) as AnimationNodeStateMachineTransition
 	if updated == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not duplicate transition for validation")

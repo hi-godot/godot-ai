@@ -303,3 +303,53 @@ func test_transition_input_allocation_and_native_names_are_guarded() -> void:
 	assert_eq(node.get_input_name(255), "Last")
 	assert_true(editor_undo(_undo))
 	assert_false(_tree.tree_root.has_node("Switch"))
+
+
+func test_dotted_native_graph_names_resolve_and_persist() -> void:
+	_ok(_call("tree_node_add", {"name": "Move.State", "node_type": "AnimationNodeBlendTree"}))
+	_ok(_call("tree_node_add", {"graph_path": "Move.State", "name": "Walk.Fast", "properties": {"animation": "walk"}}))
+	_ok(_call("tree_connect", {"graph_path": "Move.State", "input_node": "output", "input_index": 0, "output_node": "Walk.Fast"}))
+	_ok(_call("tree_node_set", {"graph_path": "Move.State/Walk.Fast", "properties": {"animation": "run"}}))
+	_ok(_call("tree_transition_add", {"from_state": "Start", "to_state": "Move.State"}))
+	var machine := _tree.tree_root as AnimationNodeStateMachine
+	var blend := machine.get_node("Move.State") as AnimationNodeBlendTree
+	assert_eq(String(machine.get_transition_to(0)), "Move.State")
+	assert_eq(String(blend.get_node("Walk.Fast").animation), "run")
+	assert_eq(blend.get("node_connections"), [StringName("output"), 0, StringName("Walk.Fast")])
+	var packed := PackedScene.new()
+	assert_eq(packed.pack(_root), OK)
+	var path := "user://dotted_graph_roundtrip.tscn"
+	assert_eq(ResourceSaver.save(packed, path), OK)
+	var reopened := (ResourceLoader.load(path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate()
+	var tree := reopened.get_node("GraphTest") as AnimationTree
+	assert_eq(String(tree.tree_root.get_node("Move.State").get_node("Walk.Fast").animation), "run")
+	assert_eq(String(tree.tree_root.get_transition_to(0)), "Move.State")
+	reopened.free()
+	DirAccess.remove_absolute(path)
+
+
+func test_scripted_graph_ancestor_and_transition_refused_before_setters() -> void:
+	var graph_script := load("res://tests/fixtures/animation_scripted_graph.gd")
+	var graph: AnimationNodeBlendTree = graph_script.new()
+	graph.add_node("Clip", AnimationNodeAnimation.new())
+	_tree.tree_root = graph
+	graph_script.setter_calls = 0
+	var history := _undo.get_history_undo_redo(_undo.get_object_history_id(_root))
+	var version := history.get_version()
+	assert_is_error(_call("tree_node_set", {"properties": {"custom_value": 2.0}}), "WRONG_TYPE")
+	assert_is_error(_call("tree_node_set", {"graph_path": "Clip", "properties": {"animation": "run"}}), "WRONG_TYPE")
+	assert_eq(graph_script.setter_calls, 0)
+	assert_eq(String(graph.get_node("Clip").animation), "")
+	assert_eq(history.get_version(), version)
+	var machine := AnimationNodeStateMachine.new()
+	machine.add_node("Idle", AnimationNodeAnimation.new())
+	var transition_script := load("res://tests/fixtures/animation_scripted_transition.gd")
+	var transition: AnimationNodeStateMachineTransition = transition_script.new()
+	machine.add_transition("Start", "Idle", transition)
+	_tree.tree_root = machine
+	transition_script.setter_calls = 0
+	assert_is_error(_call("tree_transition_set", {"from_state": "Start", "to_state": "Idle", "properties": {"custom_value": 2.0}}), "WRONG_TYPE")
+	assert_eq(transition_script.setter_calls, 0)
+	assert_eq(transition.custom_value, 1.0)
+	assert_eq(machine.get_transition(0), transition)
+	assert_eq(history.get_version(), version)
