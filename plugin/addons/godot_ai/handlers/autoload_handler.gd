@@ -59,9 +59,13 @@ func add_autoload(params: Dictionary) -> Dictionary:
 	if ProjectSettings.has_setting(key):
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Autoload '%s' already exists" % name)
 	var resource := ResourceLoader.load(path)
+	if resource is PackedScene and not resource.can_instantiate():
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "PackedScene has no nodes to instantiate: %s" % path)
 	if not (resource is PackedScene) and not (resource is Script and ClassDB.is_parent_class(resource.get_instance_base_type(), "Node")):
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Autoload must be a Node script or scene: %s" % path)
 
+	# Native scene autoload creation claims this cache path; release our validation reference first.
+	resource = null
 	var value := ("*" if singleton else "") + path
 	ProjectSettings.set_setting(key, value)
 	ProjectSettings.set_initial_value(key, "")
