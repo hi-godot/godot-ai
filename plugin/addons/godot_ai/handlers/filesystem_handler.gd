@@ -17,6 +17,10 @@ const IMPORT_SIDECAR_SUFFIX := ".import"
 
 class ScanCompletion extends RefCounted:
 	var completed := false
+	var accepted := false
+	var last_root_id := 0
+	var root_changes := 0
+	var required_root_changes := 1
 
 
 ## Godot clears is_scanning() before full-scan script registration finishes.
@@ -473,7 +477,7 @@ func scan_filesystem(params: Dictionary) -> Dictionary:
 
 
 static func _has_pending_scan() -> bool:
-	return _active_scan != null and not _active_scan.completed
+	return _active_scan != null and not _active_scan.accepted
 
 
 static func _get_or_start_scan(efs: EditorFileSystem) -> ScanCompletion:
@@ -481,19 +485,46 @@ static func _get_or_start_scan(efs: EditorFileSystem) -> ScanCompletion:
 		return _active_scan
 
 	var completion := ScanCompletion.new()
+	completion.last_root_id = efs.get_filesystem().get_instance_id()
 	_active_scan = completion
 	# Connect before scan(): non-threaded scans may finish inside that call.
-	# sources_changed is emitted after scan actions; deferred delivery also
-	# leaves the native completion callback before a caller can launch or edit.
+	# Observe the native boundary synchronously: an older deferred signal can
+	# arrive during a newer scan. Keep listening when another scan is active.
 	# A caller timeout must not permit plugin reload while native work is pending.
 	var work := ScriptWork.begin("scan_filesystem")
-	efs.sources_changed.connect(_on_scan_completed.bind(completion, work), CONNECT_ONE_SHOT | CONNECT_DEFERRED)
-	if not efs.is_scanning():
+	efs.sources_changed.connect(_on_scan_completed.bind(completion, work, efs))
+	if efs.is_scanning():
+		completion.required_root_changes = 2
+	else:
 		efs.scan()
+		# scan() returns void and may decline a finished worker awaiting native
+		# postprocessing. Two subsequent roots prove a post-request full scan:
+		# native permits only one full-scan worker/root awaiting installation.
+		if not completion.accepted and not efs.is_scanning() and efs.get_filesystem().get_instance_id() == completion.last_root_id:
+			completion.required_root_changes = 2
 	return completion
 
 
-static func _on_scan_completed(_exist: bool, completion: ScanCompletion, work: int) -> void:
+static func _on_scan_completed(_exist: bool, completion: ScanCompletion, work: int, efs: EditorFileSystem) -> void:
+	var root_id := efs.get_filesystem().get_instance_id()
+	if root_id != completion.last_root_id:
+		completion.last_root_id = root_id
+		completion.root_changes += 1
+	if efs.is_scanning():
+		return
+	# Full scans replace the native root only when their main-thread processing
+	# starts. An older signal cannot satisfy this even if our worker finished.
+	if completion.root_changes < completion.required_root_changes:
+		efs.scan()
+		return
+	completion.accepted = true
+	efs.sources_changed.disconnect(_on_scan_completed.bind(completion, work, efs))
+	# The accepted scan is complete even if a later listener starts another.
+	# Leave this signal callback before releasing waiters or native-work ownership.
+	_finish_scan_completion.call_deferred(completion, work)
+
+
+static func _finish_scan_completion(completion: ScanCompletion, work: int) -> void:
 	completion.completed = true
 	ScriptWork.finish(work)
 

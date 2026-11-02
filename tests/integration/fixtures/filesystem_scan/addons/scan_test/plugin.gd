@@ -30,6 +30,7 @@ var class_baseline := 0
 var completion_held := false
 var native_changed := false
 var immediate_update_done := false
+var sources_only_root_id := 0
 
 func _enter_tree() -> void:
 	filesystem = EditorInterface.get_resource_filesystem()
@@ -41,6 +42,16 @@ func _enter_tree() -> void:
 func _on_native_completion(changed: bool) -> void:
 	native_completions += 1
 	native_changed = changed
+	if phase == "external_sources" and native_completions == completion_baseline + 1:
+		_expect(filesystem.get_filesystem().get_instance_id() == sources_only_root_id, "sources-only scan unexpectedly replaced its native root")
+	if phase == "startup":
+		_start_contracts.call_deferred()
+
+func _start_contracts() -> void:
+	if phase != "startup" or filesystem.is_scanning():
+		return
+	phase = "preparing"
+	_run_contracts()
 
 func _on_class_update() -> void:
 	native_class_updates += 1
@@ -67,6 +78,8 @@ func _on_response(request_id: String, payload: Dictionary) -> void:
 	_expect(bool(payload.data.scan_completed), "scan did not complete: " + request_id)
 	_expect(payload.data.scan_settle == "settled", "unexpected settle status: " + request_id)
 	_expect(native_completions > completion_baseline, "reply preceded native completion: " + request_id)
+	if request_id.begins_with("generation_"):
+		_expect(_has_generation_class(request_id), "reply preceded requested generation registration: " + request_id)
 	if phase == "coalesced" and request_id == "primary":
 		_expect(native_class_updates > class_baseline, "reply preceded class registration")
 		if not failed:
@@ -80,11 +93,6 @@ func _process(_delta: float) -> void:
 		print("SCAN_TEST FAILURE: diagnostic deadline exceeded")
 		get_tree().quit(1)
 		return
-	if phase == "startup":
-		if filesystem.is_scanning() or Time.get_ticks_msec() - started < 2500:
-			return
-		phase = "preparing"
-		_run_contracts()
 
 func _write_samples(generation: int) -> void:
 	for i: int in range(800):
@@ -103,6 +111,16 @@ func _await_reply(request_id: String) -> void:
 
 func _run_contracts() -> void:
 	connection = _new_connection()
+	for label: String in ["generation_active", "generation_fast", "generation_declined", "generation_adopted"]:
+		await _run_generation_contract(label)
+		if failed:
+			_finish()
+			return
+	await _run_later_listener_contract()
+	if failed:
+		_finish()
+		return
+	connection.replies.clear()
 	_write_samples(1)
 	_begin_case("coalesced")
 	Handler.new(connection).scan_filesystem({"_request_id": "primary"})
@@ -137,6 +155,7 @@ func _run_contracts() -> void:
 	_expect(replies_stayed_empty, "reply escaped controlled native-idle completion hold")
 	print("SCAN_TEST controlled native-idle hold frames=", idle_frames)
 	completion_held = false
+	filesystem.sources_changed.connect(held_callback)
 	held_callback.call_deferred(native_changed)
 	await _await_reply("primary")
 	await _await_reply("joined")
@@ -152,10 +171,12 @@ func _run_contracts() -> void:
 	_expect(found_class, "new global script class was unavailable after scan response")
 
 	# No file changes: a fresh native completion must still be observed.
+	var unchanged_root_id := filesystem.get_filesystem().get_instance_id()
 	_begin_case("unchanged")
 	Handler.new(connection).scan_filesystem({"_request_id": "unchanged"})
 	await _await_reply("unchanged")
 	_expect(not bool(connection.replies.unchanged.data.was_already_scanning), "completed scan retained single-flight ownership")
+	_expect(filesystem.get_filesystem().get_instance_id() != unchanged_root_id, "unchanged full scan did not replace its native root")
 
 	# Synchronous entry points retain ownership until native completion too.
 	_write_samples(2)
@@ -172,6 +193,13 @@ func _run_contracts() -> void:
 	await _await_reply("external")
 	_expect(bool(connection.replies.external.data.was_already_scanning), "handler did not adopt an external scan")
 
+	_begin_case("external_sources")
+	sources_only_root_id = filesystem.get_filesystem().get_instance_id()
+	filesystem.scan_sources()
+	Handler.new(connection).scan_filesystem({"_request_id": "external_sources"})
+	await _await_reply("external_sources")
+	_expect(bool(connection.replies.external_sources.data.was_already_scanning), "handler did not adopt a sources-only scan")
+
 	# Disposing a requester must not orphan completion or another request.
 	_write_samples(3)
 	_begin_case("disconnect")
@@ -185,6 +213,65 @@ func _run_contracts() -> void:
 
 	await _run_timeout_contract()
 	_finish()
+
+func _run_generation_contract(label: String) -> void:
+	_begin_case(label)
+	# Start the tested request inside an older scan's filesystem_changed,
+	# before that older scan delivers sources_changed.
+	filesystem.filesystem_changed.connect(_start_generation_scan.bind(label), CONNECT_ONE_SHOT)
+	filesystem.scan()
+	await _await_reply(label)
+	_expect(_has_generation_class(label), "requested generation was not registered: " + label)
+	_expect(bool(connection.replies[label].data.was_already_scanning) == (label == "generation_adopted"), "incorrect adoption metadata: " + label)
+	print("SCAN_TEST native generation contract ", label)
+
+func _start_generation_scan(label: String) -> void:
+	_begin_case(label)
+	if label == "generation_declined":
+		# This worker enumerates before the files exist. Its flag clears, but
+		# scan() must still decline until the main thread installs its root.
+		filesystem.scan()
+		_drain_worker()
+	_write_generation_samples(label)
+	if label == "generation_adopted":
+		filesystem.scan()
+	Handler.new(connection).scan_filesystem({"_request_id": label})
+	if label in ["generation_fast", "generation_adopted"]:
+		# Deliberately keep the older native signal stack active while the
+		# worker finishes. Ordinary frame timing cannot guarantee this gap.
+		_drain_worker()
+
+func _write_generation_samples(label: String) -> void:
+	for i: int in range(80):
+		var file := FileAccess.open("res://%s_%d.gd" % [label, i], FileAccess.WRITE)
+		file.store_string("class_name Scan_%s_%d\nextends RefCounted\n" % [label, i])
+		file.close()
+
+func _run_later_listener_contract() -> void:
+	_begin_case("later_listener")
+	Handler.new(connection).scan_filesystem({"_request_id": "later_first"})
+	filesystem.sources_changed.connect(_request_after_acceptance, CONNECT_ONE_SHOT)
+	await _await_reply("later_first")
+	await _await_reply("generation_later")
+	_expect(not bool(connection.replies.generation_later.data.was_already_scanning), "new request joined an already accepted scan")
+	_expect(_has_generation_class("generation_later"), "later listener's files were not scanned")
+	print("SCAN_TEST later listener started a distinct operation")
+
+func _request_after_acceptance(_changed: bool) -> void:
+	_write_generation_samples("generation_later")
+	Handler.new(connection).scan_filesystem({"_request_id": "generation_later"})
+
+func _drain_worker() -> void:
+	var deadline := Time.get_ticks_msec() + 5000
+	while filesystem.is_scanning() and Time.get_ticks_msec() < deadline:
+		OS.delay_usec(1000)
+	_expect(not filesystem.is_scanning(), "controlled worker did not finish before its native callback")
+
+func _has_generation_class(label: String) -> bool:
+	for entry: Dictionary in ProjectSettings.get_global_class_list():
+		if entry["class"] == "Scan_%s_11" % label and entry["path"] == "res://%s_11.gd" % label:
+			return true
+	return false
 
 func _finish() -> void:
 	phase = "finished"
@@ -208,14 +295,15 @@ func _run_timeout_contract() -> void:
 	late_file.store_string("class_name LateScanBarrierSample\nextends RefCounted\n")
 	late_file.close()
 	Handler.new(connection).scan_filesystem({"_request_id": "after_timeout"})
-	held_callback.call_deferred(false)
-	await _await_reply("after_timeout")
-	_expect(bool(connection.replies.after_timeout.data.was_already_scanning), "timeout released unfinished native scan ownership")
 	var found_late_class := false
 	for entry: Dictionary in ProjectSettings.get_global_class_list():
 		if entry["class"] == "LateScanBarrierSample":
 			found_late_class = true
 	_expect(not found_late_class, "timed-out scan was replaced before late native completion")
+	filesystem.sources_changed.connect(held_callback)
+	held_callback.call_deferred(false)
+	await _await_reply("after_timeout")
+	_expect(bool(connection.replies.after_timeout.data.was_already_scanning), "timeout released unfinished native scan ownership")
 	await get_tree().process_frame
 	_expect(Work.active_count("scan_filesystem") == 0, "timed-out request leaked script work")
 
