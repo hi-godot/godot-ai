@@ -26,6 +26,17 @@ class _ZeroAssertSuite extends McpTestSuite:
 		return  # intentionally never asserts
 
 
+class _SuspendingSuite extends McpTestSuite:
+	signal resume_test
+	var resumed := false
+	func suite_name() -> String: return "inner_suspending"
+	func test_suspends_after_assertion() -> void:
+		assert_true(true)
+		await resume_test
+		resumed = true
+		assert_true(true)
+
+
 class _PassingSuite extends McpTestSuite:
 	func suite_name() -> String: return "inner_pass"
 	func test_one_assert() -> void:
@@ -293,3 +304,16 @@ static func _edited_scene_root() -> Node:
 	if not Engine.is_editor_hint():
 		return null
 	return EditorInterface.get_edited_scene_root()
+
+
+func test_suspended_test_fails_even_after_successful_assertions() -> void:
+	var runner := McpTestRunner.new()
+	var fixture := _SuspendingSuite.new()
+	var result := runner.run_suites([fixture])
+	assert_false(fixture.resumed, "fixture must actually suspend")
+	assert_eq(result.failed, 1, "a partial async test must not pass on early assertions")
+	assert_eq(result.passed, 0)
+	if result.failed == 1:
+		assert_contains(result.failures[0].message, "suspended")
+	fixture.resume_test.emit()
+	assert_true(fixture.resumed, "complete the isolated suspended fixture before disposal")

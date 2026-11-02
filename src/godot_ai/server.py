@@ -220,11 +220,12 @@ _NAMED_VERB_LINES: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
 ## blank line before the tilemap/tileset pair (kept for byte-stability of
 ## the no-exclusion output).
 _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
-    ("scene", "  scene_manage     create, save_as, get_roots\n"),
+    ("scene", "  scene_manage     create, save_as, close, get_roots\n"),
     (
         "node",
         "  node_manage      get_children, get_groups, delete, duplicate, rename,\n"
-        "                   move, reparent, add_to_group, remove_from_group\n",
+        "                   move, reparent, add_to_group, remove_from_group,\n"
+        "                   set_editable_children\n",
     ),
     ("script", "  script_manage    read, detach, find_symbols\n"),
     (
@@ -242,7 +243,10 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "animation",
         "  animation_manage player_create, delete, validate, add_property_track,\n"
         "                   add_method_track, set_autoplay, play, stop, list, get,\n"
-        "                   create_simple, preset_fade/slide/shake/pulse\n",
+        "                   create_simple, preset_fade/slide/shake/pulse,\n"
+        "                   library_add/remove/list, tree_create/get,\n"
+        "                   tree_node_add/remove/set, tree_connect/disconnect,\n"
+        "                   tree_point_add/set/remove, tree_transition_add/set/remove\n",
     ),
     (
         "material",
@@ -255,7 +259,8 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
     (
         "audio",
         "  audio_manage     player_create, player_set_stream, player_set_playback,\n"
-        "                   play, stop, list\n",
+        "                   play, stop, list, bus_list/add/remove/set,\n"
+        "                   bus_effect_add/set/remove, bus_layout_save\n",
     ),
     (
         "particle",
@@ -282,7 +287,8 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
     ("autoload", "  autoload_manage  list, add, remove\n"),
     (
         "filesystem",
-        "  filesystem_manage read_text, write_text, reimport, scan, search, move, rename, remove\n",
+        "  filesystem_manage read_text, write_text, import_get, import_set,\n"
+        "                    reimport, scan, search, move, rename, remove\n",
     ),
     (
         "theme",
@@ -292,8 +298,8 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
     ("ui", "  ui_manage        set_anchor_preset, set_text, build_layout, draw_recipe\n"),
     (
         "resource",
-        "  resource_manage  search, load, inspect, assign, get_info, create,\n"
-        "                   curve_set_points, environment_create,\n"
+        "  resource_manage  search, load, inspect, assign, get_info, create, set_properties,\n"
+        "                   sprite_frames_create, curve_set_points, environment_create,\n"
         "                   physics_shape_autofit, physics_shape_generate,\n"
         "                   gradient_texture_create,\n"
         "                   noise_texture_create\n",
@@ -306,7 +312,11 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "  tilemap_manage   tilemap_set_cell, tilemap_set_cells_rect,\n"
         "                   tilemap_clear, tilemap_get_cells\n",
     ),
-    ("tileset", "  tileset_manage   tileset_get_atlas_tiles, tileset_get_atlas_image\n"),
+    (
+        "tileset",
+        "  tileset_manage   tileset_create_atlas, tileset_get_atlas_tiles, "
+        "tileset_get_atlas_image\n",
+    ),
     (
         "gridmap",
         "  gridmap_manage   gridmap_set_item, gridmap_fill, gridmap_clear,\n"

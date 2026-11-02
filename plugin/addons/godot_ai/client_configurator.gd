@@ -25,6 +25,7 @@ const DshStrategy := preload("res://addons/godot_ai/clients/_dsh_strategy.gd")
 const CliStrategy := preload("res://addons/godot_ai/clients/_cli_strategy.gd")
 const ManualCommand := preload("res://addons/godot_ai/clients/_manual_command.gd")
 const CliFinder := preload("res://addons/godot_ai/clients/_cli_finder.gd")
+const RepairOwnership := preload("res://addons/godot_ai/utils/client_repair_ownership.gd")
 const MutationLock := preload("res://addons/godot_ai/utils/client_mutation_lock.gd")
 const WindowsPortReservation := preload("res://addons/godot_ai/utils/windows_port_reservation.gd")
 const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
@@ -49,6 +50,7 @@ const MAX_PORT := 65535
 const SUGGEST_PORT_MAX_PROBES := 64
 const SETTING_WS_PORT := "godot_ai/ws_port"
 const SETTING_V4_ENDPOINT_PORTS := "godot_ai/v4_endpoint_ports"
+const SETTING_AUTO_REPAIR := "godot_ai/auto_reconfigure_clients"
 const SETTING_STARTUP_TRACE := "godot_ai/log_startup_timing"
 const SETTING_KEEP_SERVER_ON_EXIT := "godot_ai/keep_server_on_exit"
 ## External cwd the user can set when an MCP client (Pi, code-server, …) reads
@@ -209,6 +211,7 @@ static func ensure_settings_registered() -> void:
 	_register_port_setting(es, McpSettings.SETTING_HTTP_PORT, DEFAULT_HTTP_PORT)
 	_register_port_setting(es, SETTING_WS_PORT, DEFAULT_WS_PORT)
 	_register_bool_setting(es, SETTING_STARTUP_TRACE, false)
+	_register_bool_setting(es, SETTING_AUTO_REPAIR, false)
 	_register_bool_setting(es, SETTING_KEEP_SERVER_ON_EXIT, false)
 	_register_string_setting(es, McpSettings.SETTING_EXCLUDED_DOMAINS, "")
 	_register_bool_setting(es, McpSettings.SETTING_TELEMETRY_ENABLED, true)
@@ -410,6 +413,8 @@ static func capture_launch_context(endpoint_policy: Dictionary = {}) -> Dictiona
 		"platform": OS.get_name(),
 		"server_url": "http://127.0.0.1:%d/mcp" % captured_http_port,
 		"project_roots": capture_project_roots(),
+		"owner_project": ProjectSettings.globalize_path("res://").simplify_path(),
+		"external_client_cwd": str(_editor_setting_lookup(SETTING_EXTERNAL_CLIENT_CWD)),
 		## The opt-out must ride the attach argv: the client spawns the bridge
 		## (and the bridge its backend) with no editor in the loop, so the
 		## env-injection path in server_lifecycle.gd never runs for them.
@@ -454,6 +459,10 @@ static func apply_endpoint_settings(changes: Dictionary) -> Dictionary:
 				if not (value is String):
 					return {"ok": false, "error": "excluded domains must be text"}
 				normalized[McpSettings.SETTING_EXCLUDED_DOMAINS] = _canonicalize_excluded_domains(value)
+			"auto_reconfigure_clients":
+				if not value is bool:
+					return {"ok": false, "error": "automatic repair preference must be boolean"}
+				normalized[SETTING_AUTO_REPAIR] = value
 			"telemetry_enabled":
 				if not (value is bool):
 					return {"ok": false, "error": "telemetry preference must be boolean"}
@@ -604,7 +613,7 @@ static func client_display_name(id: String) -> String:
 ## reads `EditorInterface.get_editor_settings()`, which is main-thread-only.
 ## Empty defaults to the live server URL — appropriate for MCP-tool callers
 ## that always run on main.
-static func configure(id: String, url: String = "", launch_context: Dictionary = {}) -> Dictionary:
+static func configure(id: String, url: String = "", launch_context: Dictionary = {}, enroll_repair: bool = true) -> Dictionary:
 	if ClientRegistry.stale_session_detected():
 		return {"status": "error", "message": ClientRegistry.RESTART_TO_FINISH_UPDATE}
 	var client := ClientRegistry.get_by_id(id)
@@ -645,6 +654,13 @@ static func configure(id: String, url: String = "", launch_context: Dictionary =
 			"status": "error",
 			"message": str(claim.get("error", MutationLock.recovery_message())),
 		}
+	var prior_target := RepairOwnership.target(client, SERVER_NAME, _project_roots_from_context(context), str(context.get("external_client_cwd", "")))
+	var refresh_owned_baseline := false
+	if not enroll_repair and not prior_target.is_empty():
+		var prior_owner := RepairOwnership.read(prior_target)
+		if not prior_owner.is_empty() and prior_owner.get("project") == context.get("owner_project") and RepairOwnership.enabled(client, prior_target):
+			var prior_status := check_status_details_for_url_with_cli_path(id, url, "", context, prior_owner.launch)
+			refresh_owned_baseline = prior_status.get("status") == Client.Status.CONFIGURED
 	var result := _dispatch_configure(client, url, launch, context)
 	## Trust-but-verify: a strategy may report ok and have actually written the
 	## file, yet the entry is missing/stale on the read-back path — most often
@@ -654,7 +670,79 @@ static func configure(id: String, url: String = "", launch_context: Dictionary =
 	var verified := _verify_post_state(
 		client, result, Client.Status.CONFIGURED, url, "configure", launch, context
 	)
+	if (enroll_repair or refresh_owned_baseline) and verified.get("status") == "ok":
+		var target := RepairOwnership.target(client, SERVER_NAME, _project_roots_from_context(context), str(context.get("external_client_cwd", "")))
+		if not target.is_empty() and (enroll_repair or target == prior_target):
+			var enrolled := RepairOwnership.record(target, str(context.get("owner_project", "")), launch_for_client(client, launch))
+			verified["repair_enrolled" if enroll_repair else "repair_baseline_refreshed"] = enrolled
+			if not enrolled:
+				verified["message"] = str(verified.get("message", "Configured.")) + " Automatic repair enrollment failed; Configure again to enroll."
 	return _finish_client_mutation(claim, verified)
+
+
+## A read-only scheduling hint, never mutation authority. Rechecked under the lock.
+static func repair_attempt_key(id: String, context: Dictionary, launch: Dictionary) -> String:
+	var client := ClientRegistry.get_by_id(id)
+	if client == null:
+		return ""
+	var target := RepairOwnership.target(client, SERVER_NAME, _project_roots_from_context(context), str(context.get("external_client_cwd", "")))
+	var stored := RepairOwnership.read(target)
+	if stored.is_empty() or stored.get("project") != context.get("owner_project"):
+		return ""
+	return (JSON.stringify(target) + JSON.stringify(launch)).sha256_text()
+
+
+static func repair(id: String, context: Dictionary, cancelled: Callable = Callable()) -> Dictionary:
+	var client := ClientRegistry.get_by_id(id)
+	if client == null or ClientRegistry.stale_session_detected():
+		return {"status": "skipped", "message": "Automatic repair unavailable; use Configure."}
+	var launch := launch_for_client(client, resolve_attach_launch(context))
+	var claim := MutationLock.acquire(id, "repair")
+	if not bool(claim.get("ok", false)):
+		return {"status": "error", "message": str(claim.get("error", MutationLock.recovery_message()))}
+	var result := _repair_locked(client, context, launch, cancelled)
+	return _finish_client_mutation(claim, result)
+
+
+static func _repair_locked(client: Client, context: Dictionary, launch: Dictionary, cancelled: Callable) -> Dictionary:
+	var skipped := {"status": "skipped", "message": "Automatic repair skipped; use Configure to review this entry."}
+	var target := RepairOwnership.target(client, SERVER_NAME, _project_roots_from_context(context), str(context.get("external_client_cwd", "")))
+	var stored := RepairOwnership.read(target)
+	if stored.is_empty() or stored.get("project") != context.get("owner_project") or not RepairOwnership.enabled(client, target):
+		return skipped
+	if client.config_type == "toml":
+		var validation := RepairOwnership.validate_toml(str(target.path), cancelled)
+		if not validation.is_empty():
+			if validation.get("status") == "cancelled":
+				validation["mutation_started"] = false
+			return validation
+	var url := server_url_from(context)
+	var prior := check_status_details_for_url_with_cli_path(client.id, url, "", context, stored.launch)
+	if prior.get("status") != Client.Status.CONFIGURED:
+		return skipped
+	if not _config_write_error(client, "configure").is_empty() or not _credentials_error(client).is_empty():
+		return skipped
+	if cancelled.is_valid() and cancelled.call():
+		return {"status": "cancelled", "mutation_started": false, "message": "Automatic repair cancelled before writing."}
+	var current := check_status_details_for_url_with_cli_path(client.id, url, "", context, launch)
+	if current.get("status") == Client.Status.CONFIGURED:
+		return {"status": "unchanged", "message": "Client configuration is current."}
+	if not bool(launch.get("ok", false)):
+		return skipped
+	if cancelled.is_valid() and cancelled.call():
+		return {"status": "cancelled", "mutation_started": false, "message": "Automatic repair cancelled before writing."}
+	var result := (
+		JsonStrategy.configure(client, SERVER_NAME, url, launch, _project_roots_from_context(context))
+		if client.config_type == "cli"
+		else _dispatch_configure(client, url, launch, context)
+	)
+	var verified := _verify_post_state(client, result, Client.Status.CONFIGURED, url, "repair", launch, context)
+	if verified.get("status") == "ok":
+		if RepairOwnership.record(target, str(context.get("owner_project", "")), launch):
+			verified["message"] = "Configuration repaired; reload the client’s MCP connection."
+		else:
+			verified["message"] = "Configuration repaired, but ownership refresh failed; use Configure before the next automatic repair."
+	return verified
 
 
 static func check_status(id: String) -> Client.Status:
@@ -675,10 +763,10 @@ static func check_status_for_url_with_cli_path(
 
 ## True when <id>'s stored entry verifies EXACTLY against the launch this
 ## editor would have rendered at `from_version` — same ports, exclusions,
-## telemetry flag, command shape; nothing differs but the version pin. This
-## is the post-update auto-repin gate: only such entries are provably "what
-## Configure wrote before the update", so rewriting them to the current
-## version restores the user's own prior intent. Anything else — entries
+## telemetry flag, command shape. A retained backup's version-bound policy
+## also permits the known previous cutoff (including a legacy absent cutoff).
+## This is the post-update auto-repin gate: exact old launch readback permits
+## rewriting its version and dependency policy to the current release. Anything else — entries
 ## pointing at another editor's ports (the smoke-fixture blast radius that
 ## motivated this gate), hand-edits, changed settings — stays untouched for
 ## the drift banner's human click. An empty `from_version` (marker written
@@ -719,7 +807,13 @@ static func entry_drift_is_version_pin_only(
 	## version, so URL-mode entries can never be version-pin-only drift and
 	## correctly fail this check.
 	var url := str(context.get("server_url", http_url()))
-	var status := check_status_for_url_with_cli_path(id, url, "", old_context)
+	var previous_launch := UvResolution.previous_launch_for_verification(
+		resolve_attach_launch(old_context), context.get("previous_dependency_policy", {})
+	)
+	if not bool(previous_launch.get("ok", false)):
+		return false
+	var details := check_status_details_for_url_with_cli_path(id, url, "", old_context, previous_launch)
+	var status: int = details.get("status", Client.Status.ERROR)
 	return status == Client.Status.CONFIGURED
 
 
@@ -888,10 +982,15 @@ static func remove(id: String, url: String = "", launch_context: Dictionary = {}
 			"status": "error",
 			"message": str(claim.get("error", MutationLock.recovery_message())),
 		}
+	var repair_target := RepairOwnership.target(client, SERVER_NAME, _project_roots_from_context(context), str(context.get("external_client_cwd", "")))
 	var result := _dispatch_remove(client, context)
 	var verified := _verify_post_state(
 		client, result, Client.Status.NOT_CONFIGURED, url, "remove", launch, context
 	)
+	if verified.get("status") == "ok" and not repair_target.is_empty():
+		var record_path := RepairOwnership.record_path(repair_target)
+		if FileAccess.file_exists(record_path) and DirAccess.remove_absolute(record_path) != OK:
+			verified["message"] = str(verified.get("message", "Removed.")) + " Could not remove the automatic repair ownership record."
 	return _finish_client_mutation(claim, verified)
 
 

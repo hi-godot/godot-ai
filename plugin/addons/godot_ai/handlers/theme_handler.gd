@@ -699,7 +699,7 @@ func stylebox_override(params: Dictionary) -> Dictionary:
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"Unknown patch key(s): %s (valid: %s)" % [", ".join(unknown_keys), ", ".join(_FLAT_PATCH_KEYS)])
 
-	var resolved := McpNodeValidator.resolve_or_error(node_path, "path")
+	var resolved := McpNodeValidator.resolve_or_error(node_path, "path", "", true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
@@ -881,7 +881,7 @@ func apply_theme(params: Dictionary) -> Dictionary:
 		if theme == null or not theme is Theme:
 			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a Theme" % theme_path)
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node

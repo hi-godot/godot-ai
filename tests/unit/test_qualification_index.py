@@ -33,7 +33,9 @@ def test_index_serves_only_hashed_retained_bytes_and_does_not_log_capability(
     tmp_path, capsys, version
 ):
     payload, rows = wheel_fixture(tmp_path, version)
-    with retained_index(tmp_path, rows) as (index, requested):
+    with retained_index(
+        tmp_path, rows, {row["filename"]: "2026-10-01T00:00:00Z" for row in rows}
+    ) as (index, requested):
         with urllib.request.urlopen(index + "example/") as response:
             listing = response.read().decode()
         assert "#sha256=" + rows[0]["sha256"] in listing
@@ -66,7 +68,9 @@ def test_index_serves_only_hashed_retained_bytes_and_does_not_log_capability(
 def test_index_rejects_encoded_path_escape_and_double_decoding(tmp_path, method):
     _payload, rows = wheel_fixture(tmp_path, "1.0+cpu")
     filename = rows[0]["filename"]
-    with retained_index(tmp_path, rows) as (index, requested):
+    with retained_index(
+        tmp_path, rows, {row["filename"]: "2026-10-01T00:00:00Z" for row in rows}
+    ) as (index, requested):
         for name in (
             "nested%2f" + filename,
             "..%2f" + filename,
@@ -83,7 +87,9 @@ def test_index_rejects_encoded_path_escape_and_double_decoding(tmp_path, method)
 
 def test_index_rejects_changed_files_before_and_after_startup(tmp_path):
     _payload, rows = wheel_fixture(tmp_path)
-    with retained_index(tmp_path, rows) as (index, requested):
+    with retained_index(
+        tmp_path, rows, {row["filename"]: "2026-10-01T00:00:00Z" for row in rows}
+    ) as (index, requested):
         (tmp_path / rows[0]["filename"]).write_bytes(b"replaced")
         artifact = urllib.parse.urljoin(index, "../files/" + rows[0]["filename"])
         with pytest.raises(urllib.error.HTTPError) as error:
@@ -91,14 +97,16 @@ def test_index_rejects_changed_files_before_and_after_startup(tmp_path):
         assert error.value.code == 409
         assert requested == []
     with pytest.raises(support.ReleaseError, match="differs"):
-        with retained_index(tmp_path, rows):
+        with retained_index(
+            tmp_path, rows, {row["filename"]: "2026-10-01T00:00:00Z" for row in rows}
+        ):
             pytest.fail("mutated index started")
 
 
 def test_index_rejects_duplicate_filenames(tmp_path):
     _payload, rows = wheel_fixture(tmp_path)
     with pytest.raises(support.ReleaseError, match="duplicate"):
-        with retained_index(tmp_path, rows + rows):
+        with retained_index(tmp_path, rows + rows, {}):
             pytest.fail("ambiguous index started")
 
 
@@ -119,7 +127,9 @@ def test_index_rejects_malformed_artifact_identity(tmp_path, field, value):
     _payload, rows = wheel_fixture(tmp_path)
     rows[0][field] = value
     with pytest.raises(support.ReleaseError, match="identity"):
-        with retained_index(tmp_path, rows):
+        with retained_index(
+            tmp_path, rows, {row["filename"]: "2026-10-01T00:00:00Z" for row in rows}
+        ):
             pytest.fail("malformed index started")
 
 
@@ -128,7 +138,9 @@ def test_index_rejects_malformed_artifact_identity(tmp_path, field, value):
 def test_index_rechecks_bounded_regular_file_for_every_request(tmp_path, mutation, method):
     payload, rows = wheel_fixture(tmp_path)
     target = tmp_path / rows[0]["filename"]
-    with retained_index(tmp_path, rows) as (index, requested):
+    with retained_index(
+        tmp_path, rows, {row["filename"]: "2026-10-01T00:00:00Z" for row in rows}
+    ) as (index, requested):
         if mutation in ("deleted", "directory"):
             target.unlink()
             if mutation == "directory":
@@ -144,7 +156,7 @@ def test_index_rechecks_bounded_regular_file_for_every_request(tmp_path, mutatio
 
 def test_empty_index_is_refused(tmp_path):
     with pytest.raises(support.ReleaseError, match="empty"):
-        with retained_index(tmp_path, []):
+        with retained_index(tmp_path, [], {}):
             pytest.fail("empty index started")
 
 
@@ -153,7 +165,9 @@ def test_index_freezes_retained_identity_against_caller_mutation(tmp_path, repla
     payload, rows = wheel_fixture(tmp_path)
     filename = rows[0]["filename"]
     replacement = b"different retained bytes"
-    with retained_index(tmp_path, rows) as (index, requested):
+    with retained_index(
+        tmp_path, rows, {row["filename"]: "2026-10-01T00:00:00Z" for row in rows}
+    ) as (index, requested):
         rows[0]["size"] = len(replacement)
         rows[0]["sha256"] = hashlib.sha256(replacement).hexdigest()
         if replace_file:
@@ -176,7 +190,9 @@ def test_index_rejects_a_fifo_replacement_without_blocking(tmp_path, monkeypatch
     target = tmp_path / rows[0]["filename"]
     original_stat = Path.lstat
     original_open = os.open
-    with retained_index(tmp_path, rows) as (index, requested):
+    with retained_index(
+        tmp_path, rows, {row["filename"]: "2026-10-01T00:00:00Z" for row in rows}
+    ) as (index, requested):
 
         def replace_after_check(path, *args, **kwargs):
             info = original_stat(path, *args, **kwargs)

@@ -42,13 +42,16 @@ class FakeClientJobs:
 	var blocked := false
 	var repin_versions: Array[Dictionary] = []
 	var refresh_requests := 0
+	var previous_policy := {}
 
 	func set_client_health_blocked(value: bool) -> void:
 		blocked = value
 
 	func begin_post_update_repin(
-		from_version: String, to_version: String, replace_owned_mismatches := false
+		from_version: String, to_version: String, replace_owned_mismatches := false,
+		_previous_dependency_policy: Dictionary = {},
 	) -> Dictionary:
+		previous_policy = _previous_dependency_policy.duplicate(true)
 		repin_versions.append({
 			"from": from_version,
 			"to": to_version,
@@ -126,12 +129,12 @@ class EndpointJobs extends FakeClientJobs:
 	var lifecycle
 	var activation_seen := {}
 
-	func begin_post_update_repin(from_version: String, to_version: String, replace_owned_mismatches := false) -> Dictionary:
+	func begin_post_update_repin(from_version: String, to_version: String, replace_owned_mismatches := false, previous_dependency_policy: Dictionary = {}) -> Dictionary:
 		activation_seen = {
 			"context": McpClientConfigurator.capture_launch_context(),
 			"plan": lifecycle._plan.duplicate(true),
 		}
-		return super.begin_post_update_repin(from_version, to_version, replace_owned_mismatches)
+		return super.begin_post_update_repin(from_version, to_version, replace_owned_mismatches, previous_dependency_policy)
 
 
 class EndpointDock:
@@ -739,3 +742,30 @@ func test_non_major_activation_without_override_keeps_legacy_custom_ports() -> v
 	plugin._lifecycle = null
 	plugin.free()
 	_restore_endpoint_test_settings()
+
+
+func test_successful_update_passes_retained_previous_cutoff_to_repin() -> void:
+	var version := "0.0.0-cutoff-plugin-fixture"
+	var root := "res://addons/.godot_ai_update/backup/" + version
+	var path := root.path_join("plugin.cfg")
+	assert_false(FileAccess.file_exists(path))
+	if FileAccess.file_exists(path):
+		return
+	assert_eq(DirAccess.make_dir_recursive_absolute(root), OK)
+	var config := ConfigFile.new()
+	config.set_value("plugin", "version", version)
+	config.set_value("plugin", "dependency_cutoff", "2025-01-02T03:04:05Z")
+	assert_eq(config.save(path), OK)
+	var plugin := Plugin.new()
+	var jobs := FakeClientJobs.new()
+	plugin._client_jobs = jobs
+	plugin._post_update_outcome = {"outcome": "success", "from_version": version, "to_version": VERSION, "backup_root": root}
+	plugin._begin_startup_release()
+	assert_eq(jobs.previous_policy, {"known": true, "cutoff": "2025-01-02T03:04:05Z"})
+	assert_false(plugin._normal_start_released)
+	plugin._client_jobs = null
+	jobs.free()
+	plugin._lifecycle = null
+	plugin.free()
+	assert_eq(DirAccess.remove_absolute(path), OK)
+	assert_eq(DirAccess.remove_absolute(root), OK)

@@ -379,6 +379,8 @@ class StubClient:
             return {"path": "res://main.tscn", "undoable": False}
         if command == "save_scene_as":
             return {"path": params.get("path", ""), "undoable": False}
+        if command == "close_scene":
+            return {"path": params.get("path", ""), "undoable": False}
         if command == "search_filesystem":
             return {"files": [{"path": f"res://file_{i}.gd"} for i in range(3)]}
         if command == "run_tests":
@@ -2565,6 +2567,22 @@ async def test_scene_save_as_handler():
     assert client.calls[-1]["params"] == {"path": "res://copy.tscn"}
 
 
+async def test_scene_close_handler_omits_default_discard_flag():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await scene_handlers.scene_close(runtime, path="res://scratch.tscn")
+    assert result["path"] == "res://scratch.tscn"
+    assert client.calls[-1]["command"] == "close_scene"
+    assert client.calls[-1]["params"] == {"path": "res://scratch.tscn"}
+
+
+async def test_scene_close_handler_forwards_discard_changes():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await scene_handlers.scene_close(runtime, path="res://scratch.tscn", discard_changes=True)
+    assert client.calls[-1]["params"] == {"path": "res://scratch.tscn", "discard_changes": True}
+
+
 # ---------------------------------------------------------------------------
 # Node handler tests
 # ---------------------------------------------------------------------------
@@ -2722,6 +2740,32 @@ async def test_node_move_handler():
     assert result["new_index"] == 2
     assert result["undoable"] is True
     assert client.calls[-1]["params"] == {"path": "/Main/Camera3D", "index": 2}
+
+
+async def test_node_set_editable_children_forwards_explicit_state_and_scene_guard():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await node_handlers.node_set_editable_children(
+        runtime, path="/Main/Model", editable=False, scene_file="res://main.tscn",
+    )
+    assert client.calls[-1]["command"] == "set_editable_children"
+    assert client.calls[-1]["params"] == {
+        "path": "/Main/Model", "editable": False, "scene_file": "res://main.tscn",
+    }
+
+
+async def test_node_set_editable_children_requires_writable():
+    client = StubClient()
+    client.live_readiness = "importing"
+    registry = SessionRegistry()
+    registry.register(Session(
+        session_id="editable-test", godot_version="4.7", project_path="/tmp/p",
+        plugin_version="4.3.1", readiness="importing",
+    ))
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError):
+        await node_handlers.node_set_editable_children(runtime, path="/Main/Model", editable=True)
+    assert not any(call["command"] == "set_editable_children" for call in client.calls)
 
 
 async def test_node_add_to_group_handler():
@@ -3696,7 +3740,10 @@ async def test_physics_shape_generate_requires_writable():
         await physics_shape_handlers.physics_shape_generate(runtime, paths=["/Main/Body"])
 
 
-async def test_resource_create_requires_writable():
+@pytest.mark.parametrize(
+    "operation", ["create", "set_properties", "sprite_frames_create", "tileset_create_atlas"]
+)
+async def test_resource_create_requires_writable(operation):
     """Write tools must raise EDITOR_NOT_READY when editor is importing."""
     from godot_ai.godot_client.client import GodotCommandError
     from godot_ai.sessions.registry import Session
@@ -3715,12 +3762,22 @@ async def test_resource_create_requires_writable():
     runtime = DirectRuntime(registry=registry, client=client)
 
     with pytest.raises(GodotCommandError):
-        await resource_handlers.resource_create(
-            runtime,
-            type="BoxMesh",
-            path="/Main/Mesh",
-            property="mesh",
-        )
+        if operation == "sprite_frames_create":
+            await resource_handlers.sprite_frames_create(runtime, "res://frames.tres", [])
+        elif operation == "tileset_create_atlas":
+            from godot_ai.handlers import tileset as tileset_handlers
+
+            await tileset_handlers.tileset_create_atlas(
+                runtime, "res://tiles.tres", "res://atlas.png", {"x": 16, "y": 16}, []
+            )
+        elif operation == "set_properties":
+            await resource_handlers.resource_set_properties(
+                runtime, path="res://mesh.tres", properties={"size": {"x": 2, "y": 2, "z": 2}}
+            )
+        else:
+            await resource_handlers.resource_create(
+                runtime, type="BoxMesh", path="/Main/Mesh", property="mesh"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -4213,6 +4270,25 @@ async def test_editor_screenshot_handler_without_image():
     assert result["width"] == 1
     assert result["original_width"] == 100
     assert "image_base64" not in result
+
+
+@pytest.mark.parametrize("readiness", ["importing", "playing"])
+async def test_editor_screenshot_file_write_requires_writable(readiness):
+    client = StubClient()
+    client.live_readiness = readiness
+    registry = SessionRegistry()
+    registry.register(_make_session(readiness=readiness))
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError) as error:
+        await editor_handlers.editor_screenshot(
+            runtime, source="cinematic", save_to="res://captures/frame.png"
+        )
+    assert error.value.code == "EDITOR_NOT_READY"
+    assert not any(call["command"] == "take_screenshot" for call in client.calls)
+
+    result = await editor_handlers.editor_screenshot(runtime, include_image=False)
+    assert result["source"] == "viewport"
+    assert client.calls[-1]["command"] == "take_screenshot"
 
 
 async def test_editor_screenshot_handler_passes_source():
@@ -6185,3 +6261,44 @@ async def test_resource_inspect_handler_preserves_graph_and_routes_read():
     runtime.send_command.assert_awaited_once_with(
         "inspect_resource", {"node_path": "/Main/Collider", "property": "shape", "depth": 1}
     )
+
+
+async def test_import_settings_forward_revision_and_native_import_budget():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await filesystem_handlers.filesystem_import_get(runtime, path="res://sound.wav")
+    assert client.calls[-1]["command"] == "import_get"
+    assert client.calls[-1]["params"] == {"path": "res://sound.wav"}
+    await filesystem_handlers.filesystem_import_set(
+        runtime,
+        path="res://sound.wav",
+        options={"edit/loop_mode": 2},
+        reimport=False,
+        expected_revision="revision",
+    )
+    call = client.calls[-1]
+    assert call["command"] == "import_set"
+    assert call["params"] == {
+        "path": "res://sound.wav",
+        "options": {"edit/loop_mode": 2},
+        "reimport": False,
+        "expected_revision": "revision",
+    }
+    assert call["timeout"] == 120.0
+    await filesystem_handlers.filesystem_reimport(runtime, paths=["res://sound.wav"])
+    assert client.calls[-1]["timeout"] == 120.0
+
+
+async def test_import_settings_write_requires_ready_editor():
+    client = StubClient()
+    client.live_readiness = "importing"
+    registry = SessionRegistry()
+    registry.register(_make_session("importing-1", readiness="importing"))
+    runtime = DirectRuntime(registry=registry, client=client)
+    await filesystem_handlers.filesystem_import_get(runtime, path="res://sound.wav")
+    assert client.calls[-1]["command"] == "import_get"
+    with pytest.raises(GodotCommandError, match="EDITOR_NOT_READY"):
+        await filesystem_handlers.filesystem_import_set(
+            runtime, path="res://sound.wav", options={"edit/loop_mode": 2}
+        )
+    assert not any(call["command"] == "import_set" for call in client.calls)

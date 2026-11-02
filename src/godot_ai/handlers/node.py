@@ -101,6 +101,16 @@ async def node_set_property(
     )
 
 
+async def node_set_editable_children(
+    runtime: DirectRuntime, path: str, editable: bool, scene_file: str = ""
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "set_editable_children",
+        _mutation_params(scene_file, path=path, editable=editable),
+    )
+
+
 async def node_rename(
     runtime: DirectRuntime, path: str, new_name: str, scene_file: str = ""
 ) -> dict:

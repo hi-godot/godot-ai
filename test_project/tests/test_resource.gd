@@ -623,6 +623,158 @@ func test_create_resource_undo_survives_interleaving() -> void:
 	_remove_node(mi)
 
 
+# ----- regression: count-dependent resource properties -----
+
+func test_create_resource_dynamic_stream_properties_persist() -> void:
+	var output := "res://tests/_mcp_dynamic_streams_1173.tres"
+	assert_false(FileAccess.file_exists(output), "output fixture must not exist")
+	var result := _handler.create_resource({
+		"type": "AudioStreamRandomizer",
+		"resource_path": output,
+		"properties": {
+			"streams_count": 2,
+			"stream_0/stream": {"__class__": "AudioStreamWAV", "mix_rate": 22050},
+			"stream_0/weight": 0.25,
+			"stream_1/stream": {"__class__": "AudioStreamWAV", "mix_rate": 11025},
+			"stream_1/weight": 0.75,
+		},
+	})
+	assert_has_key(result, "data", "count-dependent properties should apply: %s" % result)
+	if not result.has("data"):
+		return
+	var saved := ResourceLoader.load(output, "", ResourceLoader.CACHE_MODE_IGNORE) as AudioStreamRandomizer
+	assert_true(saved is AudioStreamRandomizer, "saved resource must reload as AudioStreamRandomizer")
+	if saved != null:
+		assert_eq(saved.streams_count, 2)
+		assert_true(saved.get_stream(0) is AudioStreamWAV, "first stream must be a real resource")
+		assert_true(saved.get_stream(1) is AudioStreamWAV, "second stream must be a real resource")
+		if saved.get_stream(0) is AudioStreamWAV:
+			assert_eq(saved.get_stream(0).mix_rate, 22050)
+		if saved.get_stream(1) is AudioStreamWAV:
+			assert_eq(saved.get_stream(1).mix_rate, 11025)
+		assert_eq(saved.get_stream_probability_weight(0), 0.25)
+		assert_eq(saved.get_stream_probability_weight(1), 0.75)
+	DirAccess.remove_absolute(output)
+
+
+func test_create_resource_dynamic_invalid_stream_does_not_write() -> void:
+	var output := "res://tests/_mcp_dynamic_invalid_stream_1173.tres"
+	assert_false(FileAccess.file_exists(output), "output fixture must not exist")
+	var result := _handler.create_resource({
+		"type": "AudioStreamRandomizer",
+		"resource_path": output,
+		"properties": {
+			"streams_count": 1,
+			"stream_0/weight": 0.25,
+			"stream_1/weight": 0.75,
+		},
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_1/weight")
+	assert_false(FileAccess.file_exists(output), "invalid dynamic property must not create output")
+
+
+func test_apply_resource_properties_dynamic_removed_stream_is_rejected() -> void:
+	var stream := AudioStreamRandomizer.new()
+	stream.streams_count = 1
+	var result: Variant = ResourceHandler._apply_resource_properties(stream, {
+		"streams_count": 0,
+		"stream_0/weight": 0.25,
+	})
+	assert_true(result is Dictionary, "removed requested property must be rejected")
+	if not result is Dictionary:
+		return
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_0/weight")
+	assert_eq(stream.streams_count, 0)
+
+
+# ----- regression: overwrites refresh resources already held by scene nodes -----
+
+func test_resource_overwrite_refreshes_live_cache() -> void:
+	var path := "res://tests/_mcp_overwrite_cache_1172.tres"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var created := _handler.create_resource({
+		"type": "Environment", "resource_path": path,
+		"properties": {"background_mode": 1, "background_color": "#ff0000", "background_energy_multiplier": 3.0},
+	})
+	assert_has_key(created, "data", str(created))
+	if not created.has("data"):
+		return
+	var held := ResourceLoader.load(path) as Environment
+	assert_true(held != null, "created Environment should load")
+	if held == null:
+		DirAccess.remove_absolute(path)
+		return
+	assert_true(held.has_method("copy_from_resource"), "supported engine exposes native resource replacement")
+	var world := WorldEnvironment.new()
+	world.environment = held
+	var uid := ResourceLoader.get_resource_uid(path)
+	var replaced := _handler.create_resource({
+		"type": "Environment", "resource_path": path, "overwrite": true,
+		"properties": {"background_mode": 1, "background_color": "#00ff00"},
+	})
+	assert_has_key(replaced, "data", str(replaced))
+	assert_eq(world.environment.background_color, Color.GREEN, "already assigned references must see replacement values")
+	assert_eq(world.environment.background_energy_multiplier, 1.0, "omitted properties must reset to replacement defaults")
+	assert_true(world.environment == held, "scene nodes must retain their resource instance")
+	var cached := ResourceLoader.load(path) as Environment
+	assert_true(cached == held, "refresh should preserve the cached instance")
+	assert_eq(cached.resource_path, path, "refresh must preserve the cached path")
+	var disk := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE) as Environment
+	assert_true(disk != null, "overwritten Environment should reload from disk")
+	if disk != null:
+		assert_eq(disk.background_color, Color.GREEN)
+	assert_eq(ResourceLoader.get_resource_uid(path), uid, "overwrite must preserve UID")
+	world.free()
+	DirAccess.remove_absolute(path)
+
+
+func test_resource_overwrite_rejects_cached_type_change_before_writing() -> void:
+	var path := "res://tests/_mcp_overwrite_type_1172.tres"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var created := _handler.create_resource({"type": "Environment", "resource_path": path})
+	assert_has_key(created, "data", str(created))
+	if not created.has("data"):
+		return
+	var held := ResourceLoader.load(path) as Environment
+	assert_true(held != null)
+	var original := FileAccess.get_file_as_string(path)
+	var replaced := _handler.create_resource({"type": "SphereMesh", "resource_path": path, "overwrite": true})
+	assert_is_error(replaced, ErrorCodes.WRONG_TYPE)
+	assert_eq(FileAccess.get_file_as_string(path), original, "refusal must preserve the original file and UID")
+	assert_true(ResourceLoader.load(path) == held, "refusal must preserve the cache")
+	DirAccess.remove_absolute(path)
+
+
+func test_resource_overwrite_rejects_cached_script_change_before_writing() -> void:
+	var path := "res://tests/_mcp_overwrite_script_1172.tres"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var first_script := GDScript.new()
+	first_script.source_code = "@tool\nextends Resource\n"
+	assert_eq(first_script.reload(), OK)
+	var second_script := GDScript.new()
+	second_script.source_code = "@tool\nextends Resource\n"
+	assert_eq(second_script.reload(), OK)
+	var original_resource: Resource = first_script.new()
+	var replacement_resource: Resource = second_script.new()
+	var created := McpResourceIO.save_to_disk(original_resource, path, false, "Resource")
+	assert_has_key(created, "data", str(created))
+	if not created.has("data"):
+		return
+	var held := ResourceLoader.load(path)
+	assert_true(held != null)
+	var original := FileAccess.get_file_as_string(path)
+	var replaced := McpResourceIO.save_to_disk(replacement_resource, path, true, "Resource", {}, null, true)
+	assert_is_error(replaced, ErrorCodes.WRONG_TYPE)
+	assert_eq(FileAccess.get_file_as_string(path), original)
+	assert_true(ResourceLoader.load(path) == held)
+	DirAccess.remove_absolute(path)
+
+
 # ----- regression: properties dict __class__ shortcut for nested Resource slots -----
 
 func test_create_resource_missing_nested_resource_does_not_write() -> void:
@@ -797,6 +949,218 @@ func test_apply_properties_accepts_reasonable_nesting_depth() -> void:
 	for i in 8:
 		assert_true(cursor.sub is MyTestResource, "level %d must be a MyTestResource" % (i + 1))
 		cursor = cursor.sub
+
+
+func test_nested_container_sprite_frames_refuses_silent_texture_loss() -> void:
+	var output := "res://tests/_mcp_nested_frames_1182.tres"
+	var result := _handler.create_resource({
+		"type": "SpriteFrames", "resource_path": output,
+		"properties": {"animations": [{
+			"name": "idle", "speed": 5.0, "loop": true,
+			"frames": [{"duration": 1.0, "texture": {
+				"__class__": "AtlasTexture",
+				"atlas": {"__class__": "GradientTexture2D", "width": 16, "height": 16},
+				"region": {"position": {"x": 2, "y": 3}, "size": {"x": 4, "y": 5}},
+			}}],
+		}]},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	if result.has("error"):
+		assert_contains(result.error.message, "animations[0].frames[0].texture")
+	assert_false(FileAccess.file_exists(output), "a refused constructor must not save null textures")
+	if FileAccess.file_exists(output):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(output))
+
+
+func test_nested_container_preserves_literal_class_marker_data() -> void:
+	var host := MyTestResource.new()
+	var data := {"groups": [{"__class__": "ordinary-data", "value": 17}]}
+	var error: Variant = ResourceHandler._apply_resource_properties(host, {"data": data})
+	assert_eq(error, null)
+	assert_eq(host.data, data, "untyped dictionary data must not become resource constructors")
+
+
+func test_nested_container_invalid_constructors_preserve_existing_file() -> void:
+	var output := "res://tests/_mcp_nested_existing_1182.tres"
+	assert_eq(ResourceSaver.save(SpriteFrames.new(), output), OK)
+	var original := FileAccess.get_file_as_bytes(output)
+	for constructor in [
+		{"__class__": "NotARealResource1182"},
+		{"__class__": 17},
+		{"__class__": "BoxMesh"},
+		{"__class__": "AtlasTexture", "atlas": "res://tests/_missing_atlas_1182.tres"},
+	]:
+		var result := _handler.create_resource({
+			"type": "SpriteFrames", "resource_path": output, "overwrite": true,
+			"properties": {"animations": [{
+				"name": "idle", "speed": 5.0, "loop": true,
+				"frames": [{"duration": 1.0, "texture": constructor}],
+			}]},
+		})
+		assert_is_error(result, ErrorCodes.WRONG_TYPE)
+		assert_eq(FileAccess.get_file_as_bytes(output), original, "refused constructors must not overwrite")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(output))
+
+
+func test_nested_container_detects_in_place_constructor_loss() -> void:
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+		"\tset(value):", "\t\tvalue[\"texture\"] = null", "\t\tdata = value",
+	])
+	assert_eq(script.reload(), OK)
+	var resource: Resource = script.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"data": {"texture": {"__class__": "AtlasTexture"}},
+	})
+	assert_true(error is Dictionary, "mutating the input must not conceal constructor loss")
+	if error is Dictionary:
+		assert_is_error(error, ErrorCodes.WRONG_TYPE)
+		assert_contains(error.error.message, "data.texture")
+
+
+func test_nested_container_detects_dictionary_constructor_content_loss() -> void:
+	for mutation in [
+		"value[\"texture\"] = {}",
+		"value[\"texture\"].erase(\"__class__\")",
+		"value[\"texture\"].erase(\"value\")",
+		"value[\"texture\"][\"value\"][\"nested\"][0] = 99",
+	]:
+		var script := GDScript.new()
+		script.source_code = "\n".join([
+			"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+			"\tset(value):", "\t\t" + mutation, "\t\tdata = value",
+		])
+		assert_eq(script.reload(), OK)
+		var resource: Resource = script.new()
+		var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+			"data": {"texture": {"__class__": "ordinary-data", "value": {"nested": [17]}}},
+		})
+		assert_true(error is Dictionary, "constructor content loss must be refused: " + mutation)
+		if error is Dictionary:
+			assert_is_error(error, ErrorCodes.WRONG_TYPE)
+			assert_contains(error.error.message, "data.texture")
+
+
+func test_nested_container_accepts_setter_constructed_resource() -> void:
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+		"\tset(value):", "\t\tvalue[\"texture\"] = AtlasTexture.new()", "\t\tdata = value",
+	])
+	assert_eq(script.reload(), OK)
+	var resource: Resource = script.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"data": {"texture": {"__class__": "AtlasTexture"}},
+	})
+	assert_eq(error, null)
+	assert_true(resource.get("data").texture is AtlasTexture)
+
+
+func test_nested_container_retains_data_with_extra_fields_and_nested_resource() -> void:
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+		"\tset(value):",
+		"\t\tvalue[\"texture\"][\"metadata\"] = \"added\"",
+		"\t\tvalue[\"texture\"][\"values\"].append(23)",
+		"\t\tvalue[\"texture\"][\"inner\"] = AtlasTexture.new()",
+		"\t\tdata = value",
+	])
+	assert_eq(script.reload(), OK)
+	var resource: Resource = script.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"data": {"texture": {
+			"__class__": "ordinary-data", "values": [17],
+			"inner": {"__class__": "AtlasTexture"},
+		}},
+	})
+	assert_eq(error, null, "retained data may gain fields or contain constructed resources")
+	var stored: Dictionary = resource.get("data").texture
+	assert_eq(stored["__class__"], "ordinary-data")
+	assert_eq(stored.values, [17, 23])
+	assert_eq(stored.metadata, "added")
+	assert_true(stored.inner is AtlasTexture)
+
+
+func test_nested_container_refusal_keeps_existing_node_resource() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene root")
+		return
+	var sprite := AnimatedSprite2D.new()
+	sprite.name = "TestNestedConstructor1182"
+	root.add_child(sprite)
+	sprite.owner = root
+	var original := SpriteFrames.new()
+	sprite.sprite_frames = original
+	var result := _handler.create_resource({
+		"type": "SpriteFrames", "path": str(sprite.get_path()), "property": "sprite_frames",
+		"properties": {"animations": [{
+			"name": "idle", "speed": 5.0, "loop": true,
+			"frames": [{"duration": 1.0, "texture": {"__class__": "AtlasTexture"}}],
+		}]},
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_true(sprite.sprite_frames == original, "a refused constructor must not assign a partial resource")
+	_remove_node(sprite)
+
+
+func test_nested_container_typed_resources_survive_save_reload() -> void:
+	var output := "res://tests/_mcp_nested_typed_1182.tres"
+	var result := _handler.create_resource({
+		"type": "MyTestResource", "resource_path": output,
+		"properties": {"children": [{
+			"__class__": "MyTestResource", "named_children": {"frame": {
+				"__class__": "AtlasTexture",
+				"atlas": {"__class__": "GradientTexture2D", "width": 16, "height": 16},
+				"region": {"position": {"x": 2, "y": 3}, "size": {"x": 4, "y": 5}},
+			}},
+		}]},
+	})
+	assert_has_key(result, "data")
+	assert_false(result.get("data", {}).get("undoable", true))
+	var loaded := ResourceLoader.load(output, "", ResourceLoader.CACHE_MODE_IGNORE) as MyTestResource
+	assert_true(loaded != null)
+	if loaded != null:
+		assert_eq(loaded.children.size(), 1)
+		if loaded.children.size() == 1:
+			var child := loaded.children[0] as MyTestResource
+			assert_true(child != null)
+			if child != null:
+				var texture: Variant = child.named_children.get("frame")
+				assert_true(texture is AtlasTexture)
+				if texture is AtlasTexture:
+					assert_eq(texture.region, Rect2(2, 3, 4, 5))
+					assert_true(texture.atlas is GradientTexture2D)
+					if texture.atlas is GradientTexture2D:
+						assert_eq(texture.atlas.width, 16)
+						assert_eq(texture.atlas.height, 16)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(output))
+
+
+func test_nested_container_typed_arrays_keep_depth_bound() -> void:
+	var payload := {"__class__": "MyTestResource", "label": "leaf"}
+	for i in ResourceHandler.MAX_NESTED_RESOURCE_DEPTH + 2:
+		payload = {"__class__": "MyTestResource", "children": [payload]}
+	var host := MyTestResource.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(host, {"children": [payload]})
+	assert_true(error is Dictionary, "typed-array nesting must retain the resource depth limit")
+	if error is Dictionary:
+		assert_is_error(error, ErrorCodes.INVALID_PARAMS)
+	assert_eq(host.children.size(), 0, "an over-depth array must not partially apply")
+
+
+func test_nested_container_typed_dictionaries_keep_depth_bound() -> void:
+	var payload := {"__class__": "MyTestResource", "label": "leaf"}
+	for i in ResourceHandler.MAX_NESTED_RESOURCE_DEPTH + 2:
+		payload = {"__class__": "MyTestResource", "named_children": {"next": payload}}
+	var host := MyTestResource.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(host, {"named_children": {"next": payload}})
+	assert_true(error is Dictionary, "typed-dictionary nesting must retain the resource depth limit")
+	if error is Dictionary:
+		assert_is_error(error, ErrorCodes.INVALID_PARAMS)
+	assert_eq(host.named_children.size(), 0, "an over-depth dictionary must not partially apply")
 
 
 func test_instantiate_resource_non_instantiable_project_class_is_wrong_type() -> void:
@@ -1019,3 +1383,39 @@ func test_create_resource_unknown_assign_property_enriches_error() -> void:
 	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
 	assert_contains(result.error.message, "available:",
 		"assign-property errors must use McpPropertyErrors.build_message enrichment")
+
+
+func test_resource_dynamic_properties_accept_reverse_key_order() -> void:
+	var resource := AudioStreamRandomizer.new()
+	var result: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"stream_0/weight": 0.25,
+		"stream_0/stream": {"__class__": "AudioStreamWAV", "mix_rate": 22050},
+		"streams_count": 1,
+	})
+	assert_eq(result, null, str(result))
+	assert_eq(resource.streams_count, 1)
+	assert_eq(resource.get("stream_0/weight"), 0.25)
+	assert_true(resource.get("stream_0/stream") is AudioStreamWAV)
+
+
+func test_resource_dynamic_unknown_property_still_fails_after_setters() -> void:
+	var resource := AudioStreamRandomizer.new()
+	var result: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"stream_9/weight": 0.25, "streams_count": 1,
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_9/weight")
+	assert_eq(resource.streams_count, 1)
+
+
+func test_resource_dynamic_property_removed_by_later_setter_is_rejected() -> void:
+	var resource := AudioStreamRandomizer.new()
+	resource.streams_count = 1
+	var result: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"stream_0/weight": 0.25, "streams_count": 0,
+	})
+	assert_true(result is Dictionary, "removed requested property must be rejected")
+	if not result is Dictionary:
+		return
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_0/weight")

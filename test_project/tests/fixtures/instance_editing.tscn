@@ -1,0 +1,24 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://tests/fixtures/instance_editing_nested.tscn" id="1"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_1"]
+
+[node name="Model" type="Node3D"]
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_1")
+
+[node name="Tip" type="Node3D" parent="Mesh"]
+
+[node name="Label" type="Label" parent="."]
+text = "Original"
+
+[node name="Nested" parent="." instance=ExtResource("1")]
+
+[node name="Path" type="Path3D" parent="."]
+
+[node name="Canvas" type="Node2D" parent="."]
+
+[node name="Camera" type="Camera2D" parent="Canvas"]
+enabled = false

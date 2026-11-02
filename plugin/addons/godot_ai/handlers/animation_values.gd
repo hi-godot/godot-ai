@@ -93,6 +93,8 @@ func list_animations(params: Dictionary) -> Dictionary:
 		"data": {
 			"player_path": player_path,
 			"animations": animations,
+			"libraries": handler.library_metadata(player),
+			"autoplay": String(player.autoplay),
 			"count": animations.size(),
 		}
 	}

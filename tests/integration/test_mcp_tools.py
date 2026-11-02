@@ -341,6 +341,45 @@ class TestSceneSaveAsTool:
 
 
 # ---------------------------------------------------------------------------
+# scene_manage close
+# ---------------------------------------------------------------------------
+
+
+class TestSceneCloseTool:
+    async def test_close_scene(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "close_scene"
+            assert cmd["params"] == {"path": "res://scratch/preview.tscn", "discard_changes": True}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "path": "res://scratch/preview.tscn",
+                    "discarded_changes": True,
+                    "current_scene": "res://main.tscn",
+                    "open_scenes": ["res://main.tscn"],
+                    "undoable": False,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "scene_manage",
+            {
+                "op": "close",
+                "params": {"path": "res://scratch/preview.tscn", "discard_changes": True},
+            },
+        )
+        await task
+
+        assert result.data["discarded_changes"] is True
+        assert result.data["current_scene"] == "res://main.tscn"
+        assert result.data["undoable"] is False
+
+
+# ---------------------------------------------------------------------------
 # editor_state
 # ---------------------------------------------------------------------------
 
@@ -4208,6 +4247,58 @@ class TestEditorScreenshotTool:
         assert not result.is_error
         # When include_image=True, result contains both text and image content blocks
         assert len(result.content) >= 2
+
+    @pytest.mark.parametrize("coverage", [False, True])
+    @pytest.mark.parametrize("oversized", [False, True])
+    async def test_screenshot_wire_budget(self, mcp_stack, coverage, oversized):
+        import base64
+
+        from mcp.types import JSONRPCResponse
+
+        from godot_ai.handlers.editor import SCREENSHOT_RESULT_MAX_BYTES
+
+        client, plugin = mcp_stack
+        count = 2 if coverage else 1
+        png_budget = (SCREENSHOT_RESULT_MAX_BYTES - 64 * 1024) * 3 // 4
+        payload = base64.b64encode(b"x" * (800_000 if oversized else png_budget // count)).decode()
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            image = {
+                "source": "viewport",
+                "width": 512,
+                "height": 512,
+                "original_width": 1024,
+                "original_height": 1024,
+                "format": "png",
+                "image_base64": payload,
+            }
+            data = image
+            if coverage:
+                data = {
+                    "source": "viewport",
+                    "coverage": True,
+                    "images": [
+                        dict(image, label="establishing", elevation=25, azimuth=20, fov=50),
+                        dict(image, label="top", elevation=90, azimuth=0, fov=50),
+                    ],
+                }
+            await plugin.send_response(cmd["request_id"], data)
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool_mcp("editor_screenshot", {"coverage": coverage})
+        await task
+        wire = JSONRPCResponse(
+            jsonrpc="2.0", id="request-123", result=result.model_dump(by_alias=True)
+        ).model_dump_json(by_alias=True)
+        assert len(wire.encode()) < 1024 * 1024
+        assert result.is_error is oversized
+        if oversized:
+            assert "lower max_resolution" in result.content[0].text
+        else:
+            images = [block for block in result.content if block.type == "image"]
+            assert len(images) == count
+            assert all(block.data == payload for block in images)
 
     async def test_screenshot_metadata_only(self, mcp_stack):
         client, plugin = mcp_stack
@@ -8145,3 +8236,137 @@ class TestManageRollupHintsOnOpTypo:
         assert "'get_childen'" in msg
         assert "did you mean" in msg.lower()
         assert "'get_children'" in msg
+
+
+async def test_resource_set_properties_public_mcp_dispatch(mcp_stack):
+    client, plugin = mcp_stack
+    properties = {"background_energy_multiplier": 2.0}
+
+    async def respond():
+        command = await plugin.recv_command()
+        assert command["command"] == "set_resource_properties"
+        assert command["params"] == {"path": "res://environment.tres", "properties": properties}
+        await plugin.send_response(command["request_id"], {
+            "path": "res://environment.tres", "properties_applied": 1,
+            "live_refreshed": True, "undoable": False,
+        })
+
+    task = asyncio.create_task(respond())
+    result = await client.call_tool("resource_manage", {
+        "op": "set_properties",
+        "params": {"path": "res://environment.tres", "properties": properties},
+    })
+    await task
+    assert result.data["path"] == "res://environment.tres"
+    assert result.data["properties_applied"] == 1
+    assert result.data["live_refreshed"] is True
+    assert result.data["undoable"] is False
+
+
+@pytest.mark.parametrize(
+    ("tool", "operation", "command_name", "params", "defaults"),
+    [
+        (
+            "resource_manage", "sprite_frames_create", "create_sprite_frames",
+            {"resource_path": "res://frames.tres", "animations": [{"name": "idle", "frames": []}]},
+            {"overwrite": False},
+        ),
+        (
+            "tileset_manage", "tileset_create_atlas", "tileset_create_atlas",
+            {"resource_path": "res://tiles.tres", "texture_path": "res://atlas.png",
+             "tile_size": {"x": 16, "y": 16}, "tiles": [{"coords": {"x": 0, "y": 0}}]},
+            {"source_id": 0, "margins": {"x": 0, "y": 0},
+             "separation": {"x": 0, "y": 0}, "overwrite": False},
+        ),
+    ],
+)
+async def test_explicit_resource_builders_public_mcp_dispatch(
+    mcp_stack, tool, operation, command_name, params, defaults
+):
+    client, plugin = mcp_stack
+
+    async def respond():
+        command = await plugin.recv_command()
+        assert command["command"] == command_name
+        assert command["params"] == params | defaults
+        await plugin.send_response(command["request_id"], {
+            "resource_path": params["resource_path"], "undoable": False,
+        })
+
+    task = asyncio.create_task(respond())
+    result = await client.call_tool(tool, {"op": operation, "params": params})
+    await task
+    assert result.data["resource_path"] == params["resource_path"]
+    assert result.data["undoable"] is False
+
+
+class TestImportSettingsTools:
+    @pytest.mark.parametrize(
+        "op,params,response",
+        [
+            (
+                "import_get",
+                {"path": "res://sound.wav"},
+                {
+                    "path": "res://sound.wav",
+                    "options": {"edit/loop_mode": 0},
+                    "schema_source": "stored_import_config",
+                    "revision": "prior",
+                },
+            ),
+            (
+                "import_set",
+                {
+                    "path": "res://sound.wav",
+                    "options": {"edit/loop_mode": 2},
+                    "reimport": False,
+                    "expected_revision": "prior",
+                },
+                {
+                    "settings_committed": True,
+                    "import_attempted": False,
+                    "import_pending": True,
+                    "revision": "new",
+                },
+            ),
+        ],
+    )
+    async def test_round_trip(self, mcp_stack, op, params, response):
+        client, plugin = mcp_stack
+
+        async def respond():
+            command = await plugin.recv_command()
+            assert command["command"] == op
+            assert command["params"] == params
+            await plugin.send_response(command["request_id"], response)
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("filesystem_manage", {"op": op, "params": params})
+        await task
+        assert result.data == response
+
+    async def test_committed_import_failure_is_visible(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            command = await plugin.recv_command()
+            await plugin.send_error(
+                command["request_id"],
+                "INTERNAL_ERROR",
+                "Native import failed",
+                data={"settings_committed": True, "import_valid": False, "import_attempted": True},
+            )
+
+        task = asyncio.create_task(respond())
+        with pytest.raises(Exception, match="settings_committed.*True"):
+            await client.call_tool(
+                "filesystem_manage",
+                {
+                    "op": "import_set",
+                    "params": {
+                        "path": "res://sound.wav",
+                        "options": {"edit/loop_mode": 2},
+                    },
+                },
+            )
+        await task

@@ -241,9 +241,10 @@ func test_headless_mcp_write_parse_failure_does_not_ring_watermark() -> void:
 	# (b) filesystem_manage(op="scan") — sync fallback with the single-flight
 	# latch pre-set so the call coalesces instead of kicking a real editor
 	# scan mid-suite (see test_filesystem.gd).
-	FilesystemHandler._scan_in_flight = true
+	var previous_scan = FilesystemHandler._active_scan
+	FilesystemHandler._active_scan = FilesystemHandler.ScanCompletion.new()
 	var scan_result := FilesystemHandler.new().scan_filesystem({})
-	FilesystemHandler._scan_in_flight = false
+	FilesystemHandler._active_scan = previous_scan
 	assert_has_key(scan_result, "data")
 	assert_true(scan_result.data.was_already_scanning, "Latch set → coalesced, no new scan() kicked")
 
@@ -875,6 +876,138 @@ func _remove_reload_helper(path: String) -> void:
 	DirAccess.remove_absolute(path)
 	if FileAccess.file_exists(path + ".uid"):
 		DirAccess.remove_absolute(path + ".uid")
+
+
+const REGISTERED_VALIDATION_PATH := "res://tests/mcp_registered_validation_fixture.gd"
+
+
+class _ColdWriteScriptHandler extends ScriptHandler:
+	func _register_written_file(_path: String) -> void:
+		## Keep both writes cold even when a GUI editor normally loads on register.
+		pass
+
+
+func test_two_uncached_writes_load_the_latest_script() -> void:
+	var path := _unique_reload_path("two_cold_writes")
+	var handler := _ColdWriteScriptHandler.new(_undo_redo)
+	_write_reload_helper("original", path)
+	assert_false(ResourceLoader.has_cached(path))
+	for value in ["first", "second"]:
+		var result := handler.create_script({"path": path, "content": _reload_helper_source(value)})
+		assert_eq(result.get("data", {}).get("diagnostics", ["missing"]), [])
+		assert_false(ResourceLoader.has_cached(path), "validation must leave the script uncached")
+	var loaded := _load_reload_helper(path)
+	var observed: String = loaded.new().value()
+	var stored := FileAccess.get_file_as_string(path)
+	var cached := ResourceLoader.has_cached(path)
+	_remove_reload_helper(path)
+	assert_eq(observed, "second", "first normal load must execute the latest write")
+	assert_eq(loaded.source_code, stored)
+	assert_true(cached)
+
+
+func test_validation_of_unloaded_script_allows_normal_resource_caching() -> void:
+	var path := _unique_reload_path("validation_cache")
+	_write_reload_helper("validated", path)
+	assert_false(ResourceLoader.has_cached(path), "fixture must start uncached")
+	var validation := ScriptHandler._validate_gdscript_source(_reload_helper_source("validated"), path)
+	assert_eq(validation.ok, true)
+	assert_false(ResourceLoader.has_cached(path), "validation must not claim a ResourceCache entry")
+	var loaded: GDScript = _load_reload_helper(path)
+	var cached: bool = ResourceLoader.has_cached(path)
+	var loaded_path: String = loaded.resource_path
+	var loaded_value: String = loaded.new().value()
+	var same_script: bool = ResourceLoader.load(path) == loaded
+	_remove_reload_helper(path)
+	assert_true(cached, "normal loading after validation must register the script")
+	assert_eq(loaded_path, path)
+	assert_eq(loaded_value, "validated")
+	assert_true(same_script, "subsequent loads must share the registered script")
+
+
+func _restore_registered_validation_fixture(source: String, script: GDScript) -> void:
+	var file := FileAccess.open(REGISTERED_VALIDATION_PATH, FileAccess.WRITE)
+	file.store_string(source)
+	file.close()
+	script.source_code = source
+	assert_eq(script.reload(true), OK, "registered fixture must restore cleanly")
+
+
+func test_registered_validation_patch_keeps_live_script_and_self_references() -> void:
+	var loaded: GDScript = ResourceLoader.load(REGISTERED_VALIDATION_PATH)
+	var original := FileAccess.get_file_as_string(REGISTERED_VALIDATION_PATH)
+	var instance: Variant = loaded.new()
+	instance.retained_value = 99
+	var result := _handler.patch_script({
+		"path": REGISTERED_VALIDATION_PATH, "old_text": "\"old\"", "new_text": "\"new\"",
+	})
+	var observed_value: String = instance.value()
+	var retained_value: int = instance.retained_value
+	var from_self: Variant = loaded.call("make")
+	var self_value: String = from_self.value()
+	var same_script: bool = ResourceLoader.load(REGISTERED_VALIDATION_PATH) == loaded
+	var self_script: bool = from_self.get_script() == loaded
+	_restore_registered_validation_fixture(original, loaded)
+	assert_eq(result.get("data", {}).get("diagnostics", ["missing"]), [])
+	assert_eq(result.get("data", {}).get("reloaded", false), true)
+	assert_eq(observed_value, "new")
+	assert_eq(retained_value, 99, "validation and reload must preserve instance state")
+	assert_true(same_script, "validation must not replace the cached script")
+	assert_true(self_script, "self references must resolve to the live cached script")
+	assert_eq(self_value, "new")
+
+
+func test_registered_validation_overwrite_reports_no_false_diagnostics() -> void:
+	var loaded: GDScript = ResourceLoader.load(REGISTERED_VALIDATION_PATH)
+	var original := FileAccess.get_file_as_string(REGISTERED_VALIDATION_PATH)
+	var result := _handler.create_script({
+		"path": REGISTERED_VALIDATION_PATH,
+		"content": original.replace("\"old\"", "\"overwritten\""),
+	})
+	var observed_value: String = loaded.new().value()
+	_restore_registered_validation_fixture(original, loaded)
+	assert_eq(result.get("data", {}).get("diagnostics", ["missing"]), [])
+	assert_eq(result.get("data", {}).get("reloaded", false), true)
+	assert_eq(observed_value, "overwritten")
+
+
+func test_registered_validation_reports_actual_syntax_errors() -> void:
+	var loaded: GDScript = ResourceLoader.load(REGISTERED_VALIDATION_PATH)
+	var original := FileAccess.get_file_as_string(REGISTERED_VALIDATION_PATH)
+	for _i in 6:
+		expect_script_error_containing(RELOAD_RETURN_PARSE_ERROR)
+	var result := _handler.patch_script({
+		"path": REGISTERED_VALIDATION_PATH,
+		"old_text": "return \"old\"", "new_text": "return if",
+	})
+	_restore_registered_validation_fixture(original, loaded)
+	var data: Dictionary = result.get("data", {})
+	assert_eq(data.get("reloaded", true), false)
+	assert_eq(data.get("reload_reason", ""), "parse_error")
+	assert_eq(data.get("diagnostics_detail", ""), "log_capture")
+	assert_gt(data.get("diagnostics", []).size(), 0)
+	if not data.get("diagnostics", []).is_empty():
+		assert_contains(data.diagnostics[0].text, RELOAD_RETURN_PARSE_ERROR)
+		assert_eq(data.diagnostics[0].path, REGISTERED_VALIDATION_PATH)
+		assert_eq(data.diagnostics[0].line, 9)
+
+
+func test_registered_validation_refuses_duplicate_name_at_another_path() -> void:
+	var path := _unique_reload_path("duplicate_class")
+	var original := FileAccess.get_file_as_string(REGISTERED_VALIDATION_PATH)
+	for _i in 6:
+		expect_script_error_containing("hides a global script class")
+	var result := _handler.create_script({"path": path, "content": original})
+	_remove_reload_helper(path)
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs != null:
+		efs.update_file(path)
+	var data: Dictionary = result.get("data", {})
+	assert_eq(data.get("diagnostics_detail", ""), "log_capture")
+	assert_gt(data.get("diagnostics", []).size(), 0)
+	if not data.get("diagnostics", []).is_empty():
+		assert_contains(data.diagnostics[0].text, "hides a global script class")
+		assert_eq(data.diagnostics[0].path, path)
 
 
 ## Stand-in for a GUI editor. There, EditorFileSystem.update_file() runs the

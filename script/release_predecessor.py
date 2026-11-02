@@ -20,6 +20,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from script import dependency_cutoff
 from script import release_promotion as public
 from script import release_qualification as qualification
 from script import release_support as support
@@ -254,6 +255,11 @@ def retain_predecessor_dependencies(predecessor: Path, previous: dict, output: P
     packages = output / "predecessor-packages"
     packages.mkdir()
     wheel = predecessor / "dist" / f"godot_ai-{previous['version']}-py3-none-any.whl"
+    cutoff = dependency_cutoff.predecessor_cutoff(predecessor)
+    lock = output / "predecessor-requirements.txt"
+    dependency_cutoff.compile_requirements(
+        [str(wheel)], cutoff, lock, sys.executable, dependency_environment(), qualification.execute
+    )
     qualification.execute(
         [
             sys.executable,
@@ -268,7 +274,9 @@ def retain_predecessor_dependencies(predecessor: Path, previous: dict, output: P
             "https://pypi.org/simple",
             "--dest",
             str(packages),
-            str(wheel),
+            "--require-hashes",
+            "-r",
+            str(lock),
         ],
         output / "predecessor-resolve.log",
         cwd=output,
@@ -373,6 +381,10 @@ def offline_preflight(
     python = str(qualification.environment_python(target))
     wheel = packages / f"godot_ai-{version}-py3-none-any.whl"
     resolution = output / ("offline-" + version + ".json")
+    constraints = output / ("offline-" + version + ".constraints.txt")
+    constraints.write_text(
+        "".join(f"{row['name']}=={row['version']}\n" for row in dependencies), encoding="utf-8"
+    )
     qualification.execute(
         [
             python,
@@ -388,6 +400,8 @@ def offline_preflight(
             str(packages),
             "--report",
             str(resolution),
+            "--constraint",
+            str(constraints),
             str(wheel),
         ],
         log,
@@ -444,10 +458,33 @@ def run_update(
             if row["name"] != "godot-ai" or row["version"] == record["version"]
         ]
         predecessor_dependencies = retain_predecessor_dependencies(predecessor, previous, output)
+        cutoff = dependency_cutoff.from_candidate(candidate)
+        old_cutoff = dependency_cutoff.predecessor_cutoff(predecessor)
+        shutil.copyfile(
+            predecessor / "release/godot-ai-v4-plugin.zip", output / "predecessor-policy.zip"
+        )
+        source_row = support.read_json(python_row / "row.json")
+        support.require(
+            source_row.get("dependency_cutoff") == cutoff, "predecessor candidate cutoff mismatch"
+        )
+        candidate_uploads = source_row.get("upload_times")
+        dependency_cutoff.validate_upload_times(candidate_dependencies, candidate_uploads, cutoff)
+        predecessor_uploads = dependency_cutoff.capture_upload_times(
+            predecessor_dependencies, old_cutoff
+        )
+        for filename in candidate_uploads.keys() & predecessor_uploads.keys():
+            support.require(
+                candidate_uploads[filename] == predecessor_uploads[filename],
+                "conflicting retained upload timestamps",
+            )
+        uploads = candidate_uploads | predecessor_uploads
         merge_dependency_files(python_row / "packages", candidate_dependencies, packages)
         merge_dependency_files(output / "predecessor-packages", predecessor_dependencies, packages)
         index_inventory = qualification.dependency_inventory(packages)
         dependency_evidence = {
+            "dependency_cutoff": cutoff,
+            "predecessor_cutoff": old_cutoff,
+            "upload_times": uploads,
             "closures": {
                 "candidate": candidate_dependencies,
                 "predecessor": predecessor_dependencies,
@@ -462,11 +499,51 @@ def run_update(
             },
         }
         certificate, key = runtime._tls_material(work / "tls")
-        with runtime.retained_index(packages, index_inventory) as (index, requests):
+        with runtime.retained_index(packages, index_inventory, uploads) as (index, requests):
+            dependency_evidence["runtime_resolutions"] = {}
+            for label, version, closure, policy in (
+                ("candidate", record["version"], candidate_dependencies, cutoff),
+                ("predecessor", previous["version"], predecessor_dependencies, old_cutoff),
+            ):
+                isolated = work / (label + "-resolution")
+                isolated.mkdir()
+                closure_packages = isolated / "packages"
+                closure_packages.mkdir()
+                merge_dependency_files(packages, closure, closure_packages)
+                closure_uploads = {
+                    row["filename"]: uploads[row["filename"]]
+                    for row in closure
+                    if row["filename"] in uploads
+                }
+                with runtime.retained_index(closure_packages, closure, closure_uploads) as (
+                    own_index,
+                    _,
+                ):
+                    expected = dependency_cutoff.resolve_private_runtime(
+                        own_index, version, policy, isolated
+                    )
+                selected = dependency_cutoff.resolve_private_runtime(
+                    index, version, policy, isolated
+                )
+                comparison = {"expected": expected, "selected": selected}
+                (output / (label + "-runtime-resolution.json")).write_bytes(
+                    support.canonical(comparison)
+                )
+                support.require(
+                    selected == expected, "retained union changes " + label + " runtime resolution"
+                )
+                dependency_evidence["runtime_resolutions"][label] = {
+                    "expected": expected,
+                    "selected": selected,
+                }
+            # Resolution downloads are not evidence of the native runtime fetching a wheel.
+            requests.clear()
             environment = isolated_environment(work / "environment", index)
             uvx = shutil.which("uvx", path=environment.get("PATH"))
             support.require(uvx is not None, "uvx is required for predecessor qualification")
-            runtime._write_client_pin(Path(environment["CODEX_HOME"]), uvx, previous["version"])
+            runtime._write_client_pin(
+                Path(environment["CODEX_HOME"]), uvx, previous["version"], old_cutoff
+            )
             (project / "project.godot").write_text("config_version=5\n", encoding="utf-8")
             command = [sys.executable, str(support.ROOT / "script/v4-release"), "install"]
             for flag, filename in (
@@ -511,7 +588,7 @@ def run_update(
                 )
                 bridge_log = work / "attached-bridge.log"
                 bridge = runtime.AttachedBridge(
-                    runtime._bridge_command(uvx, previous["version"]),
+                    runtime._bridge_command(uvx, previous["version"], old_cutoff),
                     environment,
                     project,
                     runtime._capability_directory(environment),

@@ -509,7 +509,7 @@ func test_game_debug_control_rejects_overlapping_mutation() -> void:
 	conn.free()
 
 
-func test_game_debug_control_guard_reply_waits_for_deferred_registration() -> void:
+func test_game_debug_control_guard_starts_after_dispatch_registration() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
 		skip("No SceneTree available")
@@ -518,8 +518,8 @@ func test_game_debug_control_guard_reply_waits_for_deferred_registration() -> vo
 	var conn := _StubConnection.new()
 	plugin.request_game_debug_control("not_an_action", "rid-debug-guard", conn)
 	assert_eq(conn.captured.size(), 0, "guard reply must not race the dispatcher registration")
-	await tree.process_frame
-	assert_eq(conn.captured.size(), 1, "deferred guard should reply on a later editor turn")
+	plugin._begin_game_debug_control("not_an_action", "rid-debug-guard", conn, 5.0)
+	assert_eq(conn.captured.size(), 1, "the deferred completion entry must return the guard error")
 	assert_eq(conn.captured[0].request_id, "rid-debug-guard")
 	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.VALUE_OUT_OF_RANGE)
 	conn.free()
@@ -1095,6 +1095,191 @@ func test_screenshot_bogus_source() -> void:
 
 
 # ----- source="cinematic" (issue #143) -----
+
+func test_issue1170_geometry_bounds_exclude_helper_volumes_and_empty_children() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	root.position = Vector3(10, 0, 0)
+	var group := Node3D.new()
+	root.add_child(group)
+	group.position = Vector3(3, 0, 0)
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = BoxMesh.new()
+	mesh.mesh.size = Vector3(2, 2, 2)
+	group.add_child(mesh)
+	var light := OmniLight3D.new()
+	light.omni_range = 50
+	root.add_child(light)
+	var marker := Marker3D.new()
+	marker.position = Vector3(1000, 0, 0)
+	group.add_child(marker)
+	var particles := GPUParticles3D.new()
+	particles.emitting = false
+	particles.visibility_aabb = AABB(Vector3(-100, -100, -100), Vector3(200, 200, 200))
+	root.add_child(particles)
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(12, -1, -1))
+	assert_eq(bounds.size, Vector3(2, 2, 2))
+
+
+func test_issue1170_helper_only_target_keeps_its_visual_bounds() -> void:
+	var light := OmniLight3D.new()
+	light.omni_range = 10
+	EditorInterface.get_base_control().get_tree().root.add_child(light)
+	light.position = Vector3(3, 0, 0)
+	var bounds := _handler._get_visual_aabb(light)
+	light.free()
+	assert_eq(bounds.position, Vector3(-7, -10, -10))
+	assert_eq(bounds.size, Vector3(20, 20, 20))
+
+
+func test_hidden_geometry_does_not_override_visible_helper_bounds() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = BoxMesh.new()
+	root.add_child(mesh)
+	mesh.position = Vector3(1000, 0, 0)
+	mesh.visible = false
+	var light := OmniLight3D.new()
+	light.omni_range = 3
+	root.add_child(light)
+	light.position = Vector3(3, 4, 5)
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(0, 1, 2))
+	assert_eq(bounds.size, Vector3(6, 6, 6))
+
+
+func test_hidden_mesh_does_not_expand_visible_mesh_bounds() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	for visible_mesh in [true, false]:
+		var mesh := MeshInstance3D.new()
+		mesh.mesh = BoxMesh.new()
+		mesh.mesh.size = Vector3(2, 4, 6)
+		root.add_child(mesh)
+		mesh.position = Vector3(3, 4, 5) if visible_mesh else Vector3(1000, 0, 0)
+		mesh.visible = visible_mesh
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(2, 2, 2))
+	assert_eq(bounds.size, Vector3(2, 4, 6))
+
+
+func test_hidden_ancestor_excludes_geometry_and_helper_bounds() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	root.position = Vector3(10, 0, 0)
+	var hidden := Node3D.new()
+	root.add_child(hidden)
+	hidden.visible = false
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = BoxMesh.new()
+	hidden.add_child(mesh)
+	mesh.position = Vector3(1000, 0, 0)
+	var light := OmniLight3D.new()
+	light.omni_range = 100
+	hidden.add_child(light)
+	assert_true(mesh.visible)
+	assert_false(mesh.is_visible_in_tree())
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(9.5, -0.5, -0.5))
+	assert_eq(bounds.size, Vector3.ONE)
+
+
+func test_issue1170_empty_subtree_gets_one_fallback_at_target_root() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	root.position = Vector3(10, 0, 0)
+	var marker := Marker3D.new()
+	marker.position = Vector3(1000, 0, 0)
+	root.add_child(marker)
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(9.5, -0.5, -0.5))
+	assert_eq(bounds.size, Vector3.ONE)
+
+
+func _issue1170_red_centroid(result: Dictionary) -> Vector2:
+	assert_has_key(result, "data", "cinematic fixture capture must succeed: %s" % result)
+	if not result.has("data"):
+		return Vector2(-1, -1)
+	var image := Image.new()
+	var err := image.load_png_from_buffer(Marshalls.base64_to_raw(result.data.image_base64))
+	assert_eq(err, OK)
+	var count := 0
+	var total := Vector2.ZERO
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			if pixel.r > 0.7 and pixel.g < 0.25 and pixel.b < 0.25:
+				total += Vector2(x, y)
+				count += 1
+	assert_gt(count, 20, "capture must contain the red projection fixture")
+	return total / count if count > 0 else Vector2(-1, -1)
+
+
+func test_issue1170_cinematic_projection_offsets_move_rendered_geometry() -> void:
+	if DisplayServer.get_name() == "headless":
+		skip("Projection pixels require a rendering editor")
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("No edited scene")
+		return
+	var prior_current: Array[Camera3D] = []
+	for existing in _collect_cameras(scene_root):
+		if existing.current:
+			prior_current.append(existing)
+			existing.current = false
+	var fixture := Node3D.new()
+	scene_root.add_child(fixture)
+	fixture.global_position = Vector3(10000, 10000, 10000)
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = BoxMesh.new()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color.RED
+	mesh.material_override = material
+	fixture.add_child(mesh)
+	mesh.force_update_transform()
+	var camera := Camera3D.new()
+	camera.projection = Camera3D.PROJECTION_FRUSTUM
+	camera.size = 2
+	camera.near = 1
+	camera.far = 20
+	camera.position = Vector3(0, 0, 5)
+	camera.environment = Environment.new()
+	camera.environment.background_mode = Environment.BG_COLOR
+	camera.environment.background_color = Color.BLACK
+	fixture.add_child(camera)
+	camera.current = true
+	camera.force_update_transform()
+	_handler.take_screenshot({"source": "cinematic", "max_resolution": 256})
+	var baseline := _handler.take_screenshot({"source": "cinematic", "max_resolution": 256})
+	camera.frustum_offset = Vector2(0.25, 0.25)
+	var frustum := _handler.take_screenshot({"source": "cinematic", "max_resolution": 256})
+	camera.frustum_offset = Vector2.ZERO
+	camera.h_offset = 1
+	var horizontal := _handler.take_screenshot({"source": "cinematic", "max_resolution": 256})
+	camera.h_offset = 0
+	camera.v_offset = 1
+	var vertical := _handler.take_screenshot({"source": "cinematic", "max_resolution": 256})
+	fixture.free()
+	for existing in prior_current:
+		existing.current = true
+	var centered := _issue1170_red_centroid(baseline)
+	var shifted_frustum := _issue1170_red_centroid(frustum)
+	var shifted_horizontal := _issue1170_red_centroid(horizontal)
+	var shifted_vertical := _issue1170_red_centroid(vertical)
+	assert_gt(absf(shifted_frustum.x - centered.x), 3.0, "frustum offset must shift the rendered object horizontally")
+	assert_gt(absf(shifted_frustum.y - centered.y), 3.0, "frustum offset must shift the rendered object vertically")
+	assert_gt(absf(shifted_horizontal.x - centered.x), 3.0, "h_offset must shift the rendered object")
+	assert_gt(absf(shifted_vertical.y - centered.y), 3.0, "v_offset must shift the rendered object")
+
 
 func test_screenshot_cinematic_no_camera_returns_error() -> void:
 	## Main scene has a camera in most configurations; this path only runs

@@ -12,6 +12,7 @@ var _undo_redo: EditorUndoRedoManager
 
 const TEST_MATERIAL_PATH := "res://tests/_mcp_test_material.tres"
 const TEST_NODE_SCRIPT_PATH := "res://tests/_mcp_test_node_script.gd"
+const TEST_NODE_ARRAY_SCENE_PATH := "res://tests/_mcp_test_node_array_scene.tscn"
 
 
 func suite_name() -> String:
@@ -37,6 +38,8 @@ func suite_teardown() -> void:
 		DirAccess.remove_absolute(TEST_NODE_SCRIPT_PATH)
 	if FileAccess.file_exists(TEST_NODE_SCRIPT_PATH + ".uid"):
 		DirAccess.remove_absolute(TEST_NODE_SCRIPT_PATH + ".uid")
+	if FileAccess.file_exists(TEST_NODE_ARRAY_SCENE_PATH):
+		DirAccess.remove_absolute(TEST_NODE_ARRAY_SCENE_PATH)
 
 
 # ----- get_children -----
@@ -1372,6 +1375,167 @@ func test_set_property_node_export_empty_string_clears() -> void:
 	_free_node_export_probe(2)
 
 
+# ----- set_property on typed Array[Node] exports (#1175) -----
+
+## Attach a @tool script with one typed node-array export to a fresh Node3D
+## probe under /Main. Returns the live node.
+func _make_node_array_probe(probe_name: String, element_type: String) -> Node:
+	_handler.create_node({"type": "Node3D", "name": probe_name, "parent_path": "/Main"})
+	var node := EditorInterface.get_edited_scene_root().get_node(probe_name)
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool",
+		"extends Node3D",
+		"@export var targets: Array[%s] = []" % element_type,
+	])
+	script.reload()
+	node.set_script(script)
+	return node
+
+
+func test_set_property_node_array_accepts_scene_and_relative_paths() -> void:
+	## The #1175 headline case: every element of an Array[Node3D] export went
+	## through the resource loader and failed with "Path must start with
+	## res://, uid://, or user://". Elements follow the #1144 rules: a leading
+	## "/" is a scene path, anything else is relative to the node.
+	var node := _make_node_array_probe("_McpTestNodeArray", "Node3D")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestNodeArray",
+		"property": "targets",
+		"value": ["/Main/World", "../World/Ground"],
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.value, ["/Main/World", "/Main/World/Ground"])
+	assert_eq(result.data.old_value, [])
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var stored: Variant = node.get("targets")
+	assert_true(stored is Array and (stored as Array).is_typed(), "the slot must keep its typing")
+	assert_eq((stored as Array).size(), 2, "both elements must land")
+	assert_true(stored[0] == scene_root.get_node("World"), "element 0 must be the World node")
+	assert_true(stored[1] == scene_root.get_node("World/Ground"), "element 1 must be the Ground node")
+	## The readback reports scene paths, not Godot's object repr.
+	var props := _handler.get_node_properties({"path": "/Main/_McpTestNodeArray"})
+	assert_has_key(props, "data")
+	var rows: Array = props.data.properties.filter(func(row): return row.name == "targets")
+	assert_eq(rows.size(), 1, "targets must be listed once")
+	assert_eq(rows[0].value, ["/Main/World", "/Main/World/Ground"])
+	assert_true(editor_undo(_undo_redo), "undo set should succeed")
+	assert_eq((node.get("targets") as Array).size(), 0)
+	assert_true(editor_undo(_undo_redo), "undo create should succeed")
+
+
+func test_set_property_node_array_survives_scene_save_and_reload() -> void:
+	## #1175 asks for Inspector-compatible saving: the elements must pack as
+	## node references and resolve again in a freshly loaded copy of the scene.
+	## Cleanup of the temp scene is guaranteed by suite_teardown() even if an
+	## assertion below fails.
+	_make_node_array_probe("_McpTestNodeArraySave", "Node3D")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestNodeArraySave",
+		"property": "targets",
+		"value": ["/Main/World", "../World/Ground"],
+	})
+	assert_has_key(result, "data")
+	var packed := PackedScene.new()
+	assert_eq(packed.pack(EditorInterface.get_edited_scene_root()), OK)
+	assert_eq(ResourceSaver.save(packed, TEST_NODE_ARRAY_SCENE_PATH), OK)
+	var reloaded := ResourceLoader.load(
+		TEST_NODE_ARRAY_SCENE_PATH, "", ResourceLoader.CACHE_MODE_IGNORE
+	) as PackedScene
+	assert_true(reloaded != null, "the saved scene must load back")
+	var copy := track(reloaded.instantiate()) as Node
+	var stored: Variant = copy.get_node("_McpTestNodeArraySave").get("targets")
+	assert_true(stored is Array and (stored as Array).is_typed(), "the reloaded slot must keep its typing")
+	assert_eq((stored as Array).size(), 2, "both elements must survive the save")
+	assert_true(stored[0] == copy.get_node("World"), "element 0 must be the reloaded World node")
+	assert_true(stored[1] == copy.get_node("World/Ground"), "element 1 must be the reloaded Ground node")
+	DirAccess.remove_absolute(TEST_NODE_ARRAY_SCENE_PATH)
+	_free_node_export_probe(1)
+
+
+func test_set_property_node_array_rejects_wrong_class_naming_index() -> void:
+	var node := _make_node_array_probe("_McpTestNodeArrayWrong", "Camera3D")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestNodeArrayWrong",
+		"property": "targets",
+		"value": ["/Main/Camera3D", "/Main/World"],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "element 1")
+	assert_eq((node.get("targets") as Array).size(), 0, "nothing may be written on error")
+	_free_node_export_probe(0)
+
+
+func test_set_property_node_array_missing_node_names_index() -> void:
+	var node := _make_node_array_probe("_McpTestNodeArrayMissing", "Node")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestNodeArrayMissing",
+		"property": "targets",
+		"value": ["/Main/World", "/Main/Nope"],
+	})
+	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
+	assert_contains(result.error.message, "element 1")
+	assert_eq((node.get("targets") as Array).size(), 0, "nothing may be written on error")
+	_free_node_export_probe(0)
+
+
+func test_set_property_node_array_rejects_node_outside_scene() -> void:
+	var node := _make_node_array_probe("_McpTestNodeArrayOutside", "Node")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestNodeArrayOutside",
+		"property": "targets",
+		"value": ["/root"],
+	})
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_contains(result.error.message, "element 0")
+	assert_eq((node.get("targets") as Array).size(), 0, "nothing may be written on error")
+	_free_node_export_probe(0)
+
+
+## Create /Main/<target_name> carrying the McpToolNodeFixture script, then an
+## Array[McpToolNodeFixture] probe. Pair with `_free_script_class_array_probe`.
+func _make_script_class_array_probe(probe_name: String, target_name: String) -> Node:
+	_handler.create_node({"type": "Node", "name": target_name, "parent_path": "/Main"})
+	EditorInterface.get_edited_scene_root().get_node(target_name).set_script(McpToolNodeFixture)
+	return _make_node_array_probe(probe_name, "McpToolNodeFixture")
+
+
+func _free_script_class_array_probe(sets: int) -> void:
+	_free_node_export_probe(sets)
+	assert_true(editor_undo(_undo_redo), "undo target create should succeed")
+
+
+func test_set_property_node_array_accepts_script_class_element() -> void:
+	## Array[MyNodeClass]: the slot's element type is a script, so string
+	## elements must still resolve as node paths and pass is_instance_of.
+	var node := _make_script_class_array_probe("_McpTestNodeArrayScript", "_McpTestFixtureTarget")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestNodeArrayScript",
+		"property": "targets",
+		"value": ["/Main/_McpTestFixtureTarget"],
+	})
+	assert_has_key(result, "data")
+	assert_eq(result.data.value, ["/Main/_McpTestFixtureTarget"])
+	var stored: Variant = node.get("targets")
+	assert_eq((stored as Array).size(), 1, "the element must land")
+	assert_true(stored[0] == EditorInterface.get_edited_scene_root().get_node("_McpTestFixtureTarget"),
+		"element 0 must be the fixture node")
+	_free_script_class_array_probe(1)
+
+
+func test_set_property_node_array_rejects_wrong_script_class_naming_index() -> void:
+	var node := _make_script_class_array_probe("_McpTestNodeArrayScriptWrong", "_McpTestFixtureTarget")
+	var result := _handler.set_property({
+		"path": "/Main/_McpTestNodeArrayScriptWrong",
+		"property": "targets",
+		"value": ["/Main/_McpTestFixtureTarget", "/Main/World"],
+	})
+	assert_is_error(result, ErrorCodes.WRONG_TYPE)
+	assert_contains(result.error.message, "element 1")
+	assert_eq((node.get("targets") as Array).size(), 0, "nothing may be written on error")
+	_free_script_class_array_probe(0)
+
+
 # ----- set_property __class__ shortcut (fresh built-in Resource) -----
 
 func _add_mesh_instance_for_shortcut(node_name: String) -> Node:
@@ -2167,9 +2331,7 @@ func test_create_node_scene_file_matching_active_scene_passes() -> void:
 # ----- honest failure for un-coercible writes -----
 
 func test_check_coerced_rejects_unsupported_struct() -> void:
-	# PackedByteArray is intentionally never coerced (base64-vs-int design gap),
-	# so it is a durable stand-in for "a type with no coercion branch".
-	var result: Variant = NodeHandler._check_coerced([1, 2, 3], TYPE_PACKED_BYTE_ARRAY)
+	var result: Variant = NodeHandler._check_coerced("not a callable", TYPE_CALLABLE)
 	assert_is_error(result, ErrorCodes.WRONG_TYPE)
 
 

@@ -21,7 +21,7 @@ func _init(undo_redo: EditorUndoRedoManager) -> void:
 ## params: {path, source_id, atlas_col, atlas_row, map_x, map_y}
 ## Returns: {map_x, map_y, source_id, atlas_col, atlas_row}
 func set_cell(params: Dictionary) -> Dictionary:
-	var layer := _resolve_layer(params)
+	var layer := _resolve_layer(params, true)
 	if layer.has("error"): return layer
 	var node: TileMapLayer = layer.node
 	var pos   := Vector2i(params.get("map_x", 0), params.get("map_y", 0))
@@ -40,7 +40,7 @@ func set_cell(params: Dictionary) -> Dictionary:
 ## params: {path, source_id, atlas_col, atlas_row, rect_x, rect_y, rect_w, rect_h}
 ## Returns: {cells_filled, rect: {x, y, w, h}}
 func set_cells_rect(params: Dictionary) -> Dictionary:
-	var layer := _resolve_layer(params)
+	var layer := _resolve_layer(params, true)
 	if layer.has("error"): return layer
 	var node: TileMapLayer = layer.node
 	var src   := int(params.get("source_id", 0))
@@ -78,7 +78,7 @@ func set_cells_rect(params: Dictionary) -> Dictionary:
 ## params: {path}
 ## Returns: {cleared: true}
 func clear_layer(params: Dictionary) -> Dictionary:
-	var layer := _resolve_layer(params)
+	var layer := _resolve_layer(params, true)
 	if layer.has("error"): return layer
 	var node: TileMapLayer = layer.node
 	var snapshot := _capture_used_cells_snapshot(node)
@@ -105,10 +105,10 @@ func get_used_cells(params: Dictionary) -> Dictionary:
 
 ## Resolve a TileMapLayer node from params["path"] in the currently edited
 ## scene. Returns {"node": TileMapLayer} on success, or an error dict.
-func _resolve_layer(params: Dictionary) -> Dictionary:
+func _resolve_layer(params: Dictionary, for_write: bool = false) -> Dictionary:
 	var path: String = params.get("path", "")
 	var scene_file: String = params.get("scene_file", "")
-	var resolved := McpNodeValidator.resolve_or_error(path, "path", scene_file)
+	var resolved := McpNodeValidator.resolve_or_error(path, "path", scene_file, for_write)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node

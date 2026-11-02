@@ -67,6 +67,10 @@ func create_particle(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var node := _instantiate_particle(type_str)
 	if node == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate particle node")
@@ -129,7 +133,7 @@ func create_particle(params: Dictionary) -> Dictionary:
 # ============================================================================
 
 func set_main(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_particle(params)
+	var resolved := _resolve_particle(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
@@ -187,7 +191,7 @@ func set_main(params: Dictionary) -> Dictionary:
 # ============================================================================
 
 func set_process(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_particle(params)
+	var resolved := _resolve_particle(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
@@ -308,7 +312,7 @@ func _set_process_cpu(node: Node, node_path: String, properties: Dictionary) -> 
 # ============================================================================
 
 func set_draw_pass(params: Dictionary) -> Dictionary:
-	var resolved := _resolve_particle(params)
+	var resolved := _resolve_particle(params, true)
 	if resolved.has("error"):
 		return resolved
 	var node: Node = resolved.node
@@ -615,6 +619,10 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var node := _instantiate_particle(type_str)
 	node.name = node_name
 
@@ -820,9 +828,9 @@ static func _instantiate_particle(type_str: String) -> Node:
 	return null
 
 
-func _resolve_particle(params: Dictionary) -> Dictionary:
+func _resolve_particle(params: Dictionary, for_write: bool = false) -> Dictionary:
 	var resolved := McpNodeValidator.resolve_or_error(
-		params.get("node_path", ""), "node_path",
+		params.get("node_path", ""), "node_path", "", for_write,
 	)
 	if resolved.has("error"):
 		return resolved

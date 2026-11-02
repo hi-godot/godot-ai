@@ -427,6 +427,7 @@ def test_composition_and_post_update_barriers_precede_every_normal_start_effect(
             "replace_owned_mismatches",
             _post_update_outcome.get("manual_migration", false),
         )),
+        preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").previous_policy(_post_update_outcome),
     )"""
     assert "".join(expected_call.split()) in "".join(begin.split())
     for effect in (

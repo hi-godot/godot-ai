@@ -50,7 +50,7 @@ def test_save_to_disk_takes_pause_target() -> None:
     # Order: pause -> save -> unpause. A naive refactor that re-orders
     # these would silently neuter the guard.
     pause_idx = block.index("pause_target.pause_processing = true")
-    save_idx = block.index("ResourceSaver.save(res, resource_path)")
+    save_idx = block.index("ResourceSaver.save(res, save_path)")
     unpause_idx = block.index("pause_target.pause_processing = false")
     assert pause_idx < save_idx < unpause_idx, (
         f"Order must be pause -> save -> unpause, got "

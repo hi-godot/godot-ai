@@ -135,6 +135,10 @@ func test_windows_dev_resolver_discovers_sibling_pythonw() -> void:
 
 func test_launch_resolver_uvx_is_strict_and_pinned() -> void:
 	var launch := _uvx_launch("audio,particle")
+	var cutoff_index: int = launch.get("args", []).find("--exclude-newer")
+	assert_true(cutoff_index >= 0, "attach carries the release dependency cutoff")
+	if cutoff_index >= 0:
+		assert_eq(launch.args[cutoff_index + 1], preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").dependency_cutoff())
 	assert_true(bool(launch.get("ok", false)))
 	assert_eq(launch.get("tier"), "uvx")
 	assert_eq(launch.get("command"), "C:/Python313/pythonw.exe")
@@ -151,6 +155,8 @@ func test_launch_resolver_uvx_is_strict_and_pinned() -> void:
 			"--no-build",
 			"--index-strategy", "first-index",
 			"--keyring-provider", "disabled",
+			"--exclude-newer", preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").dependency_cutoff(),
+			"--exclude-newer-package", "godot-ai=false",
 			"--index", "https://pypi.org/simple",
 			"--default-index", "https://pypi.org/simple",
 			"--find-links", "https://pypi.org/simple/godot-ai/",
@@ -394,7 +400,7 @@ func test_toml_encoder_matches_tomllib_fixture() -> void:
 	assert_true(fixture != null, "cross-language TOML fixture must be readable")
 	## Git may check this fixture out with CRLF on Windows while the renderer
 	## deliberately joins logical TOML lines with LF. Compare normalized text.
-	var expected := fixture.get_as_text().replace("\r\n", "\n").strip_edges()
+	var expected := fixture.get_as_text().replace("{{DEPENDENCY_CUTOFF}}", preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").dependency_cutoff()).replace("\r\n", "\n").strip_edges()
 	fixture.close()
 	assert_eq("\n".join(rendered), expected)
 
@@ -481,7 +487,7 @@ func test_json_encoder_matches_python_fixture() -> void:
 	var rendered := McpJsonStrategy.build_entry(client, "http://unused", null, launch)
 	var fixture := FileAccess.open("res://tests/fixtures/attach_json_sample.json", FileAccess.READ)
 	assert_true(fixture != null, "cross-language JSON fixture must be readable")
-	var expected = JSON.parse_string(fixture.get_as_text())
+	var expected = JSON.parse_string(fixture.get_as_text().replace("{{DEPENDENCY_CUTOFF}}", preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").dependency_cutoff()))
 	fixture.close()
 	assert_eq(rendered, expected)
 
@@ -671,6 +677,8 @@ func test_registry_wide_attach_shape_declarations() -> void:
 		"antigravity": [McpClient.CommandShape.FLAT, null, ["serverUrl"]],
 		"gemini_cli": [McpClient.CommandShape.FLAT, null, ["httpUrl", "url"]],
 		"qwen_code": [McpClient.CommandShape.FLAT, null, ["httpUrl", "url"]],
+		"qoder": [McpClient.CommandShape.FLAT, "stdio", ["url", "headers", "qoder_url", "tcp", "oauth"]],
+		"qoder_cn": [McpClient.CommandShape.FLAT, "stdio", ["url", "headers", "qoder_url", "tcp", "oauth"]],
 		"kiro": [McpClient.CommandShape.FLAT, null, ["url"]],
 		"kimi_code": [McpClient.CommandShape.FLAT, null, ["url", "transport"]],
 		"windsurf": [McpClient.CommandShape.FLAT, null, ["serverUrl"]],
@@ -1154,6 +1162,81 @@ func test_pi_load_merge_tiers_accepts_bom_prefixed_valid_object() -> void:
 	assert_ne(original_text, "", "original_text must capture non-empty source for rollback")
 
 
+func test_pi_json_strategy_accepts_shared_project_stdio_entry() -> void:
+	var global_path := _scratch_dir.path_join("pi_shared_global.json")
+	var project_path := _scratch_dir.path_join("pi_shared_project.json")
+	var client := _pi_clone(global_path)
+	client.config_merge_path_templates = {"unix": PackedStringArray([global_path]), "windows": PackedStringArray([global_path])}
+	client.config_merge_project_paths = PackedStringArray([project_path])
+	var launch := _uvx_launch()
+	var entry := {"command": launch.command, "args": launch.args, "env": {}}
+	_write(global_path, JSON.stringify({"mcpServers": {}}))
+	for typed in [false, true]:
+		if typed:
+			entry["type"] = "stdio"
+		var original := JSON.stringify({"mcpServers": {"godot-ai": entry}})
+		_write(project_path, original)
+		assert_eq(
+			McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch),
+			McpClient.Status.CONFIGURED,
+			"Pi must accept the matching project stdio entry, including Claude's optional type",
+		)
+		assert_eq(_read(project_path), original, "status must not rewrite the shared project file")
+
+
+func test_pi_json_strategy_rejects_conflicting_project_transport() -> void:
+	var global_path := _scratch_dir.path_join("pi_conflict_global.json")
+	var project_path := _scratch_dir.path_join("pi_conflict_project.json")
+	var client := _pi_clone(global_path)
+	client.config_merge_path_templates = {"unix": PackedStringArray([global_path]), "windows": PackedStringArray([global_path])}
+	client.config_merge_project_paths = PackedStringArray([project_path])
+	var launch := _uvx_launch()
+	_write(global_path, JSON.stringify({"mcpServers": {}}))
+	for fields in [
+		{"type": "http"}, {"type": "sse"}, {"type": null}, {"type": 1},
+		{"type": true}, {"type": ["stdio"]}, {"type": {"value": "stdio"}},
+		{"type": "stdio", "url": "http://legacy/mcp"},
+		{"type": "stdio", "headers": {}},
+		{"type": "stdio", "command": "stale"},
+		{"type": "stdio", "args": []},
+	]:
+		var entry := {"command": launch.command, "args": launch.args, "env": {}}
+		entry.merge(fields, true)
+		var original := JSON.stringify({"mcpServers": {"godot-ai": entry}})
+		_write(project_path, original)
+		assert_eq(
+			McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch),
+			McpClient.Status.CONFIGURED_MISMATCH,
+			"a conflicting project transport must remain a mismatch: %s" % str(fields),
+		)
+		assert_eq(_read(project_path), original, "status must preserve the conflicting project entry")
+
+
+func test_pi_stdio_exception_does_not_change_other_clients() -> void:
+	var launch := _uvx_launch()
+	var entry := {"command": launch.command, "args": launch.args, "type": "stdio"}
+	for id in ["kilo_code", "omp"]:
+		assert_false(
+			McpJsonStrategy.verify_entry(McpClientRegistry.get_by_id(id), entry, "http://unused", launch),
+			"%s must still reject its legacy type field" % id,
+		)
+	assert_true(
+		McpJsonStrategy.verify_entry(McpClientRegistry.get_by_id("claude_code"), entry, "http://unused", launch),
+		"Claude's required stdio discriminator remains valid",
+	)
+	entry.erase("type")
+	assert_false(
+		McpJsonStrategy.verify_entry(McpClientRegistry.get_by_id("claude_code"), entry, "http://unused", launch),
+		"Claude's transport discriminator is still required",
+	)
+	var migrated := McpJsonStrategy.build_entry(
+		McpClientRegistry.get_by_id("pi"), "http://unused",
+		{"type": "http", "url": "http://legacy/mcp", "headers": {}, "env": {"CUSTOM": "keep"}}, launch,
+	)
+	assert_eq(migrated, {"command": launch.command, "args": launch.args, "env": {"CUSTOM": "keep"}},
+		"Pi migration must still remove legacy transport fields and preserve custom environment")
+
+
 func test_pi_json_strategy_fails_closed_on_project_override() -> void:
 	var global_path := _scratch_dir.path_join("pi_global.json")
 	var project_path := _scratch_dir.path_join("pi_project.json")
@@ -1206,6 +1289,8 @@ func test_prewarm_argv_pins_exact_version_and_exits_via_version_flag() -> void:
 			"--no-build",
 			"--index-strategy", "first-index",
 			"--keyring-provider", "disabled",
+			"--exclude-newer", preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").dependency_cutoff(),
+			"--exclude-newer-package", "godot-ai=false",
 			"--index", "https://pypi.org/simple",
 			"--default-index", "https://pypi.org/simple",
 			"--find-links", "https://pypi.org/simple/godot-ai/",
@@ -1379,6 +1464,7 @@ func _pi_clone(path: String) -> McpClient:
 	client.command_transport_value = registered.command_transport_value
 	client.command_initial_fields = registered.command_initial_fields.duplicate(true)
 	client.command_legacy_keys = registered.command_legacy_keys
+	client.command_legacy_key_exceptions = registered.command_legacy_key_exceptions.duplicate(true)
 	client.command_user_fields = registered.command_user_fields
 	client.command_timeout_fields = registered.command_timeout_fields
 	client.command_env_legacy_keys = registered.command_env_legacy_keys
@@ -1485,3 +1571,89 @@ func _read(path: String) -> String:
 	var content := file.get_as_text()
 	file.close()
 	return content
+
+
+func test_legacy_no_cutoff_client_migrates_only_with_matching_backup_policy() -> void:
+	_check_previous_cutoff_migration("")
+
+
+func test_old_cutoff_client_migrates_only_with_matching_backup_policy() -> void:
+	_check_previous_cutoff_migration("2025-01-02T03:04:05Z")
+
+
+func _check_previous_cutoff_migration(cutoff: String) -> void:
+	var path := _scratch_dir.path_join("cutoff-migration.toml")
+	var client := _codex_client(path)
+	client.id = "cutoff_migration_fixture"
+	var context := _context("audio")
+	context.plugin_version = "4.0.1"
+	context.telemetry_enabled = false
+	var old_context := context.duplicate(true)
+	old_context.plugin_version = "4.0.0"
+	var discovery := _prewarm_overrides("uvx")
+	var launch := McpClientConfigurator.resolve_attach_launch(context, discovery)
+	var old_launch := McpClientConfigurator.resolve_attach_launch(old_context, discovery)
+	# Build the fixture independently from the production previous-policy helper.
+	var index: int = old_launch.args.find("--exclude-newer")
+	if cutoff.is_empty():
+		old_launch.args.remove_at(index + 1)
+		old_launch.args.remove_at(index)
+		index = old_launch.args.find("--exclude-newer-package")
+		old_launch.args.remove_at(index + 1)
+		old_launch.args.remove_at(index)
+	else:
+		old_launch.args[index + 1] = cutoff
+	assert_eq(McpTomlStrategy.configure(client, "godot-ai", "", old_launch).get("status"), "ok")
+	var original := _read(path)
+	var registry_had := McpClientRegistry._by_id.has(client.id)
+	var registry_prior: Variant = McpClientRegistry._by_id.get(client.id)
+	McpClientRegistry._by_id[client.id] = client
+	var cached_before := {}
+	var cached_missing: Array[String] = []
+	McpClientConfigurator._attach_launch_cache_mutex.lock()
+	for ctx in [context, old_context]:
+		var key := McpClientConfigurator._attach_launch_cache_key(ctx)
+		if McpClientConfigurator._attach_launch_cache.has(key):
+			cached_before[key] = McpClientConfigurator._attach_launch_cache[key]
+		else:
+			cached_missing.append(key)
+		McpClientConfigurator._attach_launch_cache[key] = McpClientConfigurator.resolve_attach_launch(ctx, discovery)
+	McpClientConfigurator._attach_launch_cache_mutex.unlock()
+	assert_false(McpClientConfigurator.entry_drift_is_version_pin_only(client.id, "4.0.0", context), "unknown backup cannot authorize cutoff migration")
+	assert_eq(_read(path), original)
+	context.previous_dependency_policy = {"known": true, "cutoff": cutoff}
+	assert_true(McpClientConfigurator.entry_drift_is_version_pin_only(client.id, "4.0.0", context), "exact previous launch is recognized from actual file contents")
+	assert_eq(_read(path), original, "the eligibility check is read-only")
+	for changed in [
+		original.replace("8123", "8124"),
+		original.replace("https://pypi.org/simple", "https://foreign.example/simple"),
+		original.replace("godot-ai==4.0.0", "foreign-package==4.0.0"),
+		original.replace("--disable-telemetry", "--foreign-option"),
+		original.replace("audio", "particle"),
+	]:
+		assert_ne(changed, original)
+		_write(path, changed)
+		assert_false(McpClientConfigurator.entry_drift_is_version_pin_only(client.id, "4.0.0", context), "foreign drift remains ineligible")
+		assert_eq(_read(path), changed, "refusal must preserve bytes")
+	_write(path, original)
+	context.previous_dependency_policy = {"known": true, "cutoff": "2024-01-02T03:04:05Z"}
+	assert_false(McpClientConfigurator.entry_drift_is_version_pin_only(client.id, "4.0.0", context), "another valid cutoff is still drift")
+	context.previous_dependency_policy = {"known": true, "cutoff": cutoff}
+	var written := McpClientConfigurator.configure(client.id, context.server_url, context)
+	assert_eq(written.get("status"), "ok")
+	assert_eq(McpTomlStrategy.check_status(client, "godot-ai", "", launch), McpClient.Status.CONFIGURED)
+	var updated := _read(path)
+	assert_contains(updated, "godot-ai==4.0.1")
+	assert_contains(updated, preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").dependency_cutoff())
+	assert_contains(updated, "godot-ai=false")
+	assert_contains(updated, "--disable-telemetry")
+	McpClientConfigurator._attach_launch_cache_mutex.lock()
+	for key in cached_missing:
+		McpClientConfigurator._attach_launch_cache.erase(key)
+	for key in cached_before:
+		McpClientConfigurator._attach_launch_cache[key] = cached_before[key]
+	McpClientConfigurator._attach_launch_cache_mutex.unlock()
+	if registry_had:
+		McpClientRegistry._by_id[client.id] = registry_prior
+	else:
+		McpClientRegistry._by_id.erase(client.id)

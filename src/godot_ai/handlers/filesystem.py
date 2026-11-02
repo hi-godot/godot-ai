@@ -19,9 +19,38 @@ async def filesystem_write_text(runtime: DirectRuntime, path: str, content: str 
     )
 
 
+# Native imports are synchronous; a timeout cannot cancel them. Read current
+# settings/import status before retrying an interrupted write.
+_IMPORT_TIMEOUT = 120.0
+
+
+async def filesystem_import_get(runtime: DirectRuntime, path: str) -> dict:
+    return await runtime.send_command("import_get", {"path": path})
+
+
+async def filesystem_import_set(
+    runtime: DirectRuntime,
+    path: str,
+    options: dict,
+    reimport: bool = True,
+    expected_revision: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "import_set",
+        {
+            "path": path,
+            "options": options,
+            "reimport": reimport,
+            "expected_revision": expected_revision,
+        },
+        timeout=_IMPORT_TIMEOUT,
+    )
+
+
 async def filesystem_reimport(runtime: DirectRuntime, paths: list[str]) -> dict:
     await require_writable_async(runtime)
-    return await runtime.send_command("reimport", {"paths": paths})
+    return await runtime.send_command("reimport", {"paths": paths}, timeout=_IMPORT_TIMEOUT)
 
 
 async def filesystem_scan(runtime: DirectRuntime) -> dict:
@@ -32,8 +61,11 @@ async def filesystem_scan(runtime: DirectRuntime) -> dict:
 
     Deliberately not ``require_writable``-gated: a scan is a refresh and must
     run even while the editor reports ``"importing"`` (a scan already in
-    flight), where the plugin's single-flight handler simply awaits the running
-    scan. A full scan can exceed the default command timeout on large projects,
+    flight). Concurrent callers share one operation. An external or ambiguous
+    scan start may need up to two native full-scan root replacements to prove
+    that a scan began after the request. Completion describes that scan, not
+    perpetual editor idleness if another listener starts later work.
+    A full scan can exceed the default command timeout on large projects,
     and the plugin caps its own wait at 28s, so a 35s command timeout leaves
     headroom.
     """

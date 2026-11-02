@@ -11,10 +11,17 @@ extends RefCounted
 ## process too.
 
 
+## MCP 2.3 clients cap an entire SSE event at 1 MiB. Reserve 4 KiB for
+## JSON-RPC/SSE framing and 64 KiB for screenshot metadata and content wrappers.
+## Keep SCREENSHOT_RESULT_MAX_BYTES in sync with handlers/editor.py.
+const SCREENSHOT_RESULT_MAX_BYTES := 1024 * 1024 - 4096
+const MAX_PNG_BYTES := (SCREENSHOT_RESULT_MAX_BYTES - 64 * 1024) * 3 / 4
+
+
 ## Downscale `image` in place so its longest edge is at most
-## `max_resolution` (0 = no cap), then PNG-encode. Returns
+## `max_resolution` (0 = no requested cap), then fit the PNG byte budget. Returns
 ## {base64, width, height, original_width, original_height}.
-static func downscale_and_encode(image: Image, max_resolution: int, use_hdr_2d := false) -> Dictionary:
+static func downscale_and_encode(image: Image, max_resolution: int, use_hdr_2d := false, max_png_bytes: int = MAX_PNG_BYTES) -> Dictionary:
 	## Compatibility readback stays sRGB, including when HDR 2D is enabled.
 	## Image.linear_to_srgb requires RGB8/RGBA8: converting first quantizes
 	## linear darks and clamps values above 1 rather than tone-mapping them.
@@ -36,8 +43,14 @@ static func downscale_and_encode(image: Image, max_resolution: int, use_hdr_2d :
 			var new_h := maxi(1, int(original_height * scale))
 			image.resize(new_w, new_h, Image.INTERPOLATE_LANCZOS)
 
+	var png := image.save_png_to_buffer()
+	while png.size() > max_png_bytes and (image.get_width() > 1 or image.get_height() > 1):
+		## Leave margin because PNG compression does not scale exactly with area.
+		var scale := minf(0.9, sqrt(float(max_png_bytes) / float(png.size())) * 0.9)
+		image.resize(maxi(1, int(image.get_width() * scale)), maxi(1, int(image.get_height() * scale)), Image.INTERPOLATE_LANCZOS)
+		png = image.save_png_to_buffer()
 	return {
-		"base64": Marshalls.raw_to_base64(image.save_png_to_buffer()),
+		"base64": Marshalls.raw_to_base64(png),
 		"width": image.get_width(),
 		"height": image.get_height(),
 		"original_width": original_width,

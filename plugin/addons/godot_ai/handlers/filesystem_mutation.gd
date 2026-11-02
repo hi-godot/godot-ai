@@ -559,7 +559,7 @@ func _editor_state_guard(targets: Dictionary) -> Dictionary:
 		return _unchanged("Project settings reference this resource; update those settings explicitly before mutating it", {"settings": settings})
 	for scene in EditorInterface.get_open_scenes():
 		if targets.has(scene):
-			return _unchanged("Close affected scene tabs before mutating their files", {"scene": scene})
+			return _unchanged("Close affected scene tabs (scene_manage(op=\"close\")) before mutating their files", {"scene": scene})
 	for target: String in targets:
 		var uid: int = targets[target].uid
 		if uid != ResourceUID.INVALID_ID and (not ResourceUID.has_id(uid) or ResourceUID.get_id_path(uid) != target):

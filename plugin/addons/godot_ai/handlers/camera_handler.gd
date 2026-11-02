@@ -469,6 +469,10 @@ func create_camera(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var node := _instantiate_camera(type_str)
 	if node == null:
 		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate camera")
@@ -809,13 +813,19 @@ func follow_2d(params: Dictionary) -> Dictionary:
 
 	var already_child: bool = old_parent == target
 	var reparented: bool = not already_child
+	if reparented:
+		var structure_error := McpNodeValidator.structure_error(node, scene_root)
+		if not structure_error.is_empty():
+			return structure_error
+		var target_error := McpNodeValidator.writable_error(target, scene_root)
+		if not target_error.is_empty():
+			return target_error
 
 	_undo_redo.create_action("MCP: Camera follow %s" % target.name)
 	if reparented:
 		_undo_redo.add_do_method(old_parent, "remove_child", node)
 		_undo_redo.add_do_method(target, "add_child", node, true)
 		_undo_redo.add_do_method(node, "set_owner", scene_root)
-		_undo_redo.add_do_reference(node)
 	if zero_transform:
 		if target is Node2D:
 			_undo_redo.add_do_property(node, "position", Vector2.ZERO)
@@ -832,7 +842,6 @@ func follow_2d(params: Dictionary) -> Dictionary:
 		_undo_redo.add_undo_method(old_parent, "add_child", node, true)
 		_undo_redo.add_undo_method(old_parent, "move_child", node, old_idx)
 		_undo_redo.add_undo_method(node, "set_owner", scene_root)
-		_undo_redo.add_undo_reference(node)
 	_undo_redo.commit_action()
 
 	return {
@@ -995,6 +1004,10 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		if parent == null:
 			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
 
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+
 	var node := _instantiate_camera(type_str)
 	node.name = node_name
 
@@ -1075,7 +1088,7 @@ static func _camera_type_str(node: Node) -> String:
 
 func _resolve_camera(params: Dictionary) -> Dictionary:
 	var resolved := McpNodeValidator.resolve_or_error(
-		params.get("camera_path", ""), "camera_path",
+		params.get("camera_path", ""), "camera_path", "", true,
 	)
 	if resolved.has("error"):
 		return resolved

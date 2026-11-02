@@ -89,6 +89,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.13.5"
+          enable-cache: false
       - name: Build without signing credentials
         env:
           SOURCE: ${{ matrix.source }}
@@ -96,13 +100,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install build==1.6.1
           python -m script.release_support package --root candidate --repo candidate-source --source "$SOURCE" --version "$VERSION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: v4-unsigned-${{ matrix.name }}
           path: candidate/
           if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: v4-build-evidence-${{ matrix.name }}
+          path: candidate-build-evidence/
+          if-no-files-found: warn
           retention-days: 90
 
   sign:
@@ -190,12 +200,15 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.13.5"
+          enable-cache: false
       - name: Resolve once, retain dependencies, test offline installs
         env:
           ROW_OS: ${{ matrix.os }}
         shell: bash
         run: |
-          python -m pip install uv==0.13.5
           python -m script.release_qualification --candidates candidates --output row --os "$ROW_OS"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -247,13 +260,16 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.13.5"
+          enable-cache: false
       - name: Exercise unmodified signed candidates in a real editor
         env:
           ROW_OS: ${{ matrix.os }}
           ROW_GODOT: ${{ matrix.godot }}
         shell: bash
         run: |
-          python -m pip install uv==0.13.5
           python -m script.runtime_qualification --candidates candidates --python-row python-row --godot "$GODOT" --godot-version "$ROW_GODOT" --output row --os "$ROW_OS"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

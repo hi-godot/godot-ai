@@ -650,6 +650,56 @@ func test_apply_preset_glass_to_node() -> void:
 	_remove_node(node)
 
 
+func test_metal_preset_inline_values_survive_resource_save_reload() -> void:
+	var node := _add_mesh_node("MetalPresetInlinePersistence") as MeshInstance3D
+	assert_true(node != null)
+	if node == null:
+		return
+	var node_path := McpScenePath.from_node(node, EditorInterface.get_edited_scene_root())
+	for overrides in [{}, {"metallic": 0.5, "roughness": 0.75}]:
+		var result := _handler.apply_preset({"preset": "metal", "node_path": node_path, "overrides": overrides})
+		assert_eq(result.get("data", {}).get("assigned", false), true)
+		var material := node.material_override as BaseMaterial3D
+		var metallic: float = overrides.get("metallic", 1.0)
+		var roughness: float = overrides.get("roughness", 0.25)
+		assert_eq(material.metallic, metallic)
+		assert_eq(material.roughness, roughness)
+		var path := "res://tests/_metal_inline_%d.tres" % Time.get_ticks_usec()
+		assert_eq(ResourceSaver.save(material, path), OK)
+		var stored: BaseMaterial3D = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+		_cleanup_file(path)
+		assert_eq(stored.metallic, metallic, "saved metal preset must retain metallic strength")
+		assert_eq(stored.roughness, roughness, "saved metal preset must retain roughness")
+		assert_true(stored is StandardMaterial3D)
+	_remove_node(node)
+
+
+func test_metal_preset_disk_and_assigned_values_survive_reload() -> void:
+	var node := _add_mesh_node("MetalPresetDiskPersistence") as MeshInstance3D
+	assert_true(node != null)
+	if node == null:
+		return
+	var node_path := McpScenePath.from_node(node, EditorInterface.get_edited_scene_root())
+	for assign in [false, true]:
+		var path := "res://tests/_metal_saved_%d.tres" % Time.get_ticks_usec()
+		var params := {"preset": "metal", "path": path}
+		if assign:
+			params.node_path = node_path
+			params.overrides = {"metallic": 0.5, "roughness": 0.75}
+		var result := _handler.apply_preset(params)
+		assert_eq(result.get("data", {}).get("saved_to_disk", false), true)
+		assert_eq(result.data.assigned, assign)
+		var stored: BaseMaterial3D = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+		_cleanup_file(path)
+		assert_eq(stored.metallic, 0.5 if assign else 1.0)
+		assert_eq(stored.roughness, 0.75 if assign else 0.25)
+		assert_true(stored is StandardMaterial3D)
+		if assign:
+			assert_eq(node.material_override.metallic, stored.metallic)
+			assert_eq(node.material_override.roughness, stored.roughness)
+	_remove_node(node)
+
+
 func test_apply_preset_unknown() -> void:
 	var node := _add_mesh_node("TestPresetUnknown") as Node
 	if node == null:

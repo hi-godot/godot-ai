@@ -22,6 +22,35 @@ views, not the surrounding editor chrome.
 `source="game"` is only the right answer when the thing you want to see
 only exists in the *running* game.
 
+## Save a cinematic render at an exact size
+
+```python
+editor_screenshot(source="cinematic", width=1920, height=1080,
+                  save_to="res://captures/frame.png", include_image=False)
+```
+
+Supply both dimensions, each a whole number from 1 to 4096. Omitting both
+uses the editor viewport size. The scene must contain a Camera3D. These
+options apply only to `cinematic`; they do not resize the editor or game window.
+
+The full PNG is saved before preview scaling. Parent directories are created;
+existing files require `overwrite=True`. Project write-path restrictions apply,
+and file writes require a writable editor and cannot be undone.
+
+With `include_image=False`, only metadata crosses the transport. Check
+`saved_path`, `saved_width`, `saved_height` and `saved_bytes` for the file.
+With `include_image=True`, the response also includes a preview scaled to
+`max_resolution` and the MCP transport budget; its `width` and `height` may be
+smaller than the saved dimensions. Vision Routing can describe that preview
+instead of returning it. Without `save_to`, `include_image=False` still returns
+capture metadata, but does not save a file.
+
+If saving succeeds but the preview fails, the response retains the saved file
+metadata and adds `preview_error` instead of an image. Failed file publication
+reports recovery paths in the error data; retain those files until recovery is
+complete. `backup_cleanup_failed` with `backup_path` means the new PNG was saved
+but the previous file's backup could not be removed.
+
 ## Recipe: testing a runtime UI option (e.g. main menu)
 
 ```

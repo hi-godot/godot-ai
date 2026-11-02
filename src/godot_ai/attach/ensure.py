@@ -339,7 +339,11 @@ async def probe_backend(
     capability = pinned or record.http
     try:
         async with asyncio.timeout(timeout):
-            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            # This fixed loopback HTTP endpoint never uses TLS or follows redirects.
+            # Loading CA roots here can exhaust the probe budget on Windows.
+            async with httpx.AsyncClient(
+                timeout=timeout, trust_env=False, verify=False,
+            ) as client:
                 for attempt in range(2):
                     try:
                         response, body = await _bounded_status_request(

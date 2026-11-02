@@ -7,7 +7,7 @@ import base64
 import json
 import logging
 
-from mcp.types import TextContent
+from mcp.types import CallToolResult, TextContent
 
 from godot_ai import runtime_info
 from godot_ai.fastmcp_compat import Image as McpImage
@@ -22,6 +22,26 @@ from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools._pagination import paginate
 
 logger = logging.getLogger(__name__)
+
+# Keep in sync with utils/screenshot_encode.gd. Leave 4 KiB for the JSON-RPC
+# envelope and SSE framing outside CallToolResult in the client's 1 MiB event.
+SCREENSHOT_RESULT_MAX_BYTES = 1024 * 1024 - 4096
+
+
+def _bounded_screenshot_content(blocks: list) -> list:
+    content = [
+        block.to_image_content() if isinstance(block, McpImage) else block for block in blocks
+    ]
+    size = len(CallToolResult(content=content).model_dump_json(by_alias=True).encode("utf-8"))
+    if size > SCREENSHOT_RESULT_MAX_BYTES:
+        raise GodotCommandError(
+            ErrorCode.INTERNAL_ERROR,
+            "Screenshot response exceeds the MCP image transport limit. Retry with a lower "
+            "max_resolution, coverage=False, or fewer view_target paths.",
+            {"response_bytes": size, "max_bytes": SCREENSHOT_RESULT_MAX_BYTES},
+        )
+    return blocks
+
 
 SCREENSHOT_TIMEOUT_SEC = 15.0
 GAME_SCREENSHOT_TIMEOUT_SEC = 35.0
@@ -86,7 +106,13 @@ async def editor_screenshot(
     azimuth: float | None = None,
     fov: float | None = None,
     user_prompt: str = "",
+    width: int | None = None,
+    height: int | None = None,
+    save_to: str = "",
+    overwrite: bool = False,
 ) -> dict | list:
+    if save_to:
+        await require_writable_async(runtime)
     params: dict = {"source": source}
     if max_resolution > 0:
         params["max_resolution"] = max_resolution
@@ -102,6 +128,15 @@ async def editor_screenshot(
         params["fov"] = fov
     if user_prompt:
         params["user_prompt"] = user_prompt
+    if width is not None:
+        params["width"] = width
+    if height is not None:
+        params["height"] = height
+    if save_to:
+        params["save_to"] = save_to
+        params["include_image"] = include_image
+    if overwrite:
+        params["overwrite"] = True
 
     timeout = GAME_SCREENSHOT_TIMEOUT_SEC if source == "game" else SCREENSHOT_TIMEOUT_SEC
     result = await runtime.send_command(
@@ -122,6 +157,9 @@ async def editor_screenshot(
                 "width": img["width"],
                 "height": img["height"],
             }
+            for key in ("original_width", "original_height"):
+                if key in img:
+                    meta_entry[key] = img[key]
             if img.get("ortho"):
                 meta_entry["ortho"] = True
             images_meta.append(meta_entry)
@@ -147,7 +185,7 @@ async def editor_screenshot(
         for img in result["images"]:
             image_bytes = base64.b64decode(img.get("image_base64", ""))
             blocks.append(McpImage(data=image_bytes, format=img.get("format", "png")))
-        return blocks
+        return _bounded_screenshot_content(blocks)
 
     # --- Single-image response ---
     metadata = {
@@ -172,6 +210,15 @@ async def editor_screenshot(
         "aabb_size",
         "aabb_longest_ground_axis",
         "camera_path",
+        "saved_path",
+        "saved_width",
+        "saved_height",
+        "saved_bytes",
+        "backup_path",
+        "backup_cleanup_failed",
+        "preview_error",
+        "undoable",
+        "reason",
         # #777: source="game" staleness metadata — a capture taken while the
         # game's main loop was frozen (backgrounded window) returns the last
         # rendered frame with stale_frame=true and an explanatory note.
@@ -187,7 +234,7 @@ async def editor_screenshot(
         if key in result:
             metadata[key] = result[key]
 
-    if not include_image:
+    if not include_image or (result.get("saved_path") and not result.get("image_base64")):
         return metadata
 
     # Routed captures: the plugin already converted the screenshot into a text
@@ -195,16 +242,24 @@ async def editor_screenshot(
     # a text-only model cannot use the image block, and forwarding the
     # placeholder would just waste tokens.
     if result.get("routed_via"):
-        return [TextContent(type="text", text=json.dumps(metadata))]
+        return _bounded_screenshot_content([TextContent(type="text", text=json.dumps(metadata))])
 
     image_b64 = result.get("image_base64", "")
     image_bytes = base64.b64decode(image_b64)
     fmt = result.get("format", "png")
 
-    return [
-        TextContent(type="text", text=json.dumps(metadata)),
-        McpImage(data=image_bytes, format=fmt),
-    ]
+    try:
+        return _bounded_screenshot_content(
+            [
+                TextContent(type="text", text=json.dumps(metadata)),
+                McpImage(data=image_bytes, format=fmt),
+            ]
+        )
+    except GodotCommandError as exc:
+        if not result.get("saved_path"):
+            raise
+        metadata["preview_error"] = {"code": exc.code, "message": str(exc)}
+        return metadata
 
 
 async def performance_monitors_get(

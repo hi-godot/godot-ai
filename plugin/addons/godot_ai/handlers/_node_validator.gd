@@ -42,6 +42,7 @@ static func resolve_or_error(
 	node_path: String,
 	param_name: String = "path",
 	scene_file: String = "",
+	for_write: bool = false,
 ) -> Dictionary:
 	if node_path.is_empty():
 		return ErrorCodes.make(
@@ -58,7 +59,28 @@ static func resolve_or_error(
 			ErrorCodes.NODE_NOT_FOUND,
 			ScenePath.format_node_error(node_path, scene_root),
 		)
+	if for_write:
+		var write_error := writable_error(node, scene_root)
+		if not write_error.is_empty():
+			return write_error
 	return {"node": node, "scene_root": scene_root, "path": node_path}
+
+
+## PackedScene skips a non-editable instance's internal nodes AND their
+## subtrees. Check ancestors too, including for locally owned attachments.
+static func writable_error(node: Node, scene_root: Node) -> Dictionary:
+	if node != scene_root and not scene_root.is_ancestor_of(node):
+		return {}
+	var current := node
+	while current != null and current != scene_root:
+		var owner := current.owner
+		if owner != null and owner != scene_root and not scene_root.is_editable_instance(owner):
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+				"Cannot edit %s: changes beneath instance %s (%s) would be lost on save. Enable Editable Children explicitly with node_manage(op=\"set_editable_children\") on that instance, or edit its source scene." % [
+					ScenePath.from_node(node, scene_root), ScenePath.from_node(owner, scene_root), owner.scene_file_path,
+				])
+		current = current.get_parent()
+	return {}
 
 
 ## When the caller needs the scene root but no specific node yet — e.g.
@@ -69,3 +91,13 @@ static func require_scene_or_error(scene_file: String = "") -> Dictionary:
 	if scene_check.has("error"):
 		return scene_check
 	return {"scene_root": scene_check.node}
+
+
+## Editable Children permits overrides, not rearranging the source scene.
+static func structure_error(node: Node, scene_root: Node) -> Dictionary:
+	if node != scene_root and node.owner != null and node.owner != scene_root:
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+			"Cannot change the structure of instance-owned node %s. Edit its source scene %s instead; Editable Children only permits overrides and local attachments." % [
+				ScenePath.from_node(node, scene_root), node.owner.scene_file_path,
+			])
+	return {}

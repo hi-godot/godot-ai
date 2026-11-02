@@ -25,6 +25,59 @@ async def _bounded(awaitable):
 
 
 class TestMcpVerificationWorkflows:
+    async def test_cinematic_file_output_returns_metadata_without_image(self, mcp_stack):
+        client, plugin = mcp_stack
+        saved = {
+            "source": "cinematic",
+            "width": 1920,
+            "height": 1080,
+            "original_width": 1920,
+            "original_height": 1080,
+            "format": "png",
+            "camera_path": "/Main/Camera3D",
+            "saved_path": "res://captures/frame.png",
+            "saved_width": 1920,
+            "saved_height": 1080,
+            "saved_bytes": 5_000_000,
+            "undoable": False,
+            "reason": "PNG file writes cannot be undone via editor undo",
+        }
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "take_screenshot"
+            assert cmd["params"] == {
+                "source": "cinematic",
+                "width": 1920,
+                "height": 1080,
+                "max_resolution": 64,
+                "save_to": saved["saved_path"],
+                "overwrite": True,
+                "include_image": False,
+            }
+            await plugin.send_response(cmd["request_id"], saved)
+
+        task = asyncio.create_task(respond())
+        result = await _bounded(
+            client.call_tool(
+                "editor_screenshot",
+                {
+                    "source": "cinematic",
+                    "width": 1920,
+                    "height": 1080,
+                    "max_resolution": 64,
+                    "save_to": saved["saved_path"],
+                    "overwrite": True,
+                    "include_image": False,
+                },
+            )
+        )
+        await _bounded(task)
+        assert not result.is_error
+        assert result.data == saved
+        assert all(_content_type(block) == "text" for block in result.content)
+        assert sum(len(block.text) for block in result.content) < 1024
+
     async def test_editor_screenshot_returns_consumable_image_content(self, mcp_stack):
         client, plugin = mcp_stack
 

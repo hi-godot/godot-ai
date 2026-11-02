@@ -8,6 +8,32 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 var _connection: McpConnection
 var _save_scene_callable: Callable = Callable()
 var _save_scene_as_callable: Callable = Callable()
+var _scene_tabs: SceneTabs = SceneTabs.new()
+
+
+## The editor scene-tab calls close_scene makes. Tests swap in a subclass so
+## the close flow runs without switching or closing the test runner's tabs.
+class SceneTabs:
+	extends RefCounted
+
+	func open_scenes() -> PackedStringArray:
+		return EditorInterface.get_open_scenes()
+
+	func unsaved_scenes() -> PackedStringArray:
+		return EditorInterface.get_unsaved_scenes()
+
+	func current_path() -> String:
+		var root := EditorInterface.get_edited_scene_root()
+		return root.scene_file_path if root else ""
+
+	## Switching to an already-open tab is synchronous; it is a silent no-op
+	## while the editor is mid scene change, so callers re-check current_path().
+	func switch_to(path: String) -> void:
+		EditorInterface.open_scene_from_path(path)
+
+	## Closes the current tab and drops its unsaved edits without prompting.
+	func close_current() -> int:
+		return EditorInterface.close_scene()
 
 
 func _init(connection: McpConnection = null) -> void:
@@ -375,6 +401,93 @@ func save_scene_as(params: Dictionary) -> Dictionary:
 			"path": path,
 			"undoable": false,
 			"reason": "File save cannot be undone via editor undo",
+		}
+	}
+
+
+## Close an open scene tab (#1171). Godot's close drops unsaved edits without
+## asking, so a tab with unsaved changes is refused unless discard_changes is
+## set. A tab that is not the edited one is switched to, closed, and the
+## caller's previous tab is brought back to the front; that is refused when
+## the edited tab is untitled, since it has no path to switch back to.
+func close_scene(params: Dictionary) -> Dictionary:
+	var path: String = params.get("path", "")
+	var discard_changes: bool = params.get("discard_changes", false)
+	if path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: path")
+
+	var open_scenes := _scene_tabs.open_scenes()
+	## Open tabs are keyed by res:// path. Match a uid:// against each tab's file
+	## header: a just-created scratch scene is not in the UID cache yet.
+	if path.begins_with("uid://"):
+		var uid := ResourceUID.text_to_id(path)
+		for open_path in open_scenes:
+			if uid != ResourceUID.INVALID_ID and ResourceLoader.get_resource_uid(open_path) == uid:
+				path = open_path
+				break
+		if path.begins_with("uid://"):
+			return ErrorCodes.make(
+				ErrorCodes.RESOURCE_NOT_FOUND,
+				"No open scene has uid %s (open: %s)" % [path, ", ".join(open_scenes)]
+			)
+
+	var path_err = McpPathValidator.path_error(path, "path")
+	if path_err != null:
+		return path_err
+	## Tabs hold the canonical spelling; `res://./a.tscn` must still match.
+	path = path.simplify_path()
+
+	if not open_scenes.has(path):
+		return ErrorCodes.make(
+			ErrorCodes.RESOURCE_NOT_FOUND,
+			"Scene is not open in the editor: %s (open: %s)" % [path, ", ".join(open_scenes)]
+		)
+
+	var had_unsaved_changes := _scene_tabs.unsaved_scenes().has(path)
+	if had_unsaved_changes and not discard_changes:
+		return ErrorCodes.make(
+			ErrorCodes.INVALID_PARAMS,
+			"Scene has unsaved changes: %s. Save them first (scene_open, then scene_save), or pass discard_changes=true to drop them." % path
+		)
+
+	var previous_path := _scene_tabs.current_path()
+	## An untitled tab has no path to switch back to, so closing another tab
+	## would leave the editor on whichever scene Godot selects next.
+	if previous_path.is_empty():
+		return ErrorCodes.make(
+			ErrorCodes.EDITED_SCENE_MISMATCH,
+			"The edited tab is an untitled scene, which cannot be brought back to the front after closing %s; nothing was closed. Save the untitled scene first, or switch to %s (scene_open) and close it from there." % [path, path]
+		)
+	if previous_path != path:
+		_scene_tabs.switch_to(path)
+		if _scene_tabs.current_path() != path:
+			return ErrorCodes.make(
+				ErrorCodes.EDITED_SCENE_MISMATCH,
+				"Editor did not switch to %s before closing it (current: %s); nothing was closed. Retry once the editor has settled." % [path, _scene_tabs.current_path()]
+			)
+
+	var err := _scene_tabs.close_current()
+	if err != OK:
+		if previous_path != path and _scene_tabs.open_scenes().has(previous_path):
+			_scene_tabs.switch_to(previous_path)
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to close scene %s: %s" % [path, error_string(err)])
+
+	## The close already happened and cannot be undone, so a switch back that
+	## the editor ignored is reported in the result rather than as an error.
+	var previous_scene_restored := false
+	if previous_path != path and _scene_tabs.open_scenes().has(previous_path):
+		_scene_tabs.switch_to(previous_path)
+		previous_scene_restored = _scene_tabs.current_path() == previous_path
+
+	return {
+		"data": {
+			"path": path,
+			"discarded_changes": had_unsaved_changes,
+			"current_scene": _scene_tabs.current_path(),
+			"previous_scene_restored": previous_scene_restored,
+			"open_scenes": _scene_tabs.open_scenes(),
+			"undoable": false,
+			"reason": "Closing a scene tab cannot be undone via editor undo",
 		}
 	}
 

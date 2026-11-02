@@ -63,6 +63,12 @@ static func validate_home(params: Dictionary, require_property: bool = true) -> 
 ## (`resource_path`, `overwritten`, `undoable: false`, `reason`). Passing
 ## a `reason` key in `extra_fields` overrides the default — useful for
 ## tools that edit existing files rather than creating fresh ones.
+## `refresh_cached` updates existing references after a successful overwrite.
+## Keep it disabled for disk-only edits that deliberately preserve live objects.
+## `staged_replace` stages the file and UID beside the destination before rename.
+## Windows retains a recovery backup during replacement; this is not crash-atomic.
+## Validation and staging failures leave the destination untouched; a cache-copy
+## failure after replacement explicitly reports disk_committed=true.
 ##
 ## `pause_target` should be the handler's `McpConnection`. When supplied,
 ## `pause_processing` is flipped on around `ResourceSaver.save()` so the
@@ -84,6 +90,8 @@ static func save_to_disk(
 	label: String,
 	extra_fields: Dictionary = {},
 	pause_target: McpConnection = null,
+	refresh_cached: bool = false,
+	staged_replace: bool = false,
 ) -> Dictionary:
 	var path_err = McpPathValidator.path_error(resource_path, "resource_path", true)
 	if path_err != null:
@@ -94,6 +102,12 @@ static func save_to_disk(
 		return ErrorCodes.make(
 			ErrorCodes.INVALID_PARAMS,
 			"%s already exists at %s (pass overwrite=true to replace)" % [label, resource_path]
+		)
+	var cached: Resource = ResourceLoader.get_cached_ref(resource_path) if existed_before and refresh_cached else null
+	if cached != null and (cached.get_class() != res.get_class() or cached.get_script() != res.get_script()):
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Cannot overwrite cached %s at %s with a different resource class or script: existing references cannot change type. Save to a different path and reassign it instead." % [cached.get_class(), resource_path]
 		)
 	# Captured BEFORE the overwrite below so a resave of an already-uid'd file
 	# (overwrite=true) can restore its own uid instead of losing it — see
@@ -108,22 +122,51 @@ static func save_to_disk(
 			"Failed to create directory %s: %s" % [dir_path, error_string(mkdir_err)]
 		)
 
+	var save_path := resource_path
+	if staged_replace:
+		save_path = resource_path.get_base_dir().path_join(".godot_ai_edit_%s_%s.%s" % [res.get_instance_id(), Time.get_ticks_usec(), resource_path.get_extension()])
+		if FileAccess.file_exists(save_path):
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Staging path already exists: %s" % save_path)
 	if pause_target != null:
 		pause_target.pause_processing = true
-	var save_err := ResourceSaver.save(res, resource_path)
+	var save_err := ResourceSaver.save(res, save_path)
 	if pause_target != null:
 		pause_target.pause_processing = false
 	if save_err != OK:
+		if staged_replace and FileAccess.file_exists(save_path):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(save_path))
 		return ErrorCodes.make(
 			ErrorCodes.INTERNAL_ERROR,
 			"Failed to save %s to %s: %s" % [label, resource_path, error_string(save_err)]
 		)
-	var uid_err := ensure_uid(resource_path, prior_uid)
+	var uid_err := ensure_uid(save_path, prior_uid)
 	if uid_err != OK:
+		if staged_replace:
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(save_path))
 		return ErrorCodes.make(
 			ErrorCodes.INTERNAL_ERROR,
-			"%s saved to %s but failed to write its uid: %s" % [label, resource_path, error_string(uid_err)]
+			("Failed to stage %s at %s with its uid; original file was not changed: %s" if staged_replace else "%s saved to %s but failed to write its uid: %s") % [label, resource_path, error_string(uid_err)]
 		)
+	var replacement_fields := {}
+	if staged_replace:
+		replacement_fields = _replace_staged_file(save_path, resource_path, existed_before and OS.get_name() == "Windows", Callable(), overwrite)
+		if replacement_fields.has("error"):
+			return replacement_fields
+	if cached != null:
+		# Copy all stored values, including defaults omitted from the saved file.
+		# CACHE_MODE_REPLACE only reloads serialized fields and leaves old defaults.
+		if pause_target != null:
+			pause_target.pause_processing = true
+		var refresh_err := cached.copy_from_resource(res)
+		if pause_target != null:
+			pause_target.pause_processing = false
+		if refresh_err != OK:
+			var failure := ErrorCodes.make(
+				ErrorCodes.INTERNAL_ERROR,
+				"%s saved to %s but failed to refresh its cached resource: %s. Disk contains the edit; reload the resource before making another edit." % [label, resource_path, error_string(refresh_err)]
+			)
+			failure.error["data"] = {"disk_committed": true, "live_refreshed": false, "resource_path": resource_path}
+			return failure
 
 	var efs := EditorInterface.get_resource_filesystem()
 	if efs != null:
@@ -138,8 +181,57 @@ static func save_to_disk(
 	attach_cleanup_hint(data, existed_before, [resource_path])
 	# merge with overwrite=true so callers (e.g. curve_set_points editing an
 	# existing .tres) can supply a domain-specific `reason`.
+	data.merge(replacement_fields, true)
 	data.merge(extra_fields, true)
 	return {"data": data}
+
+
+## Windows rename deletes an existing destination first. Move only into absent
+## paths there, retaining the original until commit or successful restoration.
+## The callable seam lets tests fail individual moves while using real files.
+## Recheck no-overwrite after staging; another process can still race the final
+## check and rename, so this is not an atomic no-clobber guarantee.
+static func _replace_staged_file(stage: String, destination: String, use_backup: bool, rename_file: Callable = Callable(), overwrite: bool = true) -> Dictionary:
+	if not overwrite and FileAccess.file_exists(destination):
+		var cleanup_err := DirAccess.remove_absolute(ProjectSettings.globalize_path(stage))
+		var failure := ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Destination appeared during save at %s; pass overwrite=true to replace" % destination)
+		failure.error["data"] = {"disk_committed": false, "live_refreshed": false}
+		if cleanup_err != OK:
+			failure.error.data["staged_resource"] = stage
+		return failure
+	var move: Callable = rename_file if rename_file.is_valid() else DirAccess.rename_absolute
+	var stage_absolute := ProjectSettings.globalize_path(stage)
+	var destination_absolute := ProjectSettings.globalize_path(destination)
+	var backup := ""
+	if use_backup:
+		backup = destination.get_base_dir().path_join(".godot_ai_backup_%s.%s" % [Time.get_ticks_usec(), destination.get_extension()])
+		if FileAccess.file_exists(backup):
+			return _replacement_error("Recovery backup already exists; original is unchanged", stage, "", false)
+		var backup_err: int = move.call(destination_absolute, ProjectSettings.globalize_path(backup))
+		if backup_err != OK:
+			return _replacement_error("Could not retain the original; original is unchanged: %s" % error_string(backup_err), stage, "", false)
+	var replace_err: int = ERR_ALREADY_EXISTS if use_backup and FileAccess.file_exists(destination) else move.call(stage_absolute, destination_absolute)
+	if replace_err != OK:
+		if not backup.is_empty():
+			var restore_err: int = ERR_ALREADY_EXISTS if FileAccess.file_exists(destination) else move.call(ProjectSettings.globalize_path(backup), destination_absolute)
+			if restore_err != OK:
+				return _replacement_error("Replacement and restoration failed; restore the original from recovery_backup before further edits", stage, backup, true)
+		return _replacement_error("Replacement failed; original file and live resource are unchanged: %s" % error_string(replace_err), stage, "", false)
+	if not backup.is_empty() and DirAccess.remove_absolute(ProjectSettings.globalize_path(backup)) != OK:
+		return {"backup_path": backup, "backup_cleanup_failed": true}
+	return {}
+
+
+static func _replacement_error(message: String, stage: String, backup: String, restore_failed: bool) -> Dictionary:
+	var failure := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, message)
+	failure.error["data"] = {
+		"disk_committed": false,
+		"live_refreshed": false,
+		"staged_resource": stage,
+		"recovery_backup": backup,
+		"restore_failed": restore_failed,
+	}
+	return failure
 
 
 ## Save `res` to `resource_path` with the same `pause_processing` re-entrancy

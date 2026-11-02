@@ -62,7 +62,7 @@ plugin-spawned servers never runs for a client-spawned bridge or its backend
 (see docs/TELEMETRY.md). Package pins, command paths, ports, exclusions,
 telemetry, and required uv options are verified as launch drift. After an
 update restarts the editor and the live tree verifies, the plugin repins
-configured clients automatically (pin-only). **Configure all** is manual
+configured clients automatically when exact old-launch readback matches. **Configure all** is manual
 remediation when that repin reports drift or failure, and remains the explicit
 repair path after a port
 change, telemetry toggle, or tool-domain change. Never silently fall back to a
@@ -70,6 +70,19 @@ bare `uvx` command for these entries—report ERROR and leave the config untouch
 when no verified tier exists.
 
 The uvx tier is isolated/no-config/no-build and names official PyPI explicitly.
+It also carries the release's fixed `dependency_cutoff` from `plugin.cfg` as
+`--exclude-newer`, with only `godot-ai` exempted so the release itself can be
+uploaded after preparation. Server startup, client attach and package prewarm
+share this policy. After a successful update, the plugin can migrate an exact
+previous launch, including its old cutoff or legacy absence of one. It reads
+only `addons/.godot_ai_update/backup/<from_version>/plugin.cfg` when the outcome
+names that same retained backup and the metadata version matches. This binds
+metadata to the update path/version; it does not independently authenticate the
+previous tree. Missing or malformed backup metadata cannot authorize a cutoff
+change. Other command, index, port, telemetry or domain drift still requires
+Configure. All actual launches use the current cutoff; the previous policy is
+constructed only as a readback expectation. If uv rejects the cutoff options, upgrade uv; the plugin
+does not retry with unbounded dependency resolution.
 Godot-owned server/prewarm spawns also clear inherited uv resolution controls;
 client-owned bridges carry the same resolver policy in their persisted argv.
 Only the process-local qualification switch documented in the release plan may
@@ -596,3 +609,73 @@ The suggested fresh entry sets `timeout: 300000` milliseconds because omp's
 preserved on reconfigure. `OMP_MCP_TIMEOUT_MS` takes precedence over this
 per-server value. See the [upstream MCP configuration
 guide](https://github.com/can1357/oh-my-pi/blob/main/docs/mcp-config.md).
+
+
+## Qoder and Qoder CN
+
+Choose **Qoder** or **Qoder CN** in the Godot AI dock and copy the manual
+configuration into the client's settings. Both use the authenticated
+`godot-ai attach` launcher. Their default user
+configuration files are `~/.qoder/settings.json` and
+`~/.qoder-cn/settings.json`, respectively. On Windows these directories are
+under `%USERPROFILE%`. The generated `mcpServers.godot-ai` entry contains
+`command`, `args`, and `type: "stdio"`. Use the dock's manual configuration
+output for the exact executable and version appropriate to this installation.
+
+Both editions allow comments in `settings.json`. Godot AI reads those comments
+for status checks but leaves edits to you so comments and unrelated settings
+remain intact. **Configure** and **Remove** refuse automatic writes. When
+replacing an existing Godot AI entry, remove its remote transport fields,
+including `qoder_url`, which overrides stdio. Preserve any client permissions
+and disabled state you intend to keep.
+
+`QODER_CONFIG_DIR` relocates Qoder's user directory; `QODERCN_CONFIG_DIR` does
+the same for Qoder CN. When the corresponding variable is set in Godot's
+environment, status reports that the active path is ambiguous. Confirm the
+client's actual directory before manually editing `settings.json`.
+
+Both editions can override user configuration with project
+`.qoder/settings.json`, `.mcp.json`, and `.qoder/settings.local.json` files.
+Resolve any project definition of the same server explicitly. Client command-line overrides,
+plugin configuration and a different working directory are not observable
+from Godot. If a configured server is missing, check those sources and the
+client's server allow/exclude settings. Run `/mcp reload` in an existing CLI
+session, or restart the client, after changing configuration.
+
+The paths, stdio fields and precedence follow the official
+[Qoder MCP reference](https://docs.qoder.com/cli/mcp-reference) and
+[Qoder CN MCP reference](https://docs.qoder.cn/cli/mcp-reference). Comment support
+and relocated directories follow the
+[Qoder settings guide](https://docs.qoder.com/cli/settings) and
+[Qoder CN settings guide](https://docs.qoder.cn/cli/settings).
+
+## Automatic repair
+
+The Settings tab has an **Automatically repair client configuration** switch,
+which defaults to off (`godot_ai/auto_reconfigure_clients`). After the editor
+connects to an authenticated backend, enabling it repairs changed launch
+settings only for entries this project explicitly configured. A successful
+Configure records the exact launch even when the switch is off. Configure from
+another project explicitly transfers ownership of that entry.
+
+Repair preserves client preferences, environment variables, timeouts, approval
+lists, and other server entries. It checks the retained launch again under the
+account-wide mutation lock before writing. Missing, disabled, suppressed,
+corrupt, externally edited, or ambiguously scoped entries require Configure.
+The current automatic path supports JSON, TOML, and Claude's verified user-scope
+JSON entry when there is no project state or suppression list in that file.
+Clients with project override tiers also require an explicit
+`godot_ai/external_client_cwd`. Other CLI scopes and DeepSeek Harness's layered
+YAML require manual Configure. TOML repair validates the entire file with an
+available Python 3.11+ interpreter in isolated mode, with a 1 MiB file limit and
+a three-second subprocess deadline. Unavailable parsers require manual Configure. Removing an entry revokes its repair enrollment.
+
+Each resolved target and desired launch gets at most one completed attempt per
+editor session. A repair cancelled before any write can retry after reconnecting;
+ambiguous outcomes cannot. At most 128 repair requests are admitted in total,
+including cancellations. Disabling the switch or losing the authenticated
+connection cancels queued repairs and cancels a running repair before its write
+boundary. An already completed file write is not rolled back.
+Successful repair asks you to reload the client's MCP connection. The plugin
+does not restart the client or choose different ports. Post-update migration
+continues separately and does not enroll entries or transfer ownership.

@@ -780,6 +780,43 @@ func test_follow_2d_undo_restores_parent() -> void:
 	_created_paths = [McpScenePath.from_node(cam, scene_root)]
 
 
+func test_follow_2d_discarded_redo_keeps_existing_camera_alive() -> void:
+	var created := _create("FollowRedoLifetime", "2d")
+	assert_has_key(created, "data")
+	if not created.has("data"):
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var camera: Camera2D = McpScenePath.resolve(created.data.path, scene_root)
+	camera.position = Vector2(42, 24)
+	var original_parent := camera.get_parent()
+	var target := _create_target("FollowRedoTarget")
+	var params := {"camera_path": created.data.path, "target_path": McpScenePath.from_node(target, scene_root)}
+	var followed := _handler.follow_2d(params)
+	assert_eq(followed.get("data", {}).get("reparented", false), true)
+	assert_eq(camera.get_parent(), target)
+	assert_true(editor_undo(_undo_redo))
+	assert_eq(camera.get_parent(), original_parent)
+	assert_eq(camera.position, Vector2(42, 24))
+	var target_position := target.position
+	_undo_redo.create_action("MCP test: replace camera follow redo history")
+	_undo_redo.add_do_property(target, "position", Vector2(200, 100))
+	_undo_redo.add_undo_property(target, "position", target_position)
+	_undo_redo.commit_action()
+	assert_true(is_instance_valid(camera), "discarding undone reparent history must not free an existing scene camera")
+	if not is_instance_valid(camera):
+		return
+	assert_eq(McpScenePath.resolve(created.data.path, scene_root), camera)
+	assert_eq(camera.get_parent(), original_parent)
+	assert_eq(camera.owner, scene_root)
+	assert_eq(camera.position, Vector2(42, 24))
+	var repeated := _handler.follow_2d(params)
+	assert_eq(repeated.get("data", {}).get("reparented", false), true)
+	assert_true(editor_undo(_undo_redo))
+	assert_eq(camera.get_parent(), original_parent)
+	assert_true(editor_redo(_undo_redo))
+	assert_eq(camera.get_parent(), target)
+
+
 func test_follow_2d_target_not_node2d() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:

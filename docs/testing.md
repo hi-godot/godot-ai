@@ -47,8 +47,8 @@ That's the whole loop.
   not an empty run — `{"total": 0}` would be indistinguishable from a
   silently truncated discovery (#882).
 - Test methods must be synchronous. The runner does not await coroutines — a
-  test suspends at its first `await` and everything after it never runs
-  (usually surfacing as a zero-assertion failure).
+  test that suspends at an `await` fails even if earlier assertions passed.
+  Awaiting a helper that completes synchronously does not suspend the test.
 
 ## Complete minimal example
 

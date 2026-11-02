@@ -198,3 +198,31 @@ def test_discord_changelog_follows_a_successful_promotion() -> None:
     assert upload["with"]["name"] == "v4-publication-receipt"
     # Publication jobs stay untouched: no announcement step joins them.
     assert "discord" not in str(release).lower()
+
+
+def test_cutoff_qualification_has_pinned_uv_and_retains_build_resolution():
+    qualification = yaml.safe_load(
+        (WORKFLOWS / "release-qualification.yml").read_text(encoding="utf-8")
+    )
+    validation = yaml.safe_load((WORKFLOWS / "release-validation.yml").read_text(encoding="utf-8"))
+    jobs = [qualification["jobs"][name] for name in ("build", "python", "runtime")]
+    jobs.append(validation["jobs"]["validate"])
+    ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text(encoding="utf-8"))
+    jobs.append(ci["jobs"]["python-tests"])
+    for job in jobs:
+        setup = [
+            step for step in job["steps"] if step.get("uses", "").startswith("astral-sh/setup-uv@")
+        ]
+        assert len(setup) == 1
+        assert setup[0]["uses"] == "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78"
+        assert setup[0]["with"]["version"] == "0.13.5"
+        assert "python-version" not in setup[0]["with"]
+    uploads = [
+        step
+        for step in qualification["jobs"]["build"]["steps"]
+        if step.get("with", {}).get("path") == "candidate-build-evidence/"
+    ]
+    assert len(uploads) == 1 and uploads[0]["if"] == "always()"
+    assert "pip install build" not in (WORKFLOWS / "release-qualification.yml").read_text(
+        encoding="utf-8"
+    )

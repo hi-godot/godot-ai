@@ -357,18 +357,20 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("api", HANDLERS_DIR + "api_handler.gd", [])
 	_dispatcher.register_lazy_handler("filesystem", HANDLERS_DIR + "filesystem_handler.gd", [_connection])
 	_dispatcher.register_lazy_handler("signal", HANDLERS_DIR + "signal_handler.gd", [undo])
-	_dispatcher.register_lazy_handler("autoload", HANDLERS_DIR + "autoload_handler.gd", [])
+	_dispatcher.register_lazy_handler("autoload", HANDLERS_DIR + "autoload_handler.gd", [self])
 	_dispatcher.register_lazy_handler("input", HANDLERS_DIR + "input_handler.gd", [])
 	_dispatcher.register_lazy_handler("test", HANDLERS_DIR + "test_handler.gd", [undo, _log_buffer, _dispatcher, _connection])
 	_dispatcher.register_lazy_handler("batch", HANDLERS_DIR + "batch_handler.gd", [_dispatcher, undo])
 	_dispatcher.register_lazy_handler("ui", HANDLERS_DIR + "ui_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("theme", HANDLERS_DIR + "theme_handler.gd", [undo, _connection])
+	_dispatcher.register_lazy_handler("animation_tree", HANDLERS_DIR + "animation_tree_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("animation", HANDLERS_DIR + "animation_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("material", HANDLERS_DIR + "material_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("shader", HANDLERS_DIR + "shader_handler.gd", [])
 	_dispatcher.register_lazy_handler("visual_shader", HANDLERS_DIR + "visual_shader_handler.gd", [])
 	_dispatcher.register_lazy_handler("particle", HANDLERS_DIR + "particle_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("camera", HANDLERS_DIR + "camera_handler.gd", [undo])
+	_dispatcher.register_lazy_handler("audio_bus", HANDLERS_DIR + "audio_bus_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("audio", HANDLERS_DIR + "audio_handler.gd", [undo])
 	_dispatcher.register_lazy_handler(
 		"physics_shape", HANDLERS_DIR + "physics_shape_handler.gd", [undo, _connection]
@@ -378,7 +380,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("curve", HANDLERS_DIR + "curve_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("control_draw_recipe", HANDLERS_DIR + "control_draw_recipe_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("tilemap", HANDLERS_DIR + "tilemap_handler.gd", [undo])
-	_dispatcher.register_lazy_handler("tileset", HANDLERS_DIR + "tileset_handler.gd", [])
+	_dispatcher.register_lazy_handler("tileset", HANDLERS_DIR + "tileset_handler.gd", [_connection])
 	_dispatcher.register_lazy_handler("gridmap", HANDLERS_DIR + "gridmap_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("navigation", HANDLERS_DIR + "navigation_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("csg", HANDLERS_DIR + "csg_handler.gd", [undo])
@@ -391,11 +393,13 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("open_scene", "scene", &"open_scene")
 	_dispatcher.register_lazy("save_scene", "scene", &"save_scene")
 	_dispatcher.register_lazy("save_scene_as", "scene", &"save_scene_as")
+	_dispatcher.register_lazy("close_scene", "scene", &"close_scene")
 	_dispatcher.register_lazy("get_selection", "editor", &"get_selection")
 	_dispatcher.register_lazy("create_node", "node", &"create_node")
 	_dispatcher.register_lazy("delete_node", "node", &"delete_node")
 	_dispatcher.register_lazy("reparent_node", "node", &"reparent_node")
 	_dispatcher.register_lazy("set_property", "node", &"set_property")
+	_dispatcher.register_lazy("set_editable_children", "node", &"set_editable_children")
 	_dispatcher.register_lazy("rename_node", "node", &"rename_node")
 	_dispatcher.register_lazy("duplicate_node", "node", &"duplicate_node")
 	_dispatcher.register_lazy("move_node", "node", &"move_node")
@@ -434,10 +438,14 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("inspect_resource", "resource", &"inspect_resource")
 	_dispatcher.register_lazy("assign_resource", "resource", &"assign_resource")
 	_dispatcher.register_lazy("create_resource", "resource", &"create_resource")
+	_dispatcher.register_lazy("create_sprite_frames", "resource", &"create_sprite_frames")
+	_dispatcher.register_lazy("set_resource_properties", "resource", &"set_resource_properties")
 	_dispatcher.register_lazy("get_resource_info", "resource", &"get_resource_info")
 	_dispatcher.register_lazy("get_class_info", "api", &"get_class_info")
 	_dispatcher.register_lazy("read_file", "filesystem", &"read_file")
 	_dispatcher.register_lazy("write_file", "filesystem", &"write_file")
+	_dispatcher.register_lazy("import_get", "filesystem", &"import_get")
+	_dispatcher.register_lazy("import_set", "filesystem", &"import_set")
 	_dispatcher.register_lazy("reimport", "filesystem", &"reimport")
 	_dispatcher.register_lazy("scan_filesystem", "filesystem", &"scan_filesystem")
 	_dispatcher.register_lazy("move_file", "filesystem", &"move_file")
@@ -473,6 +481,22 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("theme_stylebox_override", "theme", &"stylebox_override")
 	_dispatcher.register_lazy("apply_theme", "theme", &"apply_theme")
 	_dispatcher.register_lazy("animation_player_create", "animation", &"create_player")
+	_dispatcher.register_lazy("animation_tree_point_add", "animation_tree", &"tree_point_add")
+	_dispatcher.register_lazy("animation_tree_point_remove", "animation_tree", &"tree_point_remove")
+	_dispatcher.register_lazy("animation_tree_point_set", "animation_tree", &"tree_point_set")
+	_dispatcher.register_lazy("animation_tree_create", "animation_tree", &"tree_create")
+	_dispatcher.register_lazy("animation_tree_get", "animation_tree", &"tree_get")
+	_dispatcher.register_lazy("animation_tree_node_add", "animation_tree", &"tree_node_add")
+	_dispatcher.register_lazy("animation_tree_node_remove", "animation_tree", &"tree_node_remove")
+	_dispatcher.register_lazy("animation_tree_node_set", "animation_tree", &"tree_node_set")
+	_dispatcher.register_lazy("animation_tree_connect", "animation_tree", &"tree_connect")
+	_dispatcher.register_lazy("animation_tree_disconnect", "animation_tree", &"tree_disconnect")
+	_dispatcher.register_lazy("animation_tree_transition_add", "animation_tree", &"tree_transition_add")
+	_dispatcher.register_lazy("animation_tree_transition_remove", "animation_tree", &"tree_transition_remove")
+	_dispatcher.register_lazy("animation_tree_transition_set", "animation_tree", &"tree_transition_set")
+	_dispatcher.register_lazy("animation_library_add", "animation", &"library_add")
+	_dispatcher.register_lazy("animation_library_remove", "animation", &"library_remove")
+	_dispatcher.register_lazy("animation_library_list", "animation", &"library_list")
 	_dispatcher.register_lazy("animation_create", "animation", &"create_animation")
 	_dispatcher.register_lazy("animation_add_property_track", "animation", &"add_property_track")
 	_dispatcher.register_lazy("animation_add_method_track", "animation", &"add_method_track")
@@ -525,6 +549,15 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("audio_play", "audio", &"play")
 	_dispatcher.register_lazy("audio_stop", "audio", &"stop")
 	_dispatcher.register_lazy("audio_list", "audio", &"list_streams")
+	_dispatcher.register_lazy("audio_bus_list", "audio_bus", &"bus_list")
+	_dispatcher.register_lazy("audio_bus_add", "audio_bus", &"bus_add")
+	_dispatcher.register_lazy("audio_bus_remove", "audio_bus", &"bus_remove")
+	_dispatcher.register_lazy("audio_bus_set", "audio_bus", &"bus_set")
+	_dispatcher.register_lazy("audio_bus_effect_add", "audio_bus", &"bus_effect_add")
+	_dispatcher.register_lazy("audio_bus_effect_set", "audio_bus", &"bus_effect_set")
+	_dispatcher.register_lazy("audio_bus_effect_remove", "audio_bus", &"bus_effect_remove")
+	_dispatcher.register_lazy("audio_bus_layout_save", "audio_bus", &"bus_layout_save")
+
 	_dispatcher.register_lazy("physics_shape_autofit", "physics_shape", &"autofit")
 	_dispatcher.register_lazy("physics_shape_generate", "physics_shape", &"generate")
 	_dispatcher.register_lazy("environment_create", "environment", &"create_environment")
@@ -536,6 +569,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("tilemap_set_cells_rect", "tilemap", &"set_cells_rect")
 	_dispatcher.register_lazy("tilemap_clear", "tilemap", &"clear_layer")
 	_dispatcher.register_lazy("tilemap_get_cells", "tilemap", &"get_used_cells")
+	_dispatcher.register_lazy("tileset_create_atlas", "tileset", &"create_atlas")
 	_dispatcher.register_lazy("tileset_get_atlas_tiles", "tileset", &"get_atlas_tiles")
 	_dispatcher.register_lazy("tileset_get_atlas_image", "tileset", &"get_atlas_image")
 	_dispatcher.register_lazy("gridmap_set_item", "gridmap", &"set_item")
@@ -856,6 +890,8 @@ func _on_dock_plugin_reload_requested(reason: String) -> void:
 
 
 func _on_dock_settings_apply_requested(changes: Dictionary, reload: bool) -> void:
+	if changes.get("auto_reconfigure_clients") == false and _client_jobs != null:
+		_client_jobs.set_repair_allowed(false)
 	var applied := ClientConfigurator.apply_endpoint_settings(changes.duplicate(true))
 	if not bool(applied.get("ok", false)):
 		push_error("MCP | refused settings change: %s" % str(applied.get("error", "invalid settings")))
@@ -910,6 +946,7 @@ func _begin_startup_release() -> void:
 			"replace_owned_mismatches",
 			_post_update_outcome.get("manual_migration", false),
 		)),
+		preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").previous_policy(_post_update_outcome),
 	)
 	if not bool(started.get("ok", false)):
 		_present_post_update_barrier_failure(str(started.get("error", "Client migration could not start.")))
@@ -1203,6 +1240,13 @@ func _exit_tree() -> void:
 
 
 func _process(_delta: float) -> void:
+	if _client_jobs != null:
+		var settings := EditorInterface.get_editor_settings()
+		_client_jobs.set_repair_allowed(
+			_normal_start_released and _connection != null and _connection.is_connected
+			and settings != null and settings.has_setting(ClientConfigurator.SETTING_AUTO_REPAIR)
+			and bool(settings.get_setting(ClientConfigurator.SETTING_AUTO_REPAIR))
+		)
 	if _vision_routing != null:
 		_vision_routing.poll_completed()
 
@@ -1893,6 +1937,8 @@ func _on_custom_tools_changed() -> void:
 ## _connected is false (connection.gd::_send_json), so without this
 ## replay those tools only surface on the next registry mutation.
 func _on_connection_state_changed(is_open: bool) -> void:
+	if not is_open and _client_jobs != null:
+		_client_jobs.set_repair_allowed(false)
 	if is_open:
 		_lifecycle.transport_authenticated(_connection.server_version)
 		if _custom_tool_registry != null:

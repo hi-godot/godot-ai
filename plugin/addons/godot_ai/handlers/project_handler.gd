@@ -227,6 +227,10 @@ func set_main_scene(params: Dictionary) -> Dictionary:
 	}
 
 
+func _editor_readiness() -> String:
+	return McpConnection.get_readiness()
+
+
 func run_project(params: Dictionary) -> Dictionary:
 	var mode: String = params.get("mode", "main")
 	var autosave: bool = params.get("autosave", true)
@@ -244,6 +248,14 @@ func run_project(params: Dictionary) -> Dictionary:
 				true,
 				"Project was already running; no action taken"
 			)
+		)
+
+	if _editor_readiness() == "importing":
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_IMPORTING,
+			"Editor is importing resources; cannot start the project yet",
+			true,
+			"Wait for resource importing to finish, then retry project_run."
 		)
 
 	var validation_error: Variant = null

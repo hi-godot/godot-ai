@@ -506,6 +506,7 @@ class _ClientActionRecordingDock extends McpDockScript:
 ## Replaces the worker body so post-update owner tests never touch real client
 ## files or build a uvx environment.
 class _RepinRecordingOwner extends ClientJobOwnerScript:
+	var previous_policies: Array[Dictionary] = []
 	var calls: Array[Dictionary] = []
 	var probe_ids: Array[String] = []
 	var delay_msec := 0
@@ -518,6 +519,7 @@ class _RepinRecordingOwner extends ClientJobOwnerScript:
 		replace_owned_mismatches: bool,
 		generation: int,
 	) -> Dictionary:
+		previous_policies.append(_context.get("previous_dependency_policy", {}).duplicate(true))
 		if delay_msec > 0:
 			OS.delay_msec(delay_msec)
 		for probe in _probes:
@@ -2868,3 +2870,16 @@ func test_unknown_port_discovery_names_the_failure_in_status_and_panel() -> void
 	assert_contains(dock._crash_output.get_parsed_text(), "Windows could not query listening ports")
 	assert_false(dock._crash_output.get_parsed_text().contains("occupied by another process"))
 	dock.free()
+
+
+func test_post_update_worker_receives_its_own_previous_policy_snapshot() -> void:
+	var owner := _RepinRecordingOwner.new()
+	var previous := {"known": true, "cutoff": "2025-01-02T03:04:05Z"}
+	var started := owner.begin_post_update_repin("4.0.0", McpClientConfigurator.get_plugin_version(), false, previous)
+	assert_true(bool(started.get("ok", false)))
+	previous.cutoff = "changed-after-start"
+	while owner._post_update_thread != null and owner._post_update_thread.is_alive():
+		OS.delay_msec(1)
+	owner._poll_post_update_repin()
+	assert_eq(owner.previous_policies, [{"known": true, "cutoff": "2025-01-02T03:04:05Z"}])
+	owner.free()

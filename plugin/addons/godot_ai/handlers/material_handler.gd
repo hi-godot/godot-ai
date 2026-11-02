@@ -354,7 +354,7 @@ func assign_material(params: Dictionary) -> Dictionary:
 	if node_path.is_empty():
 		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: node_path")
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
@@ -449,7 +449,7 @@ func apply_to_node(params: Dictionary) -> Dictionary:
 			"Invalid material type '%s'. Valid: %s" % [type_str, ", ".join(_TYPE_TO_CLASS.keys())]
 		)
 
-	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
+	var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
 	if _resolved.has("error"):
 		return _resolved
 	var node: Node = _resolved.node
@@ -594,6 +594,18 @@ func apply_preset(params: Dictionary) -> Dictionary:
 			"Material already exists at %s (pass overwrite=true to replace)" % path
 		)
 
+	var node: Node = null
+	var property := ""
+	if not node_path.is_empty():
+		var resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", "", true)
+		if resolved.has("error"):
+			return resolved
+		node = resolved.node
+		var slot_result := _resolve_slot_property(node, params.get("slot", "override"))
+		if slot_result.has("error"):
+			return slot_result
+		property = slot_result.property
+
 	var mat := _instantiate_material(type_str)
 	for prop_name in preset_params:
 		var apply_err := _apply_one_param_on_instance(mat, String(prop_name), preset_params[prop_name])
@@ -614,16 +626,7 @@ func apply_preset(params: Dictionary) -> Dictionary:
 		efs.update_file(path)
 
 	var assigned := false
-	if not node_path.is_empty():
-		var _resolved := McpNodeValidator.resolve_or_error(node_path, "node_path")
-		if _resolved.has("error"):
-			return _resolved
-		var node: Node = _resolved.node
-		var _scene_root: Node = _resolved.scene_root
-		var slot_result := _resolve_slot_property(node, params.get("slot", "override"))
-		if slot_result.has("error"):
-			return slot_result
-		var property: String = slot_result.property
+	if node != null:
 		var saved_mat := ResourceLoader.load(path)
 		var old_value = node.get(property)
 		_undo_redo.create_action("MCP: Apply preset %s to %s" % [preset_name, node.name])

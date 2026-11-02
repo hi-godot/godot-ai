@@ -1,10 +1,10 @@
 @tool
 extends Logger
 
-## Short-lived Logger used only for per-write validation loads.
+## Short-lived Logger for validation loads and explicit native imports.
 ##
 ## Unlike editor_logger.gd this deliberately has no addon feedback-loop filter:
-## the caller attaches it around one ResourceLoader.load() call, reads its
+## the caller attaches it around one synchronous native call, reads its
 ## private buffer, and immediately removes it. The shared editor logger should
 ## still drop these validation-load errors so logs_read(source="editor") stays
 ## clean.

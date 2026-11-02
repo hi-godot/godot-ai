@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import zipfile
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,23 @@ PRIVATE = (
 
 @pytest.fixture
 def boundary(monkeypatch, tmp_path):
+    cutoff = "2026-11-01T19:00:00Z"
+    for name in ("candidate", "candidates/a", "candidates/b", "previous"):
+        release = tmp_path / name / "release"
+        release.mkdir(parents=True)
+        config = '[plugin]\nversion="4.2.1"\n'
+        if name != "previous":
+            config += f'dependency_cutoff="{cutoff}"\n'
+        with zipfile.ZipFile(release / "godot-ai-v4-plugin.zip", "w") as archive:
+            archive.writestr("addons/godot_ai/plugin.cfg", config)
+    python_row = tmp_path / "python-row"
+    python_row.mkdir()
+    (python_row / "row.json").write_bytes(
+        support.canonical({"dependency_cutoff": cutoff, "upload_times": {}})
+    )
+    # Resolution is outside this real-child diagnostic boundary. Keep the
+    # empty retained closure consistent while exercising actual policy reads.
+    monkeypatch.setattr(runtime.dependency_cutoff, "resolve_private_runtime", lambda *_: [])
     bridge_state = SimpleNamespace(stopped=False, enter_error=None, exit_error=None)
 
     class Bridge:
@@ -111,7 +129,13 @@ def boundary(monkeypatch, tmp_path):
             )
         else:
             runtime.exact_a_to_b(
-                tmp_path / "candidates", tmp_path / "packages", [], sys.executable, "4.7.0", output
+                tmp_path / "candidates",
+                tmp_path / "packages",
+                [],
+                {},
+                sys.executable,
+                "4.7.0",
+                output,
             )
 
     return invoke, tmp_path / "output", bridge_state
@@ -179,7 +203,7 @@ def test_timeout_retains_partial_output_without_leaking(boundary, kind, private)
         assert "partial stdout" in log and "partial stderr" in log
     for path in output.iterdir():
         if path.is_file():
-            assert all(value not in path.read_text(encoding="utf-8") for value in PRIVATE)
+            assert all(value.encode("utf-8") not in path.read_bytes() for value in PRIVATE)
 
 
 @pytest.mark.parametrize("stage", ["enter", "exit"])
@@ -393,9 +417,9 @@ def test_empty_diagnostics_remain_inventory_compatible(tmp_path):
 @pytest.mark.parametrize("kind", ["predecessor", "a-to-b"])
 def test_oversized_editor_output_is_not_written(boundary, monkeypatch, kind):
     invoke, output, _ = boundary
-    monkeypatch.setattr(support, "MAX_FILE_BYTES", 4)
+    monkeypatch.setattr(support, "MAX_FILE_BYTES", 1024)
     with pytest.raises(support.ReleaseError, match="output exceeds artifact size bound"):
-        invoke(kind)
+        invoke(kind, stdout="x" * 2048)
     assert not (output / "godot.log").exists()
     statuses = json.loads((output / "runtime-diagnostics.json").read_text(encoding="utf-8"))
     assert statuses["godot.log"] == "too_large"

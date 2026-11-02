@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import html
+import json
 import os
 import re
 import secrets
@@ -18,11 +19,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
+from script import dependency_cutoff
 from script import release_support as support
 
 
 @contextlib.contextmanager
-def retained_index(packages: Path, dependencies: list[dict]):
+def retained_index(packages: Path, dependencies: list[dict], upload_times: dict[str, str]):
     prefix = "/" + secrets.token_hex(32)
     support.require(dependencies, "empty private index")
     for row in dependencies:
@@ -47,15 +49,46 @@ def retained_index(packages: Path, dependencies: list[dict]):
         == {name: {"size": row["size"], "sha256": row["sha256"]} for name, row in files.items()},
         "private index differs from retained dependency inventory",
     )
+    dependency_cutoff.validate_upload_times(dependencies, upload_times, None)
+    upload_times = dict(upload_times)
     routes = {}
+    json_routes = {}
     for name in sorted({row["name"] for row in dependencies}):
         links = [
-            f'<a href="../../files/{quote(row["filename"])}#sha256={row["sha256"]}">'
+            f'<a href="../../files/{quote(row["filename"])}#sha256={row["sha256"]}"'
+            + (
+                f' data-upload-time="{upload_times[row["filename"]]}"'
+                if row["filename"] in upload_times
+                else ""
+            )
+            + ">"
             f"{html.escape(row['filename'])}</a>"
             for row in dependencies
             if row["name"] == name
         ]
         routes[f"{prefix}/simple/{name}/"] = ("\n".join(links) + "\n").encode()
+        json_routes[f"{prefix}/simple/{name}/"] = json.dumps(
+            {
+                "meta": {"api-version": "1.1"},
+                "name": name,
+                "versions": sorted({row["version"] for row in dependencies if row["name"] == name}),
+                "files": [
+                    {
+                        "filename": row["filename"],
+                        "url": "../../files/" + quote(row["filename"]),
+                        "hashes": {"sha256": row["sha256"]},
+                        "size": row["size"],
+                        **(
+                            {"upload-time": upload_times[row["filename"]]}
+                            if row["filename"] in upload_times
+                            else {}
+                        ),
+                    }
+                    for row in dependencies
+                    if row["name"] == name
+                ],
+            }
+        ).encode()
     requests: list[str] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -75,9 +108,16 @@ def retained_index(packages: Path, dependencies: list[dict]):
             # The exact inventory lookup below still rejects decoded separators.
             path = unquote(urlsplit(self.path).path)
             if path in routes:
-                payload = routes[path]
+                wants_json = "application/vnd.pypi.simple.v1+json" in self.headers.get("Accept", "")
+                payload = json_routes[path] if wants_json else routes[path]
                 self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header(
+                    "Content-Type",
+                    "application/vnd.pypi.simple.v1+json"
+                    if wants_json
+                    else "text/html; charset=utf-8",
+                )
+                self.send_header("Vary", "Accept")
             elif path.startswith(prefix + "/files/"):
                 name = path.removeprefix(prefix + "/files/")
                 if name not in files:
