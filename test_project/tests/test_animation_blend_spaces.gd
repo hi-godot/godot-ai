@@ -16,12 +16,14 @@ func suite_name() -> String:
 func suite_setup(ctx: Dictionary) -> void:
 	_undo = ctx.undo_redo
 	_handler = Handler.new(_undo)
+	if EditorInterface.get_edited_scene_root() == null:
+		skip_suite("No scene open")
 
 
 func setup() -> void:
 	_root = EditorInterface.get_edited_scene_root()
-	_tree = AnimationTree.new()
-	_tree.name = "BlendSpaceTest"
+	_tree = track(AnimationTree.new()) as AnimationTree
+	_tree.name = "_McpTestBlendSpace"
 	_tree.active = false
 	_tree.tree_root = AnimationNodeBlendSpace1D.new()
 	_root.add_child(_tree)
@@ -30,8 +32,15 @@ func setup() -> void:
 
 
 func teardown() -> void:
-	_root.remove_child(_tree)
-	_tree.queue_free()
+	if is_instance_valid(_tree):
+		if _tree.get_parent() != null:
+			_tree.get_parent().remove_child(_tree)
+		_tree.queue_free()
+
+
+func suite_teardown() -> void:
+	for path in ["user://blend_space_roundtrip.tscn"]:
+		DirAccess.remove_absolute(path)
 
 
 func _call(op: String, params := {}) -> Dictionary:
@@ -154,8 +163,8 @@ func test_nested_point_graph_and_saved_scene_roundtrip() -> void:
 	var path := "user://blend_space_roundtrip.tscn"
 	assert_eq(ResourceSaver.save(packed, path), OK)
 	var reopened := ResourceLoader.load(path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
-	var scene := reopened.instantiate()
-	var tree := scene.get_node("BlendSpaceTest") as AnimationTree
+	var scene := track(reopened.instantiate()) as Node
+	var tree := scene.get_node("_McpTestBlendSpace") as AnimationTree
 	assert_eq(String(tree.tree_root.get_blend_point_name(0)), "Nested")
 	assert_eq(tree.tree_root.get_blend_point_position(0), 0.5)
 	var nested: AnimationNodeBlendTree = tree.tree_root.get_blend_point_node(0)

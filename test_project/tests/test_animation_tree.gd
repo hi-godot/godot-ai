@@ -16,12 +16,14 @@ func suite_name() -> String:
 func suite_setup(ctx: Dictionary) -> void:
 	_undo = ctx.undo_redo
 	_handler = Handler.new(_undo)
+	if EditorInterface.get_edited_scene_root() == null:
+		skip_suite("No scene open")
 
 
 func setup() -> void:
 	_root = EditorInterface.get_edited_scene_root()
-	_tree = AnimationTree.new()
-	_tree.name = "GraphTest"
+	_tree = track(AnimationTree.new()) as AnimationTree
+	_tree.name = "_McpTestGraph"
 	_tree.active = false
 	_tree.tree_root = AnimationNodeStateMachine.new()
 	_root.add_child(_tree)
@@ -30,8 +32,15 @@ func setup() -> void:
 
 
 func teardown() -> void:
-	_root.remove_child(_tree)
-	_tree.queue_free()
+	if is_instance_valid(_tree):
+		if _tree.get_parent() != null:
+			_tree.get_parent().remove_child(_tree)
+		_tree.queue_free()
+
+
+func suite_teardown() -> void:
+	for path in ["user://animation_graph_roundtrip.tscn", "user://animation_graph_instance.tscn", "user://dotted_graph_roundtrip.tscn"]:
+		DirAccess.remove_absolute(path)
 
 
 func _call(op: String, params := {}) -> Dictionary:
@@ -165,13 +174,13 @@ func test_blend_refusals_cycles_topology_and_boolean_types() -> void:
 
 
 func test_create_undo_readback_and_scene_reopen() -> void:
-	var player := AnimationPlayer.new()
-	player.name = "GraphPlayer"
+	var player := track(AnimationPlayer.new()) as AnimationPlayer
+	player.name = "_McpTestGraphPlayer"
 	_root.add_child(player)
 	player.owner = _root
-	var result := _handler.tree_create({"parent_path": McpScenePath.from_node(_root, _root), "player_path": McpScenePath.from_node(player, _root), "name": "CreatedGraph", "root_type": "blend_tree"})
+	var result := _handler.tree_create({"parent_path": McpScenePath.from_node(_root, _root), "player_path": McpScenePath.from_node(player, _root), "name": "_McpTestCreatedGraph", "root_type": "blend_tree"})
 	_ok(result)
-	var created := _root.get_node("CreatedGraph") as AnimationTree
+	var created := track(_root.get_node("_McpTestCreatedGraph")) as AnimationTree
 	assert_false(created.active)
 	assert_eq(created.owner, _root)
 	assert_eq(created.get_node(created.anim_player), player)
@@ -189,8 +198,8 @@ func test_create_undo_readback_and_scene_reopen() -> void:
 	var saved := "user://animation_graph_roundtrip.tscn"
 	assert_eq(ResourceSaver.save(packed, saved), OK)
 	var reopened := ResourceLoader.load(saved, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
-	var instance := reopened.instantiate()
-	var saved_tree := instance.get_node("CreatedGraph") as AnimationTree
+	var instance := track(reopened.instantiate()) as Node
+	var saved_tree := instance.get_node("_McpTestCreatedGraph") as AnimationTree
 	assert_true(saved_tree.tree_root is AnimationNodeBlendTree)
 	assert_eq(String(saved_tree.tree_root.get_node("Clip").animation), "idle")
 	assert_eq(saved_tree.tree_root.get("node_connections"), [StringName("output"), 0, StringName("Clip")])
@@ -204,7 +213,8 @@ func test_create_undo_readback_and_scene_reopen() -> void:
 
 
 func test_shared_graph_identity_and_transition_refusals() -> void:
-	var second := AnimationTree.new()
+	var second := track(AnimationTree.new()) as AnimationTree
+	second.name = "_McpTestSecondGraph"
 	second.active = false
 	second.tree_root = _tree.tree_root
 	_root.add_child(second)
@@ -225,9 +235,9 @@ func test_shared_graph_identity_and_transition_refusals() -> void:
 
 
 func test_instance_ownership_refuses_graph_mutation() -> void:
-	var local := Node.new()
-	local.name = "GraphInstance"
-	var child := AnimationTree.new()
+	var local := track(Node.new()) as Node
+	local.name = "_McpTestGraphInstance"
+	var child := track(AnimationTree.new()) as AnimationTree
 	child.name = "Tree"
 	child.active = false
 	child.tree_root = AnimationNodeStateMachine.new()
@@ -238,7 +248,7 @@ func test_instance_ownership_refuses_graph_mutation() -> void:
 	var fixture := "user://animation_graph_instance.tscn"
 	assert_eq(ResourceSaver.save(packed, fixture), OK)
 	local.free()
-	var instance := (load(fixture) as PackedScene).instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
+	var instance := track((load(fixture) as PackedScene).instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)) as Node
 	_root.add_child(instance)
 	instance.owner = _root
 	var tree := instance.get_node("Tree") as AnimationTree
@@ -259,7 +269,8 @@ func test_instance_ownership_refuses_graph_mutation() -> void:
 func test_shared_blend_removal_undo_restores_each_trees_parameters() -> void:
 	_tree.tree_root = AnimationNodeBlendTree.new()
 	_ok(_call("tree_node_add", {"name": "Mix", "node_type": "AnimationNodeBlend2"}))
-	var second := AnimationTree.new()
+	var second := track(AnimationTree.new()) as AnimationTree
+	second.name = "_McpTestSecondGraph"
 	second.active = false
 	second.tree_root = _tree.tree_root
 	_root.add_child(second)
@@ -320,8 +331,8 @@ func test_dotted_native_graph_names_resolve_and_persist() -> void:
 	assert_eq(packed.pack(_root), OK)
 	var path := "user://dotted_graph_roundtrip.tscn"
 	assert_eq(ResourceSaver.save(packed, path), OK)
-	var reopened := (ResourceLoader.load(path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate()
-	var tree := reopened.get_node("GraphTest") as AnimationTree
+	var reopened := track((ResourceLoader.load(path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate()) as Node
+	var tree := reopened.get_node("_McpTestGraph") as AnimationTree
 	assert_eq(String(tree.tree_root.get_node("Move.State").get_node("Walk.Fast").animation), "run")
 	assert_eq(String(tree.tree_root.get_transition_to(0)), "Move.State")
 	reopened.free()
