@@ -22,6 +22,8 @@ func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.undo_redo
 	_handler = NodeHandler.new(_undo_redo)
 	_root = EditorInterface.get_edited_scene_root()
+	if _root == null:
+		skip_suite("No scene open")
 
 
 func setup() -> void:
