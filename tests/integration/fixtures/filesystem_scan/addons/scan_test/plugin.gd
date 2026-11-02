@@ -27,7 +27,8 @@ var native_completions := 0
 var native_class_updates := 0
 var completion_baseline := 0
 var class_baseline := 0
-var saw_early_idle := false
+var completion_held := false
+var native_changed := false
 var immediate_update_done := false
 
 func _enter_tree() -> void:
@@ -37,8 +38,9 @@ func _enter_tree() -> void:
 	started = Time.get_ticks_msec()
 	set_process(true)
 
-func _on_native_completion(_changed: bool) -> void:
+func _on_native_completion(changed: bool) -> void:
 	native_completions += 1
+	native_changed = changed
 
 func _on_class_update() -> void:
 	native_class_updates += 1
@@ -56,6 +58,7 @@ func _new_connection() -> TestConnection:
 	return transport
 
 func _on_response(request_id: String, payload: Dictionary) -> void:
+	_expect(not completion_held, "reply was released while native completion delivery was held: " + request_id)
 	if request_id == "withheld_completion":
 		_expect(not bool(payload.data.scan_completed), "missing completion was reported as success")
 		_expect(payload.data.scan_settle == "timeout", "missing completion did not time out")
@@ -82,9 +85,6 @@ func _process(_delta: float) -> void:
 			return
 		phase = "preparing"
 		_run_contracts()
-	elif phase == "coalesced" and not filesystem.is_scanning() and native_completions == completion_baseline:
-		saw_early_idle = true
-		_expect(connection.replies.is_empty(), "reply was released in native postprocessing")
 
 func _write_samples(generation: int) -> void:
 	for i: int in range(800):
@@ -106,21 +106,48 @@ func _run_contracts() -> void:
 	_write_samples(1)
 	_begin_case("coalesced")
 	Handler.new(connection).scan_filesystem({"_request_id": "primary"})
+	# Hold the actual callback before yielding, while the native scan still runs.
+	# Native completion/class observers remain connected; only delivery to the
+	# handler is delayed, making the idle-but-unacknowledged interval repeatable.
+	var held_callback := _take_completion_callback()
+	_expect(held_callback.is_valid(), "could not hold coalesced native completion callback")
+	if not held_callback.is_valid():
+		_finish()
+		return
+	completion_held = true
 	Handler.new(connection).scan_filesystem({"_request_id": "joined"})
 	var sync_result := Handler.new(null).scan_filesystem({})
 	_expect(not sync_result.data.scan_completed, "synchronous scan falsely claimed completion")
 	_expect(bool(sync_result.data.was_already_scanning), "synchronous request did not join pending scan")
+	while native_completions == completion_baseline:
+		await get_tree().process_frame
+	_expect(native_class_updates > class_baseline, "native scan did not register new classes")
+	var idle_deadline := Time.get_ticks_msec() + 1000
+	var idle_frames := 0
+	var stayed_idle := true
+	var replies_stayed_empty := true
+	# Exceed the old polling implementation's 750 ms grace and yield at least
+	# two frames, even on a slow host. No opportunistic native frame is required.
+	while Time.get_ticks_msec() < idle_deadline or idle_frames < 2:
+		stayed_idle = stayed_idle and not filesystem.is_scanning()
+		replies_stayed_empty = replies_stayed_empty and connection.replies.is_empty()
+		idle_frames += 1
+		await get_tree().process_frame
+	_expect(stayed_idle, "controlled completion hold did not remain natively idle")
+	_expect(replies_stayed_empty, "reply escaped controlled native-idle completion hold")
+	print("SCAN_TEST controlled native-idle hold frames=", idle_frames)
+	completion_held = false
+	held_callback.call_deferred(native_changed)
 	await _await_reply("primary")
 	await _await_reply("joined")
 	if failed:
 		_finish()
 		return
-	_expect(saw_early_idle, "test did not exercise native early-idle postprocessing window")
 	_expect(immediate_update_done, "immediate post-reply update was not exercised")
 	_expect(bool(connection.replies.joined.data.was_already_scanning), "concurrent request did not join scan")
 	var found_class := false
 	for entry: Dictionary in ProjectSettings.get_global_class_list():
-		if entry["class"] == "ScanBarrierSample11":
+		if entry["class"] == "ScanBarrierSample11" and entry["path"] == "res://scan_sample_11.gd":
 			found_class = true
 	_expect(found_class, "new global script class was unavailable after scan response")
 
@@ -171,13 +198,7 @@ func _run_timeout_contract() -> void:
 	Handler.new(connection).scan_filesystem({"_request_id": "withheld_completion"})
 	# Fault injection: hold the actual scan callback past the request deadline.
 	# Native work still completes; consumers receive its completion late.
-	var held_callback := Callable()
-	for item: Dictionary in filesystem.sources_changed.get_connections():
-		var callback: Callable = item.callable
-		if callback.get_method() == &"_on_scan_completed":
-			held_callback = callback
-			filesystem.sources_changed.disconnect(callback)
-			break
+	var held_callback := _take_completion_callback()
 	_expect(held_callback.is_valid(), "could not hold native completion callback")
 	if failed:
 		return
@@ -197,3 +218,11 @@ func _run_timeout_contract() -> void:
 	_expect(not found_late_class, "timed-out scan was replaced before late native completion")
 	await get_tree().process_frame
 	_expect(Work.active_count("scan_filesystem") == 0, "timed-out request leaked script work")
+
+func _take_completion_callback() -> Callable:
+	for item: Dictionary in filesystem.sources_changed.get_connections():
+		var callback: Callable = item.callable
+		if callback.get_method() == &"_on_scan_completed":
+			filesystem.sources_changed.disconnect(callback)
+			return callback
+	return Callable()
