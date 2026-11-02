@@ -2,11 +2,13 @@
 extends McpTestSuite
 
 const Builders := preload("res://addons/godot_ai/utils/resource_builders.gd")
+const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
 const TileSetHandler := preload("res://addons/godot_ai/handlers/tileset_handler.gd")
 const TEXTURE := "res://tests/_builder_texture.tres"
 const FRAMES := "res://tests/_builder_frames.tres"
 const TILES := "res://tests/_builder_tiles.tres"
+const ARRIVAL := "res://tests/_builder_arrival.tres"
 
 func suite_name() -> String:
 	return "resource_builders"
@@ -20,7 +22,7 @@ func suite_setup(_context: Dictionary) -> void:
 	McpResourceIO.ensure_uid(TEXTURE, ResourceUID.INVALID_ID)
 
 func suite_teardown() -> void:
-	for path in [TEXTURE, FRAMES, TILES]:
+	for path in [TEXTURE, FRAMES, TILES, ARRIVAL]:
 		if FileAccess.file_exists(path):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
@@ -153,3 +155,47 @@ func test_sprite_frame_duration_must_survive_native_storage() -> void:
 		var animations := _animations()
 		animations[0].frames[0].duration = duration
 		assert_is_error(Builders.sprite_frames(animations))
+
+
+func test_sprite_frames_non_array_input_preserves_existing_file() -> void:
+	var handler := ResourceHandler.new(null)
+	assert_has_key(handler.create_sprite_frames({"resource_path": FRAMES, "animations": _animations(), "overwrite": true}), "data")
+	var original := FileAccess.get_file_as_bytes(FRAMES)
+	var held := load(FRAMES) as SpriteFrames
+	for value in [{"name": "walk"}, null, "walk", 17, true]:
+		var result := handler.create_sprite_frames({"resource_path": FRAMES, "animations": value, "overwrite": true})
+		assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+		if result.has("error"):
+			assert_contains(result.error.message, "animations")
+		assert_eq(FileAccess.get_file_as_bytes(FRAMES), original)
+		assert_eq(held.get_frame_count("walk"), 2)
+
+
+func test_staged_save_preserves_destination_that_arrives_during_serialization() -> void:
+	if FileAccess.file_exists(ARRIVAL):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(ARRIVAL))
+	var resource := preload("res://tests/fixtures/staged_save_arrival.gd").new()
+	resource.destination = ARRIVAL
+	var result := McpResourceIO.save_to_disk(resource, ARRIVAL, false, "Arrival fixture", {}, null, false, true)
+	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+	assert_eq(FileAccess.get_file_as_string(ARRIVAL), "arrived during staging")
+	if result.has("error"):
+		assert_eq(result.error.data.disk_committed, false)
+	var staged_files: Array[String] = []
+	for file in DirAccess.get_files_at(ARRIVAL.get_base_dir()):
+		if file.begins_with(".godot_ai_edit_"):
+			staged_files.append(file)
+	assert_eq(staged_files, [], "Refusal must remove its staged file")
+
+
+func test_staged_save_allows_explicit_overwrite_of_arriving_destination() -> void:
+	if FileAccess.file_exists(ARRIVAL):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(ARRIVAL))
+	var resource := preload("res://tests/fixtures/staged_save_arrival.gd").new()
+	resource.destination = ARRIVAL
+	var result := McpResourceIO.save_to_disk(resource, ARRIVAL, true, "Arrival fixture", {}, null, false, true)
+	assert_has_key(result, "data", str(result))
+	var stored := ResourceLoader.load(ARRIVAL, "", ResourceLoader.CACHE_MODE_IGNORE)
+	assert_true(stored is Resource)
+	if stored != null:
+		assert_eq(stored.get("payload"), 17)

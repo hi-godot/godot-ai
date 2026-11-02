@@ -149,7 +149,7 @@ static func save_to_disk(
 		)
 	var replacement_fields := {}
 	if staged_replace:
-		replacement_fields = _replace_staged_file(save_path, resource_path, existed_before and OS.get_name() == "Windows")
+		replacement_fields = _replace_staged_file(save_path, resource_path, existed_before and OS.get_name() == "Windows", Callable(), overwrite)
 		if replacement_fields.has("error"):
 			return replacement_fields
 	if cached != null:
@@ -189,7 +189,16 @@ static func save_to_disk(
 ## Windows rename deletes an existing destination first. Move only into absent
 ## paths there, retaining the original until commit or successful restoration.
 ## The callable seam lets tests fail individual moves while using real files.
-static func _replace_staged_file(stage: String, destination: String, use_backup: bool, rename_file: Callable = Callable()) -> Dictionary:
+## Recheck no-overwrite after staging; another process can still race the final
+## check and rename, so this is not an atomic no-clobber guarantee.
+static func _replace_staged_file(stage: String, destination: String, use_backup: bool, rename_file: Callable = Callable(), overwrite: bool = true) -> Dictionary:
+	if not overwrite and FileAccess.file_exists(destination):
+		var cleanup_err := DirAccess.remove_absolute(ProjectSettings.globalize_path(stage))
+		var failure := ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Destination appeared during save at %s; pass overwrite=true to replace" % destination)
+		failure.error["data"] = {"disk_committed": false, "live_refreshed": false}
+		if cleanup_err != OK:
+			failure.error.data["staged_resource"] = stage
+		return failure
 	var move: Callable = rename_file if rename_file.is_valid() else DirAccess.rename_absolute
 	var stage_absolute := ProjectSettings.globalize_path(stage)
 	var destination_absolute := ProjectSettings.globalize_path(destination)

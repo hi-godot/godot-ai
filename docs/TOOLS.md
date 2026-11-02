@@ -457,6 +457,9 @@ non-imported `res://` `.tres` or `.res` path and are not scene-undoable.
 `overwrite=true` replaces the **whole resource**, retains its UID and refreshes
 cached references; it does not patch omitted fields. Overwrites use the same
 staged replacement and Windows recovery contract as `set_properties` below.
+Without `overwrite=true`, a destination that appears during staging is refused
+before replacement. This final check is not atomic with the rename; another
+process can still race it. Coordinate concurrent writers to the same path.
 
 ### Patch a saved resource
 

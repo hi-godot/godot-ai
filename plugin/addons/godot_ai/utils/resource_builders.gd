@@ -63,8 +63,8 @@ static func output_error(path: String, overwrite: bool) -> Variant:
 	return null
 
 
-static func sprite_frames(animations: Array) -> Dictionary:
-	if animations.is_empty() or animations.size() > MAX_ITEMS:
+static func sprite_frames(animations: Variant) -> Dictionary:
+	if not animations is Array or animations.is_empty() or animations.size() > MAX_ITEMS:
 		return _error("animations", "provide 1–4096 animations")
 	var frames := SpriteFrames.new()
 	frames.remove_animation("default")
