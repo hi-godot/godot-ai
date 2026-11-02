@@ -600,24 +600,30 @@ guide](https://github.com/can1357/oh-my-pi/blob/main/docs/mcp-config.md).
 
 ## Qoder and Qoder CN
 
-Choose **Qoder** or **Qoder CN** in the Godot AI dock and use **Configure**.
-Both use the existing authenticated `godot-ai attach` launcher. Their user
+Choose **Qoder** or **Qoder CN** in the Godot AI dock and copy the manual
+configuration into the client's settings. Both use the authenticated
+`godot-ai attach` launcher. Their default user
 configuration files are `~/.qoder/settings.json` and
 `~/.qoder-cn/settings.json`, respectively. On Windows these directories are
 under `%USERPROFILE%`. The generated `mcpServers.godot-ai` entry contains
 `command`, `args`, and `type: "stdio"`. Use the dock's manual configuration
 output for the exact executable and version appropriate to this installation.
 
-Configure preserves unrelated settings and servers, environment variables,
-working directory, disabled state, timeouts and tool permissions. It removes
-remote transport fields, including `qoder_url`, when converting a Godot AI
-entry to stdio. It does not enable a deliberately disabled entry or change
-Qoder's tool approval policy.
+Both editions allow comments in `settings.json`. Godot AI reads those comments
+for status checks but leaves edits to you so comments and unrelated settings
+remain intact. **Configure** and **Remove** refuse automatic writes. When
+replacing an existing Godot AI entry, remove its remote transport fields,
+including `qoder_url`, which overrides stdio. Preserve any client permissions
+and disabled state you intend to keep.
+
+`QODER_CONFIG_DIR` relocates Qoder's user directory; `QODERCN_CONFIG_DIR` does
+the same for Qoder CN. When the corresponding variable is set in Godot's
+environment, status reports that the active path is ambiguous. Confirm the
+client's actual directory before manually editing `settings.json`.
 
 Both editions can override user configuration with project
 `.qoder/settings.json`, `.mcp.json`, and `.qoder/settings.local.json` files.
-Godot AI refuses automatic writes when it detects a project definition of the
-same server; resolve that override explicitly. Client command-line overrides,
+Resolve any project definition of the same server explicitly. Client command-line overrides,
 plugin configuration and a different working directory are not observable
 from Godot. If a configured server is missing, check those sources and the
 client's server allow/exclude settings. Run `/mcp reload` in an existing CLI
@@ -625,7 +631,10 @@ session, or restart the client, after changing configuration.
 
 The paths, stdio fields and precedence follow the official
 [Qoder MCP reference](https://docs.qoder.com/cli/mcp-reference) and
-[Qoder CN MCP reference](https://docs.qoder.cn/cli/mcp-reference).
+[Qoder CN MCP reference](https://docs.qoder.cn/cli/mcp-reference). Comment support
+and relocated directories follow the
+[Qoder settings guide](https://docs.qoder.com/cli/settings) and
+[Qoder CN settings guide](https://docs.qoder.cn/cli/settings).
 
 ## Automatic repair
 

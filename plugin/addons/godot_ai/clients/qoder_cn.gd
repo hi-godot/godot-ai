@@ -8,6 +8,9 @@ func _init() -> void:
 	id = "qoder_cn"
 	display_name = "Qoder CN"
 	config_type = "json"
+	automatic_config_edits = false
+	config_allows_comments = true
+	config_scope_envs = PackedStringArray(["QODERCN_CONFIG_DIR"])
 	path_template = {
 		"unix": "~/.qoder-cn/settings.json",
 		"windows": "$USERPROFILE/.qoder-cn/settings.json",
