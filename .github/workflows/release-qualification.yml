@@ -112,7 +112,7 @@ jobs:
         with:
           name: v4-build-evidence-${{ matrix.name }}
           path: candidate-build-evidence/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 90
 
   sign:

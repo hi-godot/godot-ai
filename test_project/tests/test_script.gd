@@ -999,6 +999,9 @@ func test_registered_validation_refuses_duplicate_name_at_another_path() -> void
 		expect_script_error_containing("hides a global script class")
 	var result := _handler.create_script({"path": path, "content": original})
 	_remove_reload_helper(path)
+	var efs := EditorInterface.get_resource_filesystem()
+	if efs != null:
+		efs.update_file(path)
 	var data: Dictionary = result.get("data", {})
 	assert_eq(data.get("diagnostics_detail", ""), "log_capture")
 	assert_gt(data.get("diagnostics", []).size(), 0)

@@ -670,10 +670,12 @@ YAML require manual Configure. TOML repair validates the entire file with an
 available Python 3.11+ interpreter in isolated mode, with a 1 MiB file limit and
 a three-second subprocess deadline. Unavailable parsers require manual Configure. Removing an entry revokes its repair enrollment.
 
-Each resolved target and desired launch gets at most one attempt per editor
-session, with at most 128 attempts in total. Disabling the switch or losing the
-authenticated connection cancels queued repairs and cancels a running repair
-before its write boundary. An already completed file write is not rolled back.
+Each resolved target and desired launch gets at most one completed attempt per
+editor session. A repair cancelled before any write can retry after reconnecting;
+ambiguous outcomes cannot. At most 128 repair requests are admitted in total,
+including cancellations. Disabling the switch or losing the authenticated
+connection cancels queued repairs and cancels a running repair before its write
+boundary. An already completed file write is not rolled back.
 Successful repair asks you to reload the client's MCP connection. The plugin
 does not restart the client or choose different ports. Post-update migration
 continues separately and does not enroll entries or transfer ownership.

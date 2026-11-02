@@ -713,6 +713,8 @@ static func _repair_locked(client: Client, context: Dictionary, launch: Dictiona
 	if client.config_type == "toml":
 		var validation := RepairOwnership.validate_toml(str(target.path), cancelled)
 		if not validation.is_empty():
+			if validation.get("status") == "cancelled":
+				validation["mutation_started"] = false
 			return validation
 	var url := server_url_from(context)
 	var prior := check_status_details_for_url_with_cli_path(client.id, url, "", context, stored.launch)
@@ -721,14 +723,14 @@ static func _repair_locked(client: Client, context: Dictionary, launch: Dictiona
 	if not _config_write_error(client, "configure").is_empty() or not _credentials_error(client).is_empty():
 		return skipped
 	if cancelled.is_valid() and cancelled.call():
-		return {"status": "cancelled", "message": "Automatic repair cancelled before writing."}
+		return {"status": "cancelled", "mutation_started": false, "message": "Automatic repair cancelled before writing."}
 	var current := check_status_details_for_url_with_cli_path(client.id, url, "", context, launch)
 	if current.get("status") == Client.Status.CONFIGURED:
 		return {"status": "unchanged", "message": "Client configuration is current."}
 	if not bool(launch.get("ok", false)):
 		return skipped
 	if cancelled.is_valid() and cancelled.call():
-		return {"status": "cancelled", "message": "Automatic repair cancelled before writing."}
+		return {"status": "cancelled", "mutation_started": false, "message": "Automatic repair cancelled before writing."}
 	var result := (
 		JsonStrategy.configure(client, SERVER_NAME, url, launch, _project_roots_from_context(context))
 		if client.config_type == "cli"
