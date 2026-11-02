@@ -62,7 +62,7 @@ plugin-spawned servers never runs for a client-spawned bridge or its backend
 (see docs/TELEMETRY.md). Package pins, command paths, ports, exclusions,
 telemetry, and required uv options are verified as launch drift. After an
 update restarts the editor and the live tree verifies, the plugin repins
-configured clients automatically (pin-only). **Configure all** is manual
+configured clients automatically when exact old-launch readback matches. **Configure all** is manual
 remediation when that repin reports drift or failure, and remains the explicit
 repair path after a port
 change, telemetry toggle, or tool-domain change. Never silently fall back to a
@@ -70,6 +70,19 @@ bare `uvx` command for these entries—report ERROR and leave the config untouch
 when no verified tier exists.
 
 The uvx tier is isolated/no-config/no-build and names official PyPI explicitly.
+It also carries the release's fixed `dependency_cutoff` from `plugin.cfg` as
+`--exclude-newer`, with only `godot-ai` exempted so the release itself can be
+uploaded after preparation. Server startup, client attach and package prewarm
+share this policy. After a successful update, the plugin can migrate an exact
+previous launch, including its old cutoff or legacy absence of one. It reads
+only `addons/.godot_ai_update/backup/<from_version>/plugin.cfg` when the outcome
+names that same retained backup and the metadata version matches. This binds
+metadata to the update path/version; it does not independently authenticate the
+previous tree. Missing or malformed backup metadata cannot authorize a cutoff
+change. Other command, index, port, telemetry or domain drift still requires
+Configure. All actual launches use the current cutoff; the previous policy is
+constructed only as a readback expectation. If uv rejects the cutoff options, upgrade uv; the plugin
+does not retry with unbounded dependency resolution.
 Godot-owned server/prewarm spawns also clear inherited uv resolution controls;
 client-owned bridges carry the same resolver policy in their persisted argv.
 Only the process-local qualification switch documented in the release plan may

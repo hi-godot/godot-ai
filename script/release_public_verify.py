@@ -14,13 +14,14 @@ import venv
 from pathlib import Path
 from typing import Any
 
+from script import dependency_cutoff
 from script import release_promotion as promotion
 from script import release_qualification as qualification
 from script import release_support as support
 
 
 def verify_resolution(
-    report: dict[str, Any], record: dict[str, Any], *, require_release: bool = True
+    report: dict[str, Any], record: dict[str, Any], cutoff: str, *, require_release: bool = True
 ) -> list[dict[str, Any]]:
     installed = report.get("install", [])
     support.require(bool(installed), "empty public dependency resolution")
@@ -60,7 +61,23 @@ def verify_resolution(
             )
             found_release = True
         promotion.verify_public_file(url, expected, {"files.pythonhosted.org"})
-        result.append({"name": name, "version": version, "url": url, **expected})
+        uploaded = entry.get("upload_time_iso_8601")
+        dependency_cutoff.timestamp(uploaded)
+        if name.lower().replace("_", "-") != "godot-ai":
+            support.require(
+                dependency_cutoff.timestamp(uploaded) <= dependency_cutoff.timestamp(cutoff),
+                "public dependency was uploaded after the release cutoff",
+            )
+        result.append(
+            {
+                "name": name,
+                "version": version,
+                "url": url,
+                "filename": entry["filename"],
+                "upload_time": uploaded,
+                **expected,
+            }
+        )
     support.require(
         found_release or not require_release, "public resolution did not install godot-ai"
     )
@@ -99,6 +116,7 @@ def public_row(candidate: Path, output: Path, os_label: str) -> None:
     support.require(python_version in {"3.11", "3.14"}, "unsupported public Python row")
     support.require(not output.exists(), "public verification output already exists")
     record = support.verify_candidate(candidate, "a")
+    cutoff = dependency_cutoff.from_candidate(candidate)
     output.mkdir(parents=True)
     pypi = promotion.verify_pypi(record)
     release = promotion.github_preflight(record)
@@ -131,6 +149,15 @@ def public_row(candidate: Path, output: Path, os_label: str) -> None:
             python = str(qualification.environment_python(target))
             if kind == "sdist":
                 build_report = output / "build-resolution.json"
+                build_lock = output / "build-requirements.txt"
+                dependency_cutoff.compile_requirements(
+                    build_requirements(candidate, record["version"]),
+                    cutoff,
+                    build_lock,
+                    python,
+                    environment,
+                    qualification.execute,
+                )
                 qualification.execute(
                     [
                         python,
@@ -145,7 +172,9 @@ def public_row(candidate: Path, output: Path, os_label: str) -> None:
                         "https://pypi.org/simple",
                         "--report",
                         str(build_report),
-                        *build_requirements(candidate, record["version"]),
+                        "--require-hashes",
+                        "-r",
+                        str(build_lock),
                     ],
                     output / "build.log",
                     cwd=work,
@@ -154,8 +183,18 @@ def public_row(candidate: Path, output: Path, os_label: str) -> None:
                 resolutions["build"] = verify_resolution(
                     read_resolution(build_report),
                     record,
+                    cutoff,
                     require_release=False,
                 )
+            lock = output / f"{kind}-requirements.txt"
+            dependency_cutoff.compile_requirements(
+                ["godot-ai==" + record["version"]],
+                cutoff,
+                lock,
+                python,
+                environment,
+                qualification.execute,
+            )
             report = output / f"{kind}-resolution.json"
             command = [
                 python,
@@ -173,11 +212,11 @@ def public_row(candidate: Path, output: Path, os_label: str) -> None:
             command += ["--only-binary" if kind == "wheel" else "--no-binary", "godot-ai"]
             if kind == "sdist":
                 command.append("--no-build-isolation")
-            command.append("godot-ai==" + record["version"])
+            command.extend(["--require-hashes", "-r", str(lock)])
             qualification.execute(
                 command, output / f"{kind}.log", cwd=work, environment=environment
             )
-            resolutions[kind] = verify_resolution(read_resolution(report), record)
+            resolutions[kind] = verify_resolution(read_resolution(report), record, cutoff)
             for args in (
                 ["-m", "pip", "check"],
                 ["-m", "godot_ai", "--version"],
@@ -194,6 +233,7 @@ def public_row(candidate: Path, output: Path, os_label: str) -> None:
     result = {
         "schema": 1,
         "kind": "public",
+        "dependency_cutoff": cutoff,
         "status": "passed",
         "os": os_label,
         "python": python_version,

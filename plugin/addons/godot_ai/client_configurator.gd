@@ -675,10 +675,10 @@ static func check_status_for_url_with_cli_path(
 
 ## True when <id>'s stored entry verifies EXACTLY against the launch this
 ## editor would have rendered at `from_version` — same ports, exclusions,
-## telemetry flag, command shape; nothing differs but the version pin. This
-## is the post-update auto-repin gate: only such entries are provably "what
-## Configure wrote before the update", so rewriting them to the current
-## version restores the user's own prior intent. Anything else — entries
+## telemetry flag, command shape. A retained backup's version-bound policy
+## also permits the known previous cutoff (including a legacy absent cutoff).
+## This is the post-update auto-repin gate: exact old launch readback permits
+## rewriting its version and dependency policy to the current release. Anything else — entries
 ## pointing at another editor's ports (the smoke-fixture blast radius that
 ## motivated this gate), hand-edits, changed settings — stays untouched for
 ## the drift banner's human click. An empty `from_version` (marker written
@@ -719,7 +719,13 @@ static func entry_drift_is_version_pin_only(
 	## version, so URL-mode entries can never be version-pin-only drift and
 	## correctly fail this check.
 	var url := str(context.get("server_url", http_url()))
-	var status := check_status_for_url_with_cli_path(id, url, "", old_context)
+	var previous_launch := UvResolution.previous_launch_for_verification(
+		resolve_attach_launch(old_context), context.get("previous_dependency_policy", {})
+	)
+	if not bool(previous_launch.get("ok", false)):
+		return false
+	var details := check_status_details_for_url_with_cli_path(id, url, "", old_context, previous_launch)
+	var status: int = details.get("status", Client.Status.ERROR)
 	return status == Client.Status.CONFIGURED
 
 

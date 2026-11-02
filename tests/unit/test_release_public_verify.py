@@ -21,6 +21,7 @@ def resolution(monkeypatch):
                 "filename": "godot_ai-4.1.0-py3-none-any.whl",
                 "url": url,
                 "size": 123,
+                "upload_time_iso_8601": "2026-10-01T00:00:00Z",
                 "digests": {"sha256": "a" * 64},
             }
         ]
@@ -45,7 +46,7 @@ def resolution(monkeypatch):
 
 def test_public_resolution_redownloads_approved_bytes(resolution):
     report, record, _, reads = resolution
-    result = public.verify_resolution(report, record)
+    result = public.verify_resolution(report, record, "2026-11-01T19:00:00Z")
     assert result[0]["sha256"] == "a" * 64 and result[0]["size"] == 123
     assert reads == [
         (result[0]["url"], {"size": 123, "sha256": "a" * 64}, {"files.pythonhosted.org"})
@@ -82,7 +83,7 @@ def test_public_resolution_rejects_unapproved_or_incomplete_install(resolution, 
     else:
         report["install"].append(copy.deepcopy(item))
     with pytest.raises(support.ReleaseError):
-        public.verify_resolution(report, record)
+        public.verify_resolution(report, record, "2026-11-01T19:00:00Z")
 
 
 def test_reads_indented_pip_report_and_still_rejects_duplicate_keys(tmp_path):
@@ -108,7 +109,7 @@ def test_build_requirements_come_from_qualified_source_archive(tmp_path):
 def test_build_resolution_does_not_require_release_package(resolution):
     report, record, _, reads = resolution
     report["install"][0]["metadata"] = {"name": "setuptools", "version": "84.0.0"}
-    result = public.verify_resolution(report, record, require_release=False)
+    result = public.verify_resolution(report, record, "2026-11-01T19:00:00Z", require_release=False)
     assert result[0]["name"] == "setuptools" and len(reads) == 1
 
 
@@ -155,6 +156,9 @@ def test_install_location_check_uses_canonical_temporary_directory(tmp_path, mon
     )
     monkeypatch.setattr(public.tempfile, "TemporaryDirectory", fake_temporary)
     monkeypatch.setattr(public.support, "verify_candidate", lambda *args: record)
+    monkeypatch.setattr(
+        public.dependency_cutoff, "from_candidate", lambda _: "2026-11-01T19:00:00Z"
+    )
     monkeypatch.setattr(public.promotion, "verify_pypi", lambda record: {})
     monkeypatch.setattr(
         public.promotion,

@@ -101,7 +101,9 @@ def _repository(root: Path, public_key: str) -> tuple[Path, str]:
     repo = root / "repo"
     plugin = repo / "plugin/addons/godot_ai"
     (plugin / "utils").mkdir(parents=True)
-    (plugin / "plugin.cfg").write_text('[plugin]\nversion="4.0.0"\n', encoding="utf-8")
+    (plugin / "plugin.cfg").write_text(
+        '[plugin]\nversion="4.0.0"\ndependency_cutoff="2026-11-01T19:00:00Z"\n', encoding="utf-8"
+    )
     (plugin / "plugin.gd").write_text("@tool\nextends EditorPlugin\n", encoding="utf-8")
     (plugin / "utils/update_manager.gd").write_text(
         f'const RELEASE_SIGNING_PUBLIC_KEY_PEM := """{public_key}"""\n', encoding="utf-8"
@@ -687,7 +689,7 @@ def _signed_fixture(
 
 
 def _plugin_config() -> bytes:
-    return b'[plugin]\nversion="4.0.0"\n'
+    return b'[plugin]\nversion="4.0.0"\ndependency_cutoff="2026-11-01T19:00:00Z"\n'
 
 
 @pytest.mark.parametrize("attack", ["extra", "traversal", "case", "link", "compressed"])

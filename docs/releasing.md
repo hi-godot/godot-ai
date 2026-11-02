@@ -11,6 +11,30 @@ one-click user flow.
 
 ## Qualification and publication
 
+Before preparing candidate A, explicitly set `dependency_cutoff` in
+`plugin/addons/godot_ai/plugin.cfg` to the reviewed release preparation time,
+formatted as `YYYY-MM-DDTHH:MM:SSZ`. Keep it unchanged in candidate B. Advancing
+it changes the dependency set eligible for resolution and requires new
+qualification. Startup never replaces it with the current time.
+
+Production uv launches pass this value as `--exclude-newer`, with
+`--exclude-newer-package godot-ai=false` exempting only our own distribution,
+which is uploaded after preparation. The cutoff applies to individual artifact
+upload times, so a wheel uploaded later for an older dependency version is also
+ineligible. It limits future dependency drift; it is not a replacement for
+artifact hashes or a security audit. Missing or invalid release metadata fails
+closed. Use the qualification workflow's pinned uv version or newer; an older
+uv that rejects these options must be upgraded rather than retried without them.
+
+During post-update client repinning, the successful outcome may name the
+retained backup at `addons/.godot_ai_update/backup/<from_version>`. Its
+`plugin.cfg` must report that same version before the plugin uses its prior
+cutoff (or a legacy absent cutoff) to verify an existing client entry. This is
+version/path-bound metadata, not independent signature verification of the
+previous tree. Missing, malformed or mismatched metadata cannot authorize
+cutoff migration. The expected old argv is used only for exact file readback;
+server, attach and prewarm launches always use the current release policy.
+
 V4 may publish only immutable, qualified bytes. `release-qualification.yml`
 builds and signs the A/B candidate pair once, then runs the release gate on
 those exact bytes:

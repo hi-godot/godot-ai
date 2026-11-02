@@ -910,6 +910,7 @@ func _begin_startup_release() -> void:
 			"replace_owned_mismatches",
 			_post_update_outcome.get("manual_migration", false),
 		)),
+		preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").previous_policy(_post_update_outcome),
 	)
 	if not bool(started.get("ok", false)):
 		_present_post_update_barrier_failure(str(started.get("error", "Client migration could not start.")))

@@ -369,6 +369,9 @@ def sign_candidate(root: Path, repo: Path, source: str, version: str, key: Path)
 
 
 def package_candidate(root: Path, repo: Path, source: str, version: str) -> None:
+    from script import dependency_cutoff
+
+    cutoff = dependency_cutoff.from_source(repo)
     require(SHA.fullmatch(source), "invalid source SHA")
     version_tuple(version)
     require(
@@ -412,9 +415,7 @@ def package_candidate(root: Path, repo: Path, source: str, version: str) -> None
         ],
         check=True,
     )
-    subprocess.run(
-        [sys.executable, "-m", "build", "--outdir", str(root / "dist")], cwd=repo, check=True
-    )
+    dependency_cutoff.build_distributions(repo, root, config, cutoff)
     for path in VERIFIER_PATHS:
         target = root / "verifier" / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -498,6 +499,9 @@ def candidate_record(
         "files": actual,
     }
     verify_signed_assets(root / "release", result)
+    from script import dependency_cutoff
+
+    dependency_cutoff.from_candidate(root)
     return result
 
 

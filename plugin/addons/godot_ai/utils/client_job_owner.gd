@@ -232,7 +232,8 @@ func resume_after_quiesce() -> void:
 ## supplies both versions; a mismatch with the code actually loaded fails
 ## closed before touching client config or starting the server.
 func begin_post_update_repin(
-	from_version: String, to_version: String, replace_owned_mismatches: bool = false
+	from_version: String, to_version: String, replace_owned_mismatches: bool = false,
+	previous_dependency_policy: Dictionary = {},
 ) -> Dictionary:
 	## `from_version` is empty when the closed-editor installer put v4 into a
 	## project that had no add-on: nothing was replaced, and owned client
@@ -269,6 +270,7 @@ func begin_post_update_repin(
 	var context := ClientConfigurator.capture_launch_context()
 	if context.is_empty():
 		return {"ok": false, "error": "Post-update launch context is unavailable."}
+	context["previous_dependency_policy"] = previous_dependency_policy.duplicate(true)
 	_set_post_update_cancelled(false)
 	_post_update_generation += 1
 	_post_update_thread = Thread.new()

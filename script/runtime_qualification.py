@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from godot_ai import release_verify  # noqa: E402
+from script import dependency_cutoff
 from script import qualification_engine as engine  # noqa: E402
 from script import release_qualification as qualification  # noqa: E402
 from script import release_support as support  # noqa: E402
@@ -268,8 +269,9 @@ def _isolated_environment(root: Path, index: str) -> dict[str, str]:
     return environment
 
 
-def _write_client_pin(codex: Path, uvx: str, version: str) -> None:
+def _write_client_pin(codex: Path, uvx: str, version: str, cutoff: str | None) -> None:
     args = [
+        *(dependency_cutoff.uv_args(cutoff) if cutoff is not None else []),
         "--link-mode",
         "copy",
         "--from",
@@ -726,10 +728,11 @@ class AttachedBridge:
             (self.project / BRIDGE_SERVED_B_FILE).write_text("served\n", encoding="utf-8")
 
 
-def _bridge_command(uvx: str, version: str) -> list[str]:
+def _bridge_command(uvx: str, version: str, cutoff: str | None) -> list[str]:
     """The exact launch a client entry written for ``version`` performs."""
     return [
         uvx,
+        *(dependency_cutoff.uv_args(cutoff) if cutoff is not None else []),
         "--link-mode",
         "copy",
         "--from",
@@ -964,11 +967,17 @@ def exact_a_to_b(
     candidates: Path,
     packages: Path,
     dependencies: list[dict[str, Any]],
+    upload_times: dict[str, str],
     godot: str,
     godot_version: str,
     output: Path,
 ) -> dict[str, Any]:
     records = {name: support.verify_candidate(candidates / name, name) for name in ("a", "b")}
+    cutoff = dependency_cutoff.from_candidate(candidates / "a")
+    support.require(
+        dependency_cutoff.from_candidate(candidates / "b") == cutoff, "A/B cutoff differs"
+    )
+    dependency_cutoff.validate_upload_times(dependencies, upload_times, cutoff)
     executable = shutil.which(godot) if not Path(godot).is_absolute() else godot
     support.require(
         executable is not None and Path(executable).is_file(), "Godot executable missing"
@@ -991,11 +1000,11 @@ def exact_a_to_b(
         (project / "project.godot").write_text("config_version=5\n", encoding="utf-8")
         certificate, key = _tls_material(work / "tls")
         release_b = candidates / "b/release"
-        with retained_index(packages, dependencies) as (index, index_requests):
+        with retained_index(packages, dependencies, upload_times) as (index, index_requests):
             environment = _isolated_environment(work / "environment", index)
             uvx = shutil.which("uvx", path=environment.get("PATH"))
             support.require(uvx is not None, "uvx is required for runtime qualification")
-            _write_client_pin(Path(environment["CODEX_HOME"]), uvx, records["a"]["version"])
+            _write_client_pin(Path(environment["CODEX_HOME"]), uvx, records["a"]["version"], cutoff)
             print("Installing signed candidate A in the disposable project", flush=True)
             command = [
                 sys.executable,
@@ -1045,7 +1054,7 @@ def exact_a_to_b(
                 print(f"Running the A-to-B update in Godot {godot_version}", flush=True)
                 bridge_log = work / "attached-bridge.log"
                 bridge = AttachedBridge(
-                    _bridge_command(uvx, records["a"]["version"]),
+                    _bridge_command(uvx, records["a"]["version"], cutoff),
                     environment,
                     project,
                     _capability_directory(environment),
@@ -1180,6 +1189,8 @@ def runtime_row(
         and source_row.get("candidates") == bindings,
         "runtime dependency row is not the matching exact Python evidence",
     )
+    cutoff = dependency_cutoff.from_candidate(candidates / "a")
+    support.require(source_row.get("dependency_cutoff") == cutoff, "runtime cutoff mismatch")
     dependencies = qualification.dependency_inventory(python_row / "packages")
     support.require(
         source_row.get("dependencies") == dependencies,
@@ -1189,6 +1200,7 @@ def runtime_row(
     report: dict[str, Any] = {
         "schema": 2,
         "kind": "runtime",
+        "dependency_cutoff": cutoff,
         "status": "failed",
         "required_skips": 0,
         "os": os_label,
@@ -1206,6 +1218,7 @@ def runtime_row(
                 candidates,
                 python_row / "packages",
                 dependencies,
+                source_row.get("upload_times"),
                 godot,
                 godot_version,
                 output / "exact-a-to-b",
