@@ -142,16 +142,26 @@ static func _is_true(value: Variant) -> bool:
 
 
 ## Fixed code, isolated CPython and a single path argument; never imports client config.
-static func validate_toml(path: String, cancelled: Callable = Callable()) -> Dictionary:
-	if cancelled.is_valid() and cancelled.call():
-		return {"status": "cancelled", "message": "Automatic repair cancelled before TOML validation."}
+static func validate_toml(
+	path: String, cancelled: Callable = Callable(),
+	find_python: Callable = Callable(), run_python: Callable = Callable(),
+) -> Dictionary:
 	var seen := {}
 	for executable in ["python3", "python"]:
-		var python := McpCliFinder.find([executable])
+		if cancelled.is_valid() and cancelled.call():
+			return {"status": "cancelled", "message": "Automatic repair cancelled before TOML validation."}
+		var python: String = find_python.call(executable) if find_python.is_valid() else McpCliFinder.find([executable])
 		if python.is_empty() or seen.has(python):
 			continue
+		if cancelled.is_valid() and cancelled.call():
+			return {"status": "cancelled", "message": "Automatic repair cancelled before TOML validation."}
 		seen[python] = true
-		var result := McpCliExec.run(python, ["-I", "-S", "-c", TOML_VALIDATOR % [TOML_MAX_BYTES + 1, TOML_MAX_BYTES], path], TOML_TIMEOUT_MS, true, cancelled)
+		var args := ["-I", "-S", "-c", TOML_VALIDATOR % [TOML_MAX_BYTES + 1, TOML_MAX_BYTES], path]
+		var result: Dictionary = (
+			run_python.call(python, args, TOML_TIMEOUT_MS, cancelled)
+			if run_python.is_valid()
+			else McpCliExec.run(python, args, TOML_TIMEOUT_MS, true, cancelled)
+		)
 		if bool(result.get("termination_failed", false)):
 			return {"status": "error", "termination_failed": true, "message": MutationLock.recovery_message()}
 		if bool(result.get("cancelled", false)):
@@ -159,6 +169,6 @@ static func validate_toml(path: String, cancelled: Callable = Callable()) -> Dic
 		var output := str(result.get("stdout", "")).strip_edges()
 		if result.get("exit_code") == 0 and output == "valid":
 			return {}
-		if result.get("exit_code") != 0 or output != "unavailable":
-			return {"status": "skipped", "message": "Automatic repair could not validate this TOML file (maximum 1 MiB); review it and use Configure."}
+		if result.get("exit_code") == 0 and output == "invalid":
+			return {"status": "skipped", "message": "Automatic repair refused invalid or oversized TOML (maximum 1 MiB); review it and use Configure."}
 	return {"status": "skipped", "message": "Automatic repair needs an available Python 3.11+ TOML parser; use Configure."}
