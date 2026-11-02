@@ -278,7 +278,9 @@ func test_corrupt_unrelated_toml_section_is_not_rewritten() -> void:
 	assert_true(Lock.release(claim))
 	var corrupt := FileAccess.get_file_as_string(_path) + '\n[other]\nmalformed = [\n'
 	assert_true(McpAtomicWrite.write(_path, corrupt))
-	assert_eq(_repair(_launch(8123)).get("status"), "skipped")
+	var result := _repair(_launch(8123))
+	assert_eq(result.get("status"), "skipped")
+	assert_contains(str(result.get("message", "")), "invalid or oversized TOML", "a working parser must reject the malformed file")
 	assert_eq(FileAccess.get_file_as_string(_path), corrupt)
 
 
@@ -287,6 +289,90 @@ func test_toml_parser_cancellation_and_size_limit() -> void:
 	assert_eq(Ownership.validate_toml(_path, func() -> bool: return true).get("status"), "cancelled")
 	assert_true(McpAtomicWrite.write(_path, '#'.repeat(Ownership.TOML_MAX_BYTES + 1)))
 	assert_eq(Ownership.validate_toml(_path).get("status"), "skipped")
+
+
+func test_toml_parser_falls_back_after_unusable_interpreter() -> void:
+	for first in [
+		{"exit_code": -1, "spawn_failed": true},
+		{"exit_code": 1, "stdout": ""},
+		{"exit_code": -1, "timed_out": true, "termination_failed": false},
+		{"exit_code": 0, "stdout": "unavailable"},
+		{"exit_code": 0, "stdout": "unexpected launcher output"},
+	]:
+		var calls: Array[String] = []
+		var result := Ownership.validate_toml(_path, Callable(),
+			func(name: String) -> String: return name,
+			func(executable: String, args: Array, timeout: int, _cancel: Callable) -> Dictionary:
+				calls.append(executable)
+				assert_eq(args.slice(0, 3), ["-I", "-S", "-c"])
+				assert_eq(args[-1], _path)
+				assert_eq(timeout, Ownership.TOML_TIMEOUT_MS)
+				return first if executable == "python3" else {"exit_code": 0, "stdout": "valid"}
+		)
+		assert_eq(result, {}, "an unusable first candidate must not hide a valid parser: " + str(first))
+		assert_eq(calls, ["python3", "python"])
+
+
+func test_toml_parser_invalid_does_not_try_another_interpreter() -> void:
+	var calls: Array[String] = []
+	var result := Ownership.validate_toml(_path, Callable(),
+		func(name: String) -> String: return name,
+		func(executable: String, _args: Array, _timeout: int, _cancel: Callable) -> Dictionary:
+			calls.append(executable)
+			return {"exit_code": 0, "stdout": "invalid" if executable == "python3" else "valid"}
+	)
+	assert_eq(result.get("status"), "skipped")
+	assert_contains(str(result.get("message", "")), "invalid or oversized TOML")
+	assert_eq(calls, ["python3"], "a valid parser's invalid result is final")
+
+
+func test_toml_parser_cancelled_or_unterminated_process_prevents_fallback() -> void:
+	for first in [
+		{"exit_code": -1, "cancelled": true},
+		{"exit_code": -1, "timed_out": true, "termination_failed": true},
+	]:
+		var calls: Array[String] = []
+		var result := Ownership.validate_toml(_path, Callable(),
+			func(name: String) -> String: return name,
+			func(executable: String, _args: Array, _timeout: int, _cancel: Callable) -> Dictionary:
+				calls.append(executable)
+				return first
+		)
+		assert_eq(result.get("status"), "error" if first.get("termination_failed", false) else "cancelled")
+		assert_eq(calls, ["python3"])
+		if first.get("termination_failed", false):
+			assert_true(result.get("termination_failed", false))
+
+
+func test_toml_parser_cancellation_between_candidates_prevents_second_spawn() -> void:
+	var state := {"cancelled": false}
+	var calls: Array[String] = []
+	var result := Ownership.validate_toml(_path,
+		func() -> bool: return state.cancelled,
+		func(name: String) -> String: return name,
+		func(executable: String, _args: Array, _timeout: int, _cancel: Callable) -> Dictionary:
+			calls.append(executable)
+			state.cancelled = true
+			return {"exit_code": 1}
+	)
+	assert_eq(result.get("status"), "cancelled")
+	assert_eq(calls, ["python3"])
+
+
+func test_toml_parser_cancellation_during_lookup_prevents_spawn() -> void:
+	var state := {"cancelled": false}
+	var calls: Array[String] = []
+	var result := Ownership.validate_toml(_path,
+		func() -> bool: return state.cancelled,
+		func(name: String) -> String:
+			state.cancelled = true
+			return name,
+		func(executable: String, _args: Array, _timeout: int, _cancel: Callable) -> Dictionary:
+			calls.append(executable)
+			return {"exit_code": 0, "stdout": "valid"}
+	)
+	assert_eq(result.get("status"), "cancelled")
+	assert_true(calls.is_empty())
 
 
 func test_external_scope_and_claude_project_suppression_require_manual_configure() -> void:
