@@ -19,6 +19,8 @@ func suite_name() -> String:
 func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.undo_redo
 	_handler = Handler.new(_undo_redo)
+	if EditorInterface.get_edited_scene_root() == null:
+		skip_suite("No scene open")
 
 
 func setup() -> void:
@@ -186,6 +188,26 @@ func test_saved_scene_reopens_with_library_and_autoplay() -> void:
 	assert_eq(String(reopened.autoplay), "")
 	reopened.free()
 	assert_eq(FileAccess.get_file_as_bytes(LIBRARY_PATH), bytes_before)
+	DirAccess.remove_absolute(path)
+
+
+func test_reopened_embedded_library_has_no_external_path() -> void:
+	var embedded := AnimationLibrary.new()
+	assert_eq(embedded.add_animation("idle", Animation.new()), OK)
+	assert_eq(_player.add_animation_library("local", embedded), OK)
+	assert_eq(_player.add_animation_library("shared", load(LIBRARY_PATH)), OK)
+	var packed := PackedScene.new()
+	assert_eq(packed.pack(_player), OK)
+	var path := "user://embedded-library-metadata.tscn"
+	assert_eq(ResourceSaver.save(packed, path), OK)
+	var reopened := track((ResourceLoader.load(path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate()) as AnimationPlayer
+	assert_true(reopened.get_animation_library("local").resource_path.contains("::"))
+	var metadata := {}
+	for library in Handler.library_metadata(reopened):
+		metadata[library.name] = library
+	assert_eq(metadata.local.resource_path, "")
+	assert_eq(metadata.local.animations, ["idle"])
+	assert_eq(metadata.shared.resource_path, LIBRARY_PATH)
 	DirAccess.remove_absolute(path)
 
 

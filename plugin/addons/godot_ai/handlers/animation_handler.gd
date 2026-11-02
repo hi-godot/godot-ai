@@ -938,7 +938,8 @@ static func library_metadata(mixer: AnimationMixer) -> Array[Dictionary]:
 	for library_name in mixer.get_animation_library_list():
 		var library := mixer.get_animation_library(library_name)
 		libraries.append({
-			"name": String(library_name), "resource_path": library.resource_path,
+			"name": String(library_name),
+			"resource_path": "" if library.resource_path.contains("::") else library.resource_path,
 			"animations": Array(PackedStringArray(library.get_animation_list())),
 		})
 	return libraries
