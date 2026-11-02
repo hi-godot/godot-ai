@@ -415,7 +415,7 @@ static func _apply_resource_properties(res: Resource, properties: Dictionary, de
 	return null
 
 
-## Capture paths before a setter can mutate the supplied containers. The
+## Capture paths and independent data before a setter can mutate containers. The
 ## iterative walk does not add recursive calls for arbitrary dictionary data.
 static func _nested_constructor_paths(value: Variant, path: String) -> Array[Dictionary]:
 	var constructors: Array[Dictionary] = []
@@ -425,7 +425,9 @@ static func _nested_constructor_paths(value: Variant, path: String) -> Array[Dic
 		var supplied: Variant = item.value
 		if supplied is Dictionary:
 			if supplied.has("__class__"):
-				constructors.append({"keys": item.keys, "path": item.path})
+				constructors.append({
+					"keys": item.keys, "path": item.path, "value": supplied.duplicate(true),
+				})
 			for key in supplied:
 				pending.append({
 					"value": supplied[key], "keys": item.keys + [key],
@@ -442,7 +444,7 @@ static func _nested_constructor_paths(value: Variant, path: String) -> Array[Dic
 
 ## Untyped native setters can silently replace constructor dictionaries with
 ## null. Refuse that loss before saving or assigning the new resource. A
-## dictionary that retains __class__ as ordinary data stays a dictionary.
+## dictionary that retains the supplied constructor as ordinary data stays a dictionary.
 static func _nested_constructor_readback_error(constructors: Array[Dictionary], stored: Variant) -> Variant:
 	for constructor in constructors:
 		var actual: Variant = stored
@@ -456,12 +458,41 @@ static func _nested_constructor_readback_error(constructors: Array[Dictionary], 
 			else:
 				actual = null
 				break
-		if not (actual is Dictionary) and not (actual is Resource):
+		if not _constructor_content_retained(constructor.value, actual):
 			return ErrorCodes.make(
 				ErrorCodes.WRONG_TYPE,
 				"Nested resource constructor at '%s' was not retained. This untyped collection does not support inline resources; use a typed Resource property or construct the resource with Godot's API." % constructor.path,
 			)
 	return null
+
+
+static func _constructor_content_retained(supplied: Dictionary, stored: Variant) -> bool:
+	var pending: Array[Dictionary] = [{"supplied": supplied, "stored": stored}]
+	while not pending.is_empty():
+		var item: Dictionary = pending.pop_back()
+		var expected: Variant = item.supplied
+		var actual: Variant = item.stored
+		if expected is Dictionary:
+			if actual is Resource and expected.has("__class__"):
+				continue
+			if not (actual is Dictionary):
+				return false
+			for key in expected:
+				if not actual.has(key):
+					return false
+				pending.append({"supplied": expected[key], "stored": actual[key]})
+		elif expected is Array:
+			if not (actual is Array) or actual.size() < expected.size():
+				return false
+			for i in expected.size():
+				pending.append({"supplied": expected[i], "stored": actual[i]})
+		else:
+			var both_numeric := typeof(expected) in [TYPE_INT, TYPE_FLOAT] and typeof(actual) in [TYPE_INT, TYPE_FLOAT]
+			if typeof(expected) != typeof(actual) and not both_numeric:
+				return false
+			if expected != actual:
+				return false
+	return true
 
 
 func _assign_created_resource(res: Resource, type_str: String, node_path: String, property: String, applied_count: int) -> Dictionary:

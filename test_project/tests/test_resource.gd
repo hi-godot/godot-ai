@@ -867,6 +867,70 @@ func test_nested_container_detects_in_place_constructor_loss() -> void:
 		assert_contains(error.error.message, "data.texture")
 
 
+func test_nested_container_detects_dictionary_constructor_content_loss() -> void:
+	for mutation in [
+		"value[\"texture\"] = {}",
+		"value[\"texture\"].erase(\"__class__\")",
+		"value[\"texture\"].erase(\"value\")",
+		"value[\"texture\"][\"value\"][\"nested\"][0] = 99",
+	]:
+		var script := GDScript.new()
+		script.source_code = "\n".join([
+			"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+			"\tset(value):", "\t\t" + mutation, "\t\tdata = value",
+		])
+		assert_eq(script.reload(), OK)
+		var resource: Resource = script.new()
+		var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+			"data": {"texture": {"__class__": "ordinary-data", "value": {"nested": [17]}}},
+		})
+		assert_true(error is Dictionary, "constructor content loss must be refused: " + mutation)
+		if error is Dictionary:
+			assert_is_error(error, ErrorCodes.WRONG_TYPE)
+			assert_contains(error.error.message, "data.texture")
+
+
+func test_nested_container_accepts_setter_constructed_resource() -> void:
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+		"\tset(value):", "\t\tvalue[\"texture\"] = AtlasTexture.new()", "\t\tdata = value",
+	])
+	assert_eq(script.reload(), OK)
+	var resource: Resource = script.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"data": {"texture": {"__class__": "AtlasTexture"}},
+	})
+	assert_eq(error, null)
+	assert_true(resource.get("data").texture is AtlasTexture)
+
+
+func test_nested_container_retains_data_with_extra_fields_and_nested_resource() -> void:
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+		"\tset(value):",
+		"\t\tvalue[\"texture\"][\"metadata\"] = \"added\"",
+		"\t\tvalue[\"texture\"][\"values\"].append(23)",
+		"\t\tvalue[\"texture\"][\"inner\"] = AtlasTexture.new()",
+		"\t\tdata = value",
+	])
+	assert_eq(script.reload(), OK)
+	var resource: Resource = script.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"data": {"texture": {
+			"__class__": "ordinary-data", "values": [17],
+			"inner": {"__class__": "AtlasTexture"},
+		}},
+	})
+	assert_eq(error, null, "retained data may gain fields or contain constructed resources")
+	var stored: Dictionary = resource.get("data").texture
+	assert_eq(stored["__class__"], "ordinary-data")
+	assert_eq(stored.values, [17, 23])
+	assert_eq(stored.metadata, "added")
+	assert_true(stored.inner is AtlasTexture)
+
+
 func test_nested_container_refusal_keeps_existing_node_resource() -> void:
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null:
