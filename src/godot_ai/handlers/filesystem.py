@@ -32,8 +32,11 @@ async def filesystem_scan(runtime: DirectRuntime) -> dict:
 
     Deliberately not ``require_writable``-gated: a scan is a refresh and must
     run even while the editor reports ``"importing"`` (a scan already in
-    flight), where the plugin's single-flight handler simply awaits the running
-    scan. A full scan can exceed the default command timeout on large projects,
+    flight). Concurrent callers share one operation. An external or ambiguous
+    scan start may need up to two native full-scan root replacements to prove
+    that a scan began after the request. Completion describes that scan, not
+    perpetual editor idleness if another listener starts later work.
+    A full scan can exceed the default command timeout on large projects,
     and the plugin caps its own wait at 28s, so a 35s command timeout leaves
     headroom.
     """

@@ -283,6 +283,15 @@ models, and audio. Godot scripts (`.gd`) are not imported resources: a successfu
 script was parsed or diagnostics were produced. Use `script_patch` or
 `script_create` to save scripts and receive fresh diagnostics.
 
+`filesystem_manage(op="scan")` coalesces concurrent callers and waits for native
+scan completion, including script registration. Joining an existing scan, or an
+uncertain native start, may require additional full scanning to include files
+present when the request began. `was_already_scanning=true` identifies a joined operation.
+Completion covers that operation; another editor listener may start later work.
+A caller that reaches the 28-second wait limit receives `scan_completed=false`
+and `scan_settle="timeout"`. Native work remains owned until its completion,
+so a caller timeout does not permit overlapping plugin replacement.
+
 `filesystem_manage(op="move"|"rename"|"remove")` performs bounded,
 fail-closed resource-group mutations. Moves carry `.uid`/`.import` sidecars and
 preserve verified UID references; they refuse literal-path dependencies,
