@@ -249,3 +249,23 @@ def test_private_resolver_timeout_does_not_expose_capability(tmp_path, monkeypat
         policy.resolve_private_runtime(secret, "1.0", CUTOFF, tmp_path)
     assert "private-capability" not in str(error.value)
     assert str(error.value) == "retained runtime resolver failed to run"
+
+
+def test_compile_requirements_without_uv_fails_before_writing_or_executing(tmp_path):
+    missing_path = tmp_path / "empty-path"
+    missing_path.mkdir()
+    assert shutil.which("uv", path=str(missing_path)) is None
+    output = tmp_path / "requirements.txt"
+    calls = []
+    with pytest.raises(support.ReleaseError, match="uv is required to enforce"):
+        policy.compile_requirements(
+            ["example==1.0"],
+            CUTOFF,
+            output,
+            sys.executable,
+            {"PATH": str(missing_path)},
+            lambda *args, **kwargs: calls.append(args),
+        )
+    assert calls == []
+    assert not output.exists()
+    assert not output.with_suffix(".in").exists()

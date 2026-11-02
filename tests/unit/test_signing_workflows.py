@@ -207,6 +207,8 @@ def test_cutoff_qualification_has_pinned_uv_and_retains_build_resolution():
     validation = yaml.safe_load((WORKFLOWS / "release-validation.yml").read_text(encoding="utf-8"))
     jobs = [qualification["jobs"][name] for name in ("build", "python", "runtime")]
     jobs.append(validation["jobs"]["validate"])
+    ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text(encoding="utf-8"))
+    jobs.append(ci["jobs"]["python-tests"])
     for job in jobs:
         setup = [
             step for step in job["steps"] if step.get("uses", "").startswith("astral-sh/setup-uv@")

@@ -174,6 +174,9 @@ def test_install_location_check_uses_canonical_temporary_directory(tmp_path, mon
         "EnvBuilder",
         lambda **kwargs: types.SimpleNamespace(create=lambda target: None),
     )
+    monkeypatch.setattr(
+        public.dependency_cutoff.shutil, "which", lambda *_args, **_kwargs: "/fixture/uv"
+    )
     monkeypatch.setattr(public, "build_requirements", lambda candidate, version: ["build"])
     monkeypatch.setattr(public, "read_resolution", lambda report: {})
     monkeypatch.setattr(public, "verify_resolution", lambda *args, **kwargs: [])
