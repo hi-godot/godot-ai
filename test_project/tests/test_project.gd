@@ -10,6 +10,11 @@ const ProjectHandler := preload("res://addons/godot_ai/handlers/project_handler.
 var _handler: ProjectHandler
 
 
+class _ImportingProjectHandler extends ProjectHandler:
+	func _editor_readiness() -> String:
+		return "importing"
+
+
 func suite_name() -> String:
 	return "project"
 
@@ -301,6 +306,29 @@ func test_search_filesystem_no_results() -> void:
 func test_run_project_invalid_mode() -> void:
 	var result := _handler.run_project({"mode": "invalid_mode"})
 	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
+func test_run_project_importing_after_playing_probe_refuses_without_side_effects() -> void:
+	var conn := McpConnection.new()
+	conn._last_readiness = "playing"
+	var debugger := McpDebuggerPlugin.new()
+	var handler := _ImportingProjectHandler.new(conn, debugger)
+	var settings := EditorInterface.get_editor_settings()
+	var autosave_key := "run/auto_save/save_before_running"
+	var prior_autosave: Variant = settings.get_setting(autosave_key)
+	assert_false(EditorInterface.is_playing_scene(), "precondition: the previous game has stopped")
+
+	var result := handler.run_project({"mode": "main", "autosave": false})
+
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(result.error.data.sub_code, ErrorCodes.SUB_EDITOR_IMPORTING)
+	assert_true(result.error.data.retryable)
+	assert_false(str(result.error.data.hint).is_empty())
+	assert_false(EditorInterface.is_playing_scene(), "importing must not launch another game")
+	assert_eq(debugger._game_run_token, 0, "refusal must not rotate game capture state")
+	assert_false(conn.pause_processing, "refusal must not pause the connection")
+	assert_eq(settings.get_setting(autosave_key), prior_autosave, "refusal must preserve autosave")
+	conn.free()
 
 
 func test_run_project_invalid_mode_restores_connection_pause() -> void:
