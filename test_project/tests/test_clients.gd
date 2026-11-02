@@ -8629,6 +8629,11 @@ func test_qoder_descriptors_match_documented_scopes() -> void:
 		assert_eq(client.path_template.get("unix"), "~/%s/settings.json" % directory)
 		assert_eq(client.path_template.get("windows"), "$USERPROFILE/%s/settings.json" % directory)
 		assert_eq(client.server_key_path, PackedStringArray(["mcpServers"]))
+		assert_false(client.automatic_config_edits, "commented settings require manual edits")
+		assert_true(client.config_allows_comments, "status must read documented comments")
+		assert_eq(client.config_scope_envs, PackedStringArray([
+			"QODERCN_CONFIG_DIR" if id == "qoder_cn" else "QODER_CONFIG_DIR",
+		]))
 		assert_eq(client.config_merge_project_paths, PackedStringArray([
 			".qoder/settings.json", ".mcp.json", ".qoder/settings.local.json",
 		]))
@@ -8649,7 +8654,7 @@ func test_qoder_descriptors_match_documented_scopes() -> void:
 		assert_true(McpJsonStrategy.verify_entry(client, entry, "http://unused", launch))
 
 
-func test_qoder_configure_readback_and_remove_preserve_user_settings() -> void:
+func test_qoder_json_strategy_roundtrip_preserves_user_settings() -> void:
 	for id in ["qoder", "qoder_cn"]:
 		var client: McpClient = load("res://addons/godot_ai/clients/%s.gd" % id).new()
 		var path := _scratch_dir.path_join("%s-roundtrip.json" % id)
@@ -8711,3 +8716,69 @@ func test_qoder_project_overrides_refuse_global_mutation() -> void:
 			assert_eq(FileAccess.get_file_as_string(override_path), override_body, "project bytes unchanged")
 			_remove_if_exists(override_path)
 		_remove_if_exists(path)
+
+
+func test_qoder_commented_settings_status_and_public_actions_preserve_bytes() -> void:
+	for id in ["qoder", "qoder_cn"]:
+		var client := McpClientRegistry.get_by_id(id)
+		var saved_paths := client.path_template
+		var saved_merge := client.config_merge_path_templates
+		var path := _scratch_dir.path_join("%s-commented.json" % id)
+		client.path_template = {"unix": path, "windows": path}
+		client.config_merge_path_templates = {
+			"unix": PackedStringArray([path]), "windows": PackedStringArray([path]),
+		}
+		var launch := _test_attach_launch()
+		var entry := McpJsonStrategy.build_entry(client, "http://unused", null, launch)
+		var body := "// Preserve this explanation\n{\n\"url\":\"https://example.invalid//keep\",\n\"mcpServers\":{\"godot-ai\":%s}\n}\n" % JSON.stringify(entry)
+		_write_text(path, body)
+		var status := McpJsonStrategy.check_status_details(client, "godot-ai", "http://unused", launch)
+		var configured := McpClientConfigurator.configure(id, "http://unused")
+		var removed := McpClientConfigurator.remove(id, "http://unused")
+		var after := FileAccess.get_file_as_string(path)
+		client.path_template = saved_paths
+		client.config_merge_path_templates = saved_merge
+		assert_eq(status.get("status"), McpClient.Status.CONFIGURED, str(status))
+		for result in [configured, removed]:
+			assert_eq(result.get("status"), "error")
+			assert_contains(str(result.get("message", "")), "manual edit")
+		assert_eq(after, body, "status and public actions must preserve JSONC byte-for-byte")
+		_remove_if_exists(path)
+
+
+func test_qoder_relocated_scope_refuses_default_status_and_mutations() -> void:
+	for id in ["qoder", "qoder_cn"]:
+		var client: McpClient = load("res://addons/godot_ai/clients/%s.gd" % id).new()
+		var path := _scratch_dir.path_join("%s-default-scope.json" % id)
+		var relocated := _scratch_dir.path_join("%s-relocated/settings.json" % id)
+		client.path_template = {"unix": path, "windows": path}
+		client.config_merge_path_templates = {
+			"unix": PackedStringArray([path]), "windows": PackedStringArray([path]),
+		}
+		var launch := _test_attach_launch()
+		var body := JSON.stringify({"mcpServers": {"godot-ai": McpJsonStrategy.build_entry(client, "http://unused", null, launch)}})
+		var alternate := '{"mcpServers":{"godot-ai":{"command":"foreign"}}}'
+		_write_text(path, body)
+		_write_text(relocated, alternate)
+		var env_name := "QODERCN_CONFIG_DIR" if id == "qoder_cn" else "QODER_CONFIG_DIR"
+		var had_env := OS.has_environment(env_name)
+		var previous := OS.get_environment(env_name)
+		OS.set_environment(env_name, relocated.get_base_dir())
+		var status := McpJsonStrategy.check_status_details(client, "godot-ai", "http://unused", launch)
+		var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", launch)
+		var removed := McpJsonStrategy.remove(client, "godot-ai")
+		if had_env:
+			OS.set_environment(env_name, previous)
+		else:
+			OS.unset_environment(env_name)
+		McpPathTemplate.env_lookup(env_name)
+		assert_eq(status.get("status"), McpClient.Status.ERROR)
+		assert_contains(str(status.get("error_msg", "")), env_name)
+		for result in [configured, removed]:
+			assert_eq(result.get("status"), "error")
+			assert_contains(str(result.get("message", "")), env_name)
+			assert_false(str(result.get("message", "")).contains(relocated.get_base_dir()))
+		assert_eq(FileAccess.get_file_as_string(path), body)
+		assert_eq(FileAccess.get_file_as_string(relocated), alternate)
+		_remove_if_exists(path)
+		_remove_if_exists(relocated)
