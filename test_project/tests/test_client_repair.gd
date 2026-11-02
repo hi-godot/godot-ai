@@ -153,6 +153,207 @@ func test_job_gate_cancels_queued_repairs_without_cancelling_explicit_configure(
 	jobs.free()
 
 
+func test_cancelled_queued_repair_can_retry_after_reconnect() -> void:
+	var jobs := Jobs.new()
+	jobs._accepting_work = true
+	jobs._repair_allowed = true
+	jobs._action_threads["occupied"] = null
+	var results := {_client.id: {"status": McpClient.Status.CONFIGURED_MISMATCH, "repair_attempt_key": "queued-key", "repair_generation": jobs._repair_generation}}
+	jobs._queue_repairs(results)
+	assert_eq(jobs._pending_actions.size(), 1)
+	jobs.set_repair_allowed(false)
+	assert_true(jobs._pending_actions.is_empty())
+	jobs._client_health_blocked = true
+	jobs.set_repair_allowed(true)
+	jobs._client_health_blocked = false
+	results[_client.id].repair_generation = jobs._repair_generation
+	jobs._queue_repairs(results)
+	assert_eq(jobs._pending_actions.size(), 1, "disconnect before execution must not consume this target forever")
+	jobs._action_threads.clear()
+	jobs.quiesce()
+	jobs.free()
+
+
+class PausedRepairOwner:
+	extends "res://addons/godot_ai/utils/client_job_owner.gd"
+	var release := Semaphore.new()
+	var refresh_requests: Array = []
+	func request_status_refresh(ids: Array[String], force := false) -> bool:
+		refresh_requests.append({"ids": ids.duplicate(), "force": force})
+		return true
+	func _run_action(client_id: String, action: String, url: String, context: Dictionary, prewarm: bool) -> Dictionary:
+		release.wait()
+		return super._run_action(client_id, action, url, context, prewarm)
+
+
+func _join_repair(jobs: Node, completed: Array, expected: int) -> void:
+	var deadline := Time.get_ticks_msec() + 5000
+	while completed.size() < expected and Time.get_ticks_msec() < deadline:
+		jobs._poll_actions()
+		OS.delay_msec(10)
+	assert_eq(completed.size(), expected)
+
+
+func test_running_repair_cancelled_before_write_retries_and_then_stays_consumed() -> void:
+	_check_running_cancelled_repair(false)
+
+
+func test_reconnect_before_cancelled_worker_joins_requests_a_fresh_status() -> void:
+	_check_running_cancelled_repair(true)
+
+
+func _check_running_cancelled_repair(early_reconnect: bool) -> void:
+	_context = McpClientConfigurator.capture_launch_context()
+	var claim := Lock.acquire(_client.id, "test-cancel-worker-enroll")
+	assert_true(bool(claim.get("ok", false)))
+	assert_eq(McpJsonStrategy.configure(_client, "godot-ai", "", _launch(8000)).get("status"), "ok")
+	assert_true(Ownership.record(_target, str(_context.owner_project), _launch(8000)))
+	assert_true(Lock.release(claim))
+	var original := FileAccess.get_file_as_string(_path)
+	var original_owner := FileAccess.get_file_as_string(Ownership.record_path(_target))
+	var jobs := PausedRepairOwner.new()
+	jobs._accepting_work = true
+	jobs._repair_allowed = true
+	var completed: Array = []
+	jobs.action_completed.connect(func(_id: String, _action: String, result: Dictionary, _prewarm: Dictionary) -> void:
+		completed.append(result)
+	)
+	var key := McpClientConfigurator.repair_attempt_key(_client.id, _context, McpClientConfigurator.resolve_attach_launch(_context))
+	assert_false(key.is_empty())
+	var results := {_client.id: {"status": McpClient.Status.CONFIGURED_MISMATCH, "repair_attempt_key": key, "repair_generation": jobs._repair_generation}}
+	jobs._queue_repairs(results)
+	assert_eq(jobs._action_threads.size(), 1)
+	jobs.set_repair_allowed(false)
+	assert_true(jobs._repair_attempts.has(key), "unjoined cancellation must not release the key")
+	if early_reconnect:
+		jobs.set_repair_allowed(true)
+		results[_client.id].repair_generation = jobs._repair_generation
+		jobs._queue_repairs(results)
+		assert_eq(jobs._action_threads.size(), 1, "reconnect must not overlap an unjoined worker")
+		assert_eq(jobs.refresh_requests.size(), 1)
+	jobs.release.post()
+	_join_repair(jobs, completed, 1)
+	assert_eq(completed[0].get("status"), "cancelled")
+	assert_eq(completed[0].get("mutation_started"), false)
+	assert_eq(FileAccess.get_file_as_string(_path), original)
+	assert_eq(FileAccess.get_file_as_string(Ownership.record_path(_target)), original_owner)
+	if early_reconnect:
+		assert_eq(jobs.refresh_requests.size(), 2, "reconnect's earlier status may have skipped the still-owned key")
+		assert_eq(jobs.refresh_requests[1], jobs.refresh_requests[0], "retry preserves the reconnect refresh scope")
+	else:
+		assert_true(jobs.refresh_requests.is_empty(), "cancellation while disconnected does not start another probe")
+		jobs.set_repair_allowed(true)
+	results[_client.id].repair_generation = jobs._repair_generation
+	jobs._queue_repairs(results)
+	assert_eq(jobs._action_threads.size(), 1, "reconnect can retry the safely cancelled write")
+	jobs.release.post()
+	_join_repair(jobs, completed, 2)
+	assert_eq(completed[1].get("status"), "ok")
+	assert_ne(FileAccess.get_file_as_string(_path), original)
+	jobs._queue_repairs(results)
+	assert_true(jobs._action_threads.is_empty(), "completed repair remains at most once")
+	jobs.quiesce()
+	jobs.free()
+
+
+class DeferredRepairOwner:
+	extends "res://addons/godot_ai/utils/client_job_owner.gd"
+	var filesystem_busy := true
+	func _filesystem_busy() -> bool:
+		return filesystem_busy
+	func _run_status_refresh(probes: Array[Dictionary], _url: String, _context: Dictionary, generation: int) -> Dictionary:
+		var results := {}
+		for probe in probes:
+			results[str(probe.id)] = {"status": McpClient.Status.CONFIGURED}
+		return {"results": results, "generation": generation}
+
+
+func test_cancelled_repair_preserves_other_clients_in_deferred_reconnect_refresh() -> void:
+	var jobs := DeferredRepairOwner.new()
+	jobs._accepting_work = true
+	jobs._repair_allowed = true
+	jobs._action_threads["occupied"] = null
+	jobs._queue_repairs({"codex": {"status": McpClient.Status.CONFIGURED_MISMATCH, "repair_attempt_key": "deferred-key", "repair_generation": jobs._repair_generation}})
+	jobs._pending_actions.clear()
+	jobs._action_threads.clear()
+	jobs._action_threads["codex"] = null
+	jobs._action_names["codex"] = "repair"
+	jobs.set_repair_allowed(false)
+	jobs.set_repair_allowed(true)
+	assert_eq(jobs._refresh_state, McpClientRefreshState.DEFERRED_FOR_FILESYSTEM)
+	var completed: Array = []
+	jobs.status_refresh_completed.connect(func(results: Dictionary) -> void: completed.append(results))
+	jobs._finalize_action("codex", "repair", {"status": "cancelled", "mutation_started": false}, {})
+	jobs.filesystem_busy = false
+	jobs._retry_deferred_refresh()
+	var deadline := Time.get_ticks_msec() + 5000
+	while completed.is_empty() and Time.get_ticks_msec() < deadline:
+		jobs._poll_refresh()
+		OS.delay_msec(10)
+	assert_eq(completed.size(), 1)
+	if not completed.is_empty():
+		assert_true(completed[0].has("codex"))
+		assert_true(completed[0].has("cursor"), "retry must not displace another client's deferred reconnect status")
+	jobs.quiesce()
+	jobs.free()
+
+
+func test_completed_or_ambiguous_repairs_keep_their_attempt_key() -> void:
+	for result in [
+		{"status": "ok"}, {"status": "unchanged"}, {"status": "skipped"}, {"status": "error"},
+		{"status": "cancelled"}, {"status": "cancelled", "mutation_started": true},
+		{"status": "cancelled", "mutation_started": false, "termination_failed": true},
+		{"status": "cancelled", "mutation_started": false, "mutation_lock_release_failed": true},
+	]:
+		var jobs := Jobs.new()
+		jobs._accepting_work = true
+		jobs._repair_allowed = true
+		jobs._action_threads["occupied"] = null
+		var results := {_client.id: {"status": McpClient.Status.CONFIGURED_MISMATCH, "repair_attempt_key": "retained-key", "repair_generation": jobs._repair_generation}}
+		jobs._queue_repairs(results)
+		jobs._pending_actions.clear()
+		jobs._finish_repair_attempt(_client.id, "repair", result)
+		jobs._queue_repairs(results)
+		assert_true(jobs._pending_actions.is_empty(), str(result))
+		assert_true(jobs._repair_keys_in_flight.is_empty())
+		jobs._action_threads.clear()
+		jobs.quiesce()
+		jobs.free()
+
+
+func test_cancelled_repair_retries_remain_bounded_and_target_specific() -> void:
+	var jobs := Jobs.new()
+	jobs._accepting_work = true
+	jobs._repair_allowed = true
+	jobs._action_threads["occupied"] = null
+	var other := {"codex": {"status": McpClient.Status.CONFIGURED_MISMATCH, "repair_attempt_key": "other-key", "repair_generation": jobs._repair_generation}}
+	jobs._queue_repairs(other)
+	var results := {_client.id: {"status": McpClient.Status.CONFIGURED_MISMATCH, "repair_attempt_key": "retry-key", "repair_generation": jobs._repair_generation}}
+	for index in range(Jobs.MAX_REPAIR_ATTEMPTS - 1):
+		jobs._queue_repairs(results)
+		assert_eq(jobs._pending_actions.size(), 2, "retry %d is admitted" % index)
+		assert_true(jobs.cancel_pending_action(_client.id))
+		assert_true(jobs._repair_attempts.has("other-key"))
+	jobs._queue_repairs(results)
+	assert_eq(jobs._pending_actions.size(), 1, "cancellations cannot evade the session admission limit")
+	assert_eq(jobs._repair_admissions, Jobs.MAX_REPAIR_ATTEMPTS)
+	jobs._action_threads.clear()
+	jobs.quiesce()
+	jobs.free()
+
+
+func test_rejected_repair_does_not_reserve_an_attempt() -> void:
+	var jobs := Jobs.new()
+	jobs._accepting_work = true
+	jobs._repair_allowed = true
+	jobs._queue_repairs({"missing-fixture-client": {"status": McpClient.Status.CONFIGURED_MISMATCH, "repair_attempt_key": "missing-key", "repair_generation": jobs._repair_generation}})
+	assert_true(jobs._repair_attempts.is_empty())
+	assert_true(jobs._repair_keys_in_flight.is_empty())
+	assert_eq(jobs._repair_admissions, 0)
+	jobs.quiesce()
+	jobs.free()
+
+
 func test_project_override_and_corrupt_ownership_refuse_without_write() -> void:
 	_enroll(_launch(8000))
 	var original := FileAccess.get_file_as_string(_path)

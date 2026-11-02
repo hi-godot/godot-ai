@@ -44,6 +44,8 @@ signal action_timed_out(client_id: String, action: String, detail: String)
 var _repair_generation := 0
 var _repair_allowed := false
 var _repair_attempts := {}
+var _repair_keys_in_flight := {}
+var _repair_admissions := 0
 
 var _accepting_work := false
 var _client_health_blocked := false
@@ -151,10 +153,10 @@ func set_repair_allowed(allowed: bool) -> void:
 
 
 func _queue_repairs(results: Dictionary) -> void:
-	if not _repair_allowed or not _accepting_work or _client_health_blocked or _repair_attempts.size() >= MAX_REPAIR_ATTEMPTS:
+	if not _repair_allowed or not _accepting_work or _client_health_blocked or _repair_admissions >= MAX_REPAIR_ATTEMPTS:
 		return
 	for client_id in results:
-		if _repair_attempts.size() >= MAX_REPAIR_ATTEMPTS:
+		if _repair_admissions >= MAX_REPAIR_ATTEMPTS:
 			break
 		var result: Dictionary = results[client_id]
 		if int(result.get("repair_generation", -1)) != _repair_generation:
@@ -162,8 +164,15 @@ func _queue_repairs(results: Dictionary) -> void:
 		var key := str(result.get("repair_attempt_key", ""))
 		if key.is_empty() or _repair_attempts.has(key) or result.get("status") != Client.Status.CONFIGURED_MISMATCH:
 			continue
-		if request_action(str(client_id), "repair"):
-			_repair_attempts[key] = true
+		if _repair_keys_in_flight.has(client_id):
+			continue
+		_repair_attempts[key] = true
+		_repair_keys_in_flight[client_id] = {"key": key, "generation": _repair_generation}
+		_repair_admissions += 1
+		if not request_action(str(client_id), "repair"):
+			_repair_keys_in_flight.erase(client_id)
+			_repair_attempts.erase(key)
+			_repair_admissions -= 1
 
 
 func snapshot() -> Dictionary:
@@ -214,6 +223,8 @@ func _process(_delta: float) -> void:
 func quiesce(deadline_msec: int = 0) -> Dictionary:
 	_accepting_work = false
 	_refresh_state = RefreshState.SHUTTING_DOWN
+	for pending in _pending_actions:
+		_finish_repair_attempt(str(pending.client_id), str(pending.action), {"status": "cancelled", "mutation_started": false})
 	_pending_actions.clear()
 	_publish_snapshot()
 	for client_id in _action_threads:
@@ -230,6 +241,7 @@ func quiesce(deadline_msec: int = 0) -> Dictionary:
 		if thread != null:
 			_record_unproven_action_payload((thread as Thread).wait_to_finish())
 	_action_threads.clear()
+	_repair_keys_in_flight.clear()
 	_action_started_msec.clear()
 	_action_names.clear()
 	_action_request_ids.clear()
@@ -547,6 +559,7 @@ func _start_next_action() -> void:
 	var pending: Dictionary = _pending_actions.pop_front()
 	var started := _begin_action(str(pending.client_id), str(pending.action), "")
 	if not bool(started.get("ok", false)):
+		_finish_repair_attempt(str(pending.client_id), str(pending.action), {"status": "error"})
 		action_completed.emit(str(pending.client_id), str(pending.action), {
 			"status": "error", "message": str(started.error),
 		}, {})
@@ -559,6 +572,7 @@ func cancel_pending_action(client_id: String) -> bool:
 		if str(entry.client_id) != client_id:
 			continue
 		_pending_actions.remove_at(index)
+		_finish_repair_attempt(client_id, str(entry.action), {"status": "cancelled", "mutation_started": false})
 		action_completed.emit(client_id, str(entry.action), {
 			"status": "cancelled", "message": "Client action cancelled before it started.",
 		}, {})
@@ -571,6 +585,7 @@ func _discard_pending_actions(message: String) -> void:
 	var pending := _pending_actions.duplicate(true)
 	_pending_actions.clear()
 	for entry in pending:
+		_finish_repair_attempt(str(entry.client_id), str(entry.action), {"status": "error"})
 		action_completed.emit(str(entry.client_id), str(entry.action), {
 			"status": "error", "message": message,
 		}, {})
@@ -680,6 +695,7 @@ func _finalize_action(
 	## timed-out worker therefore cannot reopen a race window between is_alive()
 	## flipping false and its termination_failed payload being persisted.
 	_record_unproven_action_result(client_id, action, result, prewarm)
+	var retry_after_reconnect := _finish_repair_attempt(client_id, action, result, prewarm)
 	var request_id := String(_action_request_ids.get(client_id, ""))
 	_action_threads.erase(client_id)
 	_action_started_msec.erase(client_id)
@@ -695,7 +711,29 @@ func _finalize_action(
 				request_id,
 				_mcp_action_payload(client_id, result),
 			)
+	if retry_after_reconnect and _repair_allowed and _accepting_work:
+		var ids: Array[String] = []
+		ids.assign(ClientConfigurator.client_ids())
+		request_status_refresh(ids, true)
 	_publish_snapshot()
+
+
+func _finish_repair_attempt(client_id: String, action: String, result: Dictionary, prewarm: Dictionary = {}) -> bool:
+	if action != "repair":
+		return false
+	var attempt: Dictionary = _repair_keys_in_flight.get(client_id, {})
+	var key := str(attempt.get("key", ""))
+	_repair_keys_in_flight.erase(client_id)
+	if (
+		not key.is_empty() and result.get("status") == "cancelled"
+		and result.get("mutation_started", true) == false
+		and not bool(result.get("termination_failed", false))
+		and not bool(result.get("mutation_lock_release_failed", false))
+		and not bool(prewarm.get("termination_failed", false))
+	):
+		_repair_attempts.erase(key)
+		return int(attempt.get("generation", _repair_generation)) != _repair_generation
+	return false
 
 
 static func _mcp_action_payload(client_id: String, result: Dictionary) -> Dictionary:
@@ -727,6 +765,7 @@ func _record_unproven_action_payload(payload: Variant) -> void:
 		result,
 		prewarm,
 	)
+	_finish_repair_attempt(str(data.get("client_id", "")), str(data.get("action", "configure")), result, prewarm)
 
 
 func _record_unproven_action_result(
