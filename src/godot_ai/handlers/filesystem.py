@@ -19,9 +19,38 @@ async def filesystem_write_text(runtime: DirectRuntime, path: str, content: str 
     )
 
 
+# Native imports are synchronous; a timeout cannot cancel them. Read current
+# settings/import status before retrying an interrupted write.
+_IMPORT_TIMEOUT = 120.0
+
+
+async def filesystem_import_get(runtime: DirectRuntime, path: str) -> dict:
+    return await runtime.send_command("import_get", {"path": path})
+
+
+async def filesystem_import_set(
+    runtime: DirectRuntime,
+    path: str,
+    options: dict,
+    reimport: bool = True,
+    expected_revision: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "import_set",
+        {
+            "path": path,
+            "options": options,
+            "reimport": reimport,
+            "expected_revision": expected_revision,
+        },
+        timeout=_IMPORT_TIMEOUT,
+    )
+
+
 async def filesystem_reimport(runtime: DirectRuntime, paths: list[str]) -> dict:
     await require_writable_async(runtime)
-    return await runtime.send_command("reimport", {"paths": paths})
+    return await runtime.send_command("reimport", {"paths": paths}, timeout=_IMPORT_TIMEOUT)
 
 
 async def filesystem_scan(runtime: DirectRuntime) -> dict:

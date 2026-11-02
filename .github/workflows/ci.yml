@@ -74,6 +74,11 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      - name: Set up uv for cutoff integration tests
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.13.5"
+
       - name: Install dependencies
         run: pip install -e ".[dev]"
 

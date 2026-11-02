@@ -582,7 +582,7 @@ func test_stop_of_a_gone_process_succeeds_even_while_a_foreign_listener_remains(
 	assert_true(gone_pid > 1, "create our short-lived child")
 	var deadline := Time.get_ticks_msec() + 5000
 	while gone_pid > 1 and OS.is_process_running(gone_pid) and Time.get_ticks_msec() < deadline:
-		await (Engine.get_main_loop() as SceneTree).create_timer(0.05).timeout
+		OS.delay_msec(50)
 	assert_false(OS.is_process_running(gone_pid), "our child must have exited before stop")
 	var gone_grant = Authority.OwnedProcessGrant.new(gone_pid, "gone", 1)
 	var warnings := _PortWaitWarnings.new()

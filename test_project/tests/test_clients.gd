@@ -8617,3 +8617,168 @@ func test_omp_post_update_repin_preserves_disabled_clients() -> void:
 	other.config_path_candidates = saved_other_candidates
 	for path in [primary, compatibility, other_path]:
 		_remove_if_exists(path)
+
+
+func test_qoder_descriptors_match_documented_scopes() -> void:
+	for id in ["qoder", "qoder_cn"]:
+		var client := McpClientRegistry.get_by_id(id)
+		assert_true(client != null, "%s must be registered" % id)
+		if client == null:
+			continue
+		var directory := ".qoder-cn" if id == "qoder_cn" else ".qoder"
+		assert_eq(client.path_template.get("unix"), "~/%s/settings.json" % directory)
+		assert_eq(client.path_template.get("windows"), "$USERPROFILE/%s/settings.json" % directory)
+		assert_eq(client.server_key_path, PackedStringArray(["mcpServers"]))
+		assert_false(client.automatic_config_edits, "commented settings require manual edits")
+		assert_true(client.config_allows_comments, "status must read documented comments")
+		assert_eq(client.config_scope_envs, PackedStringArray([
+			"QODERCN_CONFIG_DIR" if id == "qoder_cn" else "QODER_CONFIG_DIR",
+		]))
+		assert_eq(client.config_merge_project_paths, PackedStringArray([
+			".qoder/settings.json", ".mcp.json", ".qoder/settings.local.json",
+		]))
+		var launch := _test_attach_launch()
+		var entry := McpJsonStrategy.build_entry(client, "http://unused", {
+			"type": "http", "url": "https://old.invalid", "qoder_url": "https://gateway.invalid",
+			"headers": {"Authorization": "old"}, "tcp": {"port": 1234}, "oauth": {"enabled": true},
+			"env": {"KEEP": "value"}, "disabled": true, "trust": false,
+		}, launch)
+		assert_eq(entry.get("command"), launch.get("command"))
+		assert_eq(entry.get("args"), launch.get("args"))
+		assert_eq(entry.get("type"), "stdio")
+		assert_eq(entry.get("env"), {"KEEP": "value"})
+		assert_eq(entry.get("disabled"), true)
+		assert_eq(entry.get("trust"), false)
+		for field in ["url", "qoder_url", "headers", "tcp", "oauth"]:
+			assert_false(entry.has(field), "%s must not override stdio" % field)
+		assert_true(McpJsonStrategy.verify_entry(client, entry, "http://unused", launch))
+
+
+func test_qoder_json_strategy_roundtrip_preserves_user_settings() -> void:
+	for id in ["qoder", "qoder_cn"]:
+		var client: McpClient = load("res://addons/godot_ai/clients/%s.gd" % id).new()
+		var path := _scratch_dir.path_join("%s-roundtrip.json" % id)
+		client.path_template = {"unix": path, "windows": path}
+		client.config_merge_path_templates = {
+			"unix": PackedStringArray([path]), "windows": PackedStringArray([path]),
+		}
+		var preferences := {
+			"env": {"KEEP": "value"}, "cwd": "/my/project", "disabled": true,
+			"timeout": 123456, "trust": false, "alwaysAllow": ["editor_state"],
+			"includeTools": ["editor_state"], "excludeTools": ["node_create"],
+		}
+		var old_entry := preferences.duplicate(true)
+		old_entry.merge({"type": "http", "url": "https://old.invalid", "qoder_url": "https://gateway.invalid"})
+		_write_text(path, JSON.stringify({"language": "en", "mcpServers": {
+			"godot-ai": old_entry, "other": {"command": "other"},
+		}}))
+		var launch := _test_attach_launch()
+		var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", launch)
+		assert_eq(configured.get("status"), "ok", str(configured))
+		var data: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+		assert_eq(data.get("language"), "en")
+		assert_eq(data.mcpServers.get("other"), {"command": "other"})
+		var entry: Dictionary = data.mcpServers.get("godot-ai", {})
+		assert_eq(entry.get("command"), launch.get("command"))
+		assert_eq(entry.get("args"), launch.get("args"))
+		assert_eq(entry.get("type"), "stdio")
+		for field in preferences:
+			assert_eq(entry.get(field), preferences[field], "%s must survive Configure" % field)
+		assert_false(entry.has("qoder_url"))
+		assert_false(entry.has("url"))
+		assert_eq(McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch), McpClient.Status.CONFIGURED, "status verifies the launch entry; disabled is preserved client policy")
+		var removed := McpJsonStrategy.remove(client, "godot-ai")
+		assert_eq(removed.get("status"), "ok", str(removed))
+		data = JSON.parse_string(FileAccess.get_file_as_string(path))
+		assert_eq(data.get("language"), "en")
+		assert_eq(data.get("mcpServers"), {"other": {"command": "other"}})
+		_remove_if_exists(path)
+
+
+func test_qoder_project_overrides_refuse_global_mutation() -> void:
+	for id in ["qoder", "qoder_cn"]:
+		var client: McpClient = load("res://addons/godot_ai/clients/%s.gd" % id).new()
+		var path := _scratch_dir.path_join("%s-global.json" % id)
+		client.path_template = {"unix": path, "windows": path}
+		client.config_merge_path_templates = {
+			"unix": PackedStringArray([path]), "windows": PackedStringArray([path]),
+		}
+		var root := _scratch_dir.path_join("%s-project" % id)
+		var original := '{"mcpServers":{"godot-ai":{"command":"global"}}}'
+		_write_text(path, original)
+		for relative in client.config_merge_project_paths:
+			var override_path := root.path_join(relative)
+			var override_body := '{"mcpServers":{"godot-ai":{"command":"project","disabled":true}}}'
+			_write_text(override_path, override_body)
+			var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", _test_attach_launch(), PackedStringArray([root]))
+			assert_eq(configured.get("status"), "error", "project override must refuse Configure")
+			assert_eq(FileAccess.get_file_as_string(path), original, "global bytes unchanged")
+			assert_eq(FileAccess.get_file_as_string(override_path), override_body, "project bytes unchanged")
+			_remove_if_exists(override_path)
+		_remove_if_exists(path)
+
+
+func test_qoder_commented_settings_status_and_public_actions_preserve_bytes() -> void:
+	for id in ["qoder", "qoder_cn"]:
+		var client := McpClientRegistry.get_by_id(id)
+		var saved_paths := client.path_template
+		var saved_merge := client.config_merge_path_templates
+		var path := _scratch_dir.path_join("%s-commented.json" % id)
+		client.path_template = {"unix": path, "windows": path}
+		client.config_merge_path_templates = {
+			"unix": PackedStringArray([path]), "windows": PackedStringArray([path]),
+		}
+		var launch := _test_attach_launch()
+		var entry := McpJsonStrategy.build_entry(client, "http://unused", null, launch)
+		var body := "// Preserve this explanation\n{\n\"url\":\"https://example.invalid//keep\",\n\"mcpServers\":{\"godot-ai\":%s}\n}\n" % JSON.stringify(entry)
+		_write_text(path, body)
+		var status := McpJsonStrategy.check_status_details(client, "godot-ai", "http://unused", launch)
+		var configured := McpClientConfigurator.configure(id, "http://unused")
+		var removed := McpClientConfigurator.remove(id, "http://unused")
+		var after := FileAccess.get_file_as_string(path)
+		client.path_template = saved_paths
+		client.config_merge_path_templates = saved_merge
+		assert_eq(status.get("status"), McpClient.Status.CONFIGURED, str(status))
+		for result in [configured, removed]:
+			assert_eq(result.get("status"), "error")
+			assert_contains(str(result.get("message", "")), "manual edit")
+		assert_eq(after, body, "status and public actions must preserve JSONC byte-for-byte")
+		_remove_if_exists(path)
+
+
+func test_qoder_relocated_scope_refuses_default_status_and_mutations() -> void:
+	for id in ["qoder", "qoder_cn"]:
+		var client: McpClient = load("res://addons/godot_ai/clients/%s.gd" % id).new()
+		var path := _scratch_dir.path_join("%s-default-scope.json" % id)
+		var relocated := _scratch_dir.path_join("%s-relocated/settings.json" % id)
+		client.path_template = {"unix": path, "windows": path}
+		client.config_merge_path_templates = {
+			"unix": PackedStringArray([path]), "windows": PackedStringArray([path]),
+		}
+		var launch := _test_attach_launch()
+		var body := JSON.stringify({"mcpServers": {"godot-ai": McpJsonStrategy.build_entry(client, "http://unused", null, launch)}})
+		var alternate := '{"mcpServers":{"godot-ai":{"command":"foreign"}}}'
+		_write_text(path, body)
+		_write_text(relocated, alternate)
+		var env_name := "QODERCN_CONFIG_DIR" if id == "qoder_cn" else "QODER_CONFIG_DIR"
+		var had_env := OS.has_environment(env_name)
+		var previous := OS.get_environment(env_name)
+		OS.set_environment(env_name, relocated.get_base_dir())
+		var status := McpJsonStrategy.check_status_details(client, "godot-ai", "http://unused", launch)
+		var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", launch)
+		var removed := McpJsonStrategy.remove(client, "godot-ai")
+		if had_env:
+			OS.set_environment(env_name, previous)
+		else:
+			OS.unset_environment(env_name)
+		McpPathTemplate.env_lookup(env_name)
+		assert_eq(status.get("status"), McpClient.Status.ERROR)
+		assert_contains(str(status.get("error_msg", "")), env_name)
+		for result in [configured, removed]:
+			assert_eq(result.get("status"), "error")
+			assert_contains(str(result.get("message", "")), env_name)
+			assert_false(str(result.get("message", "")).contains(relocated.get_base_dir()))
+		assert_eq(FileAccess.get_file_as_string(path), body)
+		assert_eq(FileAccess.get_file_as_string(relocated), alternate)
+		_remove_if_exists(path)
+		_remove_if_exists(relocated)

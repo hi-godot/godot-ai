@@ -2,6 +2,8 @@
 
 import copy
 import hashlib
+import io
+import zipfile
 
 import pytest
 
@@ -38,6 +40,13 @@ def rows(tmp_path, monkeypatch):
     candidate = tmp_path / "candidate"
     (candidate / "release").mkdir(parents=True)
     (candidate / "evidence.json").write_text("qualified candidate")
+    policy_bytes = io.BytesIO()
+    with zipfile.ZipFile(policy_bytes, "w") as archive:
+        archive.writestr(
+            "addons/godot_ai/plugin.cfg", '[plugin]\ndependency_cutoff="2026-11-01T19:00:00Z"\n'
+        )
+    (candidate / "release/godot-ai-v4-plugin.zip").write_bytes(policy_bytes.getvalue())
+    policy_digest = support.fingerprint(candidate / "release/godot-ai-v4-plugin.zip")
     manifest = {"inventory": [{"path": "addons/godot_ai/plugin.gd", **DIGEST}]}
     (candidate / "release" / MANIFEST).write_bytes(support.canonical(manifest))
     record = {
@@ -85,6 +94,7 @@ def rows(tmp_path, monkeypatch):
             path = root / f"{os_label}-{python}"
             path.mkdir(parents=True)
             (path / "godot.log").write_text("native evidence")
+            (path / "predecessor-policy.zip").write_bytes(policy_bytes.getvalue())
             case["godot"] = {
                 **engine.build_pin("4.7.0", os_label),
                 "version": "4.7.stable.official.fixture",
@@ -127,6 +137,16 @@ def rows(tmp_path, monkeypatch):
             )
             case["index_inventory"] = index
             case["dependency_evidence"] = {
+                "dependency_cutoff": "2026-11-01T19:00:00Z",
+                "predecessor_cutoff": "2026-11-01T19:00:00Z",
+                "upload_times": {},
+                "runtime_resolutions": {
+                    label: {
+                        "expected": [f"godot-ai=={version}"],
+                        "selected": [f"godot-ai=={version}"],
+                    }
+                    for label, version in (("candidate", "4.1.0"), ("predecessor", "4.0.4"))
+                },
                 "closures": closures,
                 "index_inventory": index,
                 "offline_installs": installs,
@@ -135,6 +155,7 @@ def rows(tmp_path, monkeypatch):
                 "godot_version": "4.7.0",
                 "schema": 1,
                 "kind": "predecessor",
+                "dependency_cutoff": "2026-11-01T19:00:00Z",
                 "status": "passed",
                 "os": os_label,
                 "python": python,
@@ -155,6 +176,7 @@ def rows(tmp_path, monkeypatch):
                 "cases": [case],
                 "files": support.inventory(path),
             }
+            row["predecessor"]["files"]["release/godot-ai-v4-plugin.zip"].update(policy_digest)
             (path / "row.json").write_bytes(support.canonical(row))
     return candidate, root, tmp_path / "result.json", record
 
@@ -190,6 +212,7 @@ def public_rows(rows):
         row["resolutions"]["build"] = [
             {
                 "name": "setuptools",
+                "upload_time": "2026-10-01T00:00:00Z",
                 "version": "84.0.0",
                 "url": "https://files.pythonhosted.org/setuptools.whl",
                 **DIGEST,
@@ -205,7 +228,7 @@ def test_complete_binds_all_six_native_rows(rows):
     candidate, root, output, _ = rows
     validation.complete(candidate, root, output, "predecessor")
     result = support.read_json(output)
-    assert result["status"] == "passed" and len(result["files"]) == 42
+    assert result["status"] == "passed" and len(result["files"]) == 48
     assert result["candidate"] == support.fingerprint(candidate / "evidence.json")
 
 
@@ -321,6 +344,9 @@ def test_public_attestation_binds_receipt_and_resolutions(rows):
         "wrong_release",
         "duplicate_package",
         "bad_digest",
+        "wrong_cutoff",
+        "new_dependency",
+        "missing_upload_time",
     ],
 )
 def test_public_attestation_rejects_incomplete_evidence(rows, fault):
@@ -346,6 +372,12 @@ def test_public_attestation_rejects_incomplete_evidence(rows, fault):
         row["resolutions"]["build"] *= 2
     elif fault == "bad_digest":
         row["resolutions"]["build"][0]["sha256"] = "bad"
+    elif fault == "wrong_cutoff":
+        row["dependency_cutoff"] = "2026-11-02T19:00:00Z"
+    elif fault == "new_dependency":
+        row["resolutions"]["build"][0]["upload_time"] = "2026-11-02T00:00:00Z"
+    elif fault == "missing_upload_time":
+        row["resolutions"]["build"][0].pop("upload_time")
     path.write_bytes(support.canonical(row))
     with pytest.raises(support.ReleaseError):
         validation.complete(candidate, root, output, "public", receipt)

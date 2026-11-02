@@ -226,7 +226,7 @@ func test_shutdown_joins_held_worker_without_deferred_publication() -> void:
 	assert_false(worker.is_alive(), "shutdown must realize the held worker")
 	assert_true(router._threads.is_empty())
 	assert_true(router._pending.is_empty())
-	await (Engine.get_main_loop() as SceneTree).process_frame
+	router.poll_completed()
 	assert_true(stub.replies.is_empty(), "no old-script callback may survive shutdown")
 
 

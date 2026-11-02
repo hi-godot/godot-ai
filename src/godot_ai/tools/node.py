@@ -38,6 +38,11 @@ Ops:
         Reorder among siblings. Index 0 = first.
   • reparent(path, new_parent, scene_file="")
         Move under a new parent. Children preserved. Cannot move into descendants.
+  • set_editable_children(path, editable, scene_file="")
+        Explicitly enable/disable Editable Children on an instanced scene root.
+        Undoable when changed. Ancestors are never enabled implicitly.
+        Disabling refuses saved child overrides, nested editable instances,
+        attachments or signals that would be lost on save. Revert those first.
   • add_to_group(path, group, scene_file="")
         Add the node to a group.
   • remove_from_group(path, group, scene_file="")
@@ -48,7 +53,7 @@ mutation fails with EDITED_SCENE_MISMATCH when the editor's current scene
 doesn't match.
 
 Writes inside non-editable scene instances are rejected before mutation.
-Enable Editable Children in Godot or edit the source scene. Deleting,
+Use set_editable_children explicitly or edit the source scene. Deleting,
 renaming, reparenting, or reordering instance-owned nodes requires editing
 the source scene even when Editable Children is enabled.
 """
@@ -152,7 +157,7 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
         """Set a property on a node.
 
         Overrides on an instance's internal nodes require Editable Children
-        to be enabled in Godot; otherwise the call fails before mutation.
+        to be explicitly enabled; otherwise the call fails before mutation.
 
         Verify the property name first — call ``node_get_properties`` (or read
         ``godot://node/{path}/properties``) to confirm the exact name and type
@@ -182,6 +187,10 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
           "resource_path": "res://meshes/box.tres"})``, then pass that res://
           path here (or use resource_manage(op="assign")).
         - StringName: plain string. Array/Dictionary: JSON list/object.
+        - PackedByteArray: JSON list of whole numbers 0..255, at most 65,536
+          bytes per value. [] clears. Strings, booleans, fractions and
+          out-of-range values are rejected before mutation. Also supported
+          inside typed containers and resource constructor properties.
 
         Args:
             path: Scene path relative to the edited scene root (e.g.
@@ -246,6 +255,7 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
             "rename": node_handlers.node_rename,
             "move": node_handlers.node_move,
             "reparent": node_handlers.node_reparent,
+            "set_editable_children": node_handlers.node_set_editable_children,
             "add_to_group": node_handlers.node_add_to_group,
             "remove_from_group": node_handlers.node_remove_from_group,
         },

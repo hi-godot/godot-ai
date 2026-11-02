@@ -99,6 +99,9 @@ var _last_frames_advance_msec: int = -1
 ## reply reports whether the _process beacon is actually advancing rather
 ## than merely proving that the capture was registered once.
 var _last_eval_liveness_reply: Dictionary = {}
+var _last_input_msec := -1
+var _last_input_report_msec := -1
+const MCP_INJECTED_INPUT := &"godot_ai_injected"
 
 
 func _ready() -> void:
@@ -116,6 +119,7 @@ func _ready() -> void:
 	## fallback (#777). A paused game still iterates its loop and renders, and
 	## must not be misread as frozen.
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_last_input_msec = Time.get_ticks_msec()
 	## register_message_capture is safe to call before the debugger
 	## handshake completes; the capture sits until a message arrives.
 	EngineDebugger.register_message_capture(CAPTURE_PREFIX, _on_debug_message)
@@ -136,12 +140,29 @@ func _ready() -> void:
 		EngineDebugger.send_message("mcp:hello", [])
 
 
+func _input(event: InputEvent) -> void:
+	if not event.has_meta(MCP_INJECTED_INPUT):
+		_last_input_msec = Time.get_ticks_msec()
+
+
+func _parse_mcp_input(event: InputEvent) -> void:
+	event.set_meta(MCP_INJECTED_INPUT, true)
+	Input.parse_input_event(event)
+
+
+func _input_age_msec(now_msec: int) -> int:
+	return maxi(0, now_msec - _last_input_msec)
+
+
 func _process(_delta: float) -> void:
 	_mcp_runtime_process_ticks += 1
 	## #777: liveness beacon for _handle_take_screenshot's stalled-loop check.
 	## Recorded before the early returns below so the signal stays truthful
 	## even when the logger or debugger channel is unavailable.
 	_last_loop_tick_msec = Time.get_ticks_msec()
+	if not Engine.is_editor_hint() and EngineDebugger.is_active() and _last_loop_tick_msec - _last_input_report_msec >= 1000:
+		EngineDebugger.send_message("mcp:input_activity", [_input_age_msec(_last_loop_tick_msec)])
+		_last_input_report_msec = _last_loop_tick_msec
 	## Rendering beacon: on Windows a minimized game keeps ticking _process
 	## while presentation stops, so frames_drawn stagnation — not loop
 	## silence — is the observable freeze signal there (#794 smoke, 1b).
@@ -663,7 +684,7 @@ func _game_input_key(params: Dictionary) -> Dictionary:
 	ev.physical_keycode = keycode
 	ev.pressed = bool(params.get("pressed", true))
 	ev.echo = bool(params.get("echo", false))
-	Input.parse_input_event(ev)
+	_parse_mcp_input(ev)
 	return {"sent": true, "key": key_name, "pressed": ev.pressed}
 
 
@@ -688,7 +709,7 @@ var _last_mouse_position: Variant = null
 func _game_input_mouse(params: Dictionary) -> Dictionary:
 	var built := _build_mouse_event(params)
 	if built.has("input"):
-		Input.parse_input_event(built.input)
+		_parse_mcp_input(built.input)
 	return built.reply
 
 
@@ -750,14 +771,14 @@ func _game_input_gamepad(params: Dictionary) -> Dictionary:
 			button.device = device
 			button.button_index = int(params.get("index", 0))
 			button.pressed = bool(params.get("pressed", true))
-			Input.parse_input_event(button)
+			_parse_mcp_input(button)
 			return {"sent": true, "control": "button", "device": device, "index": button.button_index, "pressed": button.pressed}
 		"axis":
 			var axis := InputEventJoypadMotion.new()
 			axis.device = device
 			axis.axis = int(params.get("index", 0))
 			axis.axis_value = float(params.get("value", 0.0))
-			Input.parse_input_event(axis)
+			_parse_mcp_input(axis)
 			return {"sent": true, "control": "axis", "device": device, "index": axis.axis, "value": axis.axis_value}
 	return {"sent": false, "error": "Invalid gamepad control: %s" % control}
 

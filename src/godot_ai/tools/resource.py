@@ -44,6 +44,27 @@ Ops:
         Inline {"__class__": ...} constructors require Resource-typed slots
         or typed Resource collections. Untyped collections that discard a
         nested constructor are refused before saving or assigning.
+        PackedByteArray properties accept lists of whole numbers 0..255,
+        at most 65,536 bytes per value; [] clears.
+  • sprite_frames_create(resource_path, animations, overwrite=False)
+        Build saved SpriteFrames with native animations and textures. animations:
+        [{"name":"walk","fps":8,"loop_mode":"linear","frames":[
+          {"texture_path":"res://sheet.png","region":{"x":0,"y":0,
+           "width":16,"height":16},"duration":1}]}]. Omit region for a whole
+        texture; otherwise an AtlasTexture is built explicitly. loop_mode is
+        none, linear, or pingpong. At most 4096 animations/total frames.
+        Unknown fields and invalid regions fail before saving. Persistent,
+        not scene-undoable; overwrite replaces the whole resource, retaining UID.
+  • set_properties(path, properties)
+        Patch an existing non-imported res:// .tres/.res without resetting
+        omitted values. Refreshes held references while preserving identity
+        and UID. Engine built-in resources only, including nested resources.
+        Custom scripts, GDExtension resources and resource cycles are refused.
+        Persistent file edit, not scene-undoable.
+        Validation/staging failures leave the original unchanged. Windows
+        replacement retains a backup; it is not crash-atomic. Failed
+        restoration reports recovery_backup and staged_resource paths. A rare
+        post-save refresh failure reports disk_committed=true explicitly.
   • curve_set_points(points, path="", property="", resource_path="")
         Replace all points on a Curve / Curve2D / Curve3D. Auto-creates
         the curve resource if the slot is empty (curve_created flag).
@@ -119,6 +140,8 @@ def register_resource_tools(mcp: FastMCP) -> None:
             "assign": resource_handlers.resource_assign,
             "get_info": resource_handlers.resource_get_info,
             "create": resource_handlers.resource_create,
+            "set_properties": resource_handlers.resource_set_properties,
+            "sprite_frames_create": resource_handlers.sprite_frames_create,
             "curve_set_points": curve_handlers.curve_set_points,
             "environment_create": environment_handlers.environment_create,
             "physics_shape_autofit": physics_shape_handlers.physics_shape_autofit,

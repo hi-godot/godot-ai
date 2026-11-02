@@ -78,6 +78,11 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         (status not in {"not_live", "stopped"}) mirrored from the same fields
         inside ``game_status``. ``is_playing`` remains raw editor play-state;
         use ``game_status.status`` for liveness decisions.
+        ``started_by`` identifies MCP versus editor launches; ``elapsed_s``
+        reports run age. ``last_input_age_s`` is a sampled idle estimate,
+        with ``input_sample_age_s`` for freshness; null means unknown.
+        Godot AI injected input is excluded. Other nodes may consume input
+        before the helper sees it; even fresh samples do not prove device idle.
         ``game_status.status="break"`` means the game process is parked in a
         remote-debugger break (boot-time parse errors do this before the game
         helper registers); it will not resume on its own — call
@@ -187,6 +192,10 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         azimuth: float | None = None,
         fov: float | None = None,
         user_prompt: str = "",
+        width: int | None = None,
+        height: int | None = None,
+        save_to: str = "",
+        overwrite: bool = False,
         session_id: str = "",
     ):
         """Capture a screenshot of the Godot editor viewport or running game.
@@ -237,6 +246,16 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
                 capture. With Vision Routing enabled it is sent alongside the
                 image so the vision model can describe what the agent is
                 looking for.
+            width: Cinematic render width, 1..4096 pixels. Supply with height.
+                Omit both to use the editor viewport size.
+            height: Cinematic render height, 1..4096 pixels. Supply with width.
+            save_to: Cinematic only: save the full render to a res:// PNG path.
+                Parent directories are created. max_resolution and transport
+                limits affect only the inline preview, not the saved PNG.
+                With include_image=False, only metadata crosses the transport;
+                saved_path, saved_width, saved_height and saved_bytes describe
+                the file. File writes require a writable editor and cannot be undone.
+            overwrite: Replace an existing save_to PNG. Default False.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -251,6 +270,10 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             azimuth=azimuth,
             fov=fov,
             user_prompt=user_prompt,
+            width=width,
+            height=height,
+            save_to=save_to,
+            overwrite=overwrite,
         )
 
     @mcp.tool(meta=DEFER_META)

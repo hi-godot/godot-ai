@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from script import dependency_cutoff
 from script import release_support as support
 
 
@@ -33,7 +34,8 @@ def public_files(files: dict, expected: dict, hosts: set[str]) -> None:
         promotion.validate_public_url(metadata.get("url", ""), hosts)
 
 
-def public_evidence(row: dict, record: dict) -> None:
+def public_evidence(row: dict, record: dict, cutoff: str) -> None:
+    support.require(row.get("dependency_cutoff") == cutoff, "public cutoff mismatch")
     from script import release_promotion as promotion
 
     for key, prefix, hosts in (
@@ -68,6 +70,12 @@ def public_evidence(row: dict, record: dict) -> None:
             promotion.validate_public_url(entry.get("url", ""), {"files.pythonhosted.org"})
             if normalized == "godot-ai":
                 releases.append(entry)
+            else:
+                support.require(
+                    dependency_cutoff.timestamp(entry.get("upload_time"))
+                    <= dependency_cutoff.timestamp(cutoff),
+                    "public dependency exceeds cutoff",
+                )
         if kind != "build":
             filename = f"godot_ai-{record['version']}" + (
                 "-py3-none-any.whl" if kind == "wheel" else ".tar.gz"
@@ -80,7 +88,9 @@ def public_evidence(row: dict, record: dict) -> None:
             )
 
 
-def predecessor_dependencies(case: dict, root: Path, previous: dict, record: dict) -> None:
+def predecessor_dependencies(
+    case: dict, root: Path, previous: dict, record: dict, cutoff: str
+) -> None:
     from script import release_predecessor as predecessor
 
     evidence = case.get("dependency_evidence", {})
@@ -91,9 +101,41 @@ def predecessor_dependencies(case: dict, root: Path, previous: dict, record: dic
         and set(installs) == {previous["version"], record["version"]},
         "missing predecessor dependency preflight",
     )
+    uploads = evidence.get("upload_times")
+    support.require(evidence.get("dependency_cutoff") == cutoff, "candidate cutoff mismatch")
+    archive = root / "predecessor-policy.zip"
+    support.require(
+        support.fingerprint(archive)
+        == file_metadata(previous["files"]["release/godot-ai-v4-plugin.zip"]),
+        "predecessor policy archive changed",
+    )
+    support.require(
+        evidence.get("predecessor_cutoff") == dependency_cutoff.historical_archive_cutoff(archive),
+        "predecessor cutoff mismatch",
+    )
+    resolutions = evidence.get("runtime_resolutions", {})
+    support.require(set(resolutions) == {"candidate", "predecessor"}, "missing runtime resolutions")
+    for label, resolution in resolutions.items():
+        expected = resolution.get("expected")
+        allowed = {item["name"] + "==" + item["version"] for item in closures[label]}
+        support.require(
+            isinstance(expected, list)
+            and expected
+            and len(expected) == len(set(expected))
+            and set(expected) <= allowed
+            and resolution.get("selected") == expected,
+            "retained union runtime resolution differs",
+        )
     merged = {}
     for label, identity in (("candidate", record), ("predecessor", previous)):
         rows = closures[label]
+        names = {item.get("filename") for item in rows}
+        support.require(isinstance(uploads, dict), "missing predecessor upload times")
+        dependency_cutoff.validate_upload_times(
+            rows,
+            {name: value for name, value in uploads.items() if name in names},
+            cutoff if label == "candidate" else evidence.get("predecessor_cutoff"),
+        )
         support.require(isinstance(rows, list) and rows, "empty retained dependency closure")
         releases = [row for row in rows if row.get("name") == "godot-ai"]
         wheel = f"godot_ai-{identity['version']}-py3-none-any.whl"
@@ -197,7 +239,9 @@ def predecessor_evidence(row: dict, path: Path, candidate: Path, record: dict) -
         and case.get("to_version") == record["version"],
         "predecessor native case did not pass",
     )
-    predecessor_dependencies(case, path.parent, previous, record)
+    predecessor_dependencies(
+        case, path.parent, previous, record, dependency_cutoff.from_candidate(candidate)
+    )
     result, bridge = case.get("runtime_result", {}), case.get("attached_bridge", {})
     support.require(
         result.get("status") == "passed"
@@ -304,7 +348,7 @@ def complete(
             )
             previous = identity
         else:
-            public_evidence(row, record)
+            public_evidence(row, record, dependency_cutoff.from_candidate(candidate))
         found.add(key)
     support.require(found == required, "required validation rows are missing")
     result = {

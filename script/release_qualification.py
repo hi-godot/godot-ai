@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
+from script import dependency_cutoff
 from script import qualification_engine as engine
 from script import release_support as support
 
@@ -83,7 +84,7 @@ def required_row_keys() -> set[tuple[str, str, str, str | None]]:
     return keys
 
 
-def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
+def validate_rows(output: Path, bindings: dict[str, Any], cutoff: str) -> dict[str, Any]:
     """Every required row must be present, passed, and bound to these candidates."""
     required = required_row_keys()
     found = {}
@@ -102,10 +103,14 @@ def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
             row.get("status") == "passed" and row.get("candidates") == bindings,
             "failed row or row bound to different candidates",
         )
+        support.require(row.get("dependency_cutoff") == cutoff, "qualification cutoff mismatch")
         actual = support.inventory(path.parent)
         actual.pop("row.json")
         support.require(row.get("files") == actual, "qualification row inventory mismatch")
         if row["kind"] == "python":
+            dependency_cutoff.validate_upload_times(
+                row.get("dependencies", []), row.get("upload_times"), cutoff
+            )
             support.require(
                 row.get("dependencies") == dependency_inventory(path.parent / "packages"),
                 "resolved dependency inventory mismatch",
@@ -160,7 +165,11 @@ def validate_rows(output: Path, bindings: dict[str, Any]) -> dict[str, Any]:
 def complete(candidates: Path, output: Path) -> None:
     records = {name: support.verify_candidate(candidates / name, name) for name in ("a", "b")}
     bindings = {name: support.fingerprint(candidates / name / "evidence.json") for name in records}
-    validate_rows(output, bindings)
+    cutoff = dependency_cutoff.from_candidate(candidates / "a")
+    support.require(
+        dependency_cutoff.from_candidate(candidates / "b") == cutoff, "A/B cutoff differs"
+    )
+    validate_rows(output, bindings, cutoff)
     a = records["a"]
     record = {
         "schema": 2,
@@ -335,6 +344,10 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
         records["a"]["version"],
         records["b"]["version"],
     )
+    cutoff = dependency_cutoff.from_candidate(candidates / "a")
+    support.require(
+        dependency_cutoff.from_candidate(candidates / "b") == cutoff, "A/B cutoff differs"
+    )
     output.mkdir(parents=True)
     packages = output / "packages"
     packages.mkdir()
@@ -354,6 +367,7 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
     report: dict[str, Any] = {
         "schema": 2,
         "kind": "python",
+        "dependency_cutoff": cutoff,
         "status": "failed",
         "os": os_label,
         "python": python_version,
@@ -370,6 +384,10 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
         # B's source validation forbids dependency changes.
         print(f"Resolving and retaining dependencies -> {output / 'resolve.log'}", flush=True)
         wheel_a = candidates / "a/dist" / f"godot_ai-{records['a']['version']}-py3-none-any.whl"
+        lock = output / "requirements.txt"
+        dependency_cutoff.compile_requirements(
+            [str(wheel_a), *TEST_REQUIREMENTS], cutoff, lock, sys.executable, environment, execute
+        )
         execute(
             [
                 sys.executable,
@@ -381,8 +399,9 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
                 "https://pypi.org/simple",
                 "--dest",
                 str(packages),
-                str(wheel_a),
-                *TEST_REQUIREMENTS,
+                "--require-hashes",
+                "-r",
+                str(lock),
             ],
             output / "resolve.log",
             cwd=source,
@@ -391,6 +410,9 @@ def python_row(candidates: Path, source: Path, output: Path, os_label: str) -> N
         wheel_b = candidates / "b/dist" / f"godot_ai-{records['b']['version']}-py3-none-any.whl"
         shutil.copyfile(wheel_b, packages / wheel_b.name)
         report["dependencies"] = dependency_inventory(packages)
+        report["upload_times"] = dependency_cutoff.capture_upload_times(
+            report["dependencies"], cutoff
+        )
         with tempfile.TemporaryDirectory(prefix="godot-ai-python-qualification-") as temporary:
             work = Path(temporary).resolve()
             ## B is A plus two version fields minus the bundled README: its

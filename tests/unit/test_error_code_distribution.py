@@ -46,7 +46,19 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## Non-Node resources use WRONG_TYPE separately. Together these six reviewed
 ## semantic conflicts move the ceiling from 115 to 121.
 ## #1171 adds refusal of unsaved scene closure without explicit discard.
-INVALID_PARAMS_CEILING = 122
+## Explicit Editable Children adds two scene-state conflicts: a target that
+## is not an instance root, and disabling that would discard saved overrides.
+## Animation library attachment adds two duplicate conflicts: an occupied
+## library name and a resource already attached under another name.
+## Audio buses add a duplicate-name conflict and an incoming-send conflict.
+## Cinematic PNG output adds one existing-file conflict: a valid path needs
+## explicit overwrite permission. It is not a missing, malformed or out-of-range value.
+## #1166 adds two revision conflicts: a stale caller snapshot and an external
+## sidecar change during staging. Both requests have valid keys, types and
+## values; concurrent state prevents committing the edit. These are genuine
+## state conflicts, not range/type errors. Other import refusals use specific
+## codes, so these two sites add two to the combined reviewed ceiling.
+INVALID_PARAMS_CEILING = 131
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

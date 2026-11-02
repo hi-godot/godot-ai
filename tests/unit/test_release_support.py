@@ -765,6 +765,9 @@ def test_packager_only_creates_local_matching_tags_and_builds_without_signing(
     _run("git", "config", "user.email", "fixture@example.invalid", cwd=repo)
     _run("git", "config", "user.name", "Fixture", cwd=repo)
     (repo / "pyproject.toml").write_text('[project]\nversion = "4.0.0"\n')
+    config = repo / "plugin/addons/godot_ai/plugin.cfg"
+    config.parent.mkdir(parents=True)
+    config.write_text('[plugin]\ndependency_cutoff="2026-11-01T19:00:00Z"\n')
     for path in support.VERIFIER_PATHS:
         target = repo / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -787,6 +790,10 @@ def test_packager_only_creates_local_matching_tags_and_builds_without_signing(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(support.subprocess, "run", build)
+    from script import dependency_cutoff
+
+    builds = []
+    monkeypatch.setattr(dependency_cutoff, "build_distributions", lambda *args: builds.append(args))
     output = tmp_path / "candidate"
     if tag_state == "wrong":
         with pytest.raises(support.ReleaseError, match="local tag"):
@@ -798,10 +805,10 @@ def test_packager_only_creates_local_matching_tags_and_builds_without_signing(
     assert _run("git", "rev-parse", "v4.0.0", cwd=repo).decode().strip() == source
     assert not any("push" in command or "sign" in command for command in commands)
     builders = [command for command in commands if command[0] != "git"]
-    assert len(builders) == 2
+    assert len(builders) == 1
     assert builders[0][1:3] == [str(support.ROOT / "script/v4-release"), "package"]
     assert builders[0][-2:] == ["--source-commit", source]
-    assert builders[1] == [support.sys.executable, "-m", "build", "--outdir", str(output / "dist")]
+    assert builds == [(repo, output, {"project": {"version": "4.0.0"}}, "2026-11-01T19:00:00Z")]
     for path in support.VERIFIER_PATHS:
         assert (output / "verifier" / path).read_text(
             encoding="utf-8"
@@ -948,7 +955,8 @@ def promotion_boundary(pair, tmp_path, monkeypatch):
         name: support.fingerprint(candidates / name / "evidence.json") for name in ("a", "b")
     }
 
-    def validate(root, expected):
+    def validate(root, expected, cutoff):
+        assert cutoff == "2026-11-01T19:00:00Z"
         assert root == output and expected == bindings
         return {}
 

@@ -681,6 +681,9 @@ func test_apply_resource_properties_dynamic_removed_stream_is_rejected() -> void
 		"streams_count": 0,
 		"stream_0/weight": 0.25,
 	})
+	assert_true(result is Dictionary, "removed requested property must be rejected")
+	if not result is Dictionary:
+		return
 	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
 	assert_contains(result.error.message, "stream_0/weight")
 	assert_eq(stream.streams_count, 0)
@@ -690,6 +693,8 @@ func test_apply_resource_properties_dynamic_removed_stream_is_rejected() -> void
 
 func test_resource_overwrite_refreshes_live_cache() -> void:
 	var path := "res://tests/_mcp_overwrite_cache_1172.tres"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 	var created := _handler.create_resource({
 		"type": "Environment", "resource_path": path,
 		"properties": {"background_mode": 1, "background_color": "#ff0000", "background_energy_multiplier": 3.0},
@@ -728,6 +733,8 @@ func test_resource_overwrite_refreshes_live_cache() -> void:
 
 func test_resource_overwrite_rejects_cached_type_change_before_writing() -> void:
 	var path := "res://tests/_mcp_overwrite_type_1172.tres"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 	var created := _handler.create_resource({"type": "Environment", "resource_path": path})
 	assert_has_key(created, "data", str(created))
 	if not created.has("data"):
@@ -744,6 +751,8 @@ func test_resource_overwrite_rejects_cached_type_change_before_writing() -> void
 
 func test_resource_overwrite_rejects_cached_script_change_before_writing() -> void:
 	var path := "res://tests/_mcp_overwrite_script_1172.tres"
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 	var first_script := GDScript.new()
 	first_script.source_code = "@tool\nextends Resource\n"
 	assert_eq(first_script.reload(), OK)
@@ -1008,6 +1017,70 @@ func test_nested_container_detects_in_place_constructor_loss() -> void:
 	if error is Dictionary:
 		assert_is_error(error, ErrorCodes.WRONG_TYPE)
 		assert_contains(error.error.message, "data.texture")
+
+
+func test_nested_container_detects_dictionary_constructor_content_loss() -> void:
+	for mutation in [
+		"value[\"texture\"] = {}",
+		"value[\"texture\"].erase(\"__class__\")",
+		"value[\"texture\"].erase(\"value\")",
+		"value[\"texture\"][\"value\"][\"nested\"][0] = 99",
+	]:
+		var script := GDScript.new()
+		script.source_code = "\n".join([
+			"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+			"\tset(value):", "\t\t" + mutation, "\t\tdata = value",
+		])
+		assert_eq(script.reload(), OK)
+		var resource: Resource = script.new()
+		var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+			"data": {"texture": {"__class__": "ordinary-data", "value": {"nested": [17]}}},
+		})
+		assert_true(error is Dictionary, "constructor content loss must be refused: " + mutation)
+		if error is Dictionary:
+			assert_is_error(error, ErrorCodes.WRONG_TYPE)
+			assert_contains(error.error.message, "data.texture")
+
+
+func test_nested_container_accepts_setter_constructed_resource() -> void:
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+		"\tset(value):", "\t\tvalue[\"texture\"] = AtlasTexture.new()", "\t\tdata = value",
+	])
+	assert_eq(script.reload(), OK)
+	var resource: Resource = script.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"data": {"texture": {"__class__": "AtlasTexture"}},
+	})
+	assert_eq(error, null)
+	assert_true(resource.get("data").texture is AtlasTexture)
+
+
+func test_nested_container_retains_data_with_extra_fields_and_nested_resource() -> void:
+	var script := GDScript.new()
+	script.source_code = "\n".join([
+		"@tool", "extends Resource", "@export var data: Dictionary = {}:",
+		"\tset(value):",
+		"\t\tvalue[\"texture\"][\"metadata\"] = \"added\"",
+		"\t\tvalue[\"texture\"][\"values\"].append(23)",
+		"\t\tvalue[\"texture\"][\"inner\"] = AtlasTexture.new()",
+		"\t\tdata = value",
+	])
+	assert_eq(script.reload(), OK)
+	var resource: Resource = script.new()
+	var error: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"data": {"texture": {
+			"__class__": "ordinary-data", "values": [17],
+			"inner": {"__class__": "AtlasTexture"},
+		}},
+	})
+	assert_eq(error, null, "retained data may gain fields or contain constructed resources")
+	var stored: Dictionary = resource.get("data").texture
+	assert_eq(stored["__class__"], "ordinary-data")
+	assert_eq(stored.values, [17, 23])
+	assert_eq(stored.metadata, "added")
+	assert_true(stored.inner is AtlasTexture)
 
 
 func test_nested_container_refusal_keeps_existing_node_resource() -> void:
@@ -1310,3 +1383,39 @@ func test_create_resource_unknown_assign_property_enriches_error() -> void:
 	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
 	assert_contains(result.error.message, "available:",
 		"assign-property errors must use McpPropertyErrors.build_message enrichment")
+
+
+func test_resource_dynamic_properties_accept_reverse_key_order() -> void:
+	var resource := AudioStreamRandomizer.new()
+	var result: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"stream_0/weight": 0.25,
+		"stream_0/stream": {"__class__": "AudioStreamWAV", "mix_rate": 22050},
+		"streams_count": 1,
+	})
+	assert_eq(result, null, str(result))
+	assert_eq(resource.streams_count, 1)
+	assert_eq(resource.get("stream_0/weight"), 0.25)
+	assert_true(resource.get("stream_0/stream") is AudioStreamWAV)
+
+
+func test_resource_dynamic_unknown_property_still_fails_after_setters() -> void:
+	var resource := AudioStreamRandomizer.new()
+	var result: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"stream_9/weight": 0.25, "streams_count": 1,
+	})
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_9/weight")
+	assert_eq(resource.streams_count, 1)
+
+
+func test_resource_dynamic_property_removed_by_later_setter_is_rejected() -> void:
+	var resource := AudioStreamRandomizer.new()
+	resource.streams_count = 1
+	var result: Variant = ResourceHandler._apply_resource_properties(resource, {
+		"stream_0/weight": 0.25, "streams_count": 0,
+	})
+	assert_true(result is Dictionary, "removed requested property must be rejected")
+	if not result is Dictionary:
+		return
+	assert_is_error(result, ErrorCodes.PROPERTY_NOT_ON_CLASS)
+	assert_contains(result.error.message, "stream_0/weight")

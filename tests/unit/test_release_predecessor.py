@@ -430,6 +430,10 @@ def test_offline_preflight_requires_both_distinct_dependency_versions(tmp_path):
 
 @pytest.mark.parametrize("corruption", [None, "wheel", "dependency", "yanked"])
 def test_resolve_predecessor_checks_public_bytes(monkeypatch, tmp_path, corruption):
+    monkeypatch.setattr(predecessor.dependency_cutoff, "predecessor_cutoff", lambda _: None)
+    monkeypatch.setattr(
+        predecessor.dependency_cutoff.shutil, "which", lambda *_args, **_kwargs: "/fixture/uv"
+    )
     original = tmp_path / "public"
     wheel = _wheel(original / "dist", "godot_ai", "4.1.0", "release_probe_dep==1.0")
     expected = support.fingerprint(wheel)
@@ -462,7 +466,12 @@ def test_resolve_predecessor_checks_public_bytes(monkeypatch, tmp_path, corrupti
     if corruption == "wheel":
         previous["files"]["dist/" + wheel.name] = {"size": 1, "sha256": "0" * 64}
     if corruption:
-        with pytest.raises(support.ReleaseError):
+        expected_error = {
+            "wheel": "resolved predecessor wheel differs from public bytes",
+            "dependency": "predecessor dependency differs from public PyPI bytes",
+            "yanked": "predecessor dependency absent or yanked on PyPI",
+        }[corruption]
+        with pytest.raises(support.ReleaseError, match=expected_error):
             predecessor.retain_predecessor_dependencies(original, previous, output)
     else:
         rows = predecessor.retain_predecessor_dependencies(original, previous, output)
@@ -470,8 +479,10 @@ def test_resolve_predecessor_checks_public_bytes(monkeypatch, tmp_path, corrupti
             ("godot-ai", "4.1.0"),
             ("release-probe-dep", "1.0"),
         }
-        assert commands[0][-1] == str(wheel)
-        assert "--only-binary=:all:" in commands[0]
+        assert commands[0][1:3] == ["pip", "compile"]
+        assert "--generate-hashes" in commands[0]
+        assert "--only-binary=:all:" in commands[1]
+        assert "--require-hashes" in commands[1]
 
 
 @pytest.mark.parametrize(

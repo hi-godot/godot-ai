@@ -112,6 +112,9 @@ var _pending_hello_session_id := -1
 var _pre_adoption_log_rotated := false
 var _manual_run_armed := false
 var _game_run_started_msec := 0
+var _game_run_started_at := 0.0
+var _input_sample_received_msec := -1
+var _input_sample_age_msec := 0
 var _game_run_started_editor_cursor := 0
 var _game_run_started_debugger_cursor := 0
 var _game_helper_expected := true
@@ -204,6 +207,8 @@ func _begin_game_run_tracking(
 	_game_session_id = keep_session_id
 	clear_debug_break()
 	_game_run_started_msec = Time.get_ticks_msec()
+	_game_run_started_at = Time.get_unix_time_from_system()
+	_input_sample_received_msec = -1
 	_game_run_started_editor_cursor = maxi(0, editor_log_cursor)
 	if _surfaced_error_tracker != null:
 		_surfaced_error_tracker.note_game_run_started(sticky_debugger_scan)
@@ -250,6 +255,7 @@ func end_game_run() -> void:
 	_pending_hello_session_id = -1
 	_pre_adoption_log_rotated = false
 	_game_run_active = false
+	_input_sample_received_msec = -1
 	_manual_run_armed = false
 	_game_ready = false
 	_ready_run_token = -1
@@ -643,9 +649,18 @@ func get_game_status(now_msec: int = -1, ready_wait_sec: float = GAME_READY_WAIT
 		"helper_expected": _game_helper_expected,
 		"run_started_msec": _game_run_started_msec,
 		"elapsed_msec": elapsed_msec,
+		"elapsed_s": elapsed_msec / 1000.0,
+		"started_by": ("editor" if _manual_run_armed else "mcp") if _game_run_active else null,
+		"started_at": _game_run_started_at if _game_run_active else null,
+		"last_input_age_s": null,
+		"input_sample_age_s": null,
 		"ready_wait_msec": ready_wait_msec,
 		"editor_log_cursor": _game_run_started_editor_cursor,
 	}
+	if _game_run_active and _input_sample_received_msec >= 0:
+		var sample_age := maxi(0, resolved_now - _input_sample_received_msec)
+		out["input_sample_age_s"] = sample_age / 1000.0
+		out["last_input_age_s"] = _input_sample_age_msec / 1000.0 + sample_age / 1000.0
 	if status == "break":
 		out["break"] = {
 			"reason": _break_reason,
@@ -819,6 +834,11 @@ func _format_editor_error_summary(entry: Dictionary) -> String:
 func _capture(message: String, data: Array, session_id: int) -> bool:
 	## Godot passes the full "prefix:tail" string as `message`.
 	match message:
+		"mcp:input_activity":
+			if is_game_capture_ready() and session_id == _game_session_id and data.size() == 1 and data[0] is int and data[0] >= 0:
+				_input_sample_age_msec = data[0]
+				_input_sample_received_msec = Time.get_ticks_msec()
+			return true
 		"mcp:screenshot_response":
 			_on_screenshot_response(data)
 			return true

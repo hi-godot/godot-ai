@@ -11,6 +11,17 @@ _DESCRIPTION = """\
 TileSet management — atlas inspection tools.
 
 Ops:
+  • tileset_create_atlas(resource_path, texture_path, tile_size, tiles,
+                         source_id=0, margins=None, separation=None, overwrite=False)
+        Build a saved TileSet with one native atlas source. tile_size is {x,y}
+        in pixels and sets both TileSet tile size and atlas cell size. tiles is
+        [{"coords":{"x":0,"y":0},"size":{"x":1,"y":1}}]; size defaults to
+        one cell. margins/separation are {x,y} pixel offsets, default zero.
+        At most 4096 nonoverlapping tiles, all within the texture. No terrain,
+        collision, animation or alternative-tile configuration is performed.
+        Persistent, not scene-undoable. overwrite replaces the whole TileSet
+        while retaining UID. Use existing atlas read ops to inspect the result.
+
   • tileset_get_atlas_tiles(tileset_path, source_id)
         Return all occupied atlas tile positions for one source in a TileSet.
         Read-only — does not modify any resource or project file.
@@ -61,6 +72,7 @@ def register_tileset_tools(mcp: FastMCP) -> None:
         tool_name="tileset_manage",
         description=_DESCRIPTION,
         ops={
+            "tileset_create_atlas": tileset_handlers.tileset_create_atlas,
             "tileset_get_atlas_tiles": tileset_handlers.tileset_get_atlas_tiles,
             "tileset_get_atlas_image": tileset_handlers.tileset_get_atlas_image,
         },

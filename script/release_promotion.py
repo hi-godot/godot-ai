@@ -168,7 +168,11 @@ def verify_qualification(
         support.canonical(qualification) == support.canonical(expected_qualification),
         "complete qualification evidence is missing or has changed",
     )
-    validate_rows(evidence_root, qualification["candidates"])
+    from script import dependency_cutoff
+
+    cutoff = dependency_cutoff.from_candidate(root / "a")
+    support.require(dependency_cutoff.from_candidate(root / "b") == cutoff, "A/B cutoff differs")
+    validate_rows(evidence_root, qualification["candidates"], cutoff)
     return a
 
 

@@ -350,15 +350,20 @@ static func _refresh_loaded_gdscript(data: Dictionary, path: String, content: St
 
 
 static func _validate_gdscript_source(content: String, path: String) -> Dictionary:
+	var already_loaded := ResourceLoader.has_cached(path)
 	var script := GDScript.new()
 	## Give analysis its real path without taking over a live ResourceCache entry.
 	script.set_path_cache(path)
 	script.source_code = content
 	var err := script.reload()
-	## reload() can retain a previously unloaded script in GDScriptCache. Clear
-	## its path so a later ResourceLoader.load() can register it in ResourceCache:
-	## Resource.set_path() skips registration when the path already matches.
-	script.set_path_cache("")
+	if already_loaded:
+		## Leave the live script's cache entry and identity untouched.
+		script.set_path_cache("")
+	else:
+		## Unlike set_path_cache(), set_path also detaches the validation entry
+		## from GDScriptCache's disk-path key. Otherwise a second cold write
+		## validates new bytes while the first normal load still finds old code.
+		script.resource_path = ""
 	return {
 		"ok": err == OK,
 		"error_code": err,

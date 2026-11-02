@@ -19,6 +19,23 @@ Ops:
         entry for that one file (single-file update, not a full scan).
         Newly-created files include ``data.cleanup.rm`` for transient
         smoke tests; overwrite omits the field.
+  • import_get(path)
+        Read an already-imported asset's importer, options, Variant types,
+        writable_options, revision and native import_valid status. Validation
+        uses stored config types, not a full importer enum/range schema.
+  • import_set(path, options, reimport=True, expected_revision="")
+        Patch existing scalar import options for one asset. Unknown keys,
+        importer switching and _subresources edits are unsupported. Pass the
+        revision from import_get to reject stale edits. Busy scans/imports
+        refuse before writing. Staged replacement preserves recovery paths
+        on failure; file edits are non-undoable. Returns settings_committed,
+        import_attempted, import_pending, import_valid, import_succeeded and revision. Native
+        import failure after commit returns these outcomes in error data.
+        Native validity alone can be stale; import_succeeded also requires
+        no captured errors. import_diagnostics describes editor errors during
+        the synchronous import, not guaranteed per-asset attribution.
+        reimport=False saves settings only. Native import can exceed the
+        120-second command budget: inspect current status before retrying.
   • reimport(paths)
         Force-reimport imported assets via ``EditorFileSystem.reimport_files``.
         ``paths`` is a list of res:// paths.
@@ -32,7 +49,9 @@ Ops:
         ``script_patch``/``script_create`` to save a script and receive fresh
         diagnostics, or ``scan`` for an asset awaiting its first import.
         Returns ``reimported``, ``skipped_non_imported``, ``not_found`` and their
-        counts.
+        counts. Failed native validity goes under failed_imports; valid paths
+        with captured editor errors go under unconfirmed_imports. Responses
+        include per-path import_status and bounded import_diagnostics.
   • scan()
         Force a full ``EditorFileSystem.scan()`` and wait for it to settle.
         This is the headless equivalent of the editor regaining window focus:
@@ -72,6 +91,8 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
         ops={
             "read_text": filesystem_handlers.filesystem_read_text,
             "write_text": filesystem_handlers.filesystem_write_text,
+            "import_get": filesystem_handlers.filesystem_import_get,
+            "import_set": filesystem_handlers.filesystem_import_set,
             "reimport": filesystem_handlers.filesystem_reimport,
             "scan": filesystem_handlers.filesystem_scan,
             "search": filesystem_handlers.filesystem_search,
@@ -83,6 +104,7 @@ def register_filesystem_tools(mcp: FastMCP) -> None:
             ## File reads/searches are per-call queries with arbitrary path
             ## or query inputs; no fixed-URI resource shape fits.
             "read_text": None,
+            "import_get": None,
             "search": None,
             ## `scan` is an editor action (not require_writable — it must run
             ## while readiness is "importing" to await an in-flight scan), so

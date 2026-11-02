@@ -192,3 +192,41 @@ func _compile_singleton_reference() -> Error:
 	var script := GDScript.new()
 	script.source_code = "extends RefCounted\nfunc read_volume():\n\treturn " + TEST_AUTOLOAD_NAME + ".volume\n"
 	return script.reload()
+
+
+func test_empty_packed_scene_is_refused_before_project_write() -> void:
+	var path := "res://tests/_mcp_empty_autoload_1207.tres"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string("[gd_resource type=\"PackedScene\" format=3]\n\n[resource]\n")
+	file.close()
+	var scene := ResourceLoader.load(path) as PackedScene
+	assert_true(scene != null, "empty scene still loads as PackedScene")
+	if scene == null:
+		DirAccess.remove_absolute(path)
+		return
+	assert_false(scene.can_instantiate())
+	var original := FileAccess.get_file_as_bytes("res://project.godot")
+	for singleton in [false, true]:
+		var result := _handler.add_autoload({"name": TEST_AUTOLOAD_NAME, "path": path, "singleton": singleton})
+		assert_is_error(result, ErrorCodes.WRONG_TYPE)
+		assert_false(ProjectSettings.has_setting("autoload/" + TEST_AUTOLOAD_NAME))
+		assert_eq(FileAccess.get_file_as_bytes("res://project.godot"), original)
+		if ProjectSettings.has_setting("autoload/" + TEST_AUTOLOAD_NAME):
+			_handler.remove_autoload({"name": TEST_AUTOLOAD_NAME})
+	DirAccess.remove_absolute(path)
+
+
+func test_valid_packed_scene_autoload_is_still_supported() -> void:
+	var path := "res://tests/_mcp_valid_autoload_1207.tscn"
+	var root := Node.new()
+	root.name = "ValidAutoload"
+	var packed := PackedScene.new()
+	assert_eq(packed.pack(root), OK)
+	root.free()
+	assert_eq(ResourceSaver.save(packed, path), OK)
+	var result := _handler.add_autoload({"name": TEST_AUTOLOAD_NAME, "path": path, "singleton": true})
+	assert_has_key(result, "data", str(result))
+	if ProjectSettings.has_setting("autoload/" + TEST_AUTOLOAD_NAME):
+		assert_eq(_compile_singleton_reference(), OK)
+		_handler.remove_autoload({"name": TEST_AUTOLOAD_NAME})
+	DirAccess.remove_absolute(path)

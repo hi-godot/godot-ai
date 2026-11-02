@@ -30,9 +30,35 @@ not the MCP tool names.
 | `project_run` | Play the project, then wait briefly for game liveness (autosave persists in-memory MCP edits unless `autosave=False`) |
 | `test_run` | Run GDScript test suites in the editor — see [testing.md](testing.md) for writing suites and the `McpTestSuite` API |
 | `logs_read` | Read plugin / game / editor / combined log buffers. `source="editor"` surfaces parse errors, GDScript reload warnings, @tool/EditorPlugin runtime errors, push_error/push_warning, and visible Debugger dock Errors-tab rows — use this when the editor's Output or Debugger Errors panel shows red/yellow rows |
-| `editor_screenshot` | Capture the editor 3D viewport (`viewport`), editor 2D viewport (`viewport_2d`), cinematic Camera3D render (`cinematic`), or running game framebuffer (`game`). Large PNG captures are downscaled to fit the MCP transport, including when `max_resolution=0`; metadata reports actual dimensions. With Vision Routing enabled, images are replaced by a text description (`vision_description` / `routed_via`) - see [vision-routing.md](vision-routing.md) |
+| `editor_screenshot` | Capture the editor 3D viewport (`viewport`), editor 2D viewport (`viewport_2d`), cinematic Camera3D render (`cinematic`), or running game framebuffer (`game`). Cinematic captures accept a `width`/`height` pair (each 1..4096), and `save_to="res://captures/frame.png"` saves the full render; parent directories are created, existing files require `overwrite=true`, and writes require a writable editor and cannot be undone. `include_image=false` with `save_to` returns only metadata (`saved_path`, `saved_width`, `saved_height`, `saved_bytes`), without transporting the PNG. Inline PNGs are downscaled to fit `max_resolution` and the MCP transport, including when `max_resolution=0`; metadata reports actual dimensions. These limits do not resize the saved file. Without `save_to`, `include_image=false` retains capture metadata without returning an image. With Vision Routing enabled, inline images are replaced by a text description (`vision_description` / `routed_via`) - see [vision-routing.md](vision-routing.md) |
 | `editor_reload_plugin` | Reload the plugin and wait for reconnect (works with external and plugin-managed servers) |
 | `animation_create` | Create an Animation clip (auto-creates AnimationPlayer + library if missing) |
+
+`node_set_property` accepts a `PackedByteArray` value as a JSON list of whole
+numbers from 0 to 255, with at most 65,536 bytes per value. For example,
+`value=[0,128,255]` writes three bytes and `value=[]` clears the array.
+The same conversion applies to typed containers and resource constructor
+properties, including `resource_manage(op="create")`. Strings, booleans,
+fractions, nonfinite numbers, and out-of-range bytes are rejected before the
+property is assigned. `TileMapLayer.tile_map_data` still requires Godot's
+valid binary cell format; this conversion does not generate tile data.
+
+`node_manage(op="set_editable_children", params={"path":"/Main/Model",
+"editable":true})` explicitly enables child overrides for a scene instance.
+The target must be an instance root beneath the active scene root, and its
+ancestors must already permit editing. The optional `scene_file` guard checks
+the active scene. The response reports `editable`, `previous_editable`,
+`changed`, and `undoable`; repeating the current state creates no undo action.
+Use `scene_save` to persist the flag. Structural edits to source-owned nodes
+still require editing their source scene.
+
+Disabling is allowed only when it will preserve saved edits. Child overrides,
+groups, persistent signals, attachments beneath source-owned children, or
+nested Editable Children cause a refusal because Godot would drop them on
+save/reload. Revert those edits or disable nested instances first. Overrides
+on the instance root and direct local attachments remain safe and do not
+prevent disabling. The operation never enables ancestors or discards edits
+implicitly.
 
 `logs_read` also accepts `include_details=true` for `source="editor"`,
 `source="game"`, and `source="all"`. Detailed entries include the original
@@ -69,6 +95,25 @@ can_debug, pre_live}`. The run cannot continue on its own — call
 `game_status.session_active` (`game_status.status` is not `"not_live"` or
 `"stopped"`). `is_playing` remains raw editor play-state for compatibility; use
 `game_status.status` for liveness decisions.
+
+`game_status` also reports `started_by` (`"mcp"` or `"editor"`),
+`started_at` (Unix seconds observed by the plugin), and `elapsed_s` (monotonic
+elapsed time). An already-running session keeps its original attribution when
+`project_run` is called again. Stopped sessions return null origin/start time.
+Adopting a run after the plugin loads records the adoption time.
+
+`last_input_age_s` estimates time since the game helper observed input, or
+since helper startup if there has been none. `input_sample_age_s` says how old
+the latest helper report is. Reports arrive at most once per second; both
+fields are null until one arrives, and stale samples do not prove the game is
+idle. Another node can consume input before the helper observes it, so even a
+fresh report is not authoritative device idle time. Godot AI's injected input
+is excluded. Other game scripts may synthesize
+input that cannot be distinguished from device input. Only timing is sent,
+not keys, mouse positions or other input contents. These facts inform caller
+policy; Godot AI does not automatically stop an idle game. A confirmed
+`EDITOR_PLAYING` refusal carries the latest probed `game_status` when available.
+
 
 For game logs, `logs_read(source="game")` returns lines from the current game
 run only. Each play-start creates a new `run_id`, even if the game never reaches
@@ -230,29 +275,29 @@ Calls take the form:
 | Tool | Ops |
 |------|-----|
 | `scene_manage` | `create`, `save_as`, `close`, `get_roots` |
-| `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `add_to_group`, `remove_from_group` |
+| `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `set_editable_children`, `add_to_group`, `remove_from_group` |
 | `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
-| `animation_manage` | `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
+| `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
-| `audio_manage` | `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
+| `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
 | `signal_manage` | `list`, `connect`, `disconnect` |
 | `input_map_manage` | `list`, `add_action`, `ensure_action`, `remove_action`, `bind_event`, `ensure_binding` |
 | `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `suspend`, `resume`, `next_frame`, `debug_status`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_sequence`, `input_state` |
 | `autoload_manage` | `list`, `add`, `remove` |
-| `filesystem_manage` | `read_text`, `write_text`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
+| `filesystem_manage` | `read_text`, `write_text`, `import_get`, `import_set`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `set_stylebox_texture`, `set_font`, `set_icon`, `stylebox_override`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `set_richtext`, `build_layout`, `draw_recipe` |
-| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
+| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `set_properties`, `sprite_frames_create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
 | `api_manage` | `get_class` |
 | `client_manage` | `status`, `configure`, `remove` |
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
-| `tileset_manage` | `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
+| `tileset_manage` | `tileset_create_atlas`, `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
 | `gridmap_manage` | `gridmap_set_item`, `gridmap_fill`, `gridmap_clear`, `gridmap_get_used_cells`, `gridmap_list_library_items` |
 | `navigation_manage` | `bake`, `path_get` |
 | `csg_manage` | `csg_create`, `csg_set_operation` |
@@ -276,6 +321,45 @@ Composed motion effects that are not built-in presets — bounce, orbit, sweep,
 drift — are documented as keyframe recipes in
 [animation-recipes.md](animation-recipes.md), including a custom-tool addon
 example for wrapping project-specific recipes.
+
+`filesystem_manage.import_get(path)` reads one already-imported asset's importer,
+current options, stored Variant types, writable option names, sidecar revision,
+and native import validity. `import_set(path, options, reimport=True,
+expected_revision="")` patches existing scalar options and optionally reimports.
+Pass the revision from `import_get` to reject stale edits. Busy imports/scans and
+stale revisions refuse before writing. File writes are not undoable; restore the
+prior options and reimport to revert. ConfigFile preserves other sections and
+UIDs while normalizing text formatting. Windows replacement retains a recovery
+backup until commit or restoration; this is not crash-atomic.
+
+Validation reports `schema_source=stored_import_config`: stored keys and scalar
+types are available, but built-in importer enum/range schemas are not exposed to
+GDScript. Unknown keys, complex/nil options, importer switching and `_subresources`
+writes are unsupported. Subresource values remain readable. Godot's public
+`EditorImportPlugin.append_import_external_resource` requires an import already
+in progress; it cannot switch an arbitrary asset's importer. These remaining
+parts of #1166 need a supported schema/importer-selection API.
+
+Results distinguish `settings_committed`, `import_attempted`, `import_pending`
+and `import_valid` (null when native status is unknown). A native import failure
+after a successful settings write is an error with committed outcome metadata.
+Some native importers (WAV in Godot 4.7) return OK despite load/save errors and
+leave native validity true. `import_succeeded` therefore also requires no errors
+captured during the import. `import_diagnostics` includes up to 20 recent editor
+diagnostics, with message text capped at 2,048 characters, and
+`import_error_count` counts all captured errors. `diagnostics_scope` is
+`editor_during_reimport`: background errors may be unrelated to the requested
+asset. A failure leaves `import_pending=True`; do not blindly retry.
+With `reimport=False`, native validity describes the previous import and
+`import_pending=True`. Imports are synchronous and may exceed the 120-second
+command budget; a timeout cannot cancel native work. Inspect current settings
+and editor state before retrying.
+
+For batch `reimport`, `failed_imports` contains paths with false/unknown native
+validity. Valid paths become `unconfirmed_imports` if any editor errors occurred
+during the batch, since errors cannot reliably be attributed to individual assets.
+Only confirmed paths are listed in `reimported`; `import_status` preserves the
+native validity reported for every requested imported path.
 
 `filesystem_manage.reimport` is intended for imported assets such as textures,
 models, and audio. Godot scripts (`.gd`) are not imported resources: a successful
@@ -433,6 +517,50 @@ failing property path when Godot would discard it. The operation does not save
 or assign the incomplete resource. Construct such collections through Godot's
 API. Ordinary dictionaries that retain a literal `__class__` key remain data.
 
+### Build explicit SpriteFrames and atlas TileSets
+
+`resource_manage(op="sprite_frames_create", params={"resource_path":"res://walk.tres","animations":[{"name":"walk","fps":8,"loop_mode":"linear","frames":[{"texture_path":"res://sheet.png","region":{"x":0,"y":0,"width":16,"height":16},"duration":1}]}]})`
+creates native SpriteFrames. Each frame supplies an existing Texture2D path. An
+explicit `region` creates an AtlasTexture; omitting it uses the whole texture.
+`fps` defaults to 5, `duration` to 1, and `loop_mode` to `linear` (`none` and
+`pingpong` are also supported). Animation names must be unique. Regions must fit
+inside the texture. Animations and total frames are each limited to 4096.
+
+`tileset_manage(op="tileset_create_atlas", params={"resource_path":"res://tiles.tres","texture_path":"res://sheet.png","tile_size":{"x":16,"y":16},"tiles":[{"coords":{"x":0,"y":0}}]})`
+creates a TileSet with one TileSetAtlasSource. `tile_size` sets the TileSet and
+atlas cell size in pixels. Each tile has grid `coords` and optional `size`
+(default one cell). `source_id` defaults to 0; pixel `margins` and `separation`
+default to `{x:0,y:0}`. At most 4096 nonoverlapping tiles are accepted, all inside
+the texture. Terrain, collision, animated tiles and alternatives require other
+engine operations. Existing atlas read operations inspect the saved result.
+
+Both builders reject unknown nested fields and report the offending field path.
+They accept explicit fields, without interpreting `__class__` markers. They
+validate and construct the complete resource before saving. Writes require a
+non-imported `res://` `.tres` or `.res` path and are not scene-undoable.
+`overwrite=true` replaces the **whole resource**, retains its UID and refreshes
+cached references; it does not patch omitted fields. Overwrites use the same
+staged replacement and Windows recovery contract as `set_properties` below.
+Without `overwrite=true`, a destination that appears during staging is refused
+before replacement. This final check is not atomic with the rename; another
+process can still race it. Coordinate concurrent writers to the same path.
+
+### Patch a saved resource
+
+`resource_manage(op="set_properties", params={"path":"res://environment.tres","properties":{"background_energy_multiplier":2.0}})`
+patches a saved engine built-in resource without resetting omitted properties or replacing
+its cached identity. Nested resources must also be engine built-in and unscripted;
+GDExtension resources and cyclic resource graphs are refused. The file
+must be an existing, non-imported `.tres` or `.res` beneath `res://`; UID aliases,
+subresource paths and script/path replacement are refused. Validation and staged
+save failures leave the original file and live object unchanged. The edit preserves
+its UID and immediately refreshes existing references. Windows replacement retains
+a backup and restores it if the staged move fails; it is recoverable, not crash-atomic.
+If restoration fails, the error includes `recovery_backup` and `staged_resource` paths. This persistent file edit
+is **not scene-undoable**. Native setters that reject or normalize a requested value
+are refused during validation. A post-save cache refresh failure explicitly reports
+`disk_committed: true` and `live_refreshed: false`; reload before further edits.
+
 ### Inspect a live native resource
 
 `resource_manage(op="inspect", params={"node_path":"/Main/Collider","property":"shape","depth":2})`
@@ -482,3 +610,81 @@ revalidate against intervening edits, then commit one undo action. Each returned
 
 The 4 ms budget applies to cooperative preparation. Final validation and the
 atomic undo action cannot yield; a maximum-size batch can exceed that budget.
+
+
+### Animation libraries
+
+`animation_manage library_add` attaches an existing AnimationLibrary with
+`player_path`, `resource_path`, and optional `library_name` (empty selects the
+default library). Library operations accept AnimationPlayer and AnimationTree.
+Duplicate names and attaching the same resource twice to one mixer are refused;
+remove the old library explicitly before replacing it. Adding/removing a library
+is undoable and the attachment persists when the scene is saved. The source
+library file is not modified. Removing a library also clears autoplay when it
+refers to that library; undo restores both.
+
+`library_list` returns each library's name, resource path and animation names,
+plus `autoplay` for AnimationPlayer. Existing `list` also includes library
+metadata and autoplay alongside its clip details.
+
+
+### Audio bus layouts
+
+`audio_manage` exposes native AudioServer buses and effects. Bus/effect edits
+use global editor undo and do not require an open scene. Master cannot be
+removed; sends must target an existing earlier bus. Before removing a bus,
+reroute incoming bus sends and compressor sidechain references. Bus names must be unique. Effect operations
+accept unscripted native AudioEffect classes and editor-visible properties, including
+compressor sidechain bus names. They preserve effect identity through edits
+and restore effect order and enabled state on undo.
+
+Godot's audio editor may automatically save changes to its active bus layout.
+`bus_layout_save(path, overwrite=False)` explicitly exports a snapshot to a
+`.tres` or `.res` file. It does not switch the editor's active layout, alter
+`audio/buses/default_bus_layout`, or clear undo history. Replacing an existing
+snapshot requires `overwrite=True`. File export itself is not undoable.
+
+### AnimationTree graphs
+
+`animation_manage tree_create` creates an inactive AnimationTree linked to an
+existing AnimationPlayer. Choose `root_type="state_machine"`, `"blend_tree"`, `"blend_space_1d"` or
+`"blend_space_2d"`.
+Use `tree_node_add` with a native AnimationNode class and its editable properties
+to build the graph. State-machine children must be AnimationRootNodes.
+
+Every graph operation takes `tree_path` and an optional `graph_path`. An empty
+graph path selects the tree root; `"Locomotion/Blend"` selects a nested child.
+`tree_get` returns nodes, positions, native property values, input names, edges
+and current tree parameters. `tree_node_set` edits the selected node's properties.
+Variable input counts must be configured when adding a node, with a limit of 256
+inputs per node to bound work on the editor thread; changing them later
+could drop existing connections, so that edit is refused.
+
+`tree_connect` and `tree_disconnect` operate on blend-tree input ports. Each output
+can feed one input, matching Godot; occupied inputs, reused outputs and cycles
+are refused. `tree_transition_add`, `tree_transition_set` and
+`tree_transition_remove` edit state-machine edges and their native transition
+properties, including `xfade_time`, `switch_mode`, `advance_mode` and conditions.
+
+`tree_node_remove` removes a child and its edges. Undo restores the original
+resource identities, edge order and stored tree parameters. Graph edits preserve
+shared resources, so other trees using the same graph see those edits too. Scene
+instance ownership rules apply. Save the scene to persist embedded graphs.
+Enable the finished tree and set parameters through `node_set_property`, for
+example `active=true` or `parameters/Locomotion/Blend/blend_amount=0.5`.
+
+`tree_point_add`, `tree_point_set` and `tree_point_remove` edit named blend-space
+points. A 1D position is a number; a 2D position is `{x, y}`. Names must be unique
+within the space and cannot contain `.` or `/`. Add accepts `at_index` for
+insertion, with `-1` appending, and the same native node type/properties as
+`tree_node_add`. Godot permits at most 64 points per space. Nested graph paths
+can traverse a point by its name. Use `tree_node_set` there to edit its animation
+or nested graph; use `tree_point_set` to move its position.
+
+Blend-space bounds, snap, labels, blend mode and sync settings are available
+through `tree_node_set` and `tree_get`. Godot generates 2D triangles automatically;
+a mutation response may precede that editor-frame update, so use a subsequent
+`tree_get` for triangle readback. Removing a point queues native retriangulation.
+For existing manually triangulated spaces, point insertion/removal adjusts
+native indices, and undo restores the original triangles. These tools do not
+switch triangulation mode or author manual triangles.

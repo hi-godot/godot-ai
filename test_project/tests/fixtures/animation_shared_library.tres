@@ -1,0 +1,15 @@
+[gd_resource type="AnimationLibrary" format=3 uid="uid://eyl1lxpxd3ds"]
+
+[sub_resource type="Animation" id="Animation_idle"]
+resource_name = "idle"
+length = 2.5
+
+[sub_resource type="Animation" id="Animation_run"]
+resource_name = "run"
+length = 0.75
+
+[resource]
+_data = {
+&"idle": SubResource("Animation_idle"),
+&"run": SubResource("Animation_run")
+}

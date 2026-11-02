@@ -15,11 +15,57 @@ from godot_ai.tools import DEFER_META
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
-AnimationPlayer authoring (player, tracks, autoplay, presets, playback).
+Animation authoring (players, libraries, tracks and AnimationTree graphs).
 
 Ops:
+  • tree_create(parent_path, player_path, name="AnimationTree", root_type="state_machine")
+        Create an inactive AnimationTree linked to the player.
+        root_type: state_machine|blend_tree|blend_space_1d|blend_space_2d.
+  • tree_get(tree_path, graph_path="")
+        Read graph nodes/points, properties, edges, triangles and tree parameters.
+  • tree_node_add(tree_path, name, node_type="AnimationNodeAnimation", properties=None,
+                  position=None, graph_path="")
+        Add a native node. position: {x,y}. State machines accept AnimationRootNodes.
+  • tree_node_remove(tree_path, name, graph_path="")
+        Remove a node and its edges. Undo restores identities, edges and parameters.
+  • tree_node_set(tree_path, properties, graph_path="")
+        Set editable properties of the selected graph node, e.g. animation or fadein_time.
+        Configure variable input counts (0 to 256) at creation.
+        This op preserves existing input topology.
+  • tree_connect(tree_path, input_node, input_index, output_node, graph_path="")
+        Connect a blend-tree input port. Occupied ports/outputs and cycles are refused.
+  • tree_disconnect(tree_path, input_node, input_index, graph_path="")
+        Disconnect a blend-tree input port.
+  • tree_point_add(tree_path, name, position, node_type="AnimationNodeAnimation",
+                   properties=None, at_index=-1, graph_path="")
+        Add a named blend-space point (native limit: 64). Names cannot contain '.' or '/'.
+        position: number for 1D, {x,y} for 2D. at_index=-1 appends.
+  • tree_point_set(tree_path, name, position, graph_path="")
+        Move a blend-space point. Use tree_node_set at graph_path="Space/Point" for its properties.
+  • tree_point_remove(tree_path, name, graph_path="")
+        Remove a point. Undo restores its resource, name, index and manual triangles.
+  • tree_transition_add(tree_path, from_state, to_state, graph_path="", properties=None)
+  • tree_transition_set(tree_path, from_state, to_state, graph_path="", properties=None)
+  • tree_transition_remove(tree_path, from_state, to_state, graph_path="")
+        State-machine transitions. Properties include xfade_time, switch_mode, advance_mode,
+        advance_condition and advance_expression. Start/End follow native restrictions.
+
+Blend-space node properties include min_space, max_space, snap, labels, blend_mode,
+sync_mode and cyclic_length. 2D triangulation is automatic; a subsequent tree_get
+reads generated triangles after the editor updates them.
+Graph paths select nested resource names, e.g. "Locomotion/Blend"; empty selects tree_root.
+Graph writes are undoable and preserve shared resource identity. Enable a completed tree or
+set parameters with node_set_property (e.g. property="parameters/Blend/blend_amount").
+
   • player_create(parent_path, name="AnimationPlayer")
         Create an AnimationPlayer with empty default library.
+  • library_add(player_path, resource_path, library_name="")
+        Attach a saved AnimationLibrary to an AnimationPlayer or AnimationTree. Undoable.
+        Empty library_name selects the default library. Existing names/resources are refused.
+  • library_remove(player_path, library_name="")
+        Detach a library; clears autoplay if it points into that library. Undoable.
+  • library_list(player_path)
+        List library names, resource paths and clip names. Includes autoplay for AnimationPlayer.
   • delete(player_path, animation_name)
         Delete an animation clip from the default library. Undoable.
   • validate(player_path, animation_name)
@@ -37,7 +83,7 @@ Ops:
   • stop(player_path)
         Stop editor preview. Not saved with scene.
   • list(player_path)
-        List animations with length, loop_mode, track_count.
+        List animations with length, loop_mode, track_count, plus libraries and autoplay.
   • get(player_path, animation_name)
         Inspect a clip's tracks and keyframes in detail.
   • create_simple(player_path, name, tweens, length=None, loop_mode="none",
@@ -112,6 +158,22 @@ def register_animation_tools(mcp: FastMCP) -> None:
         description=_DESCRIPTION,
         ops={
             "player_create": animation_handlers.animation_player_create,
+            "tree_point_add": animation_handlers.animation_tree_point_add,
+            "tree_point_remove": animation_handlers.animation_tree_point_remove,
+            "tree_point_set": animation_handlers.animation_tree_point_set,
+            "tree_create": animation_handlers.animation_tree_create,
+            "tree_get": animation_handlers.animation_tree_get,
+            "tree_node_add": animation_handlers.animation_tree_node_add,
+            "tree_node_remove": animation_handlers.animation_tree_node_remove,
+            "tree_node_set": animation_handlers.animation_tree_node_set,
+            "tree_connect": animation_handlers.animation_tree_connect,
+            "tree_disconnect": animation_handlers.animation_tree_disconnect,
+            "tree_transition_add": animation_handlers.animation_tree_transition_add,
+            "tree_transition_remove": animation_handlers.animation_tree_transition_remove,
+            "tree_transition_set": animation_handlers.animation_tree_transition_set,
+            "library_add": animation_handlers.animation_library_add,
+            "library_remove": animation_handlers.animation_library_remove,
+            "library_list": animation_handlers.animation_library_list,
             "delete": animation_handlers.animation_delete,
             "validate": animation_handlers.animation_validate,
             "add_property_track": animation_handlers.animation_add_property_track,
@@ -131,6 +193,8 @@ def register_animation_tools(mcp: FastMCP) -> None:
             ## No `godot://animations` resource exists. Animation reads are
             ## stateful (per-player, per-clip) and don't fit the single-URL
             ## resource shape; agents fetch via the rollup ops.
+            "tree_get": None,
+            "library_list": None,
             "validate": None,
             "play": None,
             "stop": None,

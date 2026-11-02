@@ -5,6 +5,64 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## 4.4.0 (2026-11-02)
+
+### Added
+
+- Create and edit AnimationTree state machines, blend trees, and 1D/2D
+  blend spaces. Attach existing AnimationLibrary resources to players and
+  inspect or remove their libraries.
+- Author audio buses, sends, effects, and playback settings, and export an
+  AudioBusLayout snapshot.
+- Patch existing resources while preserving their UID and refreshing held
+  references. Dedicated SpriteFrames and TileSet atlas builders handle frame
+  durations, atlas regions, tile coordinates, and multi-cell tiles.
+- Read and change stored top-level import options, then reimport assets.
+  Revision checks refuse stale edits, and failed imports report whether the
+  settings were already saved.
+- Write PackedByteArray properties, explicitly enable Editable Children on
+  scene instances, and close scene tabs with explicit discard permission for
+  unsaved changes.
+- Request cinematic screenshot dimensions and save PNG output to the project
+  without sending the image through MCP.
+- Generate manual configuration for Qoder and QoderCN clients and read their
+  commented settings without rewriting them.
+- Opt-in automatic client repair updates eligible entries previously
+  configured by this project. Manually changed, disabled, or ambiguously
+  scoped entries require explicit configuration.
+- Inspect who started a running game and how long ago input was observed.
+
+### Fixed
+
+- Local attach probes no longer initialize certificate stores or inherit
+  proxy routing for authenticated loopback requests.
+- Filesystem scans wait for native completion. Registered-script validation
+  clears stale cold-load cache entries without losing class registration.
+- Count-dependent resource properties accept dependent keys in either order.
+  Unsupported nested resource values are refused before they can be silently
+  discarded, and overwrites refresh existing references and omitted defaults.
+- Typed node arrays preserve their declared element types, including custom
+  node subclasses. Autoload registration updates the editor's compiler state
+  and refuses empty scenes before registration.
+- Instance edits that cannot survive saving are refused before writing.
+  Camera follow validation checks both nodes, and undo history no longer frees
+  an existing camera when a later action replaces its redo history.
+- Cinematic framing respects camera offsets and hidden geometry. Screenshot
+  responses fit the MCP response budget, and metal presets retain their
+  metallic value after saving.
+- Pi's stdio entry shape is recognized correctly. Calling project_run again
+  while the game is already running reaches the existing no-op behavior.
+
+### Maintenance and limits
+
+- Release metadata fixes a dependency upload cutoff for production uv
+  resolution and release qualification. Only godot-ai itself is exempt so
+  the release can be uploaded after preparation. This limits later dependency
+  drift; it does not replace artifact verification.
+- Importer switching and imported subresource options remain unsupported.
+  Animation IK and asset-specific validation remain extension work. Lightmap
+  baking still needs a supported Godot editor API.
+
 ## 4.3.1 (2026-10-23)
 
 ### Security

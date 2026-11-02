@@ -283,3 +283,238 @@ async def animation_preset_pulse(
     if overwrite:
         params["overwrite"] = True
     return await runtime.send_command("animation_preset_pulse", params)
+
+
+async def animation_library_add(
+    runtime: DirectRuntime,
+    player_path: str,
+    resource_path: str,
+    library_name: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_library_add",
+        {"player_path": player_path, "resource_path": resource_path, "library_name": library_name},
+    )
+
+
+async def animation_library_remove(
+    runtime: DirectRuntime,
+    player_path: str,
+    library_name: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_library_remove",
+        {"player_path": player_path, "library_name": library_name},
+    )
+
+
+async def animation_library_list(runtime: DirectRuntime, player_path: str) -> dict:
+    return await runtime.send_command("animation_library_list", {"player_path": player_path})
+
+
+async def animation_tree_create(
+    runtime: DirectRuntime,
+    parent_path: str,
+    player_path: str,
+    name: str = "AnimationTree",
+    root_type: str = "state_machine",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_create",
+        {
+            "parent_path": parent_path,
+            "player_path": player_path,
+            "name": name,
+            "root_type": root_type,
+        },
+    )
+
+
+async def animation_tree_get(runtime: DirectRuntime, tree_path: str, graph_path: str = "") -> dict:
+    return await runtime.send_command(
+        "animation_tree_get", {"tree_path": tree_path, "graph_path": graph_path}
+    )
+
+
+async def animation_tree_node_add(
+    runtime: DirectRuntime,
+    tree_path: str,
+    name: str,
+    node_type: str = "AnimationNodeAnimation",
+    properties: dict | None = None,
+    position: dict | None = None,
+    graph_path: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_node_add",
+        {
+            "tree_path": tree_path,
+            "name": name,
+            "node_type": node_type,
+            "properties": properties or {},
+            "position": position or {"x": 0, "y": 0},
+            "graph_path": graph_path,
+        },
+    )
+
+
+async def animation_tree_node_remove(
+    runtime: DirectRuntime, tree_path: str, name: str, graph_path: str = ""
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_node_remove",
+        {"tree_path": tree_path, "name": name, "graph_path": graph_path},
+    )
+
+
+async def animation_tree_node_set(
+    runtime: DirectRuntime, tree_path: str, properties: dict, graph_path: str = ""
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_node_set",
+        {"tree_path": tree_path, "properties": properties, "graph_path": graph_path},
+    )
+
+
+async def animation_tree_connect(
+    runtime: DirectRuntime,
+    tree_path: str,
+    input_node: str,
+    input_index: int,
+    output_node: str,
+    graph_path: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_connect",
+        {
+            "tree_path": tree_path,
+            "input_node": input_node,
+            "input_index": input_index,
+            "output_node": output_node,
+            "graph_path": graph_path,
+        },
+    )
+
+
+async def animation_tree_disconnect(
+    runtime: DirectRuntime, tree_path: str, input_node: str, input_index: int, graph_path: str = ""
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_disconnect",
+        {
+            "tree_path": tree_path,
+            "input_node": input_node,
+            "input_index": input_index,
+            "graph_path": graph_path,
+        },
+    )
+
+
+async def animation_tree_transition_add(
+    runtime: DirectRuntime,
+    tree_path: str,
+    from_state: str,
+    to_state: str,
+    graph_path: str = "",
+    properties: dict | None = None,
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_transition_add",
+        {
+            "tree_path": tree_path,
+            "from_state": from_state,
+            "to_state": to_state,
+            "graph_path": graph_path,
+            "properties": properties or {},
+        },
+    )
+
+
+async def animation_tree_transition_remove(
+    runtime: DirectRuntime, tree_path: str, from_state: str, to_state: str, graph_path: str = ""
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_transition_remove",
+        {
+            "tree_path": tree_path,
+            "from_state": from_state,
+            "to_state": to_state,
+            "graph_path": graph_path,
+        },
+    )
+
+
+async def animation_tree_transition_set(
+    runtime: DirectRuntime,
+    tree_path: str,
+    from_state: str,
+    to_state: str,
+    graph_path: str = "",
+    properties: dict | None = None,
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_transition_set",
+        {
+            "tree_path": tree_path,
+            "from_state": from_state,
+            "to_state": to_state,
+            "graph_path": graph_path,
+            "properties": properties or {},
+        },
+    )
+
+
+async def animation_tree_point_add(
+    runtime: DirectRuntime,
+    tree_path: str,
+    name: str,
+    position: float | dict,
+    node_type: str = "AnimationNodeAnimation",
+    properties: dict | None = None,
+    at_index: int = -1,
+    graph_path: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_point_add",
+        {
+            "tree_path": tree_path,
+            "name": name,
+            "position": position,
+            "node_type": node_type,
+            "properties": properties or {},
+            "at_index": at_index,
+            "graph_path": graph_path,
+        },
+    )
+
+
+async def animation_tree_point_remove(
+    runtime: DirectRuntime, tree_path: str, name: str, graph_path: str = ""
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_point_remove",
+        {"tree_path": tree_path, "name": name, "graph_path": graph_path},
+    )
+
+
+async def animation_tree_point_set(
+    runtime: DirectRuntime, tree_path: str, name: str, position: float | dict, graph_path: str = ""
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_tree_point_set",
+        {"tree_path": tree_path, "name": name, "position": position, "graph_path": graph_path},
+    )

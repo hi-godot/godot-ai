@@ -813,13 +813,19 @@ func follow_2d(params: Dictionary) -> Dictionary:
 
 	var already_child: bool = old_parent == target
 	var reparented: bool = not already_child
+	if reparented:
+		var structure_error := McpNodeValidator.structure_error(node, scene_root)
+		if not structure_error.is_empty():
+			return structure_error
+		var target_error := McpNodeValidator.writable_error(target, scene_root)
+		if not target_error.is_empty():
+			return target_error
 
 	_undo_redo.create_action("MCP: Camera follow %s" % target.name)
 	if reparented:
 		_undo_redo.add_do_method(old_parent, "remove_child", node)
 		_undo_redo.add_do_method(target, "add_child", node, true)
 		_undo_redo.add_do_method(node, "set_owner", scene_root)
-		_undo_redo.add_do_reference(node)
 	if zero_transform:
 		if target is Node2D:
 			_undo_redo.add_do_property(node, "position", Vector2.ZERO)
@@ -836,7 +842,6 @@ func follow_2d(params: Dictionary) -> Dictionary:
 		_undo_redo.add_undo_method(old_parent, "add_child", node, true)
 		_undo_redo.add_undo_method(old_parent, "move_child", node, old_idx)
 		_undo_redo.add_undo_method(node, "set_owner", scene_root)
-		_undo_redo.add_undo_reference(node)
 	_undo_redo.commit_action()
 
 	return {

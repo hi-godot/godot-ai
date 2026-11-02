@@ -51,6 +51,10 @@ static func qualification_authorized() -> bool:
 static func args() -> Array[String]:
 	var result: Array[String] = []
 	result.assign(_BASE_ARGS)
+	result.append_array([
+		"--exclude-newer", dependency_cutoff(),
+		"--exclude-newer-package", "godot-ai=false",
+	])
 	if not qualification_authorized():
 		result.append_array([
 			"--index", PUBLIC_INDEX,
@@ -58,6 +62,87 @@ static func args() -> Array[String]:
 			"--find-links", PUBLIC_FLAT_INDEX,
 		])
 	return result
+
+
+static func dependency_cutoff() -> String:
+	var config := ConfigFile.new()
+	if config.load("res://addons/godot_ai/plugin.cfg") == OK:
+		var value := validated_cutoff(config.get_value("plugin", "dependency_cutoff", ""))
+		if not value.is_empty():
+			return value
+	push_error("Godot AI plugin.cfg has no valid dependency_cutoff. Reinstall the plugin.")
+	# uv rejects this value rather than silently resolving without the release bound.
+	return "INVALID-DEPENDENCY-CUTOFF"
+
+
+static func validated_cutoff(value: Variant) -> String:
+	if not value is String or value.length() != 20:
+		return ""
+	var expression := RegEx.new()
+	expression.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+	if expression.search(value) == null or value.begins_with("0000-"):
+		return ""
+	var unix := Time.get_unix_time_from_datetime_string(value)
+	if Time.get_datetime_string_from_unix_time(unix) + "Z" != value:
+		return ""
+	return value
+
+
+## Read only the updater's retained previous tree. Missing metadata is not
+## permission to strip policy flags from an arbitrary client entry.
+static func previous_policy(outcome: Dictionary) -> Dictionary:
+	var version: Variant = outcome.get("from_version", "")
+	if not version is String:
+		return {}
+	if str(outcome.get("outcome", "")) != "success" or version.is_empty() or version.validate_filename() != version or version in [".", ".."]:
+		return {}
+	var expected: String = "res://addons/.godot_ai_update/backup/" + version
+	if str(outcome.get("backup_root", "")) != expected:
+		return {}
+	var config := ConfigFile.new()
+	if config.load(expected.path_join("plugin.cfg")) != OK:
+		return {}
+	return previous_policy_from_config(config, version)
+
+
+static func previous_policy_from_config(config: ConfigFile, expected_version: String) -> Dictionary:
+	var stored_version: Variant = config.get_value("plugin", "version", null)
+	if not stored_version is String or expected_version.is_empty() or stored_version != expected_version:
+		return {}
+	if not config.has_section_key("plugin", "dependency_cutoff"):
+		return {"known": true, "cutoff": ""}
+	var cutoff := validated_cutoff(config.get_value("plugin", "dependency_cutoff"))
+	return {"known": true, "cutoff": cutoff} if not cutoff.is_empty() else {}
+
+
+## This is an expected-value builder for readback only. Actual process launches
+## always use args() and the current release cutoff.
+static func previous_launch_for_verification(launch: Dictionary, policy: Dictionary) -> Dictionary:
+	if policy.is_empty() or launch.get("tier", "") != "uvx":
+		return launch
+	if not policy.get("known") is bool or not policy.known or not policy.get("cutoff") is String:
+		return {}
+	var cutoff: String = policy.cutoff
+	if not cutoff.is_empty() and validated_cutoff(cutoff).is_empty():
+		return {}
+	var previous := launch.duplicate(true)
+	for field in ["args", "console_args"]:
+		if not previous.has(field):
+			continue
+		if not previous[field] is Array:
+			return {}
+		var arguments: Array = previous[field].duplicate()
+		for option in ["--exclude-newer", "--exclude-newer-package"]:
+			var index := arguments.find(option)
+			if index < 0 or index + 1 >= arguments.size() or arguments.count(option) != 1:
+				return {}
+			if cutoff.is_empty():
+				arguments.remove_at(index + 1)
+				arguments.remove_at(index)
+			elif option == "--exclude-newer":
+				arguments[index + 1] = cutoff
+		previous[field] = arguments
+	return previous
 
 
 static func is_production_command(command: Array) -> bool:

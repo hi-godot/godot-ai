@@ -881,6 +881,31 @@ func _remove_reload_helper(path: String) -> void:
 const REGISTERED_VALIDATION_PATH := "res://tests/mcp_registered_validation_fixture.gd"
 
 
+class _ColdWriteScriptHandler extends ScriptHandler:
+	func _register_written_file(_path: String) -> void:
+		## Keep both writes cold even when a GUI editor normally loads on register.
+		pass
+
+
+func test_two_uncached_writes_load_the_latest_script() -> void:
+	var path := _unique_reload_path("two_cold_writes")
+	var handler := _ColdWriteScriptHandler.new(_undo_redo)
+	_write_reload_helper("original", path)
+	assert_false(ResourceLoader.has_cached(path))
+	for value in ["first", "second"]:
+		var result := handler.create_script({"path": path, "content": _reload_helper_source(value)})
+		assert_eq(result.get("data", {}).get("diagnostics", ["missing"]), [])
+		assert_false(ResourceLoader.has_cached(path), "validation must leave the script uncached")
+	var loaded := _load_reload_helper(path)
+	var observed: String = loaded.new().value()
+	var stored := FileAccess.get_file_as_string(path)
+	var cached := ResourceLoader.has_cached(path)
+	_remove_reload_helper(path)
+	assert_eq(observed, "second", "first normal load must execute the latest write")
+	assert_eq(loaded.source_code, stored)
+	assert_true(cached)
+
+
 func test_validation_of_unloaded_script_allows_normal_resource_caching() -> void:
 	var path := _unique_reload_path("validation_cache")
 	_write_reload_helper("validated", path)

@@ -509,7 +509,7 @@ func test_game_debug_control_rejects_overlapping_mutation() -> void:
 	conn.free()
 
 
-func test_game_debug_control_guard_reply_waits_for_deferred_registration() -> void:
+func test_game_debug_control_guard_starts_after_dispatch_registration() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
 		skip("No SceneTree available")
@@ -518,8 +518,8 @@ func test_game_debug_control_guard_reply_waits_for_deferred_registration() -> vo
 	var conn := _StubConnection.new()
 	plugin.request_game_debug_control("not_an_action", "rid-debug-guard", conn)
 	assert_eq(conn.captured.size(), 0, "guard reply must not race the dispatcher registration")
-	await tree.process_frame
-	assert_eq(conn.captured.size(), 1, "deferred guard should reply on a later editor turn")
+	plugin._begin_game_debug_control("not_an_action", "rid-debug-guard", conn, 5.0)
+	assert_eq(conn.captured.size(), 1, "the deferred completion entry must return the guard error")
 	assert_eq(conn.captured[0].request_id, "rid-debug-guard")
 	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.VALUE_OUT_OF_RANGE)
 	conn.free()
@@ -1132,6 +1132,62 @@ func test_issue1170_helper_only_target_keeps_its_visual_bounds() -> void:
 	light.free()
 	assert_eq(bounds.position, Vector3(-7, -10, -10))
 	assert_eq(bounds.size, Vector3(20, 20, 20))
+
+
+func test_hidden_geometry_does_not_override_visible_helper_bounds() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = BoxMesh.new()
+	root.add_child(mesh)
+	mesh.position = Vector3(1000, 0, 0)
+	mesh.visible = false
+	var light := OmniLight3D.new()
+	light.omni_range = 3
+	root.add_child(light)
+	light.position = Vector3(3, 4, 5)
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(0, 1, 2))
+	assert_eq(bounds.size, Vector3(6, 6, 6))
+
+
+func test_hidden_mesh_does_not_expand_visible_mesh_bounds() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	for visible_mesh in [true, false]:
+		var mesh := MeshInstance3D.new()
+		mesh.mesh = BoxMesh.new()
+		mesh.mesh.size = Vector3(2, 4, 6)
+		root.add_child(mesh)
+		mesh.position = Vector3(3, 4, 5) if visible_mesh else Vector3(1000, 0, 0)
+		mesh.visible = visible_mesh
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(2, 2, 2))
+	assert_eq(bounds.size, Vector3(2, 4, 6))
+
+
+func test_hidden_ancestor_excludes_geometry_and_helper_bounds() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	root.position = Vector3(10, 0, 0)
+	var hidden := Node3D.new()
+	root.add_child(hidden)
+	hidden.visible = false
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = BoxMesh.new()
+	hidden.add_child(mesh)
+	mesh.position = Vector3(1000, 0, 0)
+	var light := OmniLight3D.new()
+	light.omni_range = 100
+	hidden.add_child(light)
+	assert_true(mesh.visible)
+	assert_false(mesh.is_visible_in_tree())
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(9.5, -0.5, -0.5))
+	assert_eq(bounds.size, Vector3.ONE)
 
 
 func test_issue1170_empty_subtree_gets_one_fallback_at_target_root() -> void:

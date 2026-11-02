@@ -47,10 +47,13 @@ def test_runtime_rejects_unpinned_bytes_before_executing_version(monkeypatch, tm
     executable.write_bytes(b"untrusted executable")
     monkeypatch.setattr(support, "verify_candidate", lambda *args: {})
     monkeypatch.setattr(
+        runtime.dependency_cutoff, "from_candidate", lambda _: "2026-11-01T19:00:00Z"
+    )
+    monkeypatch.setattr(
         runtime, "_validate_godot_version", lambda *args: pytest.fail("unverified binary executed")
     )
     with pytest.raises(support.ReleaseError, match="size/type differs"):
-        runtime.exact_a_to_b(tmp_path, tmp_path, [], str(executable), "4.7.2", tmp_path / "row")
+        runtime.exact_a_to_b(tmp_path, tmp_path, [], {}, str(executable), "4.7.2", tmp_path / "row")
 
 
 def test_runtime_rejects_a_row_labeled_as_another_platform(monkeypatch, tmp_path):
@@ -62,9 +65,7 @@ def test_runtime_rejects_a_row_labeled_as_another_platform(monkeypatch, tmp_path
 
 
 def test_runtime_qualification_enables_launcher_diagnostics(tmp_path):
-    environment = runtime._isolated_environment(
-        tmp_path / "environment", "http://127.0.0.1/index"
-    )
+    environment = runtime._isolated_environment(tmp_path / "environment", "http://127.0.0.1/index")
     assert environment["GODOT_AI_STARTUP_TRACE"] == "1"
 
 
@@ -107,6 +108,8 @@ def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
             "python": python,
             "status": "passed",
             "candidates": bindings,
+            "dependency_cutoff": "2026-11-01T19:00:00Z",
+            "upload_times": {},
             "files": {},
         }
         if kind == "python":
@@ -145,7 +148,7 @@ def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
                 omitted = directory / "row.json"
         (directory / "row.json").write_bytes(support.canonical(row))
 
-    assert len(qualification.validate_rows(tmp_path, bindings)) == len(
+    assert len(qualification.validate_rows(tmp_path, bindings, "2026-11-01T19:00:00Z")) == len(
         qualification.required_row_keys()
     )
     assert omitted is not None
@@ -155,13 +158,13 @@ def test_aggregate_rejects_a_missing_engine_row(monkeypatch, tmp_path):
             case["godot"]["sha256"] = "f" * 64
     omitted.write_bytes(support.canonical(tampered))
     with pytest.raises(support.ReleaseError, match="Godot evidence differs"):
-        qualification.validate_rows(tmp_path, bindings)
+        qualification.validate_rows(tmp_path, bindings, "2026-11-01T19:00:00Z")
     omitted.unlink()
     with pytest.raises(
         support.ReleaseError,
         match="missing mandatory qualification rows: runtime/windows-latest/3.11/4.7.0",
     ):
-        qualification.validate_rows(tmp_path, bindings)
+        qualification.validate_rows(tmp_path, bindings, "2026-11-01T19:00:00Z")
 
 
 def test_manifest_tree_is_relative_to_the_managed_addon(tmp_path):
@@ -281,6 +284,9 @@ def test_private_index_path_capability_can_be_scanned_independently():
 
 
 def _stub_candidate_validation(monkeypatch, candidates):
+    monkeypatch.setattr(
+        runtime.dependency_cutoff, "from_candidate", lambda _: "2026-11-01T19:00:00Z"
+    )
     monkeypatch.setattr(runtime.engine, "host_row", lambda: "ubuntu-latest")
     records = {
         "a": {"version": "4.0.0", "tag": "v4.0.0", "source": "a" * 40},
@@ -317,6 +323,8 @@ def test_runtime_row_is_bound_to_matching_python_evidence(monkeypatch, tmp_path)
                 "os": "ubuntu-latest",
                 "python": "3.11",
                 "candidates": bindings,
+                "dependency_cutoff": "2026-11-01T19:00:00Z",
+                "upload_times": {},
                 "dependencies": [],
             }
         )
@@ -359,6 +367,8 @@ def test_runtime_row_rejects_different_candidate_binding(monkeypatch, tmp_path):
                 "os": "ubuntu-latest",
                 "python": "3.11",
                 "candidates": bindings,
+                "dependency_cutoff": "2026-11-01T19:00:00Z",
+                "upload_times": {},
                 "dependencies": [],
             }
         )
@@ -578,6 +588,8 @@ def test_runtime_row_accepts_the_extra_engine_row(monkeypatch, tmp_path):
                 "os": "ubuntu-latest",
                 "python": "3.11",
                 "candidates": bindings,
+                "dependency_cutoff": "2026-11-01T19:00:00Z",
+                "upload_times": {},
                 "dependencies": [],
             }
         )
@@ -785,9 +797,16 @@ def test_attached_bridge_client_reports_a_backend_that_never_reaches_b(tmp_path)
 
 
 def test_bridge_command_is_the_client_entry_launch():
-    command = runtime._bridge_command("/tools/uvx", "4.1.0")
-    assert command[:5] == ["/tools/uvx", "--link-mode", "copy", "--from", "godot-ai==4.1.0"]
-    assert command[5:8] == ["godot-ai", "attach", "--port"]
+    command = runtime._bridge_command("/tools/uvx", "4.1.0", "2026-11-01T19:00:00Z")
+    assert command[:5] == [
+        "/tools/uvx",
+        "--exclude-newer",
+        "2026-11-01T19:00:00Z",
+        "--exclude-newer-package",
+        "godot-ai=false",
+    ]
+    assert command[5:9] == ["--link-mode", "copy", "--from", "godot-ai==4.1.0"]
+    assert command[9:12] == ["godot-ai", "attach", "--port"]
     assert "--disable-telemetry" in command
 
 
@@ -805,6 +824,8 @@ def test_row_validation_requires_the_attached_bridge_evidence(monkeypatch, tmp_p
             "python": python,
             "status": "passed",
             "candidates": bindings,
+            "dependency_cutoff": "2026-11-01T19:00:00Z",
+            "upload_times": {},
             "files": {},
         }
         if kind == "python":
@@ -830,7 +851,7 @@ def test_row_validation_requires_the_attached_bridge_evidence(monkeypatch, tmp_p
             row.update(required_skips=0, godot_version=godot, cases=[case])
         (directory / "row.json").write_bytes(support.canonical(row))
     with pytest.raises(support.ReleaseError, match="attached-bridge evidence"):
-        qualification.validate_rows(tmp_path, bindings)
+        qualification.validate_rows(tmp_path, bindings, "2026-11-01T19:00:00Z")
 
 
 def test_attached_bridge_stop_is_prompt_even_when_the_bridge_never_answers(tmp_path):
