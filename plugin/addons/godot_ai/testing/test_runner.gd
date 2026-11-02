@@ -82,7 +82,9 @@ func _run_one_test(suite: McpTestSuite, name: String, method_name: String) -> Di
 	suite._reset()
 	_begin_script_error_capture()
 	suite.setup()
-	suite.call(method_name)
+	var returned: Variant = suite.call(method_name)
+	if returned is Object and returned.get_class() == "GDScriptFunctionState":
+		suite.assert_true(false, "Test suspended before completion; test methods must finish synchronously")
 	suite.teardown()
 	var script_errors := suite._unexpected_script_errors(_end_script_error_capture())
 	suite._free_tracked()

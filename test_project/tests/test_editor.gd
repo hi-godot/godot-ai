@@ -509,7 +509,7 @@ func test_game_debug_control_rejects_overlapping_mutation() -> void:
 	conn.free()
 
 
-func test_game_debug_control_guard_reply_waits_for_deferred_registration() -> void:
+func test_game_debug_control_guard_starts_after_dispatch_registration() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
 		skip("No SceneTree available")
@@ -518,8 +518,8 @@ func test_game_debug_control_guard_reply_waits_for_deferred_registration() -> vo
 	var conn := _StubConnection.new()
 	plugin.request_game_debug_control("not_an_action", "rid-debug-guard", conn)
 	assert_eq(conn.captured.size(), 0, "guard reply must not race the dispatcher registration")
-	await tree.process_frame
-	assert_eq(conn.captured.size(), 1, "deferred guard should reply on a later editor turn")
+	plugin._begin_game_debug_control("not_an_action", "rid-debug-guard", conn, 5.0)
+	assert_eq(conn.captured.size(), 1, "the deferred completion entry must return the guard error")
 	assert_eq(conn.captured[0].request_id, "rid-debug-guard")
 	assert_eq(conn.captured[0].payload.error.code, ErrorCodes.VALUE_OUT_OF_RANGE)
 	conn.free()

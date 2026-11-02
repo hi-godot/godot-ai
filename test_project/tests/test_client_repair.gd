@@ -200,11 +200,12 @@ func test_worker_repairs_owned_entry_once_and_joins_before_completion() -> void:
 	var key := McpClientConfigurator.repair_attempt_key(_client.id, _context, _launch(8123))
 	var results := {_client.id: {"status": McpClient.Status.CONFIGURED_MISMATCH, "repair_attempt_key": key, "repair_generation": jobs._repair_generation}}
 	jobs._queue_repairs(results)
-	for _index in range(300):
+	var deadline := Time.get_ticks_msec() + 5000
+	while Time.get_ticks_msec() < deadline:
 		jobs._poll_actions()
 		if not completed.is_empty():
 			break
-		await (Engine.get_main_loop() as SceneTree).process_frame
+		OS.delay_msec(10)
 	assert_eq(completed.size(), 1)
 	if not completed.is_empty():
 		assert_eq(completed[0].action, "repair")
