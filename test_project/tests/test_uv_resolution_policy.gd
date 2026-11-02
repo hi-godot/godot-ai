@@ -118,3 +118,52 @@ func test_config_file_cutoff_requires_quoted_string() -> void:
 	var value: Variant = bare.get_value("plugin", "dependency_cutoff", null)
 	print("CUTOFF_BARE_TIMESTAMP_PROBE ", JSON.stringify({"error": parse_error, "error_string": error_string(parse_error), "type": type_string(typeof(value)), "value": value}))
 	assert_true(parse_error != OK or not value is String or value != cutoff, "unquoted timestamp must not become valid string metadata")
+
+
+func test_previous_windows_console_policy_matches_real_client_readback() -> void:
+	var client := preload("res://addons/godot_ai/clients/antigravity.gd").new()
+	assert_false(client.needs_consoleless_launcher)
+	var path := ProjectSettings.globalize_path("user://previous-policy-console.json")
+	client.path_template = {"unix": path, "windows": path}
+	var console_args: Array = Policy.args()
+	console_args.append_array(["--from", "godot-ai==4.0.0", "godot-ai", "attach", "--port", "8123"])
+	var launch := {"ok": true, "tier": "uvx", "command": "C:/Python/pythonw.exe", "args": ["-c", "bootstrap", "C:/Tools/uvx.exe"] + console_args, "console_command": "C:/Tools/uvx.exe", "console_args": console_args, "metadata": {"preserve": true}}
+	var original := launch.duplicate(true)
+	for cutoff in ["", "2025-01-02T03:04:05Z"]:
+		var expected := console_args.duplicate()
+		for option in ["--exclude-newer", "--exclude-newer-package"]:
+			var index := expected.find(option)
+			if cutoff.is_empty():
+				expected.remove_at(index + 1)
+				expected.remove_at(index)
+			elif option == "--exclude-newer":
+				expected[index + 1] = cutoff
+		var prior := Policy.previous_launch_for_verification(launch, {"known": true, "cutoff": cutoff})
+		assert_eq(prior.args.slice(0, 3), ["-c", "bootstrap", "C:/Tools/uvx.exe"])
+		assert_eq(prior.args.slice(3), expected)
+		assert_eq(prior.console_args, expected)
+		assert_eq(prior.metadata, original.metadata)
+		var selected := McpClientConfigurator.launch_for_client(client, prior)
+		assert_eq(selected.command, launch.console_command)
+		assert_eq(selected.args, expected)
+		var stored := {"ok": true, "command": launch.console_command, "args": expected}
+		assert_eq(McpJsonStrategy.configure(client, "godot-ai", "", stored).get("status"), "ok")
+		assert_eq(McpJsonStrategy.check_status(client, "godot-ai", "", selected), McpClient.Status.CONFIGURED, "previous policy must match the actual console-client file")
+	assert_eq(launch, original)
+	DirAccess.remove_absolute(path)
+
+
+func test_previous_policy_preserves_absent_argv_and_refuses_invalid_console_args() -> void:
+	var policy := {"known": true, "cutoff": ""}
+	var launch := {"ok": true, "tier": "uvx", "args": Policy.args()}
+	var prior := Policy.previous_launch_for_verification(launch, policy)
+	assert_false(prior.has("console_args"))
+	var console_only := {"ok": true, "tier": "uvx", "console_args": Policy.args()}
+	prior = Policy.previous_launch_for_verification(console_only, policy)
+	assert_false(prior.has("args"))
+	assert_false(prior.console_args.has("--exclude-newer"))
+	for invalid in ["invalid", [], ["--exclude-newer", "2025-01-02T03:04:05Z"]]:
+		var malformed := launch.duplicate(true)
+		malformed.console_args = invalid
+		assert_eq(Policy.previous_launch_for_verification(malformed, policy), {})
+	assert_true(launch.args.has("--exclude-newer"))

@@ -126,17 +126,22 @@ static func previous_launch_for_verification(launch: Dictionary, policy: Diction
 	if not cutoff.is_empty() and validated_cutoff(cutoff).is_empty():
 		return {}
 	var previous := launch.duplicate(true)
-	var arguments: Array = previous.get("args", [])
-	for option in ["--exclude-newer", "--exclude-newer-package"]:
-		var index := arguments.find(option)
-		if index < 0 or index + 1 >= arguments.size() or arguments.count(option) != 1:
+	for field in ["args", "console_args"]:
+		if not previous.has(field):
+			continue
+		if not previous[field] is Array:
 			return {}
-		if cutoff.is_empty():
-			arguments.remove_at(index + 1)
-			arguments.remove_at(index)
-		elif option == "--exclude-newer":
-			arguments[index + 1] = cutoff
-	previous["args"] = arguments
+		var arguments: Array = previous[field].duplicate()
+		for option in ["--exclude-newer", "--exclude-newer-package"]:
+			var index := arguments.find(option)
+			if index < 0 or index + 1 >= arguments.size() or arguments.count(option) != 1:
+				return {}
+			if cutoff.is_empty():
+				arguments.remove_at(index + 1)
+				arguments.remove_at(index)
+			elif option == "--exclude-newer":
+				arguments[index + 1] = cutoff
+		previous[field] = arguments
 	return previous
 
 
