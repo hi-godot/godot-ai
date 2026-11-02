@@ -118,7 +118,11 @@ func test_bus_refusals_do_not_mutate_or_create_undo() -> void:
 
 
 func test_effect_add_edit_remove_and_undo_preserve_identity_and_order() -> void:
-	var scene_history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(EditorInterface.get_edited_scene_root()))
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene open")
+		return
+	var scene_history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(root))
 	var scene_version := scene_history.get_version()
 	_add("Music")
 	_add("Voice")
