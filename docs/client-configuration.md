@@ -626,3 +626,32 @@ session, or restart the client, after changing configuration.
 The paths, stdio fields and precedence follow the official
 [Qoder MCP reference](https://docs.qoder.com/cli/mcp-reference) and
 [Qoder CN MCP reference](https://docs.qoder.cn/cli/mcp-reference).
+
+## Automatic repair
+
+The Settings tab has an **Automatically repair client configuration** switch,
+which defaults to off (`godot_ai/auto_reconfigure_clients`). After the editor
+connects to an authenticated backend, enabling it repairs changed launch
+settings only for entries this project explicitly configured. A successful
+Configure records the exact launch even when the switch is off. Configure from
+another project explicitly transfers ownership of that entry.
+
+Repair preserves client preferences, environment variables, timeouts, approval
+lists, and other server entries. It checks the retained launch again under the
+account-wide mutation lock before writing. Missing, disabled, suppressed,
+corrupt, externally edited, or ambiguously scoped entries require Configure.
+The current automatic path supports JSON, TOML, and Claude's verified user-scope
+JSON entry when there is no project state or suppression list in that file.
+Clients with project override tiers also require an explicit
+`godot_ai/external_client_cwd`. Other CLI scopes and DeepSeek Harness's layered
+YAML require manual Configure. TOML repair validates the entire file with an
+available Python 3.11+ interpreter in isolated mode, with a 1 MiB file limit and
+a three-second subprocess deadline. Unavailable parsers require manual Configure. Removing an entry revokes its repair enrollment.
+
+Each resolved target and desired launch gets at most one attempt per editor
+session, with at most 128 attempts in total. Disabling the switch or losing the
+authenticated connection cancels queued repairs and cancels a running repair
+before its write boundary. An already completed file write is not rolled back.
+Successful repair asks you to reload the client's MCP connection. The plugin
+does not restart the client or choose different ports. Post-update migration
+continues separately and does not enroll entries or transfer ownership.

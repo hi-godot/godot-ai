@@ -856,6 +856,8 @@ func _on_dock_plugin_reload_requested(reason: String) -> void:
 
 
 func _on_dock_settings_apply_requested(changes: Dictionary, reload: bool) -> void:
+	if changes.get("auto_reconfigure_clients") == false and _client_jobs != null:
+		_client_jobs.set_repair_allowed(false)
 	var applied := ClientConfigurator.apply_endpoint_settings(changes.duplicate(true))
 	if not bool(applied.get("ok", false)):
 		push_error("MCP | refused settings change: %s" % str(applied.get("error", "invalid settings")))
@@ -1203,6 +1205,13 @@ func _exit_tree() -> void:
 
 
 func _process(_delta: float) -> void:
+	if _client_jobs != null:
+		var settings := EditorInterface.get_editor_settings()
+		_client_jobs.set_repair_allowed(
+			_normal_start_released and _connection != null and _connection.is_connected
+			and settings != null and settings.has_setting(ClientConfigurator.SETTING_AUTO_REPAIR)
+			and bool(settings.get_setting(ClientConfigurator.SETTING_AUTO_REPAIR))
+		)
 	if _vision_routing != null:
 		_vision_routing.poll_completed()
 
@@ -1893,6 +1902,8 @@ func _on_custom_tools_changed() -> void:
 ## _connected is false (connection.gd::_send_json), so without this
 ## replay those tools only surface on the next registry mutation.
 func _on_connection_state_changed(is_open: bool) -> void:
+	if not is_open and _client_jobs != null:
+		_client_jobs.set_repair_allowed(false)
 	if is_open:
 		_lifecycle.transport_authenticated(_connection.server_version)
 		if _custom_tool_registry != null:

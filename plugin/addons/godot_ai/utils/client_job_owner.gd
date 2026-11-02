@@ -20,6 +20,7 @@ const CliStrategy := preload("res://addons/godot_ai/clients/_cli_strategy.gd")
 const RefreshState := preload("res://addons/godot_ai/utils/mcp_client_refresh_state.gd")
 const MutationLock := preload("res://addons/godot_ai/utils/client_mutation_lock.gd")
 
+const MAX_REPAIR_ATTEMPTS := 128
 const STATUS_COOLDOWN_MSEC := 15 * 1000
 const STATUS_TIMEOUT_MSEC := 30 * 1000
 ## One scoped CLI configure may run three bounded cleanup commands, one write,
@@ -39,6 +40,10 @@ signal mcp_action_completed(request_id: String, payload: Dictionary)
 signal post_update_repin_completed(result: Dictionary)
 signal action_completed(client_id: String, action: String, result: Dictionary, prewarm: Dictionary)
 signal action_timed_out(client_id: String, action: String, detail: String)
+
+var _repair_generation := 0
+var _repair_allowed := false
+var _repair_attempts := {}
 
 var _accepting_work := false
 var _client_health_blocked := false
@@ -125,6 +130,40 @@ func set_client_health_blocked(blocked: bool) -> void:
 	_client_health_blocked = blocked
 	if not blocked:
 		_retry_deferred_refresh()
+
+
+func set_repair_allowed(allowed: bool) -> void:
+	if _repair_allowed == allowed:
+		return
+	_repair_allowed = allowed
+	_repair_generation += 1
+	if allowed:
+		var ids: Array[String] = []
+		ids.assign(ClientConfigurator.client_ids())
+		request_status_refresh(ids, true)
+	else:
+		for pending in _pending_actions.duplicate():
+			if pending.action == "repair":
+				cancel_pending_action(str(pending.client_id))
+		for client_id in _action_names:
+			if _action_names[client_id] == "repair":
+				_set_action_cancelled(str(client_id), true)
+
+
+func _queue_repairs(results: Dictionary) -> void:
+	if not _repair_allowed or not _accepting_work or _client_health_blocked or _repair_attempts.size() >= MAX_REPAIR_ATTEMPTS:
+		return
+	for client_id in results:
+		if _repair_attempts.size() >= MAX_REPAIR_ATTEMPTS:
+			break
+		var result: Dictionary = results[client_id]
+		if int(result.get("repair_generation", -1)) != _repair_generation:
+			continue
+		var key := str(result.get("repair_attempt_key", ""))
+		if key.is_empty() or _repair_attempts.has(key) or result.get("status") != Client.Status.CONFIGURED_MISMATCH:
+			continue
+		if request_action(str(client_id), "repair"):
+			_repair_attempts[key] = true
 
 
 func snapshot() -> Dictionary:
@@ -367,7 +406,7 @@ func _run_post_update_repin(
 				"reason": "its godot-ai entry differs from what Configure wrote before the update",
 			})
 			continue
-		var configured := ClientConfigurator.configure(client_id, server_url, context)
+		var configured := ClientConfigurator.configure(client_id, server_url, context, false)
 		if str(configured.get("status", "error")) != "ok":
 			return _post_update_result(false, generation, configured_ids, repinned_ids,
 				"%s repin failed: %s" % [client_id, str(configured.get("message", "unknown error"))],
@@ -470,9 +509,11 @@ func request_mcp_action(request_id: String, client_id: String, action: String) -
 
 
 func _start_action(client_id: String, action: String, request_id: String) -> Dictionary:
+	if action == "repair" and (not _repair_allowed or _client_health_blocked):
+		return {"ok": false, "error": "Automatic repair is disabled or disconnected."}
 	if not _accepting_work:
 		return {"ok": false, "error": "Client worker is unavailable."}
-	if action not in ["configure", "remove"]:
+	if action not in ["configure", "remove", "repair"]:
 		return {"ok": false, "error": "Unknown client action: %s" % action}
 	if _post_update_termination_unproven or not _mutation_termination_unproven.is_empty():
 		return {
@@ -537,6 +578,8 @@ func _discard_pending_actions(message: String) -> void:
 
 
 func _begin_action(client_id: String, action: String, request_id: String) -> Dictionary:
+	if action == "repair" and (not _repair_allowed or _client_health_blocked):
+		return {"ok": false, "error": "Automatic repair is disabled or disconnected."}
 	ClientConfigurator.warm_env_snapshot()
 	_set_action_cancelled(client_id, false)
 	_clear_action_phase(client_id)
@@ -581,7 +624,9 @@ func _run_action(
 ) -> Dictionary:
 	var result: Dictionary
 	var prewarm: Dictionary = {}
-	if action == "remove":
+	if action == "repair":
+		result = ClientConfigurator.repair(client_id, context, Callable(self, "_is_action_cancelled").bind(client_id))
+	elif action == "remove":
 		result = ClientConfigurator.remove(client_id, server_url, context)
 	else:
 		result = ClientConfigurator.configure(client_id, server_url, context)
@@ -797,6 +842,7 @@ func request_status_refresh(ids: Array[String], force := false) -> bool:
 		_finish_refresh({})
 		return false
 	var context := ClientConfigurator.capture_launch_context()
+	context["repair_generation"] = _repair_generation
 	_refresh_state = RefreshState.RUNNING
 	_refresh_pending = false
 	_refresh_pending_force = false
@@ -871,6 +917,8 @@ func _run_status_refresh(
 			"status": details.get("status", Client.Status.NOT_CONFIGURED),
 			"installed": bool(probe.get("installed", false)),
 			"error_msg": details.get("error_msg", ""),
+			"repair_attempt_key": ClientConfigurator.repair_attempt_key(client_id, context, resolved_launch),
+			"repair_generation": int(context.get("repair_generation", -1)),
 		}
 	return {"results": results, "generation": generation}
 
@@ -904,6 +952,7 @@ func _finish_refresh(
 	if not _client_health_blocked and _refresh_state != RefreshState.SHUTTING_DOWN:
 		status_refresh_completed.emit(results.duplicate(true))
 		_complete_mcp_status_waiters(results, completed_generation, mcp_error)
+		_queue_repairs(results)
 	_publish_snapshot()
 	if _refresh_pending:
 		var force := _refresh_pending_force

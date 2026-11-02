@@ -121,6 +121,7 @@ var _tools_close_confirm: ConfirmationDialog
 ## Update saves the project and relaunches the editor; the user says so first.
 var _update_confirm: ConfirmationDialog
 var _update_candidate_version := ""
+var _repair_toggle: CheckButton
 var _telemetry_toggle: CheckButton
 var _telemetry_pending_enabled: bool = true
 var _telemetry_saved_enabled: bool = true
@@ -1789,10 +1790,10 @@ func present_client_action_result(
 ) -> void:
 	_report_prewarm_outcome(client_id, prewarm)
 	_finalize_action_buttons(client_id)
-	if result.get("status") == "cancelled":
+	if result.get("status") in ["cancelled", "skipped", "unchanged"]:
 		var row: Dictionary = _client_rows.get(client_id, {})
 		if not row.is_empty():
-			_apply_row_status(client_id, row.get("status", Client.Status.NOT_CONFIGURED))
+			_apply_row_status(client_id, row.get("status", Client.Status.NOT_CONFIGURED), str(result.get("message", "")) if result.get("status") == "skipped" else "")
 		_refresh_clients_summary()
 		return
 	var success_status := Client.Status.NOT_CONFIGURED if action == "remove" else Client.Status.CONFIGURED
@@ -1802,7 +1803,7 @@ func present_client_action_result(
 		## that lists those removes is shown on the failure path below, which
 		## left the success path — where the sweep actually ran — silent.
 		var sweep_note := (
-			ClientConfigurator.configure_sweep_note(client_id) if action == "configure" else ""
+			ClientConfigurator.configure_sweep_note(client_id) if action == "configure" else str(result.get("message", ""))
 		)
 		_apply_row_status(client_id, success_status, sweep_note)
 		var row: Dictionary = _client_rows.get(client_id, {})
@@ -2277,6 +2278,7 @@ func _reset_tools_pending_from_setting() -> void:
 		## `set_pressed_no_signal` — mutating programmatically should not
 		## fire the toggled handler, which would mutate pending back.
 		chk.set_pressed_no_signal(_tools_pending_excluded.find(id) == -1)
+	_load_repair_setting()
 	## Also reset telemetry pending state from the persisted setting.
 	if _telemetry_toggle != null:
 		_load_telemetry_setting()
@@ -2352,6 +2354,13 @@ func _on_tools_discard_confirmed() -> void:
 
 # --- Settings tab (allow-host LAN opt-in, #507) ---
 
+func _load_repair_setting() -> void:
+	if _repair_toggle == null:
+		return
+	var settings := EditorInterface.get_editor_settings()
+	_repair_toggle.set_pressed_no_signal(settings != null and settings.has_setting(ClientConfigurator.SETTING_AUTO_REPAIR) and bool(settings.get_setting(ClientConfigurator.SETTING_AUTO_REPAIR)))
+
+
 func _build_settings_tab(tabs: TabContainer) -> void:
 	## Tab 3 — settings-style controls that don't fit Clients or Tools: the
 	## Vision Routing section plus the `--allow-host` LAN opt-in behind a
@@ -2377,6 +2386,15 @@ func _build_settings_tab(tabs: TabContainer) -> void:
 	settings_margin.name = "Settings"
 	settings_margin.add_child(settings_scroll)
 	tabs.add_child(settings_margin)
+
+	_repair_toggle = CheckButton.new()
+	_repair_toggle.text = "Automatically repair client configuration"
+	_repair_toggle.tooltip_text = "Repair launch settings only for entries this project explicitly configured. Disabled, externally edited, or ambiguous entries require Configure."
+	_load_repair_setting()
+	_repair_toggle.toggled.connect(func(enabled: bool) -> void:
+		settings_apply_requested.emit({"auto_reconfigure_clients": enabled}, false)
+	)
+	settings_tab.add_child(_repair_toggle)
 
 	## Vision Routing is configuration, not status — it lives here rather
 	## than in the dock. Not dev-gated: it is the Settings tab's primary
