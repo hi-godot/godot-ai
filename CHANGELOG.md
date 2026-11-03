@@ -5,6 +5,15 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## 4.4.1 (2026-11-02)
+
+### Changed
+
+- Update the reviewed runtime dependency set to HTTPX2/HTTPCore2 2.16.0,
+  Pydantic 2.14.1, and Starlette 1.10.0. Keep exact version enforcement and
+  a fixed dependency upload cutoff for reproducible startup.
+- Update the pinned Python setup action to 7.1.0 in CI and release workflows.
+
 ## 4.4.0 (2026-11-02)
 
 ### Added
