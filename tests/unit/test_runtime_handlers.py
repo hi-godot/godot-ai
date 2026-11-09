@@ -31,6 +31,7 @@ from godot_ai.handlers import navigation as navigation_handlers
 from godot_ai.handlers import node as node_handlers
 from godot_ai.handlers import particle as particle_handlers
 from godot_ai.handlers import physics_shape as physics_shape_handlers
+from godot_ai.handlers import profiler as profiler_handlers
 from godot_ai.handlers import project as project_handlers
 from godot_ai.handlers import resource as resource_handlers
 from godot_ai.handlers import scene as scene_handlers
@@ -1818,6 +1819,38 @@ async def test_game_debug_control_ops_use_editor_bridge():
         assert client.calls[-1]["command"] == "game_debug_control"
         assert client.calls[-1]["params"] == {"action": action}
         assert client.calls[-1]["timeout"] == game_handlers.GAME_DEBUG_TIMEOUT_SEC
+
+
+async def test_profiler_ops_send_profiler_commands():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+
+    await profiler_handlers.profiler_start(runtime)
+    assert client.calls[-1]["command"] == "profiler_start"
+    assert client.calls[-1]["params"] == {"max_functions": 128, "include_native": False}
+
+    await profiler_handlers.profiler_start(
+        runtime, profilers=["visual"], max_functions=32, include_native=True
+    )
+    assert client.calls[-1]["params"] == {
+        "max_functions": 32,
+        "include_native": True,
+        "profilers": ["visual"],
+    }
+
+    await profiler_handlers.profiler_stop(runtime)
+    assert client.calls[-1]["command"] == "profiler_stop"
+    await profiler_handlers.profiler_status(runtime)
+    assert client.calls[-1]["command"] == "profiler_status"
+
+    await profiler_handlers.profiler_get(runtime, top_n=5, sort_by="total", per_frame=True)
+    assert client.calls[-1]["command"] == "profiler_get"
+    assert client.calls[-1]["params"] == {
+        "top_n": 5,
+        "sort_by": "total",
+        "last_frames": 0,
+        "per_frame": True,
+    }
 
 
 async def test_game_get_scene_tree_sends_game_command():
