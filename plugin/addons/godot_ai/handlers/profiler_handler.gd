@@ -26,16 +26,23 @@ const DEFAULT_FUNCTIONS := 128
 ## Frames kept per stream (10 minutes at 60 fps); later frames are dropped
 ## and the capture reports truncated=true.
 const MAX_FRAMES := 36000
+## A frame whose median sits within this band of the frame-rate cap is
+## reported as capped: its frame time measures the cap, not the game's cost.
+const CAP_BAND_LOW := 0.9
+const CAP_BAND_HIGH := 1.1
 
 var _debugger_plugin: EditorDebuggerPlugin
-var _debugger: Node = null
-var _session: EditorDebuggerSession = null
+## Testing seam: returns {session, debugger} for the game to profile, or {}.
+var _target_finder: Callable
+var _debugger: Object = null
+var _session: Object = null
 var _capturing := false
 var _profilers: Array[String] = []
 var _started_msec := 0
 var _stopped_msec := 0
 var _truncated := false
 var _game_exited := false
+var _dropped_frames := 0
 
 var _signatures := {}
 var _script_frames: Array = []
@@ -47,6 +54,7 @@ var _hardware := {}
 
 func _init(debugger_plugin: EditorDebuggerPlugin = null) -> void:
 	_debugger_plugin = debugger_plugin
+	_target_finder = _find_game_debugger
 
 
 func profiler_start(params: Dictionary) -> Dictionary:
@@ -70,12 +78,12 @@ func profiler_start(params: Dictionary) -> Dictionary:
 			"max_functions must be %d..%d (got %d)" % [MIN_FUNCTIONS, MAX_FUNCTIONS, max_functions])
 	var include_native := bool(params.get("include_native", false))
 
-	if not EditorInterface.is_playing_scene():
-		return _not_running()
-	var target := _find_game_debugger()
+	## Gate on an attached debugger session, not EditorInterface.is_playing_scene():
+	## a game launched outside the editor (--remote-debug with Keep Debug Server
+	## Open) has an active session while is_playing_scene() is false.
+	var target: Dictionary = _target_finder.call()
 	if target.is_empty():
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
-			"No active debugger session for the running game — is it attached to this editor's debugger?")
+		return _not_running()
 
 	var restarted := _capturing
 	if _capturing:
@@ -123,6 +131,11 @@ func profiler_get(params: Dictionary) -> Dictionary:
 	var visual := _tail(_visual_frames, last_frames)
 	var data := _status_data()
 	data["frame_times"] = summarize_frame_times(scripts)
+	data["frame_cap"] = frame_cap(
+		ProjectSettings.get_setting("application/run/max_fps", 0),
+		ProjectSettings.get_setting("display/window/vsync/vsync_mode", DisplayServer.VSYNC_ENABLED),
+		DisplayServer.screen_get_refresh_rate(),
+		data.frame_times.frame_ms.get("p50", 0.0))
 	data["functions"] = summarize_functions(scripts, _signatures, top_n, sort_by)
 	data["servers"] = summarize_servers(scripts)
 	data["visual"] = summarize_visual(visual)
@@ -144,7 +157,10 @@ func _on_debug_data(msg: String, data: Array) -> void:
 				_signatures[int(data[1])] = str(data[0])
 		"servers:profile_frame":
 			if "scripts" in _profilers:
-				_push(_script_frames, data)
+				if is_impossible_servers_frame(data):
+					_dropped_frames += 1
+				else:
+					_push(_script_frames, data)
 		"visual:profile_frame":
 			if "visual" in _profilers:
 				_push(_visual_frames, data)
@@ -188,7 +204,7 @@ func _disconnect() -> void:
 	if _debugger != null and is_instance_valid(_debugger) and _debugger.is_connected("debug_data", _on_debug_data):
 		_debugger.disconnect("debug_data", _on_debug_data)
 	_debugger = null
-	if _session != null and _session.stopped.is_connected(_on_session_stopped):
+	if _session != null and is_instance_valid(_session) and _session.stopped.is_connected(_on_session_stopped):
 		_session.stopped.disconnect(_on_session_stopped)
 
 
@@ -200,6 +216,7 @@ func _reset() -> void:
 	_hardware = {}
 	_truncated = false
 	_game_exited = false
+	_dropped_frames = 0
 	_stopped_msec = 0
 
 
@@ -207,7 +224,7 @@ func _reset() -> void:
 ## keep the frames, so a later profiler_get still reads them. The session's
 ## `stopped` signal ends it on time; the poll covers a missed signal.
 func _check_session() -> void:
-	if _capturing and (_session == null or not _session.is_active()):
+	if _capturing and (_session == null or not is_instance_valid(_session) or not _session.is_active()):
 		_on_session_stopped()
 
 
@@ -228,6 +245,7 @@ func _status_data() -> Dictionary:
 			"visual": _visual_frames.size(),
 			"monitors": _monitor_frames.size(),
 		},
+		"dropped_frames": _dropped_frames,
 		"truncated": _truncated,
 		"game_exited": _game_exited,
 	}
@@ -236,8 +254,8 @@ func _status_data() -> Dictionary:
 func _not_running() -> Dictionary:
 	return ErrorCodes.make_not_ready(
 		ErrorCodes.SUB_EDITOR_GAME_NOT_RUNNING,
-		"Game is not running — start the project first", false,
-		"Start the game with project_run (or wait for the user to run it), then retry.")
+		"No game is attached to this editor's debugger — start the project first", false,
+		"Start the game with project_run, or launch it with --remote-debug to this editor while Debug > Keep Debug Server Open is on, then retry.")
 
 
 ## Find the active game session and the ScriptEditorDebugger behind it. The
@@ -300,6 +318,13 @@ static func monitor_names() -> Array:
 	return names
 
 
+## Script time is part of the frame, so a frame that reports more script time
+## than frame time is bogus. Seen on a real project: one frame claiming 33 s of
+## script time inside a ~50 ms frame, which skewed every average.
+static func is_impossible_servers_frame(raw: Array) -> bool:
+	return raw.size() >= 7 and float(raw[5]) > float(raw[1])
+
+
 ## ServersDebugger::ServersProfilerFrame::serialize layout: six scalars,
 ## then a counted list of servers (name, 2*n [function, seconds]), then
 ## 5*m script functions [sig_id, calls, self_s, total_s, internal_s].
@@ -311,7 +336,6 @@ static func decode_servers_frame(raw: Array) -> Dictionary:
 		"frame_time": float(raw[1]),
 		"process_time": float(raw[2]),
 		"physics_time": float(raw[3]),
-		"physics_frame_time": float(raw[4]),
 		"script_time": float(raw[5]),
 		"servers": {},
 		"functions": [],
@@ -343,7 +367,7 @@ static func decode_servers_frame(raw: Array) -> Dictionary:
 ## VisualProfilerFrame layout: frame, 3*n, then [name, cpu_ms, gpu_ms]. The
 ## times are timestamps: an area lasts until the next one starts, the first
 ## and last areas bound the frame, ">name" opens a category and "<" closes it
-## (EditorVisualProfiler::_update_frame).
+## (EditorVisualProfiler::_update_frame). Each area maps to [cpu, gpu, leaf].
 static func decode_visual_frame(raw: Array) -> Dictionary:
 	if raw.size() < 2:
 		return {}
@@ -374,21 +398,21 @@ static func decode_visual_frame(raw: Array) -> Dictionary:
 		var path := ""
 		for category in stack:
 			path += category
-			_add_area(result.areas, path, cpu, gpu)
+			_add_area(result.areas, path, cpu, gpu, false)
 			path += "/"
-		_add_area(result.areas, path + name, cpu, gpu)
+		_add_area(result.areas, path + name, cpu, gpu, true)
 	return result
 
 
-static func _add_area(areas: Dictionary, path: String, cpu: float, gpu: float) -> void:
-	var entry: Array = areas.get(path, [0.0, 0.0])
+static func _add_area(areas: Dictionary, path: String, cpu: float, gpu: float, leaf: bool) -> void:
+	var entry: Array = areas.get(path, [0.0, 0.0, leaf])
 	entry[0] += cpu
 	entry[1] += gpu
 	areas[path] = entry
 
 
 static func summarize_frame_times(raw_frames: Array) -> Dictionary:
-	var series := {"frame_ms": [], "process_ms": [], "physics_ms": [], "physics_frame_ms": [], "script_ms": []}
+	var series := {"frame_ms": [], "process_ms": [], "physics_ms": [], "script_ms": []}
 	for raw in raw_frames:
 		var f := decode_servers_frame(raw)
 		if f.is_empty():
@@ -396,7 +420,6 @@ static func summarize_frame_times(raw_frames: Array) -> Dictionary:
 		series.frame_ms.append(f.frame_time * 1000.0)
 		series.process_ms.append(f.process_time * 1000.0)
 		series.physics_ms.append(f.physics_time * 1000.0)
-		series.physics_frame_ms.append(f.physics_frame_time * 1000.0)
 		series.script_ms.append(f.script_time * 1000.0)
 	var out := {}
 	for key in series:
@@ -404,8 +427,29 @@ static func summarize_frame_times(raw_frames: Array) -> Dictionary:
 	return out
 
 
+## Whether frame time is measuring the frame-rate cap rather than the game.
+## The cap is the slower of application/run/max_fps and, with vsync on
+## (enabled or adaptive), the screen refresh rate the editor sees.
+static func frame_cap(max_fps: int, vsync_mode: int, refresh_rate: float, frame_ms_p50: float) -> Dictionary:
+	var cap_ms := 0.0
+	if max_fps > 0:
+		cap_ms = 1000.0 / max_fps
+	var vsync_caps := vsync_mode == DisplayServer.VSYNC_ENABLED or vsync_mode == DisplayServer.VSYNC_ADAPTIVE
+	if vsync_caps and refresh_rate > 0.0:
+		cap_ms = maxf(cap_ms, 1000.0 / refresh_rate)
+	var capped := cap_ms > 0.0 and frame_ms_p50 >= cap_ms * CAP_BAND_LOW and frame_ms_p50 <= cap_ms * CAP_BAND_HIGH
+	return {
+		"max_fps": max_fps,
+		"vsync_mode": ["disabled", "enabled", "adaptive", "mailbox"][clampi(vsync_mode, 0, 3)],
+		"refresh_rate": snappedf(refresh_rate, 0.01),
+		"cap_ms": snappedf(cap_ms, 0.001),
+		"capped": capped,
+	}
+
+
 ## Per-function totals over the window. Averages divide by every frame in
-## the window, so a function absent from a frame counts as zero there.
+## the window, so a function absent from a frame counts as zero there; the
+## medians are over the frames the function ran in.
 static func summarize_functions(raw_frames: Array, signatures: Dictionary, top_n: int, sort_by: String) -> Array:
 	var totals := {}
 	var frame_count := 0
@@ -415,11 +459,13 @@ static func summarize_functions(raw_frames: Array, signatures: Dictionary, top_n
 			continue
 		frame_count += 1
 		for fn in f.functions:
-			var t: Array = totals.get(fn[0], [0, 0.0, 0.0, 0])
+			var t: Array = totals.get(fn[0], [0, 0.0, 0.0, 0, [], []])
 			t[0] += fn[1]
 			t[1] += fn[2]
 			t[2] += fn[3]
 			t[3] += 1
+			t[4].append(fn[2])
+			t[5].append(fn[3])
 			totals[fn[0]] = t
 	if frame_count == 0:
 		return []
@@ -432,12 +478,20 @@ static func summarize_functions(raw_frames: Array, signatures: Dictionary, top_n
 		row["total_ms"] = snappedf(t[2] * 1000.0, 0.0001)
 		row["self_ms_per_frame"] = snappedf(t[1] * 1000.0 / frame_count, 0.0001)
 		row["total_ms_per_frame"] = snappedf(t[2] * 1000.0 / frame_count, 0.0001)
+		row["self_ms_median"] = snappedf(_median(t[4]) * 1000.0, 0.0001)
+		row["total_ms_median"] = snappedf(_median(t[5]) * 1000.0, 0.0001)
 		row["calls_per_frame"] = snappedf(float(t[0]) / frame_count, 0.01)
 		row["frames_seen"] = t[3]
 		rows.append(row)
 	var key: String = {"self": "self_ms", "total": "total_ms", "calls": "calls"}[sort_by]
 	rows.sort_custom(func(a, b): return a[key] > b[key])
 	return rows.slice(0, top_n)
+
+
+static func _median(values: Array) -> float:
+	var sorted := values.duplicate()
+	sorted.sort()
+	return sorted[clampi(ceili(0.5 * sorted.size()) - 1, 0, sorted.size() - 1)]
 
 
 ## Signatures read "script::line::function"; built-in scripts carry an extra
@@ -486,7 +540,7 @@ static func summarize_visual(raw_frames: Array) -> Dictionary:
 		cpu.append(v.cpu_ms)
 		gpu.append(v.gpu_ms)
 		for path in v.areas:
-			var acc: Array = sums.get(path, [0.0, 0.0])
+			var acc: Array = sums.get(path, [0.0, 0.0, v.areas[path][2]])
 			acc[0] += v.areas[path][0]
 			acc[1] += v.areas[path][1]
 			sums[path] = acc
@@ -494,6 +548,7 @@ static func summarize_visual(raw_frames: Array) -> Dictionary:
 	for path in sums:
 		areas.append({
 			"path": path,
+			"leaf": sums[path][2],
 			"cpu_ms": snappedf(sums[path][0] / frame_count, 0.0001),
 			"gpu_ms": snappedf(sums[path][1] / frame_count, 0.0001),
 		})
@@ -519,33 +574,33 @@ static func summarize_monitors(raw_frames: Array, names: Array) -> Dictionary:
 	return out
 
 
+## One row per frame number, ascending. Render times are keyed by the
+## RenderingServer's profile frame, which can trail the process frame, so a
+## frame number may carry only script times or only render times.
 static func per_frame_rows(script_frames: Array, visual_frames: Array) -> Array:
-	var visual_by_frame := {}
-	for raw in visual_frames:
-		var v := decode_visual_frame(raw)
-		if not v.is_empty():
-			visual_by_frame[v.frame] = v
-	var rows := []
+	var rows_by_frame := {}
 	for raw in script_frames:
 		var f := decode_servers_frame(raw)
 		if f.is_empty():
 			continue
-		var row := {
+		rows_by_frame[f.frame] = {
 			"frame": f.frame,
 			"frame_ms": snappedf(f.frame_time * 1000.0, 0.001),
 			"process_ms": snappedf(f.process_time * 1000.0, 0.001),
 			"physics_ms": snappedf(f.physics_time * 1000.0, 0.001),
 			"script_ms": snappedf(f.script_time * 1000.0, 0.001),
 		}
-		if visual_by_frame.has(f.frame):
-			row["cpu_render_ms"] = snappedf(visual_by_frame[f.frame].cpu_ms, 0.001)
-			row["gpu_render_ms"] = snappedf(visual_by_frame[f.frame].gpu_ms, 0.001)
-		rows.append(row)
-	if rows.is_empty():
-		for frame in visual_by_frame:
-			var v: Dictionary = visual_by_frame[frame]
-			rows.append({"frame": frame, "cpu_render_ms": snappedf(v.cpu_ms, 0.001), "gpu_render_ms": snappedf(v.gpu_ms, 0.001)})
-	return rows
+	for raw in visual_frames:
+		var v := decode_visual_frame(raw)
+		if v.is_empty():
+			continue
+		var row: Dictionary = rows_by_frame.get(v.frame, {"frame": v.frame})
+		row["cpu_render_ms"] = snappedf(v.cpu_ms, 0.001)
+		row["gpu_render_ms"] = snappedf(v.gpu_ms, 0.001)
+		rows_by_frame[v.frame] = row
+	var frames := rows_by_frame.keys()
+	frames.sort()
+	return frames.map(func(n): return rows_by_frame[n])
 
 
 ## avg / min / max and nearest-rank percentiles.
