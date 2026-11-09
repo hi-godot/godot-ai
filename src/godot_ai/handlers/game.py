@@ -171,39 +171,6 @@ async def game_input_state(
     return await _game_command(runtime, "input_state", params)
 
 
-async def game_profiler_start(
-    runtime: DirectRuntime,
-    profilers: list[str] | None = None,
-    max_functions: int = 128,
-    include_native: bool = False,
-) -> dict:
-    params: dict[str, Any] = {"max_functions": max_functions, "include_native": include_native}
-    if profilers is not None:
-        params["profilers"] = profilers
-    return await runtime.send_command("profiler_start", params)
-
-
-async def game_profiler_stop(runtime: DirectRuntime) -> dict:
-    return await runtime.send_command("profiler_stop", {})
-
-
-async def game_profiler_status(runtime: DirectRuntime) -> dict:
-    return await runtime.send_command("profiler_status", {})
-
-
-async def game_profiler_get(
-    runtime: DirectRuntime,
-    top_n: int = 20,
-    sort_by: str = "self",
-    last_frames: int = 0,
-    per_frame: bool = False,
-) -> dict:
-    return await runtime.send_command(
-        "profiler_get",
-        {"top_n": top_n, "sort_by": sort_by, "last_frames": last_frames, "per_frame": per_frame},
-    )
-
-
 def _invalid_params(message: str) -> GodotCommandError:
     return GodotCommandError(code=ErrorCode.INVALID_PARAMS, message=message)
 

@@ -68,31 +68,7 @@ Ops:
         basis. Action-based input is focus-independent, so it works on a
         backgrounded game window. Cannot run inside batch_execute.
   - input_state(actions=None)
-        Read current action pressed states. Empty actions = all project actions.
-  - profiler_start(profilers=["scripts", "visual", "monitors"],
-                   max_functions=128, include_native=False)
-        Start capturing what the editor's Profiler, Visual Profiler and
-        Monitors panels show for the running game (performance profiling,
-        frame time, CPU/GPU render time, draw calls). "scripts" turns on the
-        engine's script/servers profiler (per-function self/total time and
-        calls, frame/process/physics time); max_functions is how many of each
-        frame's slowest functions the game reports (16..512). "visual" turns
-        on per-render-pass CPU/GPU timing. "monitors" records the Performance
-        monitors the game sends about once a second (FPS, memory, objects,
-        draw calls, primitives). Calling it again restarts the capture.
-  - profiler_stop()
-        Stop the game-side profilers. Captured frames stay readable.
-  - profiler_status()
-        Whether a capture is running, its duration and frame counts.
-  - profiler_get(top_n=20, sort_by="self", last_frames=0, per_frame=False)
-        Aggregate the capture (works while running or after stop):
-        frame/process/physics/script time stats (avg, min, p50, p90, p99,
-        max, ms), the top_n script functions by "self", "total" or "calls"
-        (window totals plus per-frame averages, with script path and line),
-        server function averages, render CPU/GPU stats and per-pass averages
-        by Visual Profiler path, and monitor stats. last_frames=N limits the
-        script and visual aggregates to the most recent N frames;
-        per_frame=True adds one timing row per captured frame."""
+        Read current action pressed states. Empty actions = all project actions."""
 
 
 def register_game_tools(mcp: FastMCP) -> None:
@@ -114,10 +90,6 @@ def register_game_tools(mcp: FastMCP) -> None:
             "input_action": game_handlers.game_input_action,
             "input_sequence": game_handlers.game_input_sequence,
             "input_state": game_handlers.game_input_state,
-            "profiler_start": game_handlers.game_profiler_start,
-            "profiler_stop": game_handlers.game_profiler_stop,
-            "profiler_status": game_handlers.game_profiler_status,
-            "profiler_get": game_handlers.game_profiler_get,
         },
         read_resource_forms={
             "get_scene_tree": None,
@@ -133,9 +105,5 @@ def register_game_tools(mcp: FastMCP) -> None:
             "input_action": None,
             "input_sequence": None,
             "input_state": None,
-            "profiler_start": None,
-            "profiler_stop": None,
-            "profiler_status": None,
-            "profiler_get": None,
         },
     )

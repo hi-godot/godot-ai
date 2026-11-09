@@ -148,11 +148,11 @@ class TestSceneGetRootsTool:
 
 
 # ---------------------------------------------------------------------------
-# game_manage profiler ops
+# profiler_manage
 # ---------------------------------------------------------------------------
 
 
-class TestGameProfilerOps:
+class TestProfilerManageOps:
     async def test_profiler_get_round_trip(self, mcp_stack):
         client, plugin = mcp_stack
 
@@ -172,9 +172,9 @@ class TestGameProfilerOps:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "game_manage",
+            "profiler_manage",
             {
-                "op": "profiler_get",
+                "op": "get",
                 "params": {"top_n": 3, "sort_by": "calls", "last_frames": 60},
             },
         )
@@ -194,9 +194,9 @@ class TestGameProfilerOps:
 
         task = asyncio.create_task(respond())
         result = await client.call_tool(
-            "game_manage",
+            "profiler_manage",
             {
-                "op": "profiler_start",
+                "op": "start",
                 "params": {"profilers": ["scripts", "monitors"], "max_functions": 64},
             },
         )

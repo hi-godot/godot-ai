@@ -257,3 +257,11 @@ func test_start_accepts_a_session_the_editor_did_not_launch() -> void:
 	_handler.profiler_stop({})
 	assert_eq(session.calls.slice(2), [["servers", false, []], ["visual", false, []]])
 	assert_false(debugger.is_connected("debug_data", _handler._on_debug_data))
+
+
+func test_profiler_is_its_own_dock_domain() -> void:
+	assert_true(McpToolCatalog.is_excludable_domain("profiler"))
+	var all := McpToolCatalog.enabled_tool_count(PackedStringArray())
+	assert_eq(McpToolCatalog.enabled_tool_count(PackedStringArray(["profiler"])), all - 1)
+	assert_eq(McpToolCatalog.enabled_tool_count(PackedStringArray(["game"])), all - 1,
+		"turning game off leaves the profiler on")
