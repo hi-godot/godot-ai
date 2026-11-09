@@ -282,7 +282,8 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "game",
         "  game_manage      get_scene_tree, get_node_info, get_ui_elements,\n"
         "                   input_key, input_mouse, input_gamepad, input_action,\n"
-        "                   input_state\n",
+        "                   input_state, profiler_start, profiler_stop,\n"
+        "                   profiler_get\n",
     ),
     ("autoload", "  autoload_manage  list, add, remove\n"),
     (

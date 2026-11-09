@@ -288,7 +288,7 @@ Calls take the form:
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
 | `signal_manage` | `list`, `connect`, `disconnect` |
 | `input_map_manage` | `list`, `add_action`, `ensure_action`, `remove_action`, `bind_event`, `ensure_binding` |
-| `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `suspend`, `resume`, `next_frame`, `debug_status`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_sequence`, `input_state` |
+| `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `suspend`, `resume`, `next_frame`, `debug_status`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_sequence`, `input_state`, `profiler_start`, `profiler_stop`, `profiler_status`, `profiler_get` |
 | `autoload_manage` | `list`, `add`, `remove` |
 | `filesystem_manage` | `read_text`, `write_text`, `import_get`, `import_set`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `set_stylebox_texture`, `set_font`, `set_icon`, `stylebox_override`, `apply` |
@@ -472,6 +472,44 @@ array (each step's `at_frame`/`action`/`pressed`), and `actions_pressed_at_end`
 — the last so you know which actions are still held (a press with no matching
 release stays down) and must be released before the next check. Follow with `get_node_info` / `get_scene_tree` to assert the
 resulting world state.
+
+`game_manage(op="profiler_start"|"profiler_stop"|"profiler_status"|"profiler_get")`
+captures what the editor's **Profiler**, **Visual Profiler** and **Monitors**
+panels show for the running game, so an agent can profile without anyone
+reading the panels. `profiler_start` switches on the game's built-in profilers
+through `EditorDebuggerSession.toggle_profiler` (the same messages the panels'
+Start buttons send) and records their frames: `profilers` picks any of
+`"scripts"` (per-function self/total time and calls, plus frame, process,
+physics and script time), `"visual"` (CPU and GPU time per render pass) and
+`"monitors"` (the Performance monitors the game sends about once a second:
+FPS, memory, object, draw-call and primitive counts). `max_functions`
+(16..512, default 128) is how many of each frame's slowest script functions the
+game reports, as in the editor's own setting; `include_native=true` also
+profiles native calls.
+
+`profiler_get` aggregates the capture, during or after it: `frame_times`
+(`frame_ms`, `process_ms`, `physics_ms`, `physics_frame_ms`, `script_ms`, each
+with `count`, `avg`, `min`, `p50`, `p90`, `p99`, `max`), the `top_n` script
+`functions` sorted by `sort_by` (`"self"`, `"total"` or `"calls"`; window
+totals plus per-frame averages, with script path and line), `servers`
+(average ms per frame for each physics/audio/navigation server step),
+`visual` (render `cpu_ms`/`gpu_ms` stats and per-pass averages keyed by the
+Visual Profiler's tree path) and `monitors` (`avg`, `min`, percentiles, `max`,
+`last`, raw units: seconds and bytes as `Performance` reports them).
+`last_frames=N` limits the script and visual aggregates to the newest N frames;
+`per_frame=true` adds one timing row per captured frame. A capture keeps at
+most 36000 frames per stream (`truncated=true` past that), and ends by itself
+with `game_exited=true` when the game closes.
+
+Typical use: `project_run`, `profiler_start`, wait or drive input for a few
+seconds, `profiler_stop`, then `profiler_get(top_n=20)`.
+
+Limits: script functions are only those in each frame's top `max_functions`
+by total time; GPU pass times come from the renderer's timestamp queries and
+stay at zero where the rendering driver has none. Profiling a game is not free:
+the script profiler adds per-call overhead to the numbers it reports. If the
+editor's own Profiler or Visual Profiler panel is recording, stopping the
+capture also stops the game-side profiler behind that panel.
 
 Every rolled-up tool also accepts an optional top-level `session_id` for
 per-call multi-editor routing (sibling of `op` and `params`, *not* nested

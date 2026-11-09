@@ -148,6 +148,64 @@ class TestSceneGetRootsTool:
 
 
 # ---------------------------------------------------------------------------
+# game_manage profiler ops
+# ---------------------------------------------------------------------------
+
+
+class TestGameProfilerOps:
+    async def test_profiler_get_round_trip(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "profiler_get"
+            assert cmd["params"] == {
+                "top_n": 3,
+                "sort_by": "calls",
+                "last_frames": 60,
+                "per_frame": False,
+            }
+            await plugin.send_response(
+                cmd["request_id"],
+                {"capturing": False, "frames": {"scripts": 60}, "functions": []},
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "game_manage",
+            {
+                "op": "profiler_get",
+                "params": {"top_n": 3, "sort_by": "calls", "last_frames": 60},
+            },
+        )
+        await task
+
+        assert result.data["frames"]["scripts"] == 60
+
+    async def test_profiler_start_forwards_options(self, mcp_stack):
+        client, plugin = mcp_stack
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "profiler_start"
+            assert cmd["params"]["profilers"] == ["scripts", "monitors"]
+            assert cmd["params"]["max_functions"] == 64
+            await plugin.send_response(cmd["request_id"], {"capturing": True})
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "game_manage",
+            {
+                "op": "profiler_start",
+                "params": {"profilers": ["scripts", "monitors"], "max_functions": 64},
+            },
+        )
+        await task
+
+        assert result.data["capturing"] is True
+
+
+# ---------------------------------------------------------------------------
 # scene_create
 # ---------------------------------------------------------------------------
 
