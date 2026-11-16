@@ -261,6 +261,27 @@ def test_private_capability_is_never_written_to_retained_log(tmp_path):
     with pytest.raises(support.ReleaseError, match="printed a private capability"):
         runtime._write_secret_free_log(log, b"prefix secret-token suffix", ("secret-token",))
     assert log.read_text(encoding="utf-8") == (
+        "qualification output withheld: private capability leaked\nprefix <private value> suffix"
+    )
+
+
+def test_redaction_masks_the_longest_private_value_first(tmp_path):
+    log = tmp_path / "process.log"
+    index = "http://127.0.0.1:9/cap-123/simple/"
+    output = f"uv: no wheels on {index} (cap-123)".encode()
+    with pytest.raises(support.ReleaseError, match="printed a private capability"):
+        runtime._write_secret_free_log(log, output, ("cap-123", index))
+    text = log.read_text(encoding="utf-8")
+    assert "cap-123" not in text and "127.0.0.1:9" not in text
+    assert text.endswith("uv: no wheels on <private value> (<private value>)")
+
+
+def test_redaction_withholds_output_when_masking_recreates_a_value(tmp_path):
+    log = tmp_path / "process.log"
+    # Replacing "ab" leaves "<private value>", which contains the second value.
+    with pytest.raises(support.ReleaseError):
+        runtime._write_secret_free_log(log, b"xx ab yy", ("ab", "private"))
+    assert log.read_text(encoding="utf-8") == (
         "qualification output withheld: private capability leaked\n"
     )
 
