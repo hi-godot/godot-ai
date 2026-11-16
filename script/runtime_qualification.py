@@ -271,6 +271,12 @@ def _isolated_environment(root: Path, index: str) -> dict[str, str]:
             "UV_CACHE_DIR": str(root / "uv-cache"),
             "UV_TOOL_DIR": str(root / "uv-tools"),
             "UV_NO_PROGRESS": "1",
+            # A macOS editor started without TERM replaces its environment with
+            # a login zsh's (/etc/zprofile runs path_helper), which reorders
+            # PATH and lets uv pick a Homebrew or python.org interpreter the
+            # retained index has no wheels for. This is Godot's own opt-out
+            # marker for that reload; the variable is inert on other systems.
+            "__GODOT_SHELL_ENV_SET": "1",
             "PIP_CONFIG_FILE": os.devnull,
             "PYTHONNOUSERSITE": "1",
         }
@@ -823,7 +829,16 @@ def _manifest_tree(candidate: Path) -> dict[str, dict[str, Any]]:
     }
 
 
-REDACTED_LOG_HEADER = b"qualification output withheld: private capability leaked\n"
+REDACTED_LOG_HEADER = b"qualification output redacted: private values replaced\n"
+WITHHELD_LOG_HEADER = b"qualification output withheld: private capability leaked\n"
+
+
+class PrivateValuePrinted(support.ReleaseError):
+    """A process printed a private value; `withheld` says no output was kept."""
+
+    def __init__(self, withheld: bool) -> None:
+        super().__init__("qualification process printed a private capability")
+        self.withheld = withheld
 
 
 def _write_secret_free_log(path: Path, output: bytes, secrets: tuple[str, ...]) -> None:
@@ -838,9 +853,10 @@ def _write_secret_free_log(path: Path, output: bytes, secrets: tuple[str, ...]) 
         for secret in sorted({value for value in secrets if value}, key=len, reverse=True):
             redacted = redacted.replace(secret.encode(), b"<private value>")
         if any(value and value.encode() in redacted for value in secrets):
-            redacted = b""
+            path.write_bytes(WITHHELD_LOG_HEADER)
+            raise PrivateValuePrinted(withheld=True)
         path.write_bytes(REDACTED_LOG_HEADER + redacted)
-        raise support.ReleaseError("qualification process printed a private capability")
+        raise PrivateValuePrinted(withheld=False)
     path.write_bytes(output)
 
 
@@ -903,8 +919,10 @@ def _retain_runtime_diagnostics(
                         data or b"qualification diagnostic was empty\n",
                         private_values,
                     )
-                except support.ReleaseError:
-                    status = "withheld_private_value"
+                except PrivateValuePrinted as error:
+                    status = (
+                        "withheld_private_value" if error.withheld else "redacted_private_value"
+                    )
                 except OSError:
                     status = "write_error"
                 else:
