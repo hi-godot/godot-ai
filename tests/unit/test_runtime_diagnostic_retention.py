@@ -79,6 +79,7 @@ def boundary(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime, "_execute_sensitive", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(runtime, "_manifest_tree", lambda *_: {})
     monkeypatch.setattr(runtime, "_write_project", lambda *_: None)
+    monkeypatch.setattr(runtime, "_require_row_python", lambda *_: None)
     monkeypatch.setattr(runtime, "_capability_directory", lambda *_: tmp_path / "capabilities")
     monkeypatch.setattr(runtime, "AttachedBridge", Bridge)
     origin = SimpleNamespace(token=PRIVATE[0], proxy_port=1, environment=lambda: {})

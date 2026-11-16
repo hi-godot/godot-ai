@@ -882,3 +882,50 @@ def test_attached_bridge_stop_is_prompt_even_when_the_bridge_never_answers(tmp_p
     assert not bridge._thread.is_alive()
     assert bridge._process is not None and bridge._process.poll() is not None
     assert bridge.served_b is False
+
+
+def test_isolated_environment_makes_the_row_python_uvs_first_choice(tmp_path):
+    # Production argv carries `--python <range>` (#1244), which overrides
+    # UV_PYTHON; the retained index only holds this row's wheels.
+    environment = runtime._isolated_environment(tmp_path, "http://127.0.0.1:1/")
+
+    assert environment["PATH"].split(os.pathsep)[0] == os.path.dirname(sys.executable)
+    assert environment["UV_PYTHON_PREFERENCE"] == "only-system"
+    assert environment["UV_PYTHON_DOWNLOADS"] == "never"
+
+
+def _addon_with_config(project: Path, text: str) -> None:
+    (project / "addons/godot_ai").mkdir(parents=True)
+    (project / "addons/godot_ai/plugin.cfg").write_text(text, encoding="utf-8")
+
+
+def test_plugin_python_request_reads_the_installed_addon(tmp_path):
+    _addon_with_config(tmp_path / "new", '[plugin]\npython_request=">=3.11,<3.15"\n')
+    _addon_with_config(tmp_path / "old", '[plugin]\nname="Godot AI"\n')
+
+    assert runtime._plugin_python_request(tmp_path / "new") == ">=3.11,<3.15"
+    assert runtime._plugin_python_request(tmp_path / "old") is None
+
+
+def test_require_row_python_rejects_another_in_range_interpreter(monkeypatch, tmp_path):
+    _addon_with_config(tmp_path, '[plugin]\npython_request=">=3.11,<3.15"\n')
+    monkeypatch.setattr(runtime.shutil, "which", lambda *args, **kwargs: "/bin/uv")
+    monkeypatch.setattr(runtime, "current_python_version", lambda: "3.11")
+    outputs = iter(["/opt/homebrew/bin/python3.14\n", "3.14\n"])
+    monkeypatch.setattr(
+        runtime.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=next(outputs)),
+    )
+
+    with pytest.raises(support.ReleaseError, match="Python 3.14 .* not this row's 3.11"):
+        runtime._require_row_python({"PATH": ""}, tmp_path)
+
+
+def test_require_row_python_skips_addons_without_a_request(monkeypatch, tmp_path):
+    _addon_with_config(tmp_path, '[plugin]\nname="Godot AI"\n')
+    monkeypatch.setattr(
+        runtime.subprocess, "run", lambda *args, **kwargs: pytest.fail("uv should not run")
+    )
+
+    runtime._require_row_python({"PATH": ""}, tmp_path)
