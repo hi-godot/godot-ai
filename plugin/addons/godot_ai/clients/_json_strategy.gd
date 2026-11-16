@@ -103,6 +103,8 @@ static func _configure_merged(
 			if _first_wins(client):
 				break
 	var tier: Dictionary = tiers[target_index]
+	if bool(tier.get("had_comments", false)):
+		return {"status": "error", "message": _commented_tier_write_error(str(tier["path"]), server_name)}
 	var config: Dictionary = tier["data"]
 	var holder := _ensure_path(config, select_server_key_path(config, client))
 	var existing: Variant = holder.get(server_name, null)
@@ -318,6 +320,11 @@ static func _remove_merged(
 		if not tier.get("exists", false):
 			continue
 		var key_path := select_server_key_path(tier["data"], client)
+		var parsed_holder: Variant = _walk_path(tier["data"], key_path)
+		if not (parsed_holder is Dictionary and parsed_holder.has(server_name)):
+			continue  # entry not in this tier; never scan a tier we would not change
+		if bool(tier.get("had_comments", false)):
+			return {"status": "error", "message": _commented_tier_write_error(str(tier["path"]), server_name)}
 		var original: String = str(tier.get("original_text", ""))
 		# Token-preserving removal (F5): edit `original` textually instead of
 		# re-serialising the parsed config. This preserves every byte outside
@@ -534,6 +541,7 @@ static func _read_file_text(path: String, allow_comments: bool = false) -> Dicti
 	if body.strip_edges().is_empty():
 		return {"exists": true, "ok": true, "data": {}, "original_text": content}
 	var parse_copy := body
+	var had_comments := false
 	if allow_comments:
 		# Parse copy only — `original_text` stays byte-for-byte, and an
 		# unterminated block comment fails closed rather than letting the
@@ -543,7 +551,9 @@ static func _read_file_text(path: String, allow_comments: bool = false) -> Dicti
 			var strip_msg := str(stripped.get("error", "invalid JSONC"))
 			push_warning("MCP | %s in %s" % [strip_msg, path])
 			return {"exists": true, "ok": false, "error": strip_msg, "original_text": content}
-		parse_copy = str(stripped.get("text", ""))
+		var without_comments := str(stripped.get("text", ""))
+		had_comments = without_comments != parse_copy
+		parse_copy = without_comments
 	var json := JSON.new()
 	if json.parse(parse_copy) != OK:
 		var msg := "JSON parse error on line %d: %s" % [json.get_error_line(), json.get_error_message()]
@@ -551,7 +561,7 @@ static func _read_file_text(path: String, allow_comments: bool = false) -> Dicti
 		return {"exists": true, "ok": false, "error": msg, "original_text": content}
 	if not (json.data is Dictionary):
 		return {"exists": true, "ok": false, "error": "top-level value is %s, expected object" % type_string(typeof(json.data)), "original_text": content}
-	return {"exists": true, "ok": true, "data": json.data, "original_text": content}
+	return {"exists": true, "ok": true, "data": json.data, "original_text": content, "had_comments": had_comments}
 
 
 ## Read-only by construction: requiring both flags means no Configure/Remove
@@ -858,7 +868,13 @@ static func _load_merge_tiers(client: McpClient, allow_comments: bool = false) -
 				"ok": false,
 				"error": McpClient.unresolved_config_path_error(client.display_name, path),
 			}
-		var read := _read_file_text(path, allow_comments)
+		## A `.jsonc` tier is commented JSON by definition (OpenCode merges
+		## opencode.json and opencode.jsonc, #1235), so it is always parsed
+		## with comments stripped. Writers check `had_comments` per tier and
+		## refuse to re-serialize one that has them, so comments are never
+		## dropped; an uncommented tier, or a commented one that does not hold
+		## our entry, no longer blocks the whole client.
+		var read := _read_file_text(path, allow_comments or _is_jsonc_path(path))
 		if not read.get("ok", false):
 			return {
 				"ok": false,
@@ -869,8 +885,17 @@ static func _load_merge_tiers(client: McpClient, allow_comments: bool = false) -
 			"exists": read.get("exists", false),
 			"original_text": read.get("original_text", ""),
 			"data": read.get("data", {}),
+			"had_comments": bool(read.get("had_comments", false)),
 		})
 	return {"ok": true, "tiers": tiers}
+
+
+static func _is_jsonc_path(path: String) -> bool:
+	return path.get_extension().to_lower() == "jsonc"
+
+
+static func _commented_tier_write_error(path: String, server_name: String) -> String:
+	return "%s contains comments that rewriting it would drop. Add or edit the %s entry in that file by hand, or remove the comments and retry." % [path, server_name]
 
 
 ## Commit a multi-file removal with best-effort rollback. Each individual write

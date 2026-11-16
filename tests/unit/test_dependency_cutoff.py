@@ -269,3 +269,20 @@ def test_compile_requirements_without_uv_fails_before_writing_or_executing(tmp_p
     assert calls == []
     assert not output.exists()
     assert not output.with_suffix(".in").exists()
+
+
+def test_plugin_python_request_mirrors_pyproject_requires_python():
+    """uvx launches pass plugin.cfg's python_request as --python (#1244); it must
+    name exactly the interpreter range the published package declares."""
+    import configparser
+    import tomllib
+
+    config = configparser.ConfigParser(interpolation=None)
+    config.read_string(
+        (support.ROOT / "plugin/addons/godot_ai/plugin.cfg").read_text(encoding="utf-8")
+    )
+    request = config.get("plugin", "python_request")
+    project = tomllib.loads((support.ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+    assert request == '"' + project["requires-python"] + '"'

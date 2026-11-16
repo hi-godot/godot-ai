@@ -26,6 +26,7 @@ const ClientRefreshStateScript := preload("res://addons/godot_ai/utils/mcp_clien
 const Client := preload("res://addons/godot_ai/clients/_base.gd")
 const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
 const ClientConfigurator := preload("res://addons/godot_ai/client_configurator.gd")
+const UvResolution := preload("res://addons/godot_ai/utils/uv_resolution_policy.gd")
 const ClientRegistry := preload("res://addons/godot_ai/clients/_registry.gd")
 const ToolCatalog := preload("res://addons/godot_ai/tool_catalog.gd")
 const LogViewerScript := preload("res://addons/godot_ai/dock_panels/log_viewer.gd")
@@ -1261,7 +1262,14 @@ func _apply_dev_mode_visibility() -> void:
 	# re-applies visibility on every status transition, so the section
 	# appears the moment the launch outcome makes it relevant.
 	var is_dev := ClientConfigurator.is_dev_checkout()
-	var uv_missing := not is_dev and ClientConfigurator.check_uv_version().is_empty()
+	## A uv too old for the launch policy (#1242) needs the same Setup row as
+	## a missing one: every launch would exit with code 2 before resolving.
+	## Probe only in user mode: a dev checkout never shows the uv row, so it
+	## must not pay a cold `uvx --version` on the main thread.
+	var uv_missing := false
+	if not is_dev:
+		var uv_version := ClientConfigurator.check_uv_version()
+		uv_missing = uv_version.is_empty() or UvResolution.uv_version_too_old(uv_version)
 	_setup_section.visible = _setup_section_should_show(dev, uv_missing, _server_launch_pending())
 
 
@@ -1488,7 +1496,19 @@ func _refresh_setup_status() -> void:
 
 	# User mode — check for uv
 	var uv_version := ClientConfigurator.check_uv_version()
-	if not uv_version.is_empty():
+	if UvResolution.uv_version_too_old(uv_version):
+		_setup_container.add_child(_make_status_row(
+			"uv",
+			"%s — needs %s+" % [_compact_uv_version_text(uv_version), UvResolution.MIN_UV_VERSION],
+			Color.RED,
+			"%s is too old for Godot AI's launch policy; the server cannot start until uv is updated (`uv self update`, or your package manager)." % uv_version,
+		))
+		var update_btn := Button.new()
+		update_btn.text = "How to update uv"
+		update_btn.tooltip_text = "Opens the official uv installation docs, which cover upgrading."
+		update_btn.pressed.connect(_on_install_uv)
+		_setup_container.add_child(update_btn)
+	elif not uv_version.is_empty():
 		var compact_uv_version := _compact_uv_version_text(uv_version)
 		var uv_tooltip := uv_version if compact_uv_version != uv_version else ""
 		_setup_container.add_child(_make_status_row("uv", compact_uv_version, Color.GREEN, uv_tooltip))

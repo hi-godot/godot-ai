@@ -27,6 +27,31 @@ func test_fixed_cutoff_and_only_own_package_exemption() -> void:
 		return
 	assert_eq(args[index + 1], "godot-ai=false")
 	assert_eq(args.count("--exclude-newer-package"), 1)
+	index = args.find("--python")
+	assert_true(index >= 0 and index + 1 < args.size(), "every launch requests a supported interpreter (#1244)")
+	if index < 0 or index + 1 >= args.size():
+		return
+	assert_eq(args[index + 1], config.get_value("plugin", "python_request", ""))
+	assert_eq(args[index + 1], Policy.python_request())
+	assert_eq(args.count("--python"), 1)
+
+
+func test_python_request_accepts_only_a_bounded_cpython_range() -> void:
+	assert_eq(Policy.validated_python_request(">=3.11,<3.15"), ">=3.11,<3.15")
+	for value in [null, 3.11, "", "3.13", ">=3.11", "<3.15", ">=3.11, <3.15", ">=3.11,<3.15 ", ">=3.11,<4", "pypy>=3.11,<3.15", ">=3.11,<3.15;rm"]:
+		assert_eq(Policy.validated_python_request(value), "", "reject %s" % str(value))
+
+
+func test_uv_version_gate_matches_first_uv_accepting_package_exemption() -> void:
+	assert_eq(Policy.parse_uv_version("uv 0.9.7"), "0.9.7")
+	assert_eq(Policy.parse_uv_version("uvx 0.11.32 (9d177269e 2026-10-01)"), "0.11.32")
+	assert_eq(Policy.parse_uv_version("  uv 0.13.8\n"), "0.13.8")
+	for text in ["", "not uv 0.9.7", "uv", "uv dev"]:
+		assert_eq(Policy.parse_uv_version(text), "", "unrecognized: %s" % text)
+	for old in ["uv 0.9.7", "uvx 0.9.24", "uv 0.8.30", "uv 0.1.0"]:
+		assert_true(Policy.uv_version_too_old(old), "%s rejects godot-ai=false (#1242)" % old)
+	for ok in ["uv 0.9.25", "uvx 0.9.26", "uv 0.10.0", "uv 0.13.8", "uv 1.0.0", "", "garbage"]:
+		assert_false(Policy.uv_version_too_old(ok), "%s must not be reported as too old" % ok)
 
 
 func test_cutoff_requires_complete_utc_calendar_time() -> void:
@@ -53,10 +78,19 @@ func test_previous_policy_binds_success_backup_path_and_metadata_version() -> vo
 	var config := ConfigFile.new()
 	config.set_value("plugin", "version", version)
 	assert_eq(config.save(path), OK)
-	assert_eq(Policy.previous_policy(outcome), {"known": true, "cutoff": ""}, "legacy backup explicitly proves absence")
+	assert_eq(Policy.previous_policy(outcome), {"known": true, "cutoff": "", "python": ""}, "legacy backup explicitly proves absence")
 	config.set_value("plugin", "dependency_cutoff", "2025-01-02T03:04:05Z")
 	assert_eq(config.save(path), OK)
-	assert_eq(Policy.previous_policy(outcome), {"known": true, "cutoff": "2025-01-02T03:04:05Z"})
+	assert_eq(Policy.previous_policy(outcome), {"known": true, "cutoff": "2025-01-02T03:04:05Z", "python": ""}, "pre-4.4.2 backup launched without --python")
+	config.set_value("plugin", "python_request", ">=3.11,<3.15")
+	assert_eq(config.save(path), OK)
+	assert_eq(Policy.previous_policy(outcome), {"known": true, "cutoff": "2025-01-02T03:04:05Z", "python": ">=3.11,<3.15"})
+	for python in ["", "3.13", 3]:
+		config.set_value("plugin", "python_request", python)
+		assert_eq(config.save(path), OK)
+		assert_eq(Policy.previous_policy(outcome), {}, "present invalid python_request is never legacy absence")
+	config.erase_section_key("plugin", "python_request")
+	assert_eq(config.save(path), OK)
 	for changed in [{"outcome": "rollback"}, {"backup_root": root + "/other"}, {"from_version": "../escape"}, {"from_version": 3}]:
 		var wrong := outcome.duplicate()
 		wrong.merge(changed, true)
@@ -83,29 +117,37 @@ func test_previous_policy_rejects_untyped_or_missing_version_metadata() -> void:
 	config.set_value("plugin", "version", 3)
 	assert_eq(Policy.previous_policy_from_config(config, "3"), {})
 	config.set_value("plugin", "version", "3")
-	assert_eq(Policy.previous_policy_from_config(config, "3"), {"known": true, "cutoff": ""})
+	assert_eq(Policy.previous_policy_from_config(config, "3"), {"known": true, "cutoff": "", "python": ""})
 
 
 func test_previous_launch_is_readback_only_and_does_not_mutate_live_policy() -> void:
 	var launch := {"ok": true, "tier": "uvx", "command": "uvx", "args": Policy.args()}
 	launch.args.append_array(["--from", "godot-ai==4.0.0", "godot-ai", "attach", "--port", "8123"])
 	var original := launch.duplicate(true)
-	var legacy := Policy.previous_launch_for_verification(launch, {"known": true, "cutoff": ""})
+	var legacy := Policy.previous_launch_for_verification(launch, {"known": true, "cutoff": "", "python": ""})
 	assert_false(legacy.args.has("--exclude-newer"))
 	assert_false(legacy.args.has("--exclude-newer-package"))
+	assert_false(legacy.args.has("--python"))
 	assert_eq(legacy.args[legacy.args.find("--from") + 1], "godot-ai==4.0.0")
 	assert_eq(legacy.args[legacy.args.find("--index") + 1], Policy.PUBLIC_INDEX)
-	var old := Policy.previous_launch_for_verification(launch, {"known": true, "cutoff": "2025-01-02T03:04:05Z"})
+	var old := Policy.previous_launch_for_verification(launch, {"known": true, "cutoff": "2025-01-02T03:04:05Z", "python": ""})
 	assert_eq(old.args[old.args.find("--exclude-newer") + 1], "2025-01-02T03:04:05Z")
 	assert_eq(old.args[old.args.find("--exclude-newer-package") + 1], "godot-ai=false")
+	assert_false(old.args.has("--python"), "4.4.1 and earlier launched without --python")
+	var pinned := Policy.previous_launch_for_verification(launch, {"known": true, "cutoff": "2025-01-02T03:04:05Z", "python": ">=3.11,<3.14"})
+	assert_eq(pinned.args[pinned.args.find("--python") + 1], ">=3.11,<3.14")
+	assert_eq(pinned.args.size(), launch.args.size())
 	assert_eq(launch, original, "constructing old expectation cannot mutate an actual launch")
 	assert_eq(Policy.args(), original.args.slice(0, Policy.args().size()), "current production policy remains fixed")
 	assert_eq(Policy.previous_launch_for_verification(launch, {}), launch, "unknown backup cannot remove current policy")
-	for invalid in [{"known": true}, {"known": "true", "cutoff": ""}, {"known": true, "cutoff": 0}, {"known": true, "cutoff": "invalid"}]:
+	for invalid in [{"known": true}, {"known": "true", "cutoff": ""}, {"known": true, "cutoff": 0}, {"known": true, "cutoff": "invalid"}, {"known": true, "cutoff": ""}, {"known": true, "cutoff": "", "python": 3}, {"known": true, "cutoff": "", "python": "3.13"}]:
 		assert_eq(Policy.previous_launch_for_verification(launch, invalid), {})
 	var duplicate_option := launch.duplicate(true)
 	duplicate_option.args.append_array(["--exclude-newer", "2025-01-02T03:04:05Z"])
-	assert_eq(Policy.previous_launch_for_verification(duplicate_option, {"known": true, "cutoff": ""}), {})
+	assert_eq(Policy.previous_launch_for_verification(duplicate_option, {"known": true, "cutoff": "", "python": ""}), {})
+	var duplicate_python := launch.duplicate(true)
+	duplicate_python.args.append_array(["--python", "3.13"])
+	assert_eq(Policy.previous_launch_for_verification(duplicate_python, {"known": true, "cutoff": "", "python": ""}), {})
 
 
 func test_config_file_cutoff_requires_quoted_string() -> void:
@@ -138,7 +180,10 @@ func test_previous_windows_console_policy_matches_real_client_readback() -> void
 				expected.remove_at(index)
 			elif option == "--exclude-newer":
 				expected[index + 1] = cutoff
-		var prior := Policy.previous_launch_for_verification(launch, {"known": true, "cutoff": cutoff})
+		var python_index := expected.find("--python")
+		expected.remove_at(python_index + 1)
+		expected.remove_at(python_index)
+		var prior := Policy.previous_launch_for_verification(launch, {"known": true, "cutoff": cutoff, "python": ""})
 		assert_eq(prior.args.slice(0, 3), ["-c", "bootstrap", "C:/Tools/uvx.exe"])
 		assert_eq(prior.args.slice(3), expected)
 		assert_eq(prior.console_args, expected)
@@ -154,7 +199,7 @@ func test_previous_windows_console_policy_matches_real_client_readback() -> void
 
 
 func test_previous_policy_preserves_absent_argv_and_refuses_invalid_console_args() -> void:
-	var policy := {"known": true, "cutoff": ""}
+	var policy := {"known": true, "cutoff": "", "python": ""}
 	var launch := {"ok": true, "tier": "uvx", "args": Policy.args()}
 	var prior := Policy.previous_launch_for_verification(launch, policy)
 	assert_false(prior.has("console_args"))
@@ -162,6 +207,7 @@ func test_previous_policy_preserves_absent_argv_and_refuses_invalid_console_args
 	prior = Policy.previous_launch_for_verification(console_only, policy)
 	assert_false(prior.has("args"))
 	assert_false(prior.console_args.has("--exclude-newer"))
+	assert_false(prior.console_args.has("--python"))
 	for invalid in ["invalid", [], ["--exclude-newer", "2025-01-02T03:04:05Z"]]:
 		var malformed := launch.duplicate(true)
 		malformed.console_args = invalid

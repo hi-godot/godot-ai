@@ -157,6 +157,7 @@ func test_launch_resolver_uvx_is_strict_and_pinned() -> void:
 			"--keyring-provider", "disabled",
 			"--exclude-newer", preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").dependency_cutoff(),
 			"--exclude-newer-package", "godot-ai=false",
+			"--python", ">=3.11,<3.15",
 			"--index", "https://pypi.org/simple",
 			"--default-index", "https://pypi.org/simple",
 			"--find-links", "https://pypi.org/simple/godot-ai/",
@@ -1027,6 +1028,53 @@ func test_opencode_json_strategy_updates_the_jsonc_tier_that_wins_the_merge() ->
 	DirAccess.remove_absolute(high_path)
 
 
+func test_opencode_commented_jsonc_tier_is_read_but_never_rewritten() -> void:
+	## #1235: comments are the point of opencode.jsonc. A commented jsonc tier
+	## without our entry must not block Configure into opencode.json, and one
+	## that holds our entry verifies but refuses any write that would drop
+	## the comments.
+	var low_path := _scratch_dir.path_join("opencode_commented.json")
+	var high_path := _scratch_dir.path_join("opencode_commented.jsonc")
+	var commented := '{\n  // my theme\n  "theme": "dark", /* keep */\n  "mcp": {"other": {"type": "local", "command": ["other"]}}\n}\n'
+	_write(high_path, commented)
+	DirAccess.remove_absolute(low_path)
+	var client := _opencode_clone(low_path, PackedStringArray([low_path, high_path]))
+	var launch := _uvx_launch()
+	assert_eq(
+		McpJsonStrategy.check_status_details(client, "godot-ai", "http://unused", launch).get("status"),
+		McpClient.Status.NOT_CONFIGURED,
+		"a comment in opencode.jsonc must not turn status into a parse error",
+	)
+	var configured := McpJsonStrategy.configure(client, "godot-ai", "http://unused", launch)
+	assert_eq(configured.get("status"), "ok", configured.get("message", "configure failed"))
+	assert_eq(_read(high_path), commented, "the commented jsonc tier stays byte-for-byte")
+	var low_written: Dictionary = JSON.parse_string(_read(low_path))
+	assert_true(low_written["mcp"].has("godot-ai"), "the entry lands in opencode.json")
+	assert_eq(McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch), McpClient.Status.CONFIGURED)
+	var removed := McpJsonStrategy.remove(client, "godot-ai")
+	assert_eq(removed.get("status"), "ok", removed.get("message", "remove failed"))
+	assert_eq(_read(high_path), commented, "Remove never scans or rewrites a tier without our entry")
+
+	var argv: Array = [str(launch.get("command"))]
+	argv.append_array(launch.get("args", []))
+	var entry := JSON.stringify({"type": "local", "command": argv, "enabled": true})
+	var holding := '{\n  // pinned by hand\n  "mcp": {"godot-ai": %s}\n}\n' % entry
+	_write(high_path, holding)
+	assert_eq(
+		McpJsonStrategy.check_status(client, "godot-ai", "http://unused", launch),
+		McpClient.Status.CONFIGURED,
+		"status verifies an entry inside a commented jsonc tier",
+	)
+	var refused := McpJsonStrategy.configure(client, "godot-ai", "http://unused", launch)
+	assert_eq(refused.get("status"), "error")
+	assert_contains(str(refused.get("message", "")), "comments")
+	var refused_remove := McpJsonStrategy.remove(client, "godot-ai")
+	assert_eq(refused_remove.get("status"), "error")
+	assert_eq(_read(high_path), holding, "refused writes preserve the commented file")
+	DirAccess.remove_absolute(low_path)
+	DirAccess.remove_absolute(high_path)
+
+
 func test_opencode_exact_file_override_beats_the_merge_tiers() -> void:
 	## $OPENCODE_CONFIG names one exact file; it must win over both tiers.
 	var low_path := _scratch_dir.path_join("opencode_override_low.json")
@@ -1291,6 +1339,7 @@ func test_prewarm_argv_pins_exact_version_and_exits_via_version_flag() -> void:
 			"--keyring-provider", "disabled",
 			"--exclude-newer", preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").dependency_cutoff(),
 			"--exclude-newer-package", "godot-ai=false",
+			"--python", ">=3.11,<3.15",
 			"--index", "https://pypi.org/simple",
 			"--default-index", "https://pypi.org/simple",
 			"--find-links", "https://pypi.org/simple/godot-ai/",
@@ -1603,6 +1652,10 @@ func _check_previous_cutoff_migration(cutoff: String) -> void:
 		old_launch.args.remove_at(index)
 	else:
 		old_launch.args[index + 1] = cutoff
+	# Releases before 4.4.2 launched without --python (#1244).
+	index = old_launch.args.find("--python")
+	old_launch.args.remove_at(index + 1)
+	old_launch.args.remove_at(index)
 	assert_eq(McpTomlStrategy.configure(client, "godot-ai", "", old_launch).get("status"), "ok")
 	var original := _read(path)
 	var registry_had := McpClientRegistry._by_id.has(client.id)
@@ -1621,7 +1674,7 @@ func _check_previous_cutoff_migration(cutoff: String) -> void:
 	McpClientConfigurator._attach_launch_cache_mutex.unlock()
 	assert_false(McpClientConfigurator.entry_drift_is_version_pin_only(client.id, "4.0.0", context), "unknown backup cannot authorize cutoff migration")
 	assert_eq(_read(path), original)
-	context.previous_dependency_policy = {"known": true, "cutoff": cutoff}
+	context.previous_dependency_policy = {"known": true, "cutoff": cutoff, "python": ""}
 	assert_true(McpClientConfigurator.entry_drift_is_version_pin_only(client.id, "4.0.0", context), "exact previous launch is recognized from actual file contents")
 	assert_eq(_read(path), original, "the eligibility check is read-only")
 	for changed in [
@@ -1636,9 +1689,9 @@ func _check_previous_cutoff_migration(cutoff: String) -> void:
 		assert_false(McpClientConfigurator.entry_drift_is_version_pin_only(client.id, "4.0.0", context), "foreign drift remains ineligible")
 		assert_eq(_read(path), changed, "refusal must preserve bytes")
 	_write(path, original)
-	context.previous_dependency_policy = {"known": true, "cutoff": "2024-01-02T03:04:05Z"}
+	context.previous_dependency_policy = {"known": true, "cutoff": "2024-01-02T03:04:05Z", "python": ""}
 	assert_false(McpClientConfigurator.entry_drift_is_version_pin_only(client.id, "4.0.0", context), "another valid cutoff is still drift")
-	context.previous_dependency_policy = {"known": true, "cutoff": cutoff}
+	context.previous_dependency_policy = {"known": true, "cutoff": cutoff, "python": ""}
 	var written := McpClientConfigurator.configure(client.id, context.server_url, context)
 	assert_eq(written.get("status"), "ok")
 	assert_eq(McpTomlStrategy.check_status(client, "godot-ai", "", launch), McpClient.Status.CONFIGURED)
@@ -1646,6 +1699,7 @@ func _check_previous_cutoff_migration(cutoff: String) -> void:
 	assert_contains(updated, "godot-ai==4.0.1")
 	assert_contains(updated, preload("res://addons/godot_ai/utils/uv_resolution_policy.gd").dependency_cutoff())
 	assert_contains(updated, "godot-ai=false")
+	assert_contains(updated, ">=3.11,<3.15")
 	assert_contains(updated, "--disable-telemetry")
 	McpClientConfigurator._attach_launch_cache_mutex.lock()
 	for key in cached_missing:

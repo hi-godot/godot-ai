@@ -38,6 +38,8 @@ _UVX_POLICY_AND_ENTRYPOINT = [
     "{{DEPENDENCY_CUTOFF}}",
     "--exclude-newer-package",
     "godot-ai=false",
+    "--python",
+    ">=3.11,<3.15",
     "--index",
     "https://pypi.org/simple",
     "--default-index",
