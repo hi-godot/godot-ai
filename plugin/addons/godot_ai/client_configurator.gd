@@ -1870,6 +1870,14 @@ static func get_server_command(trace: Callable = Callable()) -> Array[String]:
 			)
 		else:
 			print("MCP | using uvx (godot-ai==%s)" % pypi_version)
+		## Only consult an already-cached probe: this path must not add a
+		## subprocess. The dock probes uv on startup, so the cache is normally
+		## warm by the time a launch is attempted (#1242).
+		if _uv_version_searched and UvResolution.uv_version_too_old(_uv_version_cache):
+			push_warning(
+				"MCP | %s is older than %s and rejects Godot AI's launch options; update uv (`uv self update`) and restart the editor."
+				% [_uv_version_cache, UvResolution.MIN_UV_VERSION]
+			)
 		var cmd: Array[String] = [uvx]
 		cmd.append_array(UvResolution.args())
 		cmd.append_array(["--from", "godot-ai==%s" % pypi_version, "godot-ai"])

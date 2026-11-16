@@ -761,7 +761,7 @@ func test_successful_update_passes_retained_previous_cutoff_to_repin() -> void:
 	plugin._client_jobs = jobs
 	plugin._post_update_outcome = {"outcome": "success", "from_version": version, "to_version": VERSION, "backup_root": root}
 	plugin._begin_startup_release()
-	assert_eq(jobs.previous_policy, {"known": true, "cutoff": "2025-01-02T03:04:05Z"})
+	assert_eq(jobs.previous_policy, {"known": true, "cutoff": "2025-01-02T03:04:05Z", "python": ""})
 	assert_false(plugin._normal_start_released)
 	plugin._client_jobs = null
 	jobs.free()

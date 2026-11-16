@@ -11,6 +11,10 @@ const PathTemplate := preload("res://addons/godot_ai/clients/_path_template.gd")
 const PUBLIC_INDEX := "https://pypi.org/simple"
 const PUBLIC_FLAT_INDEX := "https://pypi.org/simple/godot-ai/"
 const QUALIFICATION_INDEX_ENV := "GODOT_AI_QUALIFICATION_PYTHON_INDEX"
+## Oldest uv that accepts `--exclude-newer-package <name>=false` (#1242). uv
+## 0.9.24 and earlier reject the value during argument parsing, before any
+## resolution, so every production launch exits with code 2 on them.
+const MIN_UV_VERSION := "0.9.25"
 const _BASE_ARGS := [
 	"--isolated",
 	"--no-config",
@@ -54,6 +58,11 @@ static func args() -> Array[String]:
 	result.append_array([
 		"--exclude-newer", dependency_cutoff(),
 		"--exclude-newer-package", "godot-ai=false",
+		## Without an explicit request uv picks its default interpreter, which
+		## can be newer than this release supports. With --no-build, a
+		## dependency that has no wheel for that interpreter fails resolution
+		## outright instead of uv falling back to a compatible Python (#1244).
+		"--python", python_request(),
 	])
 	if not qualification_authorized():
 		result.append_array([
@@ -73,6 +82,52 @@ static func dependency_cutoff() -> String:
 	push_error("Godot AI plugin.cfg has no valid dependency_cutoff. Reinstall the plugin.")
 	# uv rejects this value rather than silently resolving without the release bound.
 	return "INVALID-DEPENDENCY-CUTOFF"
+
+
+## The interpreter range this release supports, mirrored from pyproject's
+## `requires-python` (tests/unit/test_dependency_cutoff.py locks the parity).
+## Kept in plugin.cfg beside the cutoff so a retained backup proves whether the
+## previous release passed --python at all.
+static func python_request() -> String:
+	var config := ConfigFile.new()
+	if config.load("res://addons/godot_ai/plugin.cfg") == OK:
+		var value := validated_python_request(config.get_value("plugin", "python_request", ""))
+		if not value.is_empty():
+			return value
+	push_error("Godot AI plugin.cfg has no valid python_request. Reinstall the plugin.")
+	# uv rejects this value rather than silently picking an unsupported interpreter.
+	return "INVALID-PYTHON-REQUEST"
+
+
+static func validated_python_request(value: Variant) -> String:
+	if not value is String:
+		return ""
+	var expression := RegEx.new()
+	expression.compile("^>=3\\.[0-9]{1,2},<3\\.[0-9]{1,2}$")
+	return value if expression.search(value) != null else ""
+
+
+## Parse the first line of `uv --version` / `uvx --version` ("uv 0.9.7",
+## "uvx 0.11.32 (abc 2026-01-01)"). Empty when the text is not recognizable.
+static func parse_uv_version(text: String) -> String:
+	var expression := RegEx.new()
+	expression.compile("^uvx?\\s+([0-9]+\\.[0-9]+\\.[0-9]+)")
+	var found := expression.search(text.strip_edges())
+	return found.get_string(1) if found != null else ""
+
+
+## True only when the version is recognizable and older than MIN_UV_VERSION.
+## An unparseable string is not evidence of an old uv, so it never blocks.
+static func uv_version_too_old(text: String) -> bool:
+	var version := parse_uv_version(text)
+	if version.is_empty():
+		return false
+	var have := version.split(".")
+	var need := MIN_UV_VERSION.split(".")
+	for i in range(3):
+		if int(have[i]) != int(need[i]):
+			return int(have[i]) < int(need[i])
+	return false
 
 
 static func validated_cutoff(value: Variant) -> String:
@@ -109,10 +164,17 @@ static func previous_policy_from_config(config: ConfigFile, expected_version: St
 	var stored_version: Variant = config.get_value("plugin", "version", null)
 	if not stored_version is String or expected_version.is_empty() or stored_version != expected_version:
 		return {}
+	## Releases before 4.4.2 carry no python_request and launched without
+	## --python; a present but invalid value is never legacy absence.
+	var python := ""
+	if config.has_section_key("plugin", "python_request"):
+		python = validated_python_request(config.get_value("plugin", "python_request"))
+		if python.is_empty():
+			return {}
 	if not config.has_section_key("plugin", "dependency_cutoff"):
-		return {"known": true, "cutoff": ""}
+		return {"known": true, "cutoff": "", "python": python}
 	var cutoff := validated_cutoff(config.get_value("plugin", "dependency_cutoff"))
-	return {"known": true, "cutoff": cutoff} if not cutoff.is_empty() else {}
+	return {"known": true, "cutoff": cutoff, "python": python} if not cutoff.is_empty() else {}
 
 
 ## This is an expected-value builder for readback only. Actual process launches
@@ -124,6 +186,11 @@ static func previous_launch_for_verification(launch: Dictionary, policy: Diction
 		return {}
 	var cutoff: String = policy.cutoff
 	if not cutoff.is_empty() and validated_cutoff(cutoff).is_empty():
+		return {}
+	if not policy.get("python") is String:
+		return {}
+	var python: String = policy.python
+	if not python.is_empty() and validated_python_request(python).is_empty():
 		return {}
 	var previous := launch.duplicate(true)
 	for field in ["args", "console_args"]:
@@ -141,6 +208,14 @@ static func previous_launch_for_verification(launch: Dictionary, policy: Diction
 				arguments.remove_at(index)
 			elif option == "--exclude-newer":
 				arguments[index + 1] = cutoff
+		var python_index := arguments.find("--python")
+		if python_index < 0 or python_index + 1 >= arguments.size() or arguments.count("--python") != 1:
+			return {}
+		if python.is_empty():
+			arguments.remove_at(python_index + 1)
+			arguments.remove_at(python_index)
+		else:
+			arguments[python_index + 1] = python
 		previous[field] = arguments
 	return previous
 
