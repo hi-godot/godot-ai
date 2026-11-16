@@ -823,14 +823,23 @@ def _manifest_tree(candidate: Path) -> dict[str, dict[str, Any]]:
     }
 
 
-def _write_secret_free_log(path: Path, output: bytes, secrets: tuple[str, ...]) -> None:
-    """Retain diagnostics only when they contain no private capability value."""
+REDACTED_LOG_HEADER = b"qualification output withheld: private capability leaked\n"
 
-    leaked = [secret for secret in secrets if secret.encode() in output]
+
+def _write_secret_free_log(path: Path, output: bytes, secrets: tuple[str, ...]) -> None:
+    """Retain diagnostics with every private capability value masked."""
+
+    leaked = [secret for secret in secrets if secret and secret.encode() in output]
     if leaked:
-        path.write_text(
-            "qualification output withheld: private capability leaked\n", encoding="utf-8"
-        )
+        # Keep the diagnosis: every private value is replaced in place (longest
+        # first, so an index URL is masked before its capability segment), and
+        # the result is checked again before anything is written.
+        redacted = output
+        for secret in sorted({value for value in secrets if value}, key=len, reverse=True):
+            redacted = redacted.replace(secret.encode(), b"<private value>")
+        if any(value and value.encode() in redacted for value in secrets):
+            redacted = b""
+        path.write_bytes(REDACTED_LOG_HEADER + redacted)
         raise support.ReleaseError("qualification process printed a private capability")
     path.write_bytes(output)
 

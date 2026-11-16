@@ -199,7 +199,8 @@ def test_timeout_retains_partial_output_without_leaking(boundary, kind, private)
     assert bridge.stopped
     log = (output / "godot.log").read_text(encoding="utf-8")
     if private:
-        assert log == "qualification output withheld: private capability leaked\n"
+        assert log.startswith("qualification output withheld: private capability leaked\n")
+        assert "partial stderr" in log and "<private value>" in log
     else:
         assert "partial stdout" in log and "partial stderr" in log
     for path in output.iterdir():
@@ -271,9 +272,9 @@ def test_retention_failure_fails_otherwise_successful_execution(tmp_path):
         runtime._retain_runtime_diagnostics(
             project, tmp_path / "missing", output, PRIVATE, b"ok", None
         )
-    assert (output / "runtime-result.json").read_text(
-        encoding="utf-8"
-    ) == "qualification output withheld: private capability leaked\n"
+    assert (output / "runtime-result.json").read_text(encoding="utf-8") == (
+        "qualification output withheld: private capability leaked\n<private value>"
+    )
     assert (
         json.loads((output / "runtime-diagnostics.json").read_text(encoding="utf-8"))[
             "runtime-result.json"
@@ -299,9 +300,9 @@ def test_timeout_stderr_secret_is_withheld(boundary, private):
     invoke, output, _ = boundary
     with pytest.raises(subprocess.TimeoutExpired):
         invoke("predecessor", timeout=True, stderr=private)
-    assert (output / "godot.log").read_text(encoding="utf-8") == (
-        "qualification output withheld: private capability leaked\n"
-    )
+    log = (output / "godot.log").read_text(encoding="utf-8")
+    assert log.startswith("qualification output withheld: private capability leaked\n")
+    assert private not in log and "<private value>" in log
 
 
 @pytest.mark.parametrize(
@@ -317,9 +318,9 @@ def test_each_retained_file_checks_every_private_value(tmp_path, name, private):
     source.write_text(private, encoding="utf-8")
     primary = RuntimeError("original failure")
     runtime._retain_runtime_diagnostics(project, bridge_log, output, PRIVATE, None, primary)
-    assert (output / name).read_text(
-        encoding="utf-8"
-    ) == "qualification output withheld: private capability leaked\n"
+    assert (output / name).read_text(encoding="utf-8") == (
+        "qualification output withheld: private capability leaked\n<private value>"
+    )
     statuses = json.loads((output / "runtime-diagnostics.json").read_text(encoding="utf-8"))
     assert statuses[name] == "withheld_private_value"
     assert primary.__notes__ == [
