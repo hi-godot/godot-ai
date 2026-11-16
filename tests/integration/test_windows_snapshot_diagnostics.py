@@ -16,7 +16,10 @@ pytestmark = [
     "control,category",
     [
         ("ancestor_creation_empty", "row_identity"),
-        ("ancestor_cycle", "lineage_cycle"),
+        # A parent PID that points at a newer process is a reused PID: the
+        # chain ends there instead of looping (the CI failure in run 43952810276).
+        ("ancestor_cycle", None),
+        ("ancestor_cycle_same_age", "lineage_cycle"),
         ("target_cim_missing", None),
     ],
 )
@@ -33,8 +36,14 @@ def test_snapshot_diagnostics_classify_real_collector_controls(tmp_path, control
         injection = ("$ancestor = [int]$processes[%d].ParentProcessId; "
             + "$original = $processes[$ancestor]; "
             + "if ($null -eq $original) { throw 'control_precondition' }; ") % target
-        var creation := "''" if control == "ancestor_creation_empty" else "$original.CreationDate"
-        var parent := str(target) if control == "ancestor_cycle" else "$original.ParentProcessId"
+        var creation := "$original.CreationDate"
+        if control == "ancestor_creation_empty":
+            creation = "''"
+        elif control == "ancestor_cycle_same_age":
+            creation = "$processes[%d].CreationDate" % target
+        var parent := "$original.ParentProcessId"
+        if control.begins_with("ancestor_cycle"):
+            parent = str(target)
         injection += ("$processes[$ancestor] = [pscustomobject]@{"
             + "ProcessId=$original.ProcessId;ParentProcessId=%s;CreationDate=%s;"
             + "CommandLine=$original.CommandLine}; ") % [parent, creation]
