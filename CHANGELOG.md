@@ -5,6 +5,26 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## 4.4.2 (2026-11-16)
+
+### Fixed
+
+- Start the server when uv's default interpreter is Python 3.15: every uvx
+  launch now requests the supported range (`--python ">=3.11,<3.15"`)
+  instead of whatever uv picks, which failed resolution under `--no-build`
+  (#1244).
+- Show uv older than 0.9.25 in the dock's Setup section with an update link.
+  Those versions reject the launch policy's `--exclude-newer-package
+  godot-ai=false` and every launch exited with code 2 (#1242).
+- Accept comments in `opencode.jsonc`. Status, Configure and Remove read the
+  tier with comments stripped; only a write that would drop comments from a
+  tier holding the Godot AI entry is refused (#1235).
+
+### Changed
+
+- Update the reviewed runtime dependency set to FastMCP/FastMCP-slim 4.1.6,
+  Pydantic 2.14.3, and websockets 17.4, with a new dependency upload cutoff.
+
 ## 4.4.1 (2026-11-02)
 
 ### Changed
