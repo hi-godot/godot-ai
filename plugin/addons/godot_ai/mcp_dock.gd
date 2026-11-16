@@ -1264,10 +1264,12 @@ func _apply_dev_mode_visibility() -> void:
 	var is_dev := ClientConfigurator.is_dev_checkout()
 	## A uv too old for the launch policy (#1242) needs the same Setup row as
 	## a missing one: every launch would exit with code 2 before resolving.
-	var uv_version := ClientConfigurator.check_uv_version()
-	var uv_missing := not is_dev and (
-		uv_version.is_empty() or UvResolution.uv_version_too_old(uv_version)
-	)
+	## Probe only in user mode: a dev checkout never shows the uv row, so it
+	## must not pay a cold `uvx --version` on the main thread.
+	var uv_missing := false
+	if not is_dev:
+		var uv_version := ClientConfigurator.check_uv_version()
+		uv_missing = uv_version.is_empty() or UvResolution.uv_version_too_old(uv_version)
 	_setup_section.visible = _setup_section_should_show(dev, uv_missing, _server_launch_pending())
 
 
