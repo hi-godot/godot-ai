@@ -110,7 +110,9 @@ Failed editor runs retain available `godot.log`, `attached-bridge.log`,
 `runtime-result.json`, and `runtime-progress.json` diagnostics before the
 temporary project is removed. `runtime-diagnostics.json` records whether each
 file was retained, absent, empty, or could not be collected. Private values
-cause the affected output to be withheld. Collection failures do not replace
+are replaced in place (`redacted_private_value`); output is withheld only if a
+value survives that masking (`withheld_private_value`). Either still fails the
+row. Collection failures do not replace
 an active runtime failure, including a process-identity failure before the
 driver writes its normal result. Retained diagnostic files never count as a
 passed upgrade case. Subprocess timeouts retain captured output when available.

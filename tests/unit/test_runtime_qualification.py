@@ -261,7 +261,7 @@ def test_private_capability_is_never_written_to_retained_log(tmp_path):
     with pytest.raises(support.ReleaseError, match="printed a private capability"):
         runtime._write_secret_free_log(log, b"prefix secret-token suffix", ("secret-token",))
     assert log.read_text(encoding="utf-8") == (
-        "qualification output withheld: private capability leaked\nprefix <private value> suffix"
+        "qualification output redacted: private values replaced\nprefix <private value> suffix"
     )
 
 
@@ -279,8 +279,9 @@ def test_redaction_masks_the_longest_private_value_first(tmp_path):
 def test_redaction_withholds_output_when_masking_recreates_a_value(tmp_path):
     log = tmp_path / "process.log"
     # Replacing "ab" leaves "<private value>", which contains the second value.
-    with pytest.raises(support.ReleaseError):
+    with pytest.raises(runtime.PrivateValuePrinted) as raised:
         runtime._write_secret_free_log(log, b"xx ab yy", ("ab", "private"))
+    assert raised.value.withheld
     assert log.read_text(encoding="utf-8") == (
         "qualification output withheld: private capability leaked\n"
     )
@@ -913,6 +914,16 @@ def test_isolated_environment_makes_the_row_python_uvs_first_choice(tmp_path):
     assert environment["PATH"].split(os.pathsep)[0] == os.path.dirname(sys.executable)
     assert environment["UV_PYTHON_PREFERENCE"] == "only-system"
     assert environment["UV_PYTHON_DOWNLOADS"] == "never"
+
+
+def test_isolated_environment_keeps_the_macos_editor_on_that_path(monkeypatch, tmp_path):
+    # Without TERM, a macOS editor reloads a login zsh environment whose
+    # path_helper PATH puts another in-range Python first. Godot skips that
+    # reload when its own marker is already set, even if the runner set it.
+    monkeypatch.delenv("TERM", raising=False)
+    environment = runtime._isolated_environment(tmp_path, "http://127.0.0.1:1/")
+
+    assert environment["__GODOT_SHELL_ENV_SET"] == "1"
 
 
 def _addon_with_config(project: Path, text: str) -> None:
