@@ -404,6 +404,11 @@ static func pid_alive(pid: int, snapshot: Variant = null) -> bool:
 ## Linux captures the same bounded ancestry using procfs; macOS keeps ps.
 ## The process enumeration stays inside PowerShell; only the bounded target
 ## ancestry crosses back into Godot, without logging command-line metadata.
+## Windows keeps a dead parent's PID in ParentProcessId, and that PID can be
+## reused by a later process, even one of our own descendants, which turns the
+## walk into a cycle. A "parent" created after its child is such a reused PID,
+## not an ancestor, so the chain ends there (parent_pid 0). This only ever
+## shortens the ancestry; it can never add a lineage or brand match.
 static func capture_process_snapshot(pid: int, diagnostics: Variant = null) -> Variant:
 	if OS.get_name() == "Linux":
 		return LinuxProc.process_snapshot(pid)
@@ -425,18 +430,23 @@ static func capture_process_snapshot(pid: int, diagnostics: Variant = null) -> V
 
 static func _windows_process_snapshot_script(pid: int) -> String:
 	return (
-		"$rows = @(); $current = %d; $seen = @{}; $capture_failed = $false; "
+		"$rows = @(); $current = %d; $seen = @{}; $capture_failed = $false; $child_created = $null; "
 		+ "$processes = @{}; try { Get-CimInstance Win32_Process -ErrorAction Stop | "
 		+ "ForEach-Object { $processes[[int]$_.ProcessId] = $_ } } catch {}; "
 		+ "for ($depth = 0; $depth -lt 16 -and $current -gt 1; $depth++) { "
 		+ "if ($seen.ContainsKey($current)) { break }; $seen[$current] = $true; "
 		+ "$p = $processes[$current]; "
 		+ "if ($null -eq $p) { "
-		+ "try { $identity = [string](Get-Process -Id $current -ErrorAction Stop).StartTime.ToFileTimeUtc(); "
+		+ "try { $started = (Get-Process -Id $current -ErrorAction Stop).StartTime; "
+		+ "if ($child_created -is [datetime] -and $started -gt $child_created) { break }; "
+		+ "$identity = [string]$started.ToFileTimeUtc(); "
 		+ "$rows += @{pid=$current;parent_pid=0;identity=$identity;commandline=''} } catch { if ($_.CategoryInfo.Category -ne 'ObjectNotFound') { $capture_failed = $true } }; break }; "
-		+ "$rows += @{pid=[int]$p.ProcessId;parent_pid=[int]$p.ParentProcessId; "
+		+ "$parent_pid = [int]$p.ParentProcessId; $parent = $processes[$parent_pid]; "
+		+ "if ($null -ne $parent -and $parent.CreationDate -is [datetime] -and $p.CreationDate -is [datetime] "
+		+ "-and $parent.CreationDate -gt $p.CreationDate) { $parent_pid = 0 }; "
+		+ "$rows += @{pid=[int]$p.ProcessId;parent_pid=$parent_pid; "
 		+ "identity=([string]$p.CreationDate + '|' + [string]$p.CommandLine);commandline=[string]$p.CommandLine}; "
-		+ "$current = [int]$p.ParentProcessId }; "
+		+ "$child_created = $p.CreationDate; $current = $parent_pid }; "
 		+ "if ($capture_failed) { 'null' } else { ConvertTo-Json -InputObject @($rows) -Compress -Depth 3 }"
 	) % pid
 
