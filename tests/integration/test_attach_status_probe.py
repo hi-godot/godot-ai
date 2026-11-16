@@ -1,6 +1,7 @@
 """Exercise the authenticated loopback probe through a real HTTP client."""
 
 import asyncio
+import contextlib
 import json
 import ssl
 
@@ -46,16 +47,22 @@ async def test_loopback_probe_needs_no_ca_bundle(tmp_path, monkeypatch, reply: s
             await writer.drain()
             if reply == "drip":
                 for byte in body:
-                    writer.write(bytes([byte]))
-                    await writer.drain()
                     try:
+                        writer.write(bytes([byte]))
+                        await writer.drain()
                         await asyncio.wait_for(reader.read(1), timeout=0.02)
                         break
                     except TimeoutError:
                         continue
+                    except ConnectionError:
+                        # The probe gives up mid-body and resets the socket.
+                        break
         finally:
             writer.close()
-            await writer.wait_closed()
+            # An abandoned drip ends in a peer reset; on macOS asyncio can
+            # surface it from wait_closed() (ECONNRESET, Errno 54).
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
             handlers.discard(task)
 
     def load_ca_bundle(*_args, **_kwargs):
