@@ -237,6 +237,16 @@ def _isolated_environment(root: Path, index: str) -> dict[str, str]:
         for key, value in os.environ.items()
         if not key.startswith(("UV_", "PIP_", "PYTHON", "GODOT_AI_"))
     }
+    # Production launches pass an explicit `--python` range (#1244), which
+    # overrides UV_PYTHON. The retained index only carries wheels for this
+    # row's interpreter, so make it the first interpreter uv discovers: search
+    # system interpreters only, with this row's directory ahead of any other
+    # in-range Python a runner image puts on PATH (Homebrew, python.org).
+    row_python_dir = os.path.dirname(sys.executable)
+    inherited_path = environment.get("PATH", "")
+    environment["PATH"] = (
+        row_python_dir + os.pathsep + inherited_path if inherited_path else row_python_dir
+    )
     environment.update(
         {
             "HOME": str(home),
@@ -256,6 +266,7 @@ def _isolated_environment(root: Path, index: str) -> dict[str, str]:
             "UV_INDEX": index,
             "UV_DEFAULT_INDEX": index,
             "UV_PYTHON": sys.executable,
+            "UV_PYTHON_PREFERENCE": "only-system",
             "UV_PYTHON_DOWNLOADS": "never",
             "UV_CACHE_DIR": str(root / "uv-cache"),
             "UV_TOOL_DIR": str(root / "uv-tools"),
@@ -267,6 +278,58 @@ def _isolated_environment(root: Path, index: str) -> dict[str, str]:
     if os.name == "nt":
         environment["LOCALAPPDATA"] = str(local)
     return environment
+
+
+def _plugin_python_request(project: Path) -> str | None:
+    """The installed add-on's `python_request`, or None for a pre-4.4.2 add-on."""
+
+    config = project / "addons/godot_ai/plugin.cfg"
+    for line in config.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "python_request":
+            return value.strip().strip('"')
+    return None
+
+
+def _require_row_python(environment: dict[str, str], project: Path) -> None:
+    """Fail clearly when uv would launch the add-on on another interpreter.
+
+    The retained index only holds this row's wheels, so any other in-range
+    interpreter fails resolution later with output the leak guard withholds.
+    """
+
+    request = _plugin_python_request(project)
+    if request is None:
+        return
+    uv = shutil.which("uv", path=environment.get("PATH"))
+    support.require(uv is not None, "uv is required for runtime qualification")
+    found = subprocess.run(
+        [uv, "python", "find", request],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    selected = found.stdout.strip()
+    print(f"uv selects {selected or '<none>'} for --python {request}", flush=True)
+    support.require(
+        found.returncode == 0 and selected,
+        f"uv found no interpreter for --python {request}",
+    )
+    version = subprocess.run(
+        [selected, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    ).stdout.strip()
+    support.require(
+        version == current_python_version(),
+        f"uv selects Python {version or 'unknown'} for --python {request}, "
+        f"not this row's {current_python_version()}",
+    )
 
 
 def _write_client_pin(codex: Path, uvx: str, version: str, cutoff: str | None) -> None:
@@ -1036,6 +1099,7 @@ def exact_a_to_b(
                 environment=environment,
                 secrets=(index,),
             )
+            _require_row_python(environment, project)
             _write_project(project, certificate, records["a"]["version"], records["b"]["version"])
             with private_release_origin(
                 release_b,
