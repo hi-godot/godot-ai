@@ -247,12 +247,18 @@ explicit build, `script_manage(op="build")` (#1251), described below.
   (restore failure, missing SDK) carries `output_tail` and reports
   `diagnostics_status: "not_checked"`, since the compiler's verdict is not
   in the list.
-  - Params: `timeout_sec` (10–900, default 180; the process is killed and
-    the result says `timed_out: true`, `diagnostics_status: "not_checked"`),
+  - Params: `timeout_sec` (10–900, default 180; the process tree is killed
+    and the result says `timed_out: true`, `diagnostics_status:
+    "not_checked"` even if some errors were printed before the kill, and
+    `termination_confirmed`, true only when Windows `taskkill /T` proved the
+    whole tree gone; POSIX kills the exact PID only),
     `include_warnings` (default true; counts always include warnings),
     `max_diagnostics` (1–1000).
   - A second request while a build runs joins it and receives the same
-    result (`shared_build: true`) instead of starting a parallel build.
+    result (`shared_build: true`) instead of starting a parallel build. A
+    joiner whose `timeout_sec` would expire before the running build can
+    finish is refused (`VALUE_OUT_OF_RANGE`, naming the `timeout_sec` that
+    would cover it) rather than left to time out.
   - It builds only. The editor loads the rebuilt assembly when its window
     regains focus or after its own Build button (`reload_hint`).
   - Refusals: a non-.NET editor (`VALUE_OUT_OF_RANGE`), no `.csproj`

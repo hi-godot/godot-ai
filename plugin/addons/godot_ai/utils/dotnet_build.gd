@@ -28,6 +28,7 @@ extends RefCounted
 ## response says so instead of claiming the new code is live.
 
 const ScriptWork := preload("res://addons/godot_ai/utils/script_work.gd")
+const PortResolver := preload("res://addons/godot_ai/utils/port_resolver.gd")
 
 const DEFAULT_TIMEOUT_SEC := 180
 const MIN_TIMEOUT_SEC := 10
@@ -39,6 +40,14 @@ const MAX_MAX_DIAGNOSTICS := 1000
 const MAX_OUTPUT_BYTES := 4 * 1024 * 1024
 const OUTPUT_TAIL_CHARS := 2000
 const _READ_CHUNK := 65536
+## Most bytes one drain call reads across stdout + stderr before returning to
+## the poll loop (which yields a frame and re-checks the deadline).
+const DRAIN_BUDGET_BYTES := 1024 * 1024
+## Bounded drain passes after the child exits (covers MAX_OUTPUT_BYTES).
+const _FINAL_DRAIN_PASSES := 8
+## How long a killed build may take to disappear before the result reports
+## `termination_confirmed: false` and the next build is admitted anyway.
+const KILL_GRACE_MS := 3000
 ## Headroom the dispatcher gets over the build's own timeout so the build's
 ## timed_out result (not DEFERRED_TIMEOUT) reaches the caller.
 const DEFERRED_GRACE_MS := 5000
@@ -242,6 +251,7 @@ static func build_result(
 	output_truncated: bool,
 	include_warnings: bool,
 	max_diagnostics: int,
+	termination_confirmed: bool = true,
 ) -> Dictionary:
 	var parsed := parse_output(output, include_warnings, max_diagnostics)
 	var succeeded := not timed_out and exit_code == 0
@@ -249,7 +259,9 @@ static func build_result(
 	## a failed one whose errors were parsed. A failure with no parsed error
 	## (missing SDK, restore failure, killed by timeout) proves nothing about
 	## the source, so it must not read as "checked, no errors".
-	var compiler_verdict: bool = succeeded or parsed.error_count > 0
+	## A timed-out build is never "checked", even when it printed an error
+	## before it was killed: the list is a partial view of an unfinished run.
+	var compiler_verdict: bool = not timed_out and (succeeded or parsed.error_count > 0)
 	var data := {
 		"project": project,
 		"succeeded": succeeded,
@@ -271,6 +283,11 @@ static func build_result(
 		data["output_tail"] = output.replace("\r\n", "\n").right(OUTPUT_TAIL_CHARS).strip_edges()
 	if output_truncated:
 		data["output_truncated"] = true
+	if timed_out:
+		## Whether the killed build's whole process tree is provably gone. Only
+		## Windows `taskkill /T` can prove that; POSIX kills the exact PID, so a
+		## descendant may outlive it there.
+		data["termination_confirmed"] = termination_confirmed
 	return data
 
 
@@ -292,11 +309,25 @@ static func start(
 		"max_diagnostics": max_diagnostics,
 	}
 	if not _active.is_empty():
+		## A joiner keeps its own deferred budget. If that budget ends before
+		## the running build can finish (its deadline plus the kill grace), the
+		## joiner would get DEFERRED_TIMEOUT instead of the shared result, so
+		## refuse it up front with the budget it would need.
+		var needed_ms := join_budget_needed_ms(int(_active.deadline_ms), Time.get_ticks_msec())
+		if timeout_sec * 1000 + DEFERRED_GRACE_MS < needed_ms:
+			return {
+				"join_refused": true,
+				"needed_timeout_sec": maxi(
+					MIN_TIMEOUT_SEC, ceili(float(needed_ms - DEFERRED_GRACE_MS) / 1000.0)
+				),
+			}
 		_active.waiters.append(waiter)
 		return {"joined": true}
 	var exe := resolve_dotnet_executable()
 	var args := build_args(ProjectSettings.globalize_path(project))
+	PortResolver.lock_process_spawn()
 	var info := OS.execute_with_pipe(exe, args, false)
+	PortResolver.unlock_process_spawn()
 	var pid := int(info.get("pid", -1)) if not info.is_empty() else -1
 	if pid <= 0:
 		_close_pipes(info)
@@ -315,10 +346,19 @@ static func start(
 	return {"joined": false}
 
 
+## How long from `now_ms` until a build with deadline `deadline_ms` has
+## replied at the latest (deadline, then the kill grace). A joiner's deferred
+## budget (`timeout_sec * 1000 + DEFERRED_GRACE_MS`) must cover it; a joiner
+## with the same timeout_sec as the running build always does.
+static func join_budget_needed_ms(deadline_ms: int, now_ms: int) -> int:
+	return maxi(0, deadline_ms - now_ms) + KILL_GRACE_MS
+
+
 static func _poll_until_done(connection: McpConnection) -> void:
 	var work := ScriptWork.begin("dotnet_build")
 	var tree: SceneTree = connection.get_tree() if is_instance_valid(connection) else null
 	var timed_out := false
+	var termination_confirmed := true
 	if tree != null:
 		## Let _dispatch() register the deferred request before any reply.
 		await tree.process_frame
@@ -326,15 +366,30 @@ static func _poll_until_done(connection: McpConnection) -> void:
 			_drain(_active)
 			if Time.get_ticks_msec() >= _active.deadline_ms:
 				timed_out = true
-				OS.kill(_active.pid)
 				break
 			await tree.process_frame
 	else:
 		## No tree to yield to (connection already gone): nothing can receive
 		## the reply, so stop the child rather than orphan it.
 		timed_out = true
-		OS.kill(_active.pid)
-	_drain(_active)
+	if timed_out:
+		termination_confirmed = _kill_build_tree(_active.pid)
+		## Keep `_active` held (new requests join or are refused) until the
+		## killed tree is gone or the grace expires, so a fresh build never
+		## starts while the old one still writes the same output directory.
+		var grace_end := Time.get_ticks_msec() + KILL_GRACE_MS
+		while PortResolver.pid_alive(_active.pid) and Time.get_ticks_msec() < grace_end:
+			if tree == null:
+				break
+			await tree.process_frame
+		if PortResolver.pid_alive(_active.pid):
+			termination_confirmed = false
+	## The child has exited (or was killed); whatever is still buffered is
+	## finite unless a surviving descendant keeps writing, so drain in a few
+	## bounded passes rather than until empty.
+	for i in _FINAL_DRAIN_PASSES:
+		if not _drain(_active):
+			break
 	var build := _active
 	_active = {}
 	_close_pipes(build.info)
@@ -352,6 +407,7 @@ static func _poll_until_done(connection: McpConnection) -> void:
 			build.output_truncated,
 			waiter.include_warnings,
 			waiter.max_diagnostics,
+			termination_confirmed,
 		)
 		if build.waiters.size() > 1:
 			data["shared_build"] = true
@@ -362,19 +418,28 @@ static func _poll_until_done(connection: McpConnection) -> void:
 ## Pull whatever the child has written without blocking. stderr is folded
 ## into the same buffer: MSBuild writes diagnostics to stdout, but the host
 ## reports its own failures (missing SDK, bad switch) on stderr.
-static func _drain(build: Dictionary) -> void:
+##
+## Bounded: one call reads at most DRAIN_BUDGET_BYTES across both streams, so
+## a child that keeps its pipe readable cannot hold the editor inside one
+## frame — the caller yields and re-checks the deadline between calls. Returns
+## true when the budget ran out (more may be waiting).
+static func _drain(build: Dictionary) -> bool:
 	## Packed arrays are values: mutate a local and store it back.
 	var output: PackedByteArray = build.output
+	var budget := DRAIN_BUDGET_BYTES
 	for key in ["stdio", "stderr"]:
 		var pipe: Variant = build.info.get(key, null)
 		if pipe == null or not (pipe is FileAccess) or not pipe.is_open():
 			continue
-		while true:
-			var chunk: PackedByteArray = pipe.get_buffer(_READ_CHUNK)
+		while budget > 0:
+			var chunk: PackedByteArray = pipe.get_buffer(mini(_READ_CHUNK, budget))
 			if chunk.is_empty():
 				break
+			budget -= chunk.size()
 			var room := MAX_OUTPUT_BYTES - output.size()
 			if room <= 0:
+				## Past the cap: keep reading (bounded) so the child never
+				## blocks on a full pipe, but discard the bytes.
 				build.output_truncated = true
 				continue
 			if chunk.size() > room:
@@ -382,6 +447,24 @@ static func _drain(build: Dictionary) -> void:
 				build.output_truncated = true
 			output.append_array(chunk)
 	build.output = output
+	return budget <= 0
+
+
+## Kill the timed-out build and its descendants. Windows `taskkill /T` (via
+## the same exact-identity grant McpCliExec uses) covers the MSBuild nodes and
+## compiler server the build launched and reports success only when Windows
+## accepted the whole tree; POSIX `OS.kill` reaches only the exact PID.
+## Returns true only when the tree kill is proven. Runs once, on timeout, and
+## blocks the main thread for the duration of the identity probe and taskkill.
+static func _kill_build_tree(pid: int) -> bool:
+	var grant := PortResolver.capture_process_kill_grant(pid)
+	if not grant.is_empty():
+		var grants: Array[Dictionary] = [grant]
+		var killed := PortResolver.kill_exact_processes(grants, false, true)
+		if killed.has(pid):
+			return OS.get_name() == "Windows"
+	OS.kill(pid)
+	return false
 
 
 static func _close_pipes(info: Dictionary) -> void:

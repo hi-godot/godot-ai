@@ -649,6 +649,13 @@ func build_csharp(params: Dictionary) -> Dictionary:
 	var started := DotnetBuild.start(
 		_connection, request_id, project, timeout_sec, include_warnings, max_diagnostics
 	)
+	if bool(started.get("join_refused", false)):
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"A C# build is already running and would outlast this request's timeout_sec=%d. " % timeout_sec
+			+ "Retry with timeout_sec >= %d to share its result, or retry after it finishes."
+			% int(started.needed_timeout_sec),
+		)
 	if bool(started.get("spawn_failed", false)):
 		return ErrorCodes.make(
 			ErrorCodes.RESOURCE_NOT_FOUND,

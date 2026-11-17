@@ -226,3 +226,117 @@ func test_build_without_csproj_reports_not_found() -> void:
 	var result := _handler.build_csharp({"_request_id": "r1"})
 	assert_is_error(result, ErrorCodes.RESOURCE_NOT_FOUND)
 	assert_contains(result.error.message, ".csproj")
+
+
+# --- review follow-ups: timeout status, join budget, bounded drain, tree kill
+
+func test_build_result_timeout_with_parsed_error_stays_not_checked() -> void:
+	var out := "%s(4,13): error CS0029: Cannot implicitly convert type 'string' to 'int'" % \
+		_project_file("Player.cs")
+	var data := DotnetBuild.build_result("res://Game.csproj", -1, true, 10000, out, false, true, 200, false)
+	assert_eq(data.diagnostics_status, "not_checked",
+		"an error printed before the kill is a partial view, not the compiler's verdict")
+	assert_eq(data.error_count, 1, "the partial error is still reported")
+	assert_has_key(data, "output_tail")
+	assert_eq(data.termination_confirmed, false)
+
+
+func test_build_result_finished_build_has_no_termination_field() -> void:
+	var data := DotnetBuild.build_result("res://Game.csproj", 0, false, 10, "", false, true, 200)
+	assert_false(data.has("termination_confirmed"), "only a killed build reports termination")
+
+
+func test_join_budget_covers_remaining_build_plus_grace() -> void:
+	var now := 1000
+	assert_eq(DotnetBuild.join_budget_needed_ms(now + 60000, now),
+		60000 + DotnetBuild.KILL_GRACE_MS)
+	assert_eq(DotnetBuild.join_budget_needed_ms(now - 5, now), DotnetBuild.KILL_GRACE_MS,
+		"a build past its deadline still needs the kill grace")
+	assert_true(
+		60 * 1000 + DotnetBuild.DEFERRED_GRACE_MS >= DotnetBuild.join_budget_needed_ms(now + 60000, now),
+		"a joiner with the same timeout_sec as the running build must be able to join")
+
+
+func test_join_refused_when_budget_ends_before_running_build() -> void:
+	var saved: Dictionary = DotnetBuild._active
+	DotnetBuild._active = {
+		"pid": 999999, "deadline_ms": Time.get_ticks_msec() + 300000, "waiters": [{}],
+	}
+	var refused := DotnetBuild.start(null, "r2", "res://Game.csproj", 10, true, 200)
+	var waiters_after_refusal: int = DotnetBuild._active.waiters.size()
+	var joined := DotnetBuild.start(null, "r3", "res://Game.csproj", 300, true, 200)
+	var waiters_after_join: int = DotnetBuild._active.waiters.size()
+	DotnetBuild._active = saved
+	assert_true(bool(refused.get("join_refused", false)))
+	assert_gt(int(refused.needed_timeout_sec), 290, "names the timeout that would cover the build")
+	assert_eq(waiters_after_refusal, 1, "a refused joiner must not be queued")
+	assert_true(bool(joined.get("joined", false)))
+	assert_eq(waiters_after_join, 2)
+
+
+func test_drain_reads_at_most_the_budget_per_call() -> void:
+	var path := "user://_mcp_dotnet_drain_fixture.bin"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	var block := PackedByteArray()
+	block.resize(DotnetBuild.DRAIN_BUDGET_BYTES + 4096)
+	block.fill(65)
+	f.store_buffer(block)
+	f.close()
+	var build := {
+		"info": {"stdio": FileAccess.open(path, FileAccess.READ)},
+		"output": PackedByteArray(),
+		"output_truncated": false,
+	}
+	var more_first := DotnetBuild._drain(build)
+	var after_first: int = build.output.size()
+	var more_second := DotnetBuild._drain(build)
+	var after_second: int = build.output.size()
+	build.info.stdio.close()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	assert_true(more_first, "the first call must stop at the budget and report more pending")
+	assert_eq(after_first, DotnetBuild.DRAIN_BUDGET_BYTES)
+	assert_false(more_second)
+	assert_eq(after_second, DotnetBuild.DRAIN_BUDGET_BYTES + 4096)
+
+
+func test_kill_build_tree_reaches_descendants_on_windows() -> void:
+	if OS.get_name() != "Windows":
+		skip("tree termination is only provable via taskkill /T on Windows")
+		return
+	var info := OS.execute_with_pipe("cmd.exe", ["/c", "ping", "-n", "60", "127.0.0.1"], false)
+	var parent := int(info.get("pid", -1))
+	assert_gt(parent, 0, "fixture cmd.exe must start")
+	var child := _wait_for_child(parent, "PING.EXE", 5000)
+	var killed := DotnetBuild._kill_build_tree(parent)
+	var child_gone := _wait_until_dead(child, 5000)
+	DotnetBuild._close_pipes(info)
+	assert_gt(child, 0, "fixture must have a ping.exe descendant to prove anything")
+	assert_true(killed, "taskkill /T must report the tree killed")
+	assert_true(child_gone, "the descendant must not outlive the timed-out build")
+
+
+func _wait_for_child(parent: int, image: String, timeout_ms: int) -> int:
+	var deadline := Time.get_ticks_msec() + timeout_ms
+	while Time.get_ticks_msec() < deadline:
+		var output: Array = []
+		OS.execute("tasklist", ["/FI", "IMAGENAME eq %s" % image, "/FO", "CSV", "/NH"], output, true)
+		for line in str(output[0] if not output.is_empty() else "").split("\n"):
+			var cols := line.strip_edges().split("\",\"")
+			if cols.size() < 2:
+				continue
+			var pid := int(cols[1])
+			if pid > 0 and McpPortResolver.process_parent(pid) == parent:
+				return pid
+		OS.delay_msec(100)
+	return -1
+
+
+func _wait_until_dead(pid: int, timeout_ms: int) -> bool:
+	if pid <= 0:
+		return false
+	var deadline := Time.get_ticks_msec() + timeout_ms
+	while Time.get_ticks_msec() < deadline:
+		if not McpPortResolver.pid_alive(pid):
+			return true
+		OS.delay_msec(100)
+	return false
