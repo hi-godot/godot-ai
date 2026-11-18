@@ -395,7 +395,9 @@ which: `DISCOVERY_EXPIRED`, `DISCOVERY_CANCELLED`, `DISCOVERY_ENTRY_LIMIT`,
 `DISCOVERY_BYTE_LIMIT`, `DISCOVERY_OWNER_TOO_LARGE`,
 `DISCOVERY_DIRECTORY_UNREADABLE`, `DISCOVERY_OWNER_UNREADABLE`,
 `DISCOVERY_BINARY_UNREADABLE`, `DISCOVERY_LINKED_ENTRY`, `DISCOVERY_CHANGED`
-or `DISCOVERY_UID_UNRESOLVED`. Semantic refusals remain `INVALID_PARAMS`.
+or `DISCOVERY_UID_UNRESOLVED`. A cancelled request's response is never
+delivered, so callers do not see `DISCOVERY_CANCELLED`; it exists for the
+discovery job itself. Semantic refusals remain `INVALID_PARAMS`.
 A mutation path that is itself linked is refused with `INVALID_PARAMS`,
 including when `force=true`. Engine metadata, VCS
 internals and the loaded plugin implementation are excluded. Hidden folders and

@@ -54,15 +54,50 @@ def test_discovery_failures_go_through_the_sub_code_helper() -> None:
     ], lines
 
 
+def _discovery_fault_calls(text: str) -> list[str]:
+    """Return the argument text of every ``_discovery_fault(...)`` call,
+    including calls whose arguments span several lines."""
+    calls = []
+    for match in re.finditer(r"(?<![\w.])_discovery_fault\(", text):
+        depth, index = 1, match.end()
+        while depth:
+            char = text[index]
+            depth += {"(": 1, ")": -1}.get(char, 0)
+            index += 1
+        calls.append(text[match.end() : index - 1])
+    return calls
+
+
+def _last_argument(arguments: str) -> str:
+    depth, start = 0, 0
+    for index, char in enumerate(arguments):
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth -= 1
+        elif char == "," and depth == 0:
+            start = index + 1
+    return " ".join(arguments[start:].split())
+
+
 def test_every_sub_code_is_emitted_and_every_emission_is_known() -> None:
     text = MUTATION_GD.read_text(encoding="utf-8")
     used = set(re.findall(r"Errors\.(DISCOVERY_SUB_\w+)", text))
     known = set(_gd_constants())
     assert used <= known, f"unknown sub-code constants: {sorted(used - known)}"
     assert used == known, f"sub-codes never emitted: {sorted(known - used)}"
-    calls = re.findall(r"_discovery_fault\((.*)\)\s*$", text, re.MULTILINE)
-    assert calls, "no _discovery_fault calls found"
+    calls = [c for c in _discovery_fault_calls(text) if not c.startswith("message: String")]
+    assert len(calls) >= len(known), calls
     for call in calls:
-        if call.startswith("message: String"):
-            continue  # the definition
-        assert re.search(r"Errors\.DISCOVERY_SUB_\w+$", call), call
+        detail = _last_argument(call)
+        assert re.fullmatch(r"(.* else )?Errors\.DISCOVERY_SUB_\w+", detail), call
+
+
+def test_call_extraction_checks_each_multiline_call() -> None:
+    """A multiline call with an empty detail must fail even when another call
+    supplies the same sub-code."""
+    sample = (
+        '_discovery_fault("a", Errors.DISCOVERY_SUB_CHANGED)\n_discovery_fault(\n\t"b",\n\t""\n)\n'
+    )
+    details = [_last_argument(call) for call in _discovery_fault_calls(sample)]
+    assert details == ["Errors.DISCOVERY_SUB_CHANGED", '""']

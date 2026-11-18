@@ -42,6 +42,8 @@ const FILESYSTEM_DISCOVERY_FAILED := "FILESYSTEM_DISCOVERY_FAILED"
 ## The 25 s discovery deadline passed.
 const DISCOVERY_SUB_EXPIRED := "DISCOVERY_EXPIRED"
 ## The caller stopped waiting (deferred response gone) before the deadline.
+## Local to the job: a cancelled job's result is never delivered, so this
+## never reaches the caller or telemetry.
 const DISCOVERY_SUB_CANCELLED := "DISCOVERY_CANCELLED"
 ## The project walk passed MAX_ENTRIES.
 const DISCOVERY_SUB_ENTRY_LIMIT := "DISCOVERY_ENTRY_LIMIT"

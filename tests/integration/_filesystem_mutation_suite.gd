@@ -200,6 +200,23 @@ func test_mutation_owner_change_during_discovery_is_reported() -> void:
 	_mutation_cleanup()
 
 
+func test_mutation_large_owner_expiry_is_not_reported_as_changed() -> void:
+	_mutation_cleanup()
+	var owner := MUTATION_ROOT + ".txt"
+	_mutation_write(owner, "unchanged owner")
+	var job := Mutation.new()
+	job._large_owners[owner] = {
+		"modified": FileAccess.get_modified_time(owner),
+		"size": FileAccess.get_file_as_bytes(owner).size(),
+		"dependencies": job._owner_dependencies(owner),
+	}
+	## The owner is unchanged; only the deadline has passed.
+	job._deadline = 0
+	assert_false(await job._large_owners_unchanged(), "an expired check must not pass")
+	assert_eq(job._fault_sub_code, "DISCOVERY_EXPIRED", "an unchanged owner must not be reported as changed")
+	_mutation_cleanup()
+
+
 func test_mutation_permanent_directory_refused_without_deleting() -> void:
 	var path := MUTATION_ROOT + "_directory"
 	assert_eq(DirAccess.make_dir_absolute(path), OK)

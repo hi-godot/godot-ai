@@ -36,6 +36,9 @@ var _anchors: Array[String] = []
 var _fault := ""
 var _fault_code := ""
 var _fault_sub_code := ""
+## Why the last `_active()` check failed, so the fault reports what that check
+## saw instead of re-reading the clock.
+var _stop_sub_code := ""
 var _io: Callable
 
 ## Dispatch stays synchronous; the retained job owns work across frame yields.
@@ -83,6 +86,7 @@ func run(params: Dictionary, operation: String, active: Callable = Callable()) -
 	_fault = ""
 	_fault_code = ""
 	_fault_sub_code = ""
+	_stop_sub_code = ""
 	var result := await _run(params, operation)
 	_busy = false
 	return result
@@ -203,7 +207,7 @@ func _run(params: Dictionary, operation: String) -> Dictionary:
 	if not await _revalidate():
 		return _fault_result()
 	if not _active():
-		_expiry_fault("Filesystem request expired before mutation; nothing changed")
+		_expiry_fault("Filesystem request expired or was cancelled before mutation; nothing changed")
 		return _fault_result()
 	for item in group:
 		if not _confined_without_links(item.from) or (operation != "remove" and not _destination_available(item.from, item.to)):
@@ -218,8 +222,16 @@ func _run(params: Dictionary, operation: String) -> Dictionary:
 	return _move(source, destination, directory, group, targets)
 
 
+## The deadline is checked first, so a passed deadline wins over a caller that
+## also stopped waiting.
 func _active() -> bool:
-	return Time.get_ticks_msec() < _deadline and (not _alive.is_valid() or bool(_alive.call()))
+	if Time.get_ticks_msec() >= _deadline:
+		_stop_sub_code = Errors.DISCOVERY_SUB_EXPIRED
+		return false
+	if _alive.is_valid() and not bool(_alive.call()):
+		_stop_sub_code = Errors.DISCOVERY_SUB_CANCELLED
+		return false
+	return true
 
 
 func _yield_if_needed() -> bool:
@@ -601,10 +613,17 @@ func _revalidate() -> bool:
 		if _fingerprints[path] != original[path]:
 			_discovery_fault("Owner changed during discovery: %s" % path, Errors.DISCOVERY_SUB_CHANGED)
 			return false
+	return await _large_owners_unchanged()
+
+
+func _large_owners_unchanged() -> bool:
 	var original_large := _large_owners.duplicate(true)
 	for path in original_large:
 		if not await _large_owner_unchanged(path, original_large[path]):
-			_discovery_fault("Owner changed during discovery: %s" % path, Errors.DISCOVERY_SUB_CHANGED)
+			# Keep an expiry, cancellation or unreadable-owner fault the check
+			# recorded; only an observed difference is a change.
+			if _fault.is_empty():
+				_discovery_fault("Owner changed during discovery: %s" % path, Errors.DISCOVERY_SUB_CHANGED)
 			return false
 	return true
 
@@ -766,10 +785,12 @@ func _discovery_fault(message: String, sub_code: String) -> void:
 	_set_fault(message, Errors.FILESYSTEM_DISCOVERY_FAILED, sub_code)
 
 
-## `_active()` failed: tell a passed deadline from a caller that stopped waiting.
+## `_active()` failed: report the reason that check saw. A cancelled job's
+## result is never delivered (`_finish` drops it), so DISCOVERY_CANCELLED stays
+## local to the job and never reaches the caller or telemetry.
 func _expiry_fault(message: String) -> void:
-	var expired := Time.get_ticks_msec() >= _deadline
-	_discovery_fault(message, Errors.DISCOVERY_SUB_EXPIRED if expired else Errors.DISCOVERY_SUB_CANCELLED)
+	var cancelled := _stop_sub_code == Errors.DISCOVERY_SUB_CANCELLED
+	_discovery_fault(message, Errors.DISCOVERY_SUB_CANCELLED if cancelled else Errors.DISCOVERY_SUB_EXPIRED)
 
 
 func _fault_result() -> Dictionary:

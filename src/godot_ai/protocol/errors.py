@@ -129,6 +129,8 @@ class FilesystemDiscoverySubCode(StrEnum):
     """
 
     DISCOVERY_EXPIRED = "DISCOVERY_EXPIRED"
+    # Local to the plugin job: a cancelled job's result is never delivered,
+    # so this value does not reach callers or telemetry.
     DISCOVERY_CANCELLED = "DISCOVERY_CANCELLED"
     DISCOVERY_ENTRY_LIMIT = "DISCOVERY_ENTRY_LIMIT"
     DISCOVERY_BYTE_LIMIT = "DISCOVERY_BYTE_LIMIT"
