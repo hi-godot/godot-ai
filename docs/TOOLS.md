@@ -388,9 +388,16 @@ is at most 256 KiB, after expanding a compressed container, are also scanned
 for exact serialized path/UID bytes. Serialized strings in larger binary
 owners that are not engine dependencies remain outside static discovery, like
 computed runtime paths. Unreadable
-metadata, discovery deadline/cancellation and discovery budgets return
-`FILESYSTEM_DISCOVERY_FAILED`; semantic refusals remain `INVALID_PARAMS`.
-Linked paths are refused, including when `force=true`. Engine metadata, VCS
+metadata, discovery deadline/cancellation, discovery budgets, a link met in
+the project walk, entries changing during discovery and a UID the cache does
+not resolve return `FILESYSTEM_DISCOVERY_FAILED`, with `data.sub_code` naming
+which: `DISCOVERY_EXPIRED`, `DISCOVERY_CANCELLED`, `DISCOVERY_ENTRY_LIMIT`,
+`DISCOVERY_BYTE_LIMIT`, `DISCOVERY_OWNER_TOO_LARGE`,
+`DISCOVERY_DIRECTORY_UNREADABLE`, `DISCOVERY_OWNER_UNREADABLE`,
+`DISCOVERY_BINARY_UNREADABLE`, `DISCOVERY_LINKED_ENTRY`, `DISCOVERY_CHANGED`
+or `DISCOVERY_UID_UNRESOLVED`. Semantic refusals remain `INVALID_PARAMS`.
+A mutation path that is itself linked is refused with `INVALID_PARAMS`,
+including when `force=true`. Engine metadata, VCS
 internals and the loaded plugin implementation are excluded. Hidden folders and
 folders holding a `.gdignore`, which Godot neither imports nor tracks, are left
 out of discovery unless they hold or lie inside the mutation path; their

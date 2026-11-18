@@ -35,6 +35,7 @@ var _large_owners: Dictionary = {}
 var _anchors: Array[String] = []
 var _fault := ""
 var _fault_code := ""
+var _fault_sub_code := ""
 var _io: Callable
 
 ## Dispatch stays synchronous; the retained job owns work across frame yields.
@@ -81,6 +82,7 @@ func run(params: Dictionary, operation: String, active: Callable = Callable()) -
 	_anchors.clear()
 	_fault = ""
 	_fault_code = ""
+	_fault_sub_code = ""
 	var result := await _run(params, operation)
 	_busy = false
 	return result
@@ -157,7 +159,7 @@ func _run(params: Dictionary, operation: String) -> Dictionary:
 			# owners, but not for scripts or text resources: those can refer to a
 			# target in ordinary strings the graph does not report. Fail closed.
 			if extension not in ["res", "scn"]:
-				_set_fault("Cannot safely read owner %s (exceeds %d bytes)" % [path, MAX_FILE_BYTES], Errors.FILESYSTEM_DISCOVERY_FAILED)
+				_discovery_fault("Cannot safely read owner %s (exceeds %d bytes)" % [path, MAX_FILE_BYTES], Errors.DISCOVERY_SUB_OWNER_TOO_LARGE)
 				return _fault_result()
 			hits = await _large_owner_references(path, targets)
 		else:
@@ -201,7 +203,7 @@ func _run(params: Dictionary, operation: String) -> Dictionary:
 	if not await _revalidate():
 		return _fault_result()
 	if not _active():
-		_set_fault("Filesystem request expired before mutation; nothing changed", Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_expiry_fault("Filesystem request expired before mutation; nothing changed")
 		return _fault_result()
 	for item in group:
 		if not _confined_without_links(item.from) or (operation != "remove" and not _destination_available(item.from, item.to)):
@@ -222,7 +224,7 @@ func _active() -> bool:
 
 func _yield_if_needed() -> bool:
 	if not _active():
-		_set_fault("Filesystem discovery expired or was cancelled; nothing changed", Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_expiry_fault("Filesystem discovery expired or was cancelled; nothing changed")
 		return false
 	var paused := Time.get_ticks_usec()
 	if paused - _yield_at >= _budget:
@@ -230,7 +232,7 @@ func _yield_if_needed() -> bool:
 		_yield_at = Time.get_ticks_usec()
 		_budget = _frame_budget(_yield_at - paused)
 	if not _active():
-		_set_fault("Filesystem discovery expired or was cancelled; nothing changed", Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_expiry_fault("Filesystem discovery expired or was cancelled; nothing changed")
 		return false
 	return true
 
@@ -249,11 +251,11 @@ func _collect_tree(root: String, files: Array[String]) -> bool:
 		var path: String = pending.pop_back()
 		var dir := DirAccess.open(path)
 		if dir == null:
-			_set_fault("Cannot inspect directory: %s" % path, Errors.FILESYSTEM_DISCOVERY_FAILED)
+			_discovery_fault("Cannot inspect directory: %s" % path, Errors.DISCOVERY_SUB_DIRECTORY_UNREADABLE)
 			return false
 		dir.include_hidden = true
 		if dir.list_dir_begin() != OK:
-			_set_fault("Cannot list directory: %s" % path, Errors.FILESYSTEM_DISCOVERY_FAILED)
+			_discovery_fault("Cannot list directory: %s" % path, Errors.DISCOVERY_SUB_DIRECTORY_UNREADABLE)
 			return false
 		var entries: Array[String] = []
 		var name := dir.get_next()
@@ -266,7 +268,7 @@ func _collect_tree(root: String, files: Array[String]) -> bool:
 				if child not in ["res://.godot", "res://.git", PLUGIN_TREE]:
 					var skipped := dir.current_is_dir() and not _scanned(child, FileAccess.get_hidden_attribute(child))
 					if not skipped and (not dir.has_method("is_link") or bool(dir.call("is_link", child))):
-						_fault = "Cannot establish ownership through a linked entry: %s" % child
+						_discovery_fault("Cannot establish ownership through a linked entry: %s" % child, Errors.DISCOVERY_SUB_LINKED_ENTRY)
 						dir.list_dir_end()
 						return false
 					if skipped:
@@ -277,7 +279,7 @@ func _collect_tree(root: String, files: Array[String]) -> bool:
 						files.append(child)
 					count += 1
 					if count > MAX_ENTRIES:
-						_set_fault("Project discovery exceeds %d entries; nothing changed. Hidden folders and folders holding a .gdignore are not scanned" % MAX_ENTRIES, Errors.FILESYSTEM_DISCOVERY_FAILED)
+						_discovery_fault("Project discovery exceeds %d entries; nothing changed. Hidden folders and folders holding a .gdignore are not scanned" % MAX_ENTRIES, Errors.DISCOVERY_SUB_ENTRY_LIMIT)
 						dir.list_dir_end()
 						return false
 			if not await _yield_if_needed():
@@ -314,22 +316,22 @@ func _scanned(directory: String, hidden: bool) -> bool:
 func _read_bounded(path: String) -> Variant:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
-		_set_fault("Cannot safely read owner %s (unreadable)" % path, Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_discovery_fault("Cannot safely read owner %s (unreadable)" % path, Errors.DISCOVERY_SUB_OWNER_UNREADABLE)
 		return null
 	if file.get_length() > MAX_FILE_BYTES:
-		_set_fault("Cannot safely read owner %s (exceeds %d bytes)" % [path, MAX_FILE_BYTES], Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_discovery_fault("Cannot safely read owner %s (exceeds %d bytes)" % [path, MAX_FILE_BYTES], Errors.DISCOVERY_SUB_OWNER_TOO_LARGE)
 		return null
 	var bytes := PackedByteArray()
 	var length := file.get_length()
 	while file.get_position() < length:
 		var part := file.get_buffer(mini(16384, length - file.get_position()))
 		if part.is_empty():
-			_set_fault("Short read while inspecting %s" % path, Errors.FILESYSTEM_DISCOVERY_FAILED)
+			_discovery_fault("Short read while inspecting %s" % path, Errors.DISCOVERY_SUB_OWNER_UNREADABLE)
 			return null
 		bytes.append_array(part)
 		_bytes += part.size()
 		if _bytes > MAX_TOTAL_BYTES:
-			_set_fault("Filesystem discovery exceeds its byte budget; nothing changed", Errors.FILESYSTEM_DISCOVERY_FAILED)
+			_discovery_fault("Filesystem discovery exceeds its byte budget; nothing changed", Errors.DISCOVERY_SUB_BYTE_LIMIT)
 			return null
 		if not await _yield_if_needed():
 			return null
@@ -350,7 +352,7 @@ func _mutation_member(path: String, source: String, directory: bool) -> bool:
 func _file_length(path: String) -> int:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
-		_set_fault("Cannot inspect owner metadata: %s" % path, Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_discovery_fault("Cannot inspect owner metadata: %s" % path, Errors.DISCOVERY_SUB_OWNER_UNREADABLE)
 		return -1
 	var length := file.get_length()
 	file.close()
@@ -421,7 +423,7 @@ func _binary_references(path: String, bytes: PackedByteArray, targets: Dictionar
 			hits.append({"path": target, "kind": "path"})
 		elif uses_uid:
 			if not ResourceUID.has_id(uid) or ResourceUID.get_id_path(uid) != target:
-				_set_fault("UID mapping is not authoritative for %s" % target)
+				_discovery_fault("UID mapping is not authoritative for %s" % target, Errors.DISCOVERY_SUB_UID_UNRESOLVED)
 				return hits
 			hits.append({"path": target, "kind": "uid"})
 	return hits
@@ -441,38 +443,38 @@ func _binary_scan_bytes(path: String, bytes: PackedByteArray) -> Variant:
 		return bytes
 	var unreadable := "Cannot inspect compressed binary owner: %s" % path
 	if bytes.size() < 16:
-		_set_fault(unreadable, Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_discovery_fault(unreadable, Errors.DISCOVERY_SUB_BINARY_UNREADABLE)
 		return null
 	var mode := bytes.decode_u32(4)
 	var block_size := bytes.decode_u32(8)
 	var total := bytes.decode_u32(12)
 	if mode > FileAccess.COMPRESSION_BROTLI or block_size == 0:
-		_set_fault(unreadable, Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_discovery_fault(unreadable, Errors.DISCOVERY_SUB_BINARY_UNREADABLE)
 		return null
 	if total > MAX_FILE_BYTES:
 		return PackedByteArray()
 	var block_count := total / block_size + 1
 	var offset := 16 + block_count * 4
 	if offset > bytes.size():
-		_set_fault(unreadable, Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_discovery_fault(unreadable, Errors.DISCOVERY_SUB_BINARY_UNREADABLE)
 		return null
 	var payload := PackedByteArray()
 	for index in block_count:
 		var compressed_size := bytes.decode_u32(16 + index * 4)
 		var expected := total % block_size if index == block_count - 1 else block_size
 		if offset + compressed_size > bytes.size():
-			_set_fault(unreadable, Errors.FILESYSTEM_DISCOVERY_FAILED)
+			_discovery_fault(unreadable, Errors.DISCOVERY_SUB_BINARY_UNREADABLE)
 			return null
 		if expected > 0:
 			var block := bytes.slice(offset, offset + compressed_size).decompress(expected, mode)
 			if block.size() != expected:
-				_set_fault(unreadable, Errors.FILESYSTEM_DISCOVERY_FAILED)
+				_discovery_fault(unreadable, Errors.DISCOVERY_SUB_BINARY_UNREADABLE)
 				return null
 			payload.append_array(block)
 		offset += compressed_size
 	_bytes += payload.size()
 	if _bytes > MAX_TOTAL_BYTES:
-		_set_fault("Filesystem discovery exceeds its byte budget; nothing changed", Errors.FILESYSTEM_DISCOVERY_FAILED)
+		_discovery_fault("Filesystem discovery exceeds its byte budget; nothing changed", Errors.DISCOVERY_SUB_BYTE_LIMIT)
 		return null
 	return payload
 
@@ -547,7 +549,7 @@ func _references(path: String, bytes: PackedByteArray, targets: Dictionary) -> A
 			uses_uid = true
 		if uses_uid:
 			if not ResourceUID.has_id(uid) or ResourceUID.get_id_path(uid) != target:
-				_fault = "UID mapping is not authoritative for %s" % target
+				_discovery_fault("UID mapping is not authoritative for %s" % target, Errors.DISCOVERY_SUB_UID_UNRESOLVED)
 				return hits
 			hits.append({"path": target, "kind": "uid"})
 	return hits
@@ -590,19 +592,19 @@ func _revalidate() -> bool:
 	if not await _collect_tree("res://", files):
 		return false
 	if _directories != original_directories:
-		_fault = "Project entries changed during discovery; retry after changes settle"
+		_discovery_fault("Project entries changed during discovery; retry after changes settle", Errors.DISCOVERY_SUB_CHANGED)
 		return false
 	var original := _fingerprints.duplicate(true)
 	for path in original:
 		if await _read_bounded(path) == null:
 			return false
 		if _fingerprints[path] != original[path]:
-			_fault = "Owner changed during discovery: %s" % path
+			_discovery_fault("Owner changed during discovery: %s" % path, Errors.DISCOVERY_SUB_CHANGED)
 			return false
 	var original_large := _large_owners.duplicate(true)
 	for path in original_large:
 		if not await _large_owner_unchanged(path, original_large[path]):
-			_fault = "Owner changed during discovery: %s" % path
+			_discovery_fault("Owner changed during discovery: %s" % path, Errors.DISCOVERY_SUB_CHANGED)
 			return false
 	return true
 
@@ -751,14 +753,28 @@ static func _is_sidecar(path: String) -> bool:
 	return path.ends_with(".uid") or path.ends_with(".import")
 
 
-func _set_fault(message: String, code: String = "") -> void:
+func _set_fault(message: String, code: String = "", sub_code: String = "") -> void:
 	_fault = message
 	_fault_code = code
+	_fault_sub_code = sub_code
+
+
+## Every FILESYSTEM_DISCOVERY_FAILED refusal goes through here so it carries a
+## `data.sub_code` naming its refusal path (#1120). The sub-code is a fixed
+## vocabulary from utils/error_codes.gd; the message keeps the path detail.
+func _discovery_fault(message: String, sub_code: String) -> void:
+	_set_fault(message, Errors.FILESYSTEM_DISCOVERY_FAILED, sub_code)
+
+
+## `_active()` failed: tell a passed deadline from a caller that stopped waiting.
+func _expiry_fault(message: String) -> void:
+	var expired := Time.get_ticks_msec() >= _deadline
+	_discovery_fault(message, Errors.DISCOVERY_SUB_EXPIRED if expired else Errors.DISCOVERY_SUB_CANCELLED)
 
 
 func _fault_result() -> Dictionary:
 	if _fault_code == Errors.FILESYSTEM_DISCOVERY_FAILED:
-		return _failure(_fault, "unchanged", {}, _fault_code)
+		return _failure(_fault, "unchanged", {"sub_code": _fault_sub_code}, _fault_code)
 	return _unchanged(_fault)
 
 

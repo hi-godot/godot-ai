@@ -54,7 +54,12 @@ from urllib.parse import urlparse
 import httpx
 
 from godot_ai import __version__ as _PACKAGE_VERSION
-from godot_ai.protocol.errors import EditorNotReadySubCode, EditorTransportSubCode, ErrorCode
+from godot_ai.protocol.errors import (
+    EditorNotReadySubCode,
+    EditorTransportSubCode,
+    ErrorCode,
+    FilesystemDiscoverySubCode,
+)
 
 logger = logging.getLogger("godot-ai-telemetry")
 
@@ -1011,6 +1016,8 @@ def _safe_error_sub_code(exc: Exception) -> str | None:
         allowed = {m.value for m in EditorNotReadySubCode}
     elif code == ErrorCode.TRANSPORT_OUTCOME_UNKNOWN:
         allowed = {m.value for m in EditorTransportSubCode}
+    elif code == ErrorCode.FILESYSTEM_DISCOVERY_FAILED:
+        allowed = {m.value for m in FilesystemDiscoverySubCode}
     else:
         return None
     data = getattr(exc, "data", None)
