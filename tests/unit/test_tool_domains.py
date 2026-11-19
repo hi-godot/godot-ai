@@ -128,6 +128,18 @@ def test_create_server_drops_whole_non_core_domain():
     assert all(t.startswith("audio_") for t in dropped)
 
 
+def test_profiler_is_its_own_excludable_domain():
+    ## The dock's Tools tab toggles whole domains, so the profiler has its own
+    ## domain: turning it off drops profiler_manage and leaves game_manage.
+    assert parse_exclude_list("profiler") == {"profiler"}
+    full = set(_list_tools(create_server()))
+    trimmed = set(_list_tools(create_server(exclude_domains={"profiler"})))
+    assert full - trimmed == {"profiler_manage"}
+    assert "game_manage" in trimmed
+    _core, catalog = _parse_gd_catalog()
+    assert catalog["profiler"] == ["profiler_manage"]
+
+
 def test_create_server_preserves_core_when_core_bearing_domain_excluded():
     ## Excluding `node` drops node_create, node_find, … but keeps
     ## node_get_properties. Same for editor/scene.

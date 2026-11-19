@@ -94,6 +94,7 @@ from godot_ai.tools.material import register_material_tools
 from godot_ai.tools.navigation import register_navigation_tools
 from godot_ai.tools.node import register_node_tools
 from godot_ai.tools.particle import register_particle_tools
+from godot_ai.tools.profiler import register_profiler_tools
 from godot_ai.tools.project import register_project_tools
 from godot_ai.tools.resource import register_resource_tools
 from godot_ai.tools.scene import register_scene_tools
@@ -284,6 +285,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "                   input_key, input_mouse, input_gamepad, input_action,\n"
         "                   input_state\n",
     ),
+    ("profiler", "  profiler_manage  start, stop, status, get\n"),
     ("autoload", "  autoload_manage  list, add, remove\n"),
     (
         "filesystem",
@@ -890,6 +892,8 @@ def create_server(
         register_input_map_tools(mcp)
     if "game" not in exclude:
         register_game_tools(mcp)
+    if "profiler" not in exclude:
+        register_profiler_tools(mcp)
     if "testing" not in exclude:
         register_testing_tools(mcp)
     if "batch" not in exclude:
