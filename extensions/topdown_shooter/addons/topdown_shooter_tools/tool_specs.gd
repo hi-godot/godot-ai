@@ -10,6 +10,7 @@ const HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/topdown_tools
 const _NUM := {"type": "number"}
 const _BOOL := {"type": "boolean"}
 const _STR := {"type": "string"}
+const _VEC3 := {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
 
 
 static func definitions() -> Array[Dictionary]:
@@ -97,6 +98,45 @@ static func definitions() -> Array[Dictionary]:
 					"script_dir": _desc(_STR, "Default res://scripts/topdown."),
 					"overwrite": _desc(_BOOL, "Replace existing files for this weapon_id. Default false."),
 					"overwrite_scripts": _desc(_BOOL, "Replace existing weapon scripts with the templates. Default false."),
+				},
+			},
+		},
+		{
+			"name": "enemy_ai_scaffold",
+			"method": &"enemy_scaffold",
+			"description": "Create an enemy scene (CharacterBody3D, NavigationAgent3D, WeaponMount) with a state-machine AI: PATROL (route or wander) -> CHASE (seen in a vision cone with line of sight, damaged, or alerted by an ally) -> ATTACK (melee, or ranged with its own ray or a weapon_create weapon) -> SEARCH (last known position) -> PATROL. Uses take_damage(amount, info) like the player and weapons. Places instances in the open scene and, if it has no NavigationRegion3D, adds one baked from static colliders. One undo step.",
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["enemy_id"],
+				"properties": {
+					"enemy_id": _desc(_STR, "lower_snake_case id, also the scene file name (e.g. grunt, rifleman)."),
+					"attack_mode": _desc({"type": "string", "enum": ["melee", "ranged"]}, "Default melee."),
+					"weapon_scene": _desc(_STR, "Ranged only: res:// weapon .tscn (from weapon_create) mounted on the enemy. Without it the enemy fires its own ray."),
+					"max_health": _desc(_range(1, 100000), "Default 60."),
+					"patrol_speed": _desc(_range(0, 100), "m/s. Default 2.5."),
+					"chase_speed": _desc(_range(0.1, 100), "m/s. Default 4.5."),
+					"sight_range": _desc(_range(0.5, 1000), "Meters. Default 15."),
+					"sight_angle_degrees": _desc(_range(1, 360), "Full vision cone width. Default 110."),
+					"proximity_radius": _desc(_range(0, 100), "Noticed in any direction this close. Default 2.5."),
+					"attack_range": _desc(_range(0.3, 1000), "Default 1.8 melee, 12 ranged."),
+					"attack_damage": _desc(_range(0, 100000), "Per hit (weapon-less). Default 10."),
+					"attack_cooldown": _desc(_range(0, 60), "Seconds between attacks. Default 1 melee, 0.8 ranged."),
+					"attack_windup": _desc(_range(0, 10), "Telegraph / reaction time before attacking. Default 0.35."),
+					"lose_sight_time": _desc(_range(0, 60), "Seconds chasing the last seen spot before searching. Default 3."),
+					"search_time": _desc(_range(0, 60), "Seconds looking around before patrolling again. Default 4."),
+					"alert_radius": _desc(_range(0, 1000), "Nearby enemies within this radius join the chase; 0 off. Default 8."),
+					"wander_radius": _desc(_range(0, 1000), "Wander range around the spawn point when there are no patrol_points. Default 6."),
+					"target_group": _desc(_STR, "Group of nodes the enemy hunts. Default player."),
+					"add_to_scene": _desc(_BOOL, "Place instances in the open scene. Default true."),
+					"parent_path": _desc(_STR, "Parent for the instances. Default scene root."),
+					"positions": _desc({"type": "array", "items": _VEC3, "minItems": 1, "maxItems": 64}, "One instance per [x, y, z]. Default [[0, 0, -8]]."),
+					"patrol_points": _desc({"type": "array", "items": _VEC3, "maxItems": 256}, "World [x, y, z] route, looped, set on every placed instance. Default none (wander)."),
+					"setup_navigation": _desc(_BOOL, "Add and bake a NavigationRegion3D from static colliders when the scene has none. Default true."),
+					"scene_dir": _desc(_STR, "Default res://scenes/enemies."),
+					"script_dir": _desc(_STR, "Default res://scripts/topdown."),
+					"overwrite": _desc(_BOOL, "Replace an existing scene for this enemy_id. Default false."),
+					"overwrite_scripts": _desc(_BOOL, "Replace an existing enemy_ai.gd with the template. Default false."),
 				},
 			},
 		},
