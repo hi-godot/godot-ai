@@ -178,7 +178,15 @@ func delete_node(params: Dictionary) -> Dictionary:
 	_undo_redo.add_do_method(parent, "remove_child", node)
 	_undo_redo.add_undo_method(parent, "add_child", node, true)
 	_undo_redo.add_undo_method(parent, "move_child", node, idx)
-	_undo_redo.add_undo_method(node, "set_owner", scene_root)
+	## Godot clears owners outside the detached subtree. Restore them after
+	## reattaching it so its scene-owned descendants are saved again.
+	var pending: Array[Node] = [node]
+	while not pending.is_empty():
+		var descendant: Node = pending.pop_back()
+		var owner := descendant.owner
+		if owner != null and owner != node and not node.is_ancestor_of(owner):
+			_undo_redo.add_undo_method(descendant, "set_owner", owner)
+		pending.append_array(descendant.get_children(true))
 	_undo_redo.add_undo_reference(node)
 	_undo_redo.commit_action()
 
