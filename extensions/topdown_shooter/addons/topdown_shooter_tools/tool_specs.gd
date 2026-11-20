@@ -13,6 +13,7 @@ const RAID_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/raid_too
 const PLAYTEST_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/playtest_tools.gd"
 const HIDEOUT_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/hideout_tools.gd"
 const NOTES_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/notes_tools.gd"
+const FEEDBACK_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/feedback_tools.gd"
 
 const _NUM := {"type": "number"}
 const _BOOL := {"type": "boolean"}
@@ -105,6 +106,46 @@ static func definitions() -> Array[Dictionary]:
 					"script_dir": _desc(_STR, "Default res://scripts/topdown."),
 					"overwrite": _desc(_BOOL, "Replace existing files for this weapon_id. Default false."),
 					"overwrite_scripts": _desc(_BOOL, "Replace existing weapon scripts with the templates. Default false."),
+				},
+			},
+		},
+		{
+			"name": "combat_feedback_setup",
+			"method": &"combat_feedback_setup",
+			"script": FEEDBACK_HANDLER_PATH,
+			"description": "Add combat feel to the open 3D scene: one CombatFeedback node that at run time hooks every weapon (fired/hit signals, spawned ones too) and damageable body (health_changed) and adds muzzle flash, shell casings, hit particles (blood/sparks), damage numbers, hitmarker/kill marker, red hurt vignette and screen shake. No weapon/enemy/player script is edited. Each effect has an inspector switch; rerunning retunes the node. One undo step.",
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"enabled": _desc(_BOOL, "Master switch. Default true."),
+					"muzzle_flash": _BOOL,
+					"muzzle_flash_for_enemies": _desc(_BOOL, "Default true."),
+					"shell_casings": _BOOL,
+					"shell_casings_for_enemies": _desc(_BOOL, "Default false."),
+					"hit_particles": _BOOL,
+					"damage_numbers": _BOOL,
+					"damage_numbers_for_enemies": _desc(_BOOL, "Numbers for enemy shots (on the player). Default false."),
+					"hitmarker": _BOOL,
+					"hitmarker_at_cursor": _desc(_BOOL, "false: at the hit point. Default true."),
+					"damage_vignette": _BOOL,
+					"screen_shake": _BOOL,
+					"muzzle_flash_size": _desc(_range(0.05, 3), "Meters. Default 0.35."),
+					"damage_number_font_size": _desc({"type": "integer", "minimum": 8, "maximum": 256}, "Default 56."),
+					"damage_number_merge_time": _desc(_range(0, 1), "Hits on one target this close (s) add into one number. Default 0.12."),
+					"hitmarker_size": _desc(_range(2, 80), "Pixels. Default 11."),
+					"vignette_max_alpha": _desc(_range(0, 1), "Default 0.6."),
+					"low_health_threshold": _desc(_range(0, 1), "Vignette pulses below this health fraction; 0 off. Default 0.3."),
+					"shake_strength": _desc(_range(0, 3), "Multiplier. Default 1."),
+					"max_shake_offset": _desc(_range(0, 3), "Meters at full shake. Default 0.35."),
+					"shake_on_fire": _desc(_range(0, 1), "Default 0.12."),
+					"shake_on_hurt": _desc(_range(0, 1), "Default 0.45."),
+					"shake_on_kill": _desc(_range(0, 1), "Default 0.2."),
+					"player_group": _desc(_STR, "Default player."),
+					"parent_path": _desc(_STR, "Default scene root."),
+					"name": _desc(_STR, "Default CombatFeedback."),
+					"script_dir": _desc(_STR, "Default res://scripts/topdown."),
+					"overwrite_scripts": _desc(_BOOL, "Replace combat_feedback.gd with the template. Default false."),
 				},
 			},
 		},
