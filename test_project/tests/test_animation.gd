@@ -6,6 +6,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const AnimationHandler := preload("res://addons/godot_ai/handlers/animation_handler.gd")
 const AnimationValues := preload("res://addons/godot_ai/handlers/animation_values.gd")
 const TypedTargetFixture := preload("res://tests/mcp_animation_typed_target.gd")
+const AUDIO_SAMPLE := "res://tests/fixtures/import_settings.wav"
 
 ## Tests for AnimationHandler — AnimationPlayer authoring.
 ##
@@ -14,6 +15,7 @@ const TypedTargetFixture := preload("res://tests/mcp_animation_typed_target.gd")
 
 var _handler: AnimationHandler
 var _undo_redo: EditorUndoRedoManager
+var _second_audio_asset := ""
 
 
 func suite_name() -> String:
@@ -26,7 +28,10 @@ func suite_setup(ctx: Dictionary) -> void:
 
 
 func suite_teardown() -> void:
-	pass
+	if not _second_audio_asset.is_empty() and FileAccess.file_exists(_second_audio_asset):
+		var error := DirAccess.remove_absolute(_second_audio_asset)
+		if error != OK:
+			push_warning("MCP animation test cleanup failed for %s: %s" % [_second_audio_asset, error_string(error)])
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -652,7 +657,153 @@ func test_add_method_track_requires_method_key() -> void:
 	_remove_node(player_path)
 
 
-# ─── animation_set_autoplay ───────────────────────────────────────────────────
+# ─── animation_add_audio_track ────────────────────────────────────────────────
+
+func _audio_track_fixture() -> Dictionary:
+	var player_path := _add_player("_McpTestAudioAnimationPlayer")
+	if player_path.is_empty():
+		return {}
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var player := McpScenePath.resolve(player_path, scene_root) as AnimationPlayer
+	var audio_root := Node.new()
+	audio_root.name = "_McpTestAudioRoot"
+	scene_root.add_child(audio_root)
+	audio_root.owner = scene_root
+	player.root_node = player.get_path_to(audio_root)
+	var targets: Array[Node] = [AudioStreamPlayer.new(), AudioStreamPlayer2D.new(), AudioStreamPlayer3D.new()]
+	var names := [&"Cue", &"Cue2D", &"_McpTestCue3D"]
+	for index in targets.size():
+		var target := targets[index]
+		target.name = names[index]
+		var parent := scene_root if index == 2 else audio_root
+		parent.add_child(target)
+		target.owner = scene_root
+	var animation := Animation.new()
+	animation.length = 2.0
+	var library := AnimationLibrary.new()
+	library.add_animation(&"pulse", animation)
+	player.add_animation_library(&"effects", library)
+	return {
+		"player_path": player_path,
+		"root": audio_root,
+		"animation": animation,
+		"history": _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(scene_root)),
+	}
+
+
+func _add_audio_track_for(fixture: Dictionary, target: String, keyframes: Array) -> Dictionary:
+	return _handler.add_audio_track({
+		"player_path": fixture.player_path,
+		"animation_name": "effects/pulse",
+		"target_node_path": target,
+		"keyframes": keyframes,
+	})
+
+
+func _assert_native_audio_track(animation: Animation, path: String, first: AudioStream, second: AudioStream) -> void:
+	var track_index := animation.find_track(NodePath(path), Animation.TYPE_AUDIO)
+	assert_true(track_index >= 0, "The native audio track must target %s" % path)
+	if track_index < 0:
+		return
+	assert_eq(animation.track_get_key_count(track_index), 2)
+	if animation.track_get_key_count(track_index) != 2:
+		return
+	assert_eq(animation.track_get_key_time(track_index, 0), 0.25)
+	assert_eq(animation.audio_track_get_key_stream(track_index, 0), first)
+	assert_eq(animation.audio_track_get_key_start_offset(track_index, 0), 0.00390625)
+	assert_eq(animation.audio_track_get_key_end_offset(track_index, 0), 0.0078125)
+	assert_eq(animation.track_get_key_time(track_index, 1), 1.5)
+	assert_eq(animation.audio_track_get_key_stream(track_index, 1), second)
+	assert_eq(animation.audio_track_get_key_start_offset(track_index, 1), 0.0)
+	assert_eq(animation.audio_track_get_key_end_offset(track_index, 1), 0.0)
+
+
+func test_add_audio_track_preserves_native_streams_trims_and_scene_undo() -> void:
+	var fixture := _audio_track_fixture()
+	if fixture.is_empty():
+		skip("No scene root — is a scene open?")
+		return
+	# Use a distinct saved AudioStream for the second key so copying one
+	# key's asset into both slots cannot satisfy the native identity check.
+	_second_audio_asset = "res://tests/_mcp_test_animation_audio_%d.tres" % Time.get_ticks_usec()
+	var clip := AudioStreamWAV.new()
+	clip.mix_rate = 8000
+	var samples := PackedByteArray()
+	samples.resize(800)
+	clip.data = samples
+	var save_error := ResourceSaver.save(clip, _second_audio_asset)
+	assert_eq(save_error, OK, "Save the second audio fixture")
+	if save_error != OK:
+		return
+	var first := ResourceLoader.load(AUDIO_SAMPLE) as AudioStream
+	var second := ResourceLoader.load(_second_audio_asset) as AudioStream
+	assert_true(first != null and second != null and first != second, "Load two distinct audio assets")
+	if first == null or second == null:
+		return
+	var keys := [
+		{"time": 1.5, "stream_path": _second_audio_asset},
+		{"time": 0.25, "stream_path": AUDIO_SAMPLE, "start_offset": 0.00390625, "end_offset": 0.0078125},
+	]
+	var animation: Animation = fixture.animation
+	var history: UndoRedo = fixture.history
+	var global_history := _undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+	var global_version := global_history.get_version()
+	var version := history.get_version()
+	for target in ["Cue2D", "../_McpTestCue3D", "Cue"]:
+		var result := _add_audio_track_for(fixture, "./" + target, keys)
+		assert_has_key(result, "data")
+		if not result.has("data"):
+			return
+		assert_eq(result.data.animation_name, "effects/pulse")
+		assert_eq(result.data.target_node_path, target)
+		assert_eq(result.data.keyframe_count, 2)
+		assert_true(result.data.undoable)
+		_assert_native_audio_track(animation, target, first, second)
+	assert_eq(history.get_version(), version + 3, "One scene action per track")
+	assert_eq(global_history.get_version(), global_version)
+	assert_true(history.undo(), "One undo removes the entire two-key Cue track")
+	assert_eq(animation.get_track_count(), 2)
+	assert_eq(animation.find_track(NodePath("Cue"), Animation.TYPE_AUDIO), -1)
+	_assert_native_audio_track(animation, "Cue2D", first, second)
+	_assert_native_audio_track(animation, "../_McpTestCue3D", first, second)
+	assert_true(history.redo(), "One redo restores the entire two-key Cue track")
+	assert_eq(animation.get_track_count(), 3)
+	_assert_native_audio_track(animation, "Cue", first, second)
+
+
+func test_add_audio_track_refusals_preserve_tracks_and_undo_history() -> void:
+	var fixture := _audio_track_fixture()
+	if fixture.is_empty():
+		skip("No scene root — is a scene open?")
+		return
+	var animation: Animation = fixture.animation
+	var history: UndoRedo = fixture.history
+	var version := history.get_version()
+	var valid := {"time": 0.25, "stream_path": AUDIO_SAMPLE}
+	var missing := {"time": 0.75, "stream_path": "res://tests/_mcp_test_animation_audio_missing.tres"}
+	var wrong_resource := {"time": 0.75, "stream_path": "res://main.tscn"}
+	var nearby := {"time": 0.2500001, "stream_path": AUDIO_SAMPLE}
+	var negative_trim := {"time": 0.75, "stream_path": AUDIO_SAMPLE, "start_offset": -0.01}
+	var root: Node = fixture.root
+	var absolute_target := McpScenePath.from_node(root.get_node("Cue"), EditorInterface.get_edited_scene_root())
+	assert_is_error(_add_audio_track_for(fixture, "Cue", [valid, missing]), ErrorCodes.RESOURCE_NOT_FOUND)
+	assert_is_error(_add_audio_track_for(fixture, "Cue", [valid, wrong_resource]), ErrorCodes.WRONG_TYPE)
+	assert_is_error(_add_audio_track_for(fixture, "Cue", [valid, valid]), ErrorCodes.INVALID_PARAMS)
+	assert_is_error(_add_audio_track_for(fixture, "Cue", [valid, nearby]), ErrorCodes.INVALID_PARAMS)
+	assert_is_error(_add_audio_track_for(fixture, "Cue", [valid, negative_trim]), ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(_add_audio_track_for(fixture, absolute_target, [valid]), ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(_add_audio_track_for(fixture, ".", [valid]), ErrorCodes.WRONG_TYPE)
+	assert_eq(animation.get_track_count(), 0)
+	assert_eq(history.get_version(), version, "Refusals should add no undo action")
+	var created := _add_audio_track_for(fixture, "Cue", [valid])
+	assert_eq(created.get("data", {}).get("keyframe_count"), 1)
+	version = history.get_version()
+	assert_is_error(_add_audio_track_for(fixture, "./Cue", [valid]), ErrorCodes.INVALID_PARAMS)
+	assert_eq(animation.get_track_count(), 1, "Equivalent paths must not create duplicate audio tracks")
+	assert_eq(history.get_version(), version, "Duplicate target should add no undo action")
+
+
+# ─── animation_set_autoplay ──────────────────────────────────────────────────
 
 func test_set_autoplay_basic() -> void:
 	var player_path := _add_player("TestAutoplay")

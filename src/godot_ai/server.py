@@ -242,8 +242,8 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
     (
         "animation",
         "  animation_manage player_create, delete, validate, add_property_track,\n"
-        "                   add_method_track, set_autoplay, play, stop, list, get,\n"
-        "                   create_simple, preset_fade/slide/shake/pulse,\n"
+        "                   add_method_track, add_audio_track, set_autoplay, play,\n"
+        "                   stop, list, get, create_simple, preset_fade/slide/shake/pulse,\n"
         "                   library_add/remove/list, tree_create/get,\n"
         "                   tree_node_add/remove/set, tree_connect/disconnect,\n"
         "                   tree_point_add/set/remove, tree_transition_add/set/remove\n",

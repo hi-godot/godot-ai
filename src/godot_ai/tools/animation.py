@@ -76,6 +76,15 @@ set parameters with node_set_property (e.g. property="parameters/Blend/blend_amo
         [{time, value, transition?}, ...]. interpolation: linear|nearest|cubic.
   • add_method_track(player_path, animation_name, target_node_path, keyframes)
         Add a method track. keyframes: [{time, method, args?}, ...].
+  • add_audio_track(player_path, animation_name, target_node_path, keyframes)
+        Add an undoable audio playback track. target_node_path is relative to
+        the AnimationPlayer's root_node and must resolve to an AudioStreamPlayer,
+        AudioStreamPlayer2D, or AudioStreamPlayer3D in the edited scene.
+        Pass a nonempty list [{time, stream_path, start_offset?, end_offset?}, ...]
+        with saved res:// AudioStream paths. Times and offsets are finite
+        nonnegative seconds. Times must be distinct at Godot's track precision
+        and offsets default to zero. An existing audio track for the same target
+        is refused.
   • set_autoplay(player_path, animation_name="")
         Set autoplay. Empty animation_name clears.
   • play(player_path, animation_name="")
@@ -126,7 +135,8 @@ def register_animation_tools(mcp: FastMCP) -> None:
         """Create a new Animation clip inside an AnimationPlayer's default library.
 
         After creating the clip, add tracks via ``animation_manage`` ops
-        ``add_property_track`` / ``add_method_track`` / ``create_simple``.
+        ``add_property_track``, ``add_method_track``, or ``add_audio_track``.
+        ``create_simple`` builds an animation directly from tween specs.
         Track node paths are stored relative to the AnimationPlayer's
         ``root_node`` (default: its parent), not to the scene root — see
         ``animation_manage`` preset ops for a forgiving target_path that
@@ -178,6 +188,7 @@ def register_animation_tools(mcp: FastMCP) -> None:
             "validate": animation_handlers.animation_validate,
             "add_property_track": animation_handlers.animation_add_property_track,
             "add_method_track": animation_handlers.animation_add_method_track,
+            "add_audio_track": animation_handlers.animation_add_audio_track,
             "set_autoplay": animation_handlers.animation_set_autoplay,
             "play": animation_handlers.animation_play,
             "stop": animation_handlers.animation_stop,

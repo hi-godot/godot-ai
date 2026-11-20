@@ -1010,7 +1010,7 @@ class StubClient:
                 "keyframe_count": len(params.get("keyframes", [])),
                 "undoable": True,
             }
-        if command == "animation_add_method_track":
+        if command in {"animation_add_method_track", "animation_add_audio_track"}:
             return {
                 "player_path": params.get("player_path", ""),
                 "animation_name": params.get("animation_name", ""),
@@ -5178,6 +5178,53 @@ async def test_animation_add_method_track_handler():
     assert params["target_node_path"] == "."
     assert params["keyframes"] == keyframes
     assert result["keyframe_count"] == 1
+
+
+async def test_animation_add_audio_track_forwards_keyframes():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    params = {
+        "player_path": "/Main/AP",
+        "animation_name": "step",
+        "target_node_path": "../Speaker",
+        "keyframes": [
+            {"time": 0.0, "stream_path": "res://step.wav"},
+            {"time": 0.75, "stream_path": "res://step.ogg", "start_offset": 0.1, "end_offset": 0.2},
+        ],
+    }
+
+    result = await animation_handlers.animation_add_audio_track(runtime, **params)
+
+    assert len(client.calls) == 1
+    assert client.calls[0]["command"] == "animation_add_audio_track"
+    assert client.calls[0]["params"] == params
+    assert result["target_node_path"] == "../Speaker"
+    assert result["keyframe_count"] == 2
+    assert result["undoable"] is True
+
+
+async def test_animation_add_audio_track_refuses_unwritable_pinned_editor():
+    client = StubClient()
+    client.live_readiness = "playing"
+    registry = SessionRegistry()
+    registry.register(_make_session("active"))
+    registry.register(_make_session("pinned", readiness="playing"))
+    runtime = DirectRuntime(registry=registry, client=client, session_id="pinned")
+
+    with pytest.raises(GodotCommandError) as error:
+        await animation_handlers.animation_add_audio_track(
+            runtime,
+            player_path="/Main/AP",
+            animation_name="step",
+            target_node_path="Speaker",
+            keyframes=[{"time": 0.0, "stream_path": "res://step.wav"}],
+        )
+
+    assert error.value.code == "EDITOR_NOT_READY"
+    assert error.value.data["sub_code"] == "EDITOR_PLAYING"
+    assert [(call["command"], call["session_id"]) for call in client.calls] == [
+        ("get_editor_state", "pinned")
+    ]
 
 
 async def test_animation_set_autoplay_handler():
