@@ -16,6 +16,7 @@ const LootTools := preload("res://addons/topdown_shooter_tools/handlers/loot_too
 const InventoryTools := preload("res://addons/topdown_shooter_tools/handlers/inventory_tools.gd")
 const RaidTools := preload("res://addons/topdown_shooter_tools/handlers/raid_tools.gd")
 const PlaytestTools := preload("res://addons/topdown_shooter_tools/handlers/playtest_tools.gd")
+const NotesTools := preload("res://addons/topdown_shooter_tools/handlers/notes_tools.gd")
 const ToolSpecs := preload("res://addons/topdown_shooter_tools/tool_specs.gd")
 
 const WORK_DIR := "res://zz_mcp_test_topdown"
@@ -27,6 +28,7 @@ var _loot: LootTools
 var _inventory: InventoryTools
 var _raid: RaidTools
 var _playtest: PlaytestTools
+var _notes: NotesTools
 var _undo_redo: EditorUndoRedoManager
 var _added: Array[Node] = []
 
@@ -43,6 +45,8 @@ func suite_setup(ctx: Dictionary) -> void:
 	_inventory = InventoryTools.new()
 	_raid = RaidTools.new()
 	_playtest = PlaytestTools.new()
+	_notes = NotesTools.new()
+	_notes.notes_dir = WORK_DIR + "/notes/"
 	if EditorInterface.get_edited_scene_root() == null:
 		skip_suite("needs an open scene")
 
@@ -68,6 +72,9 @@ func suite_teardown() -> void:
 			InputMap.erase_action(action)
 	if ProjectSettings.has_setting(PlaytestTools.autoload_key()) and str(ProjectSettings.get_setting(PlaytestTools.autoload_key())).contains(WORK_DIR):
 		ProjectSettings.set_setting(PlaytestTools.autoload_key(), null)
+		changed = true
+	if ProjectSettings.has_setting(NotesTools.autoload_key()) and str(ProjectSettings.get_setting(NotesTools.autoload_key())).contains(WORK_DIR):
+		ProjectSettings.set_setting(NotesTools.autoload_key(), null)
 		changed = true
 	if changed:
 		ProjectSettings.save()
@@ -122,16 +129,17 @@ func _weapon_params(id: String, extra: Dictionary = {}) -> Dictionary:
 
 func test_specs_validate() -> void:
 	var specs := ToolSpecs.build()
-	assert_eq(specs.size(), 9)
+	assert_eq(specs.size(), 10)
 	var names := []
 	for spec in specs:
 		assert_eq(spec.validate(), [] as Array[String], "spec %s" % spec.name)
 		assert_true(spec.promoted)
 		## The playtest runs while the game plays, so it must not be gated.
-		assert_eq(spec.requires_writable, spec.name != "raid_playtest", "requires_writable of %s" % spec.name)
+		## playtest_notes is read while the game runs, so it is not gated either.
+		assert_eq(spec.requires_writable, not spec.name in ["raid_playtest", "playtest_notes"], "requires_writable of %s" % spec.name)
 		assert_eq(spec.deferred, spec.name == "raid_playtest", "deferred of %s" % spec.name)
 		names.append(spec.name)
-	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold", "raid_map_blockout", "raid_playtest"])
+	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold", "raid_map_blockout", "raid_playtest", "playtest_notes"])
 
 
 # --- player ------------------------------------------------------------------
@@ -1826,3 +1834,263 @@ func test_playtest_install_registers_autoload_with_undo() -> void:
 	if before != null:
 		ProjectSettings.set_setting(key, before)
 		ProjectSettings.save()
+
+
+# --- playtest notes ------------------------------------------------------------------
+
+func _notes_dir() -> String:
+	return WORK_DIR + "/notes/"
+
+
+## Writes a note file the way the in-game overlay does.
+func _write_note(id: String, extra: Dictionary = {}) -> Dictionary:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(_notes_dir()))
+	var note := {
+		"id": id, "status": "open", "text": "wall %s has a gap" % id, "category": "bug",
+		"scene": "res://scenes/raid.tscn", "position": [1.0, 0.0, -2.0],
+		"created": "2026-11-20T20:00:00", "created_unix": 1000.0 + float(id.hash() % 100),
+		"screenshot": _notes_dir() + id + ".png",
+	}
+	note.merge(extra, true)
+	var f := FileAccess.open(_notes_dir() + id + ".json", FileAccess.WRITE)
+	f.store_string(JSON.stringify(note))
+	f.close()
+	var img := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	img.save_png(_notes_dir() + id + ".png")
+	return note
+
+
+func _clear_notes() -> void:
+	_remove_tree(ProjectSettings.globalize_path(_notes_dir()))
+
+
+func _overlay() -> GDScript:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORK_DIR + "/scripts"))
+	return _tool_copy(_install_template("playtest_notes_overlay"))
+
+
+func _global_undo() -> UndoRedo:
+	return EditorInterface.get_editor_undo_redo().get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+
+
+func test_notes_list_filters_and_hints() -> void:
+	_clear_notes()
+	var empty: Dictionary = _notes.playtest_notes({})
+	assert_eq(empty.data.count, 0)
+	_write_note("n-a", {"created_unix": 10.0})
+	_write_note("n-b", {"created_unix": 20.0, "category": "idea", "scene": "res://scenes/other.tscn"})
+	_write_note("n-c", {"created_unix": 30.0, "status": "resolved"})
+	var f := FileAccess.open(_notes_dir() + "broken.json", FileAccess.WRITE)
+	f.store_string("{nope")
+	f.close()
+	var out: Dictionary = _notes.playtest_notes({"op": "list"}).data
+	assert_eq(out.count, 2, "open only by default")
+	assert_eq(out.notes[0].id, "n-a", "oldest first")
+	assert_eq(out.open_total, 2)
+	assert_eq(out.resolved_total, 1)
+	assert_eq(out.broken_files.size(), 1)
+	assert_true(String(out.notes[0].screenshot_path).ends_with("n-a.png"))
+	assert_eq(_notes.playtest_notes({"status": "all"}).data.count, 3)
+	assert_eq(_notes.playtest_notes({"status": "resolved"}).data.notes[0].id, "n-c")
+	assert_eq(_notes.playtest_notes({"category": "idea"}).data.notes[0].id, "n-b")
+	assert_eq(_notes.playtest_notes({"scene": "res://scenes/raid.tscn", "status": "all"}).data.count, 2)
+	var limited: Dictionary = _notes.playtest_notes({"status": "all", "limit": 1}).data
+	assert_eq(limited.shown, 1)
+	assert_eq(limited.notes[0].id, "n-c", "limit keeps the newest")
+	_clear_notes()
+
+
+func test_notes_rejects_bad_calls() -> void:
+	assert_is_error(_notes.playtest_notes({"op": "dance"}), "INVALID_PARAMS")
+	assert_is_error(_notes.playtest_notes({"op": "list", "id": "x"}), "INVALID_PARAMS")
+	assert_is_error(_notes.playtest_notes({"status": "maybe"}), "INVALID_PARAMS")
+	assert_is_error(_notes.playtest_notes({"scene": "scenes/a.tscn"}), "INVALID_PARAMS")
+	assert_is_error(_notes.playtest_notes({"op": "get"}), "INVALID_PARAMS")
+	assert_is_error(_notes.playtest_notes({"op": "get", "id": "../../project"}), "INVALID_PARAMS")
+	assert_is_error(_notes.playtest_notes({"op": "get", "id": "missing-1"}), "NODE_NOT_FOUND")
+	assert_is_error(_notes.playtest_notes({"op": "resolve", "ids": "a"}), "INVALID_PARAMS")
+	assert_is_error(_notes.playtest_notes({"op": "install", "script_dir": "res://addons/x"}), "INVALID_PARAMS")
+
+
+func test_notes_get_returns_full_note_and_screenshot() -> void:
+	_clear_notes()
+	_write_note("g-1", {"recent_errors": [{"kind": "error", "message": "boom"}], "cursor_node": "/Raid/Wall3"})
+	var out: Dictionary = _notes.playtest_notes({"op": "get", "id": "g-1"}).data
+	assert_eq(out.text, "wall g-1 has a gap")
+	assert_eq(out.recent_errors[0].message, "boom")
+	assert_true(out.screenshot_exists)
+	assert_true(String(out.screenshot_path).begins_with("/") or String(out.screenshot_path).contains(":"), "absolute path")
+	assert_true(String(out.note_path).ends_with("g-1.json"))
+	_clear_notes()
+
+
+func test_notes_resolve_reopen_with_undo() -> void:
+	_clear_notes()
+	_write_note("r-1")
+	_write_note("r-2")
+	var before := FileAccess.get_file_as_string(_notes_dir() + "r-1.json")
+	var out: Dictionary = _notes.playtest_notes({"op": "resolve", "ids": ["r-1", "r-2"], "resolution": "closed the gap"}).data
+	assert_eq(out.changed, ["r-1", "r-2"])
+	var note: Dictionary = _notes.read_note("r-1")
+	assert_eq(note.status, "resolved")
+	assert_eq(note.resolution, "closed the gap")
+	assert_true(note.has("resolved"))
+	assert_eq(_notes.playtest_notes({}).data.count, 0)
+	_global_undo().undo()
+	assert_eq(FileAccess.get_file_as_string(_notes_dir() + "r-1.json"), before, "undo restores the file byte for byte")
+	_global_undo().redo()
+	assert_eq(_notes.read_note("r-2").status, "resolved", "redo")
+	var again: Dictionary = _notes.playtest_notes({"op": "resolve", "id": "r-1"}).data
+	assert_eq(again.changed, [], "already resolved")
+	var reopened: Dictionary = _notes.playtest_notes({"op": "reopen", "id": "r-1"}).data
+	assert_eq(reopened.changed, ["r-1"])
+	assert_eq(_notes.read_note("r-1").status, "open")
+	assert_false(_notes.read_note("r-1").has("resolved"))
+	## A missing id fails before anything is written.
+	assert_is_error(_notes.playtest_notes({"op": "resolve", "ids": ["r-2", "nope-9"]}), "NODE_NOT_FOUND")
+	_clear_notes()
+
+
+func test_notes_delete_with_undo() -> void:
+	_clear_notes()
+	_write_note("d-1")
+	var out: Dictionary = _notes.playtest_notes({"op": "delete", "id": "d-1"}).data
+	assert_eq(out.files.size(), 2, "json + png")
+	assert_false(FileAccess.file_exists(_notes_dir() + "d-1.json"))
+	assert_false(FileAccess.file_exists(_notes_dir() + "d-1.png"))
+	_global_undo().undo()
+	assert_true(FileAccess.file_exists(_notes_dir() + "d-1.json"), "undo brings the note back")
+	assert_true(FileAccess.file_exists(_notes_dir() + "d-1.png"), "and its screenshot")
+	_clear_notes()
+
+
+func test_notes_markers_are_view_only() -> void:
+	var root := _root()
+	if not root is Node3D:
+		skip("needs a 3D scene")
+		return
+	_clear_notes()
+	var scene := root.scene_file_path
+	_write_note("m-1", {"scene": scene, "position": [2.0, 0.0, 3.0]})
+	_write_note("m-2", {"scene": scene, "status": "resolved"})
+	_write_note("m-3", {"scene": "res://elsewhere.tscn"})
+	var out: Dictionary = _notes.playtest_notes({"op": "markers"}).data
+	assert_eq(out.count, 1, "open notes of the open scene")
+	var holder := root.get_node_or_null(NotesTools.MARKERS_NAME)
+	if holder == null:
+		for child in root.get_children(true):
+			if child.name == NotesTools.MARKERS_NAME:
+				holder = child
+	assert_true(holder != null, "pins added")
+	assert_eq(holder.owner, null, "never saved")
+	assert_eq(holder.get_child(0).position, Vector3(2, 0, 3))
+	assert_eq(holder.get_child(0).get_meta(&"playtest_note_id"), "m-1")
+	assert_false(out.undoable)
+	## Resolving redraws the pins with the same filter.
+	_notes.playtest_notes({"op": "resolve", "id": "m-1"})
+	var count := 0
+	for child in root.get_children(true):
+		if child.name == NotesTools.MARKERS_NAME:
+			count += 1
+	assert_eq(count, 0, "no open notes left, so no pins")
+	assert_eq(_notes.playtest_notes({"op": "markers", "status": "all"}).data.count, 2)
+	assert_true(_notes.playtest_notes({"op": "clear_markers"}).data.removed)
+	for child in root.get_children(true):
+		assert_true(child.name != NotesTools.MARKERS_NAME, "cleared")
+	_clear_notes()
+
+
+func test_notes_install_registers_autoload_with_undo() -> void:
+	var key := NotesTools.autoload_key()
+	var before: Variant = ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null
+	var dir := WORK_DIR + "/notes_script"
+	var out: Dictionary = _notes.playtest_notes({"op": "install", "script_dir": dir})
+	assert_eq(out.data.script, dir + "/playtest_notes_overlay.gd")
+	assert_eq(out.data.script_status, "created")
+	assert_eq(ProjectSettings.get_setting(key), "*" + dir + "/playtest_notes_overlay.gd")
+	assert_eq(_notes.playtest_notes({"op": "install", "script_dir": dir}).data.autoload_status, "kept")
+	_global_undo().undo()
+	assert_eq(ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null, before, "undo restores the autoload")
+	_notes.playtest_notes({"op": "install", "script_dir": dir})
+	assert_true(_notes.playtest_notes({"op": "uninstall"}).data.removed)
+	assert_false(ProjectSettings.has_setting(key))
+	if before != null:
+		ProjectSettings.set_setting(key, before)
+		ProjectSettings.save()
+
+
+func test_notes_overlay_note_key() -> void:
+	var overlay := _overlay()
+	var f8 := InputEventKey.new()
+	f8.physical_keycode = KEY_F8
+	f8.pressed = true
+	if InputMap.has_action(&"playtest_note"):
+		skip("project defines its own playtest_note action")
+		return
+	assert_true(overlay.is_note_key(f8), "F8")
+	var echo := f8.duplicate()
+	echo.echo = true
+	assert_false(overlay.is_note_key(echo), "no key repeat")
+	var ctrl_n := InputEventKey.new()
+	ctrl_n.physical_keycode = KEY_N
+	ctrl_n.ctrl_pressed = true
+	ctrl_n.pressed = true
+	assert_true(overlay.is_note_key(ctrl_n), "Ctrl+N")
+	var cmd_n := ctrl_n.duplicate()
+	cmd_n.ctrl_pressed = false
+	cmd_n.meta_pressed = true
+	assert_true(overlay.is_note_key(cmd_n), "Cmd+N")
+	var n := InputEventKey.new()
+	n.physical_keycode = KEY_N
+	n.pressed = true
+	assert_false(overlay.is_note_key(n), "plain N is a game key")
+	var id: String = overlay.new_id()
+	assert_true(NotesTools.valid_id(id), "id %s is file safe" % id)
+
+
+func test_notes_overlay_saves_note_the_tool_reads() -> void:
+	_clear_notes()
+	var script := _overlay()
+	var overlay: Node = script.new()
+	overlay.notes_folder = _notes_dir()
+	overlay.set("_context", {
+		"scene": "res://scenes/raid.tscn", "scene_name": "Raid",
+		"cursor_position": [4.0, 0.0, 1.0], "player_position": [0.0, 0.0, 0.0],
+		"cursor_node": "/Raid/Crate2", "fps": 60.0,
+	})
+	var shot := Image.create(64, 36, false, Image.FORMAT_RGBA8)
+	shot.fill(Color.BLACK)
+	overlay.set("_shot", shot)
+	var note: Dictionary = overlay.save_note("  crate floats  ", "bug", false)
+	assert_false(note.has("error"), str(note))
+	assert_eq(note.text, "crate floats")
+	assert_eq(note.position, [4.0, 0.0, 1.0], "mouse spot by default")
+	assert_eq(note.position_source, "cursor")
+	assert_true(FileAccess.file_exists(_notes_dir() + ".gdignore"), "editor skips the folder")
+	assert_true(FileAccess.file_exists(note.screenshot))
+	var by_player: Dictionary = overlay.save_note("here", "idea", true)
+	assert_eq(by_player.position, [0.0, 0.0, 0.0])
+	assert_eq(by_player.position_source, "player")
+	var listed: Dictionary = _notes.playtest_notes({"status": "all"}).data
+	assert_eq(listed.count, 2, "the tool reads what the game wrote")
+	var got: Dictionary = _notes.playtest_notes({"op": "get", "id": note.id}).data
+	assert_eq(got.cursor_node, "/Raid/Crate2")
+	assert_true(got.screenshot_exists)
+	overlay.free()
+	_clear_notes()
+
+
+func test_notes_overlay_pin_and_ring() -> void:
+	var script := _overlay()
+	var pin: Node3D = script.make_pin(Vector3(1, 2, 3), Color.RED, "label")
+	assert_eq(pin.position, Vector3(1, 2, 3))
+	assert_eq(pin.get_child_count(), 4, "stick, head, ring, label")
+	pin.free()
+	var img := Image.create(40, 40, false, Image.FORMAT_RGBA8)
+	img.fill(Color.BLACK)
+	script.call("_ring", img, Vector2(20, 20), 10.0, 2.0, Color.RED)
+	assert_eq(img.get_pixel(30, 20), Color.RED, "ring drawn")
+	assert_eq(img.get_pixel(20, 20), Color.BLACK, "center left clear")
+	var tool_pin := NotesTools.make_pin(Vector3.ZERO, Color.RED, "x")
+	assert_eq(tool_pin.get_child_count(), 4, "editor pins match the game's")
+	tool_pin.free()
