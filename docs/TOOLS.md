@@ -308,6 +308,10 @@ a fresh `res://` `.wav` path in the selected editor's local project. Supply
 `source_path`, `path`, `start_seconds`, and `end_seconds`. The destination
 directory must exist. Source and destination paths must use ordinary project
 directories. The operation refuses symbolic links, junctions and occupied output paths.
+On Linux and macOS, the exporter checks POSIX ownership and permission bits
+to choose a writable staging directory on the output filesystem. If the output
+directory moves during publication, check `disk_committed` in the error data.
+A value of `true` means the clip was written before its requested path could be verified.
 
 The source must contain 16-bit PCM mono or stereo audio, including standard
 `WAVE_FORMAT_EXTENSIBLE` PCM. The output keeps the source sample rate and

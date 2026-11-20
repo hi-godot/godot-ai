@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import errno
 import os
+import stat
 import struct
 import subprocess
 import threading
 import wave
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -29,8 +31,8 @@ _STAGE_GLOB = ".godot-ai-wav-*.tmp"
 
 @pytest.fixture
 def clip_editor(tmp_path):
-    root = tmp_path / "project"
-    root.mkdir()
+    root = tmp_path / "workspace" / "project"
+    root.mkdir(mode=0o755, parents=True)
     (root / "project.godot").write_text("config_version=5\n", encoding="utf-8")
     with wave.open(str(root / "source.wav"), "wb") as source:
         source.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
@@ -54,15 +56,15 @@ async def _clip(runtime, path=DESTINATION):
     return await audio_wav_clip(runtime, SOURCE, path, start_seconds=0.005, end_seconds=0.015)
 
 
-def _observe_directory_fds(monkeypatch, directory):
+def _observe_directory_fds(monkeypatch, *directories):
     descriptors = set()
     if os.name != "nt":
         actual_open = _wav_clip._open_project_directory
-        expected = directory.stat()
+        expected = [directory.stat() for directory in directories]
 
         def observe_open(*args, **kwargs):
             anchor = actual_open(*args, **kwargs)
-            if os.path.samestat(anchor.info, expected):
+            if any(os.path.samestat(anchor.info, directory) for directory in expected):
                 assert anchor.fd is not None
                 descriptors.add(anchor.fd)
             return anchor
@@ -83,7 +85,7 @@ def _assert_directory_fds_closed(descriptors):
 async def test_successful_wav_export_releases_the_destination_directory(clip_editor, monkeypatch):
     runtime, _, root, _ = clip_editor
     directory = root / "clips"
-    directory.mkdir()
+    directory.mkdir(mode=0o755)
     descriptors = _observe_directory_fds(monkeypatch, directory)
 
     result = await _clip(runtime, "res://clips/output.wav")
@@ -123,7 +125,13 @@ async def test_wav_publication_has_no_non_atomic_fallback(clip_editor, monkeypat
     def unsupported(*args, **kwargs):
         raise OSError(errno.ENOTSUP, "atomic publication unsupported")
 
-    monkeypatch.setattr(_wav_clip.DirectoryAnchor, "publish", unsupported)
+    if os.name == "nt":
+        from godot_ai.handlers._wav_windows_stage import WindowsStage
+
+        publisher = WindowsStage
+    else:
+        publisher = _wav_clip.DirectoryAnchor
+    monkeypatch.setattr(publisher, "publish", unsupported)
     with pytest.raises(GodotCommandError) as error:
         await _clip(runtime)
 
@@ -148,6 +156,7 @@ async def test_failed_wav_worker_discards_its_partial_file(clip_editor, monkeypa
     assert not list(root.glob(_STAGE_GLOB))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows keeps the staged file handle open")
 async def test_wav_cleanup_preserves_a_replaced_staging_entry(clip_editor, monkeypatch):
     runtime, _, root, _ = clip_editor
     publish = _wav_clip._publish_clip
@@ -169,7 +178,7 @@ async def test_wav_cleanup_preserves_a_replaced_staging_entry(clip_editor, monke
 
 @pytest.fixture
 def hold_staged_clip(monkeypatch):
-    async def hold():
+    async def hold(*, timeout=10):
         loop = asyncio.get_running_loop()
         staged = asyncio.Event()
         discarded = asyncio.Event()
@@ -181,8 +190,13 @@ def hold_staged_clip(monkeypatch):
         def block_after_stage(*args):
             assert threading.get_ident() != caller_thread
             clip = stage(*args)
-            loop.call_soon_threadsafe(staged.set)
-            assert release.wait(timeout=10), "test did not release the staged WAV"
+            try:
+                loop.call_soon_threadsafe(staged.set)
+                assert release.wait(timeout=timeout), "test did not release the staged WAV"
+            except BaseException:
+                # Until the future returns the clip, the test owns cleanup.
+                _wav_clip._close_clip(clip)
+                raise
             return clip
 
         def observe_discard(future):
@@ -194,6 +208,23 @@ def hold_staged_clip(monkeypatch):
         return staged, release, discarded
 
     return hold
+
+
+async def test_staged_wav_gate_timeout_releases_the_directory(
+    clip_editor, hold_staged_clip, monkeypatch
+):
+    runtime, _, root, _ = clip_editor
+    directory = root / "clips"
+    directory.mkdir(mode=0o755)
+    descriptors = _observe_directory_fds(monkeypatch, root, directory)
+    await hold_staged_clip(timeout=0)
+
+    with pytest.raises(AssertionError, match="test did not release the staged WAV"):
+        await _clip(runtime, "res://clips/output.wav")
+
+    _assert_directory_fds_closed(descriptors)
+    moved = root.rename(root.with_name("moved-project"))
+    assert not list((moved / "clips").iterdir())
 
 
 async def test_cancelled_wav_request_does_not_publish(clip_editor, hold_staged_clip):
@@ -214,20 +245,22 @@ async def test_cancelled_wav_request_does_not_publish(clip_editor, hold_staged_c
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows directory sharing semantics")
-async def test_windows_holds_directory_after_staged_file_is_closed(clip_editor, hold_staged_clip):
+async def test_windows_holds_directory_and_stage_after_rendering(clip_editor, hold_staged_clip):
     runtime, _, root, _ = clip_editor
     directory = root / "clips"
-    directory.mkdir()
+    directory.mkdir(mode=0o755)
     moved = root / "moved-clips"
     staged, release, _ = await hold_staged_clip()
     request = asyncio.create_task(_clip(runtime, "res://clips/output.wav"))
     try:
-        # The worker has closed both WAV streams. The directory handle alone
-        # prevents a move while the caller is waiting to publish.
+        # Rendering has finished. Both the folder and the stage entry stay
+        # pinned while the caller is waiting to publish.
         await asyncio.wait_for(staged.wait(), timeout=5)
-        assert len(list(directory.glob(_STAGE_GLOB))) == 1
+        (stage,) = directory.glob(_STAGE_GLOB)
         with pytest.raises(PermissionError):
             directory.rename(moved)
+        with pytest.raises(PermissionError):
+            stage.rename(directory / "renamed-stage.tmp")
     finally:
         release.set()
 
@@ -246,7 +279,7 @@ async def test_wav_export_keeps_its_stage_in_the_original_directory(
     runtime, _, root, _ = clip_editor
     destination = root / "clips"
     moved = root / "retained-clips"
-    destination.mkdir()
+    destination.mkdir(mode=0o755)
     (destination / "original.txt").write_text("keep original", encoding="utf-8")
     original_source = (root / "source.wav").read_bytes()
 
@@ -395,3 +428,144 @@ async def test_wav_does_not_follow_linked_destination_directory(clip_editor, tmp
 
     assert error.value.data["reason"] == "linked_project_path"
     assert not list(outside.iterdir())
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "O_PATH"), reason="Requires Linux search-only directory handles"
+)
+async def test_wav_export_through_a_search_only_ancestor(clip_editor):
+    if os.geteuid() == 0:
+        pytest.skip("Root can list directories even without read permission")
+    runtime, _, root, _ = clip_editor
+    ancestor = root.parent
+    permissions = stat.S_IMODE(ancestor.stat().st_mode)
+    ancestor.chmod(0o100)
+    try:
+        assert (root / "source.wav").is_file()
+        with pytest.raises(PermissionError):
+            list(ancestor.iterdir())
+        result = await _clip(runtime)
+    finally:
+        ancestor.chmod(permissions)
+
+    assert result["frame_count"] == 80
+    assert {entry.name for entry in root.iterdir()} == {"project.godot", "source.wav", "output.wav"}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows pins the project path during staging")
+async def test_wav_export_keeps_a_common_project_root_during_a_move(clip_editor, monkeypatch):
+    runtime, _, root, _ = clip_editor
+    moved = root.with_name("relocated-project")
+    sources = root / "sources"
+    sources.mkdir()
+    (root / "source.wav").rename(sources / "source.wav")
+    clips = root / "clips"
+    clips.mkdir(mode=0o755)
+
+    open_directory = _wav_clip._open_project_directory
+    edit_wav = _wav_clip.edit_pcm_wav
+
+    def move_before_opening_source(project, relative, *, label):
+        if relative == Path("sources"):
+            root.rename(moved)
+        return open_directory(project, relative, label=label)
+
+    def restore_after_opening_source(source, output, **options):
+        assert not root.exists()
+        moved.rename(root)
+        return edit_wav(source, output, **options)
+
+    monkeypatch.setattr(_wav_clip, "_open_project_directory", move_before_opening_source)
+    monkeypatch.setattr(_wav_clip, "edit_pcm_wav", restore_after_opening_source)
+    try:
+        result = await audio_wav_clip(
+            runtime,
+            "res://sources/source.wav",
+            "res://clips/output.wav",
+            start_seconds=0.005,
+            end_seconds=0.015,
+        )
+    finally:
+        if moved.exists():
+            moved.rename(root)
+
+    assert {entry.name for entry in clips.iterdir()} == {"output.wav"}
+    with wave.open(str(clips / "output.wav"), "rb") as clip:
+        assert clip.getnframes() == result["frame_count"] == 80
+        assert clip.readframes(80) == struct.pack("<80h", *range(40, 120))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows pins the destination during publication")
+async def test_wav_reports_a_destination_move_after_native_publication(clip_editor, monkeypatch):
+    runtime, _, root, _ = clip_editor
+    clips = root / "clips"
+    clips.mkdir(mode=0o755)
+    moved = root / "retained-clips"
+    descriptors = _observe_directory_fds(monkeypatch, clips)
+    publish = _wav_clip.DirectoryAnchor.publish
+
+    def move_after_publish(anchor, stage, destination, *, source):
+        publish(anchor, stage, destination, source=source)
+        clips.rename(moved)
+        clips.mkdir()
+
+    monkeypatch.setattr(_wav_clip.DirectoryAnchor, "publish", move_after_publish)
+    with pytest.raises(GodotCommandError) as error:
+        await _clip(runtime, "res://clips/output.wav")
+
+    assert error.value.code == "INVALID_PARAMS"
+    assert error.value.data["reason"] == "publication_path_changed"
+    assert error.value.data["disk_committed"] is True
+    assert not list(clips.iterdir())
+    _assert_directory_fds_closed(descriptors)
+    assert {entry.name for entry in moved.iterdir()} == {"output.wav"}
+    with wave.open(str(moved / "output.wav"), "rb") as clip:
+        assert clip.getnframes() == 80
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shared directory permissions")
+@pytest.mark.parametrize("stage_location", ["project", "temporary"])
+@pytest.mark.parametrize("write_error", [False, True], ids=["export", "write-error"])
+async def test_wav_uses_same_device_protected_staging_for_shared_output(
+    clip_editor, monkeypatch, tmp_path, stage_location, write_error
+):
+    runtime, _, root, _ = clip_editor
+    clips = root / "shared-clips"
+    clips.mkdir()
+    clips.chmod(0o775)
+    staging = root
+    if stage_location == "temporary":
+        root.chmod(0o775)
+        staging = tmp_path / "trusted-temp"
+        staging.mkdir(mode=0o700)
+        monkeypatch.setattr(_wav_clip, "_temporary_stage_paths", lambda: (staging,))
+    destination = "res://shared-clips/output.wav"
+    edit_wav = _wav_clip.edit_pcm_wav
+
+    def inspect_private_stage(source, output, **options):
+        assert not list(clips.iterdir())
+        (stage,) = staging.glob(_STAGE_GLOB)
+        info = stage.stat()
+        assert os.path.samestat(info, os.fstat(output.fileno()))
+        assert info.st_dev == clips.stat().st_dev
+        assert stat.S_IMODE(info.st_mode) & 0o077 == 0
+        assert stat.S_IMODE(staging.stat().st_mode) & 0o022 == 0
+        if write_error:
+            output.write(b"incomplete WAV")
+            raise OSError(errno.ENOSPC, "out of space")
+        return edit_wav(source, output, **options)
+
+    monkeypatch.setattr(_wav_clip, "edit_pcm_wav", inspect_private_stage)
+    if write_error:
+        with pytest.raises(GodotCommandError) as error:
+            await _clip(runtime, destination)
+        assert error.value.data["reason"] == "wav_io_failed"
+        assert not list(clips.iterdir())
+    else:
+        result = await _clip(runtime, destination)
+        assert {entry.name for entry in clips.iterdir()} == {"output.wav"}
+        with wave.open(str(clips / "output.wav"), "rb") as clip:
+            assert clip.getnframes() == result["frame_count"] == 80
+
+    for directory in {root, staging}:
+        assert not list(directory.glob(_STAGE_GLOB))

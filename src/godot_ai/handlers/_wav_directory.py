@@ -60,10 +60,11 @@ def _open_windows_directory(path: Path) -> int:
         raise
 
 
-def _pin_windows_path(path: Path, handles: ExitStack) -> os.stat_result:
+def _pin_windows_path(
+    current: Path, components: tuple[str, ...], handles: ExitStack
+) -> os.stat_result:
     # A path-based operation stays anchored while every ancestor is pinned.
-    current = Path(path.anchor)
-    for component in ("", *path.parts[1:]):
+    for component in components:
         current /= component
         expected = _real_directory(current.lstat())
         fd = _open_windows_directory(current)
@@ -72,11 +73,16 @@ def _pin_windows_path(path: Path, handles: ExitStack) -> os.stat_result:
     return info
 
 
-def _walk_posix_path(path: Path) -> int:
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    fd = os.open(path.anchor, flags)
+def _posix_directory_flags() -> int:
+    # Directory traversal needs search permission. O_RDONLY would also ask
+    # for listing permission on systems with a search-only descriptor mode.
+    search = getattr(os, "O_PATH", getattr(os, "O_SEARCH", os.O_RDONLY))
+    return search | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _walk_posix_path(fd: int, components: tuple[str, ...], flags: int) -> int:
     try:
-        for component in path.parts[1:]:
+        for component in components:
             expected = _real_directory(os.stat(component, dir_fd=fd, follow_symlinks=False))
             child = os.open(component, flags, dir_fd=fd)
             previous, fd = fd, child
@@ -100,12 +106,28 @@ class DirectoryAnchor:
         with ExitStack() as handles:
             if os.name == "nt":
                 fd = None
-                info = _pin_windows_path(path, handles)
+                info = _pin_windows_path(Path(path.anchor), ("", *path.parts[1:]), handles)
             else:
-                fd = _walk_posix_path(path)
+                flags = _posix_directory_flags()
+                start = os.open(path.anchor, flags)
+                fd = _walk_posix_path(start, path.parts[1:], flags)
                 handles.callback(os.close, fd)
                 info = os.fstat(fd)
             return cls(path, fd, info, handles.pop_all())
+
+    def child(self, relative: Path) -> DirectoryAnchor:
+        """Open a relative directory while the owning parent anchor stays live."""
+        with ExitStack() as handles:
+            if self.fd is None:
+                fd = None
+                info = self.info
+                if relative.parts:
+                    info = _pin_windows_path(self.path, relative.parts, handles)
+            else:
+                fd = _walk_posix_path(os.dup(self.fd), relative.parts, _posix_directory_flags())
+                handles.callback(os.close, fd)
+                info = os.fstat(fd)
+            return DirectoryAnchor(self.path / relative, fd, info, handles.pop_all())
 
     def close(self) -> None:
         self._handles.close()
@@ -122,11 +144,7 @@ class DirectoryAnchor:
     def unlink(self, name: str) -> None:
         os.unlink(self._entry(name), dir_fd=self.fd)
 
-    def publish(self, stage: str, destination: str) -> None:
-        if self.fd is None:
-            # Windows rename refuses an occupied destination.
-            os.rename(self.path / stage, self.path / destination)
-        else:
-            os.link(
-                stage, destination, src_dir_fd=self.fd, dst_dir_fd=self.fd, follow_symlinks=False
-            )
+    def publish(self, stage: str, destination: str, *, source: DirectoryAnchor) -> None:
+        if source.fd is None or self.fd is None:
+            raise NotImplementedError("Native stage handle required")
+        os.link(stage, destination, src_dir_fd=source.fd, dst_dir_fd=self.fd, follow_symlinks=False)
