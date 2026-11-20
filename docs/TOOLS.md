@@ -655,6 +655,11 @@ Silence or constant audio and ranges too short for the requested duration
 return an empty list with a reason. The analysis leaves both the source WAV and
 its import settings unchanged.
 
+The finder can also analyze 16-bit WAVE_FORMAT_EXTENSIBLE PCM files (format
+tag `0xFFFE`). To preview one in Godot 4.7.2, re-save it as conventional
+16-bit PCM WAV (format tag `1`), then run the finder on the saved file before
+applying its loop points.
+
 For a forward-loop preview, read the WAV settings with
 `filesystem_manage(op="import_get")`. Pass its revision as `expected_revision`
 to `import_set` when setting `edit/loop_mode=2`. Use the candidate's
