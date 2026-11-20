@@ -2,6 +2,10 @@
 ## and open (or refresh) a pull request so upstream fixes keep flowing in.
 ## Requires: Actions enabled on the fork, and Settings > Actions > General >
 ## "Allow GitHub Actions to create and approve pull requests" turned on.
+## Also requires the FORK_SYNC_TOKEN secret: a fine-grained personal access
+## token for this repository with Contents, Pull requests and Workflows set
+## to "Read and write". The built-in GITHUB_TOKEN can never push commits or
+## tags that touch .github/workflows/, and upstream tags and merges do.
 name: Fork sync from upstream
 
 on:
@@ -24,11 +28,19 @@ jobs:
     env:
       UPSTREAM: https://github.com/hi-godot/godot-ai.git
       SYNC_BRANCH: sync/upstream
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
     steps:
+      - name: Check for FORK_SYNC_TOKEN
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Add the FORK_SYNC_TOKEN repository secret (see the comment at the top of this workflow and FORK.md)."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.FORK_SYNC_TOKEN }}
 
       - name: Merge upstream main into the sync branch
         id: merge
