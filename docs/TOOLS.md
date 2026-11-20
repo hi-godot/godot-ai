@@ -283,7 +283,7 @@ Calls take the form:
 | `test_manage` | `results_get` |
 | `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
-| `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
+| `audio_manage` | `wav_loop_find`, `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
 | `signal_manage` | `list`, `connect`, `disconnect` |
@@ -636,6 +636,44 @@ refers to that library; undo restores both.
 plus `autoplay` for AnimationPlayer. Existing `list` also includes library
 metadata and autoplay alongside its clip details.
 
+
+### WAV loop analysis
+
+`audio_manage(op="wav_loop_find")` analyzes a saved `res://` 16-bit PCM WAV
+with one or two channels in the selected editor's local project. Pass its
+`source_path`. `start_seconds` and `end_seconds` narrow the search and default
+to the entire file. The selected range can contain up to 64 MiB of PCM data.
+Search boundaries round to the nearest source sample frame with ties rounded
+up. `min_loop_seconds` must be positive. It defaults to `0.5` and rounds up to a
+whole frame. `max_candidates` accepts 1 through 10 and defaults to `3`.
+
+The reply includes the analyzed range and ranked `candidates`. Each candidate
+has an inclusive `start_frame` and exclusive `end_frame`, the same bounds in
+seconds, its frame count and duration, and a `seam_error`. Lower scores indicate
+a closer waveform match across the seam. Audition the candidates in context.
+Silence or constant audio and ranges too short for the requested duration
+return an empty list with a reason. The analysis leaves both the source WAV and
+its import settings unchanged.
+
+The finder can also analyze 16-bit WAVE_FORMAT_EXTENSIBLE PCM files (format
+tag `0xFFFE`). To preview one in Godot 4.7.2, re-save it as conventional
+16-bit PCM WAV (format tag `1`), then run the finder on the saved file before
+applying its loop points.
+
+For a forward-loop preview, read the WAV settings with
+`filesystem_manage(op="import_get")`. Pass its revision as `expected_revision`
+to `import_set` when setting `edit/loop_mode=2`. Use the candidate's
+frame coordinates as initial `edit/loop_begin` and `edit/loop_end` values. To
+preserve source frame coordinates, turn off `edit/trim` and `force/max_rate`.
+For an unmodified PCM preview, also turn off `edit/normalize`, `force/8_bit`,
+and `force/mono`, and choose `compress/mode=0`.
+
+Godot 4.7.2's forward PCM mixer can shift a loop boundary by one frame based on
+its internal buffer alignment. In a stereo fixture, import points 55 and 648
+repeated the top candidate's source frames `[56, 649)`. Audition the wrap and
+adjust the import points as needed. At frame zero or the end of the file an exact wrap may require
+an interior seam. For a candidate ending at EOF, start with `edit/loop_end`
+equal to `end_frame - 1`. [Godot 4.7.2 forward WAV mixer](https://github.com/godotengine/godot/blob/4.7.2-stable/scene/resources/audio_stream_wav.cpp#L286-L322)
 
 ### Audio bus layouts
 

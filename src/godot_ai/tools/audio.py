@@ -26,6 +26,13 @@ Bus/effect edits use global editor undo. Godot may autosave them to its active
 layout. bus_layout_save only exports a snapshot and does not switch that target.
 
 Ops:
+  • wav_loop_find(source_path, start_seconds=None, end_seconds=None,
+                  min_loop_seconds=0.5, max_candidates=3)
+        Analyze a project-local res:// 16-bit PCM mono or stereo WAV for
+        forward-loop candidates. Optional bounds limit the search. Lower
+        seam_error ranks a better match. Candidate start_frame is inclusive
+        and end_frame exclusive in source sample frames. This read leaves
+        the audio file and its import settings untouched.
   • bus_list()
         List buses, sends, volume, mute, solo, bypass, and effect properties/enabled state.
   • bus_add(name, at_position=-1, send="Master")
@@ -66,6 +73,7 @@ def register_audio_tools(mcp: FastMCP) -> None:
         tool_name="audio_manage",
         description=_DESCRIPTION,
         ops={
+            "wav_loop_find": audio_handlers.audio_wav_loop_find,
             "bus_list": audio_handlers.audio_bus_list,
             "bus_add": audio_handlers.audio_bus_add,
             "bus_remove": audio_handlers.audio_bus_remove,
@@ -82,6 +90,8 @@ def register_audio_tools(mcp: FastMCP) -> None:
             "list": audio_handlers.audio_list,
         },
         read_resource_forms={
+            ## Loop analysis takes per-call search bounds and a selected project.
+            "wav_loop_find": None,
             ## Audio reads are stateful and per-player; no aggregate resource.
             "bus_list": None,
             "play": None,
