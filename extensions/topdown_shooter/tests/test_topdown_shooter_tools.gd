@@ -993,8 +993,10 @@ func test_loot_table_edit_upserts_removes_and_expands_categories() -> void:
 	assert_eq(entries[0].weight, 10.0)
 	assert_eq(entries[1], {"item_id": "gold_watch", "weight": 2.0, "min": 1, "max": 2, "guaranteed": false})
 
-	result = _loot.loot_table_edit(_loot_params({"entries": [{"tag": "heal", "weight": 1}], "replace_entries": true}))
+	result = _loot.loot_table_edit(_loot_params({"entries": [{"tag": "heal", "weight": 1}, {"item_id": "bandage", "weight": 5}], "replace_entries": true}))
 	assert_eq(result.data.added, ["bandage"])
+	assert_eq(result.data.changed, [], "a later entry for an item added in the same call is not a change")
+	assert_eq(_load_fresh(LOOT_DIR + "/test_grunt.tres").get("entries")[0].weight, 5.0, "the later entry wins")
 	assert_eq(_load_fresh(LOOT_DIR + "/test_grunt.tres").get("entries").size(), 1)
 
 

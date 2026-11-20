@@ -79,7 +79,7 @@ gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
 
 | 매개변수 | 내용 |
 |---|---|
-| `entries` | `[{item_id, weight, min_count, max_count, guaranteed}]`. `item_id` 대신 `category`나 `tag`를 주면 DB에서 맞는 아이템을 모두 같은 가중치로 추가. 이미 표에 있는 아이템은 값만 바꿈 |
+| `entries` | `[{item_id, weight, min_count, max_count, guaranteed}]`. `item_id` 대신 `category`나 `tag`를 주면 DB에서 맞는 아이템을 모두 같은 가중치로 추가. 이미 표에 있는 아이템은 값만 바꿈. 같은 아이템을 여러 항목이 가리키면 뒤의 것이 이김 |
 | `remove_items`, `replace_entries` | 아이템 빼기, 기존 항목을 비우고 새로 쓰기 |
 | `rolls_min`, `rolls_max`, `empty_weight` | 드롭당 굴림 횟수, "없음" 가중치. 새 표 기본값은 1, 1, 0 |
 | `simulate`, `seed`, `samples` | 시뮬레이션 횟수(기본 1000), 시드(같은 시드면 같은 결과), 보여 줄 샘플 드롭 수 |

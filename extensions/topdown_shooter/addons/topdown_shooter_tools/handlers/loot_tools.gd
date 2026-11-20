@@ -143,8 +143,10 @@ func loot_table_edit(params: Dictionary, _ctx = null) -> Dictionary:
 				table.entries.append(entry)
 				added.append(id)
 			else:
+				## A later entry for the same item wins; report it once.
 				table.entries[idx] = entry
-				changed.append(id)
+				if id not in added and id not in changed:
+					changed.append(id)
 	if not unknown.is_empty() and not allow_unknown:
 		return Util.error(Util.INVALID_PARAMS, "not in the item database (%s): %s. Fix the ids, import the items first, or pass allow_unknown_items=true" % [database_path, ", ".join(unknown)])
 	if table.entries.size() > MAX_ENTRIES:
