@@ -34,6 +34,11 @@ async def scene_create(
     return await runtime.send_command("create_scene", params)
 
 
+async def scene_inherit(runtime: DirectRuntime, base_path: str, path: str) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command("inherit_scene", {"base_path": base_path, "path": path})
+
+
 async def scene_open(
     runtime: DirectRuntime,
     path: str,

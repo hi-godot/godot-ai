@@ -2,6 +2,7 @@
 extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const SceneInheritance := preload("res://addons/godot_ai/handlers/scene_inheritance.gd")
 
 ## Handles scene tree reading and node search.
 
@@ -213,6 +214,11 @@ func _pack_and_save_with_uid(root: Node, path: String) -> Error:
 	if err == OK:
 		err = McpResourceIO.ensure_uid(path, prior_uid)
 	return err
+
+
+## Open and save a native inherited scene from a saved .tscn base.
+func inherit_scene(params: Dictionary) -> Dictionary:
+	return SceneInheritance.start(_connection, params)
 
 
 ## How long open_scene waits for the editor to actually switch to the

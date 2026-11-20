@@ -94,6 +94,35 @@ func suite_teardown() -> void:
 			push_warning("MCP test cleanup: failed to remove %s: %s" % [_UID_SCENE_FIXTURE_PATH, error_string(remove_err)])
 
 
+# ----- inherit_scene -----
+
+func test_inherit_refuses_invalid_paths_without_changing_files_or_tabs() -> void:
+	var base := "res://main.tscn"
+	var prefix := "res://tests/_mcp_test_inherit_%d" % Time.get_ticks_usec()
+	var target := prefix + ".tscn"
+	var missing_parent := prefix + "/child.tscn"
+	var saved_base := FileAccess.get_file_as_bytes(base)
+	var open_scenes := EditorInterface.get_open_scenes()
+	var unsaved_scenes := EditorInterface.get_unsaved_scenes()
+	var current_root := EditorInterface.get_edited_scene_root()
+
+	assert_is_error(_handler.inherit_scene({"base_path": "user://base.tscn", "path": target}), ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(_handler.inherit_scene({"base_path": base, "path": "res://../outside.tscn"}), ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(_handler.inherit_scene({"base_path": base, "path": prefix + ".scn"}), ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(_handler.inherit_scene({"base_path": prefix + ".scn", "path": target}), ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_is_error(_handler.inherit_scene({"base_path": prefix + "_base.tscn", "path": target}), ErrorCodes.RESOURCE_NOT_FOUND)
+	assert_is_error(_handler.inherit_scene({"base_path": base, "path": missing_parent}), ErrorCodes.RESOURCE_NOT_FOUND)
+	assert_is_error(_handler.inherit_scene({"base_path": base, "path": "res://./main.tscn"}), ErrorCodes.INVALID_PARAMS)
+
+	assert_false(FileAccess.file_exists(target))
+	assert_false(FileAccess.file_exists(prefix + ".scn"))
+	assert_false(DirAccess.dir_exists_absolute(prefix))
+	assert_eq(FileAccess.get_file_as_bytes(base), saved_base)
+	assert_eq(EditorInterface.get_open_scenes(), open_scenes)
+	assert_eq(EditorInterface.get_unsaved_scenes(), unsaved_scenes)
+	assert_eq(EditorInterface.get_edited_scene_root(), current_root)
+
+
 # ----- get_scene_tree -----
 
 func test_scene_tree_returns_data() -> void:

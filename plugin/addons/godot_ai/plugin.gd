@@ -390,6 +390,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("get_open_scenes", "scene", &"get_open_scenes")
 	_dispatcher.register_lazy("find_nodes", "scene", &"find_nodes")
 	_dispatcher.register_lazy("create_scene", "scene", &"create_scene")
+	_dispatcher.register_lazy("inherit_scene", "scene", &"inherit_scene")
 	_dispatcher.register_lazy("open_scene", "scene", &"open_scene")
 	_dispatcher.register_lazy("save_scene", "scene", &"save_scene")
 	_dispatcher.register_lazy("save_scene_as", "scene", &"save_scene_as")
