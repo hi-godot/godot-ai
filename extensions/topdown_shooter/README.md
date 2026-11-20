@@ -12,10 +12,10 @@
    복사합니다. 결과: `<게임 프로젝트>/addons/topdown_shooter_tools/plugin.cfg`
 2. Godot에서 **프로젝트 > 프로젝트 설정 > 플러그인**을 열고 `Godot AI`와
    `Top-down Shooter Tools`를 둘 다 켭니다.
-3. Godot AI 독의 **Tools** 탭에 도구 4개가 보이면 끝입니다. Claude Code나 Claude
+3. Godot AI 독의 **Tools** 탭에 도구 5개가 보이면 끝입니다. Claude Code나 Claude
    데스크톱에는 `custom_topdown_camera_setup`, `custom_player_controller_scaffold`,
-   `custom_weapon_create`, `custom_enemy_ai_scaffold`라는 이름으로 바로
-   나타납니다(승격 도구). 도구 목록이
+   `custom_weapon_create`, `custom_enemy_ai_scaffold`, `custom_item_db_import`라는
+   이름으로 바로 나타납니다(승격 도구). 도구 목록이
    갱신되지 않는 클라이언트라면 `custom_manage(op="invoke", name=...)`로도 부를
    수 있습니다.
 
@@ -26,6 +26,7 @@
 | `topdown_camera_setup` | 열린 3D 씬에 탑뷰 추적 카메라 리그(Node3D + Camera3D)를 추가. 대상(기본: `player` 그룹의 첫 노드)을 따라가고, 마우스 방향으로 화면을 살짝 당겨 줌(선행 오프셋). 각도·거리·회전·부드러움을 인스펙터에서 바로 조정. 실행 취소 한 번으로 제거 |
 | `player_controller_scaffold` | 플레이어 씬 생성: CharacterBody3D, 캡슐 충돌·메시, 조준 피벗(`Aim`), 무기 장착점(`Aim/WeaponMount`). 카메라 기준 WASD 이동, 마우스 조준(바닥 평면 레이캐스트), 무적 구르기, 체력·`take_damage`, 발사·재장전 입력. 없는 입력 액션만 `project.godot`에 추가하고, 기본으로 열린 씬에 배치 |
 | `enemy_ai_scaffold` | 적 씬 생성: CharacterBody3D, 캡슐, `NavigationAgent3D`, `WeaponMount`. 상태 머신 AI(순찰 → 추격 → 공격 → 수색 → 순찰, 사망). 시야각 + 시선 레이로 감지하고, 맞으면 쏜 쪽을 쫓고, 주변 적에게 알림. 근접 공격 또는 원거리(자체 레이, 또는 `weapon_create` 무기 장착). 체력·`take_damage`. 열린 씬에 여러 마리 배치하고, 씬에 `NavigationRegion3D`가 없으면 정적 충돌체로 내비 메시를 구워 추가. 실행 취소 한 번으로 제거 |
+| `item_db_import` | 아이템 스프레드시트(CSV/TSV)를 행마다 아이템 `.tres` 하나로 바꾸고, 전체를 묶은 `item_database.tres`(`get_item(id)`, `find_by`, `find_by_tag`)를 만들거나 갱신. 모든 행을 먼저 검사해서 한 칸이라도 틀리면 아무것도 쓰지 않음. 다시 가져오면 기존 아이템을 제자리에서 갱신. 실행 취소 한 번으로 이전 파일로 복원 |
 | `weapon_create` | 무기 스탯 `.tres`(데미지, 연사, 자동, 탄창, 재장전, 탄퍼짐, 산탄 수, 사거리)와 무기 씬 생성. 히트스캔 또는 투사체로 발사하고, 맞은 대상의 `take_damage(amount, info)`를 호출. `attach_to`로 플레이어에 바로 장착 |
 
 Claude에게는 이렇게 말하면 됩니다.
@@ -35,6 +36,34 @@ Claude에게는 이렇게 말하면 됩니다.
 
 > 근접 적 grunt 3마리를 (-6,0,-10), (0,0,-12), (6,0,-10)에 두고, 권총 든 원거리 적
 > gunner 하나를 (0,0,-20)에 둬. grunt는 (-8,0,-10)과 (8,0,-10) 사이를 순찰하게.
+
+> 이 아이템 시트(CSV 붙여 넣기)를 아이템 DB로 가져와 줘. 먼저 dry_run으로 확인해 줘.
+
+## 아이템 DB 가져오기
+
+시트 예시(첫 줄은 열 이름). Google 시트는 **파일 > 다운로드 > CSV**, Excel은
+**CSV UTF-8**로 저장합니다. 파일은 `res://`나 `user://` 아래에 두고 `csv_path`로
+주거나, 내용을 그대로 `csv_text`로 줍니다.
+
+```csv
+id,이름,category,rarity,무게,price,stack,tags,weapon,durability
+bandage,붕대,medical,common,0.1,50,5,heal;cheap,,
+ak_rifle,AK 소총,weapon,rare,3.5,12000,1,,ak47,
+gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
+```
+
+| 규칙 | 내용 |
+|---|---|
+| 열 → 속성 | 열 이름이 `item_data.gd`의 `@export` 속성 이름과 같으면 그대로 연결. 별칭: `id`, `name`/`이름`, `price`/`가격`, `stack`/`중첩`, `무게`, `분류`, `희귀도`, `설명`, `태그`, `무기` 등. 다른 이름은 `column_map`(`{"시트 열": "속성"}`, `"-"`면 무시)으로 연결 |
+| 값 변환 | 속성 타입에 맞춰 변환: 숫자, 정수, true/false, 열거형(`category`, `rarity`, 대소문자 무시), `;`로 나눈 목록(`tags`), `res://` 경로(아이콘 등), `weapon`은 무기 id만 써도 `res://data/weapons/<id>.tres`를 찾음 |
+| 모르는 열 | 아이템의 `extra` 사전에 저장(숫자는 숫자로). `#`나 `_`로 시작하는 열과 `#`로 시작하는 행은 무시 |
+| 빈 칸 | 새 아이템은 기본값, 기존 아이템은 원래 값 유지 |
+| 이미 있는 아이템 | `existing`: `update`(기본, 시트에 있는 값만 바꿈) / `replace`(새로 만듦) / `skip` / `error` |
+| 검사 | id 중복, 형식 오류, 없는 열거값, 없는 리소스를 줄 번호와 함께 모두 보고하고 아무것도 쓰지 않음. `dry_run=true`는 결과만 미리 봄 |
+
+`item_data.gd`에 `@export var armor_class := 0`처럼 속성을 추가하고 같은 이름의 열을
+시트에 넣으면 다음 가져오기부터 자동으로 채워집니다. `item_database.tres`는 같은
+폴더의 이전 항목을 유지하고 이번 시트의 아이템을 추가하거나 교체합니다.
 
 ## 적 AI
 
@@ -66,11 +95,13 @@ Claude에게는 이렇게 말하면 됩니다.
 
 ```
 res://scripts/topdown/   topdown_camera_rig.gd, player_controller.gd,
-                         weapon.gd, weapon_data.gd, projectile.gd, enemy_ai.gd
+                         weapon.gd, weapon_data.gd, projectile.gd, enemy_ai.gd,
+                         item_data.gd, item_database.gd
 res://scenes/player/     player.tscn
 res://scenes/weapons/    <weapon_id>.tscn, projectile.tscn
 res://scenes/enemies/    <enemy_id>.tscn  (스크립트는 scripts/topdown/enemy_ai.gd)
 res://data/weapons/      <weapon_id>.tres
+res://data/items/        <item_id>.tres, item_database.tres
 ```
 
 스크립트는 템플릿에서 프로젝트로 **복사**되므로 마음대로 고쳐도 됩니다. 이미

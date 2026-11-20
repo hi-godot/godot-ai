@@ -11,12 +11,14 @@ extends McpTestSuite
 ## Input actions use a unique prefix and are removed from project.godot.
 
 const Tools := preload("res://addons/topdown_shooter_tools/handlers/topdown_tools.gd")
+const ItemTools := preload("res://addons/topdown_shooter_tools/handlers/item_tools.gd")
 const ToolSpecs := preload("res://addons/topdown_shooter_tools/tool_specs.gd")
 
 const WORK_DIR := "res://zz_mcp_test_topdown"
 const ACTION_PREFIX := "mcp_test_td_"
 
 var _tools: Tools
+var _items: ItemTools
 var _undo_redo: EditorUndoRedoManager
 var _added: Array[Node] = []
 
@@ -28,6 +30,7 @@ func suite_name() -> String:
 func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.get("undo_redo")
 	_tools = Tools.new()
+	_items = ItemTools.new()
 	if EditorInterface.get_edited_scene_root() == null:
 		skip_suite("needs an open scene")
 
@@ -104,14 +107,14 @@ func _weapon_params(id: String, extra: Dictionary = {}) -> Dictionary:
 
 func test_specs_validate() -> void:
 	var specs := ToolSpecs.build()
-	assert_eq(specs.size(), 4)
+	assert_eq(specs.size(), 5)
 	var names := []
 	for spec in specs:
 		assert_eq(spec.validate(), [] as Array[String], "spec %s" % spec.name)
 		assert_true(spec.promoted)
 		assert_true(spec.requires_writable)
 		names.append(spec.name)
-	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold"])
+	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import"])
 
 
 # --- player ------------------------------------------------------------------
@@ -651,3 +654,208 @@ func test_enemy_alerts_nearby_allies() -> void:
 	assert_eq(enemy.get_state_name(), "CHASE")
 	assert_eq(ally.get_state_name(), "CHASE", "ally joins the chase")
 	assert_eq(ally.target, target)
+
+
+# --- items -------------------------------------------------------------------
+
+const ITEM_DIR := WORK_DIR + "/items"
+
+const ITEM_CSV := """id,이름,category,rarity,무게,price,stack,tags,description,durability
+bandage,Bandage,medical,common,0.1,50,5,heal;cheap,"Stops bleeding, slowly",
+ammo_9mm,9mm Round,ammo,Common,0.01,2,60,ammo,,
+# comment row
+gold_watch,"Gold ""Rolex"" Watch",valuable,rare,0.2,1500,1,,"Line one
+line two",80
+"""
+
+
+func _item_params(extra: Dictionary = {}) -> Dictionary:
+	var params := {
+		"csv_text": ITEM_CSV,
+		"data_dir": ITEM_DIR,
+		"script_dir": WORK_DIR + "/scripts",
+		"weapon_data_dir": WORK_DIR + "/data",
+	}
+	params.merge(extra, true)
+	return params
+
+
+func _load_fresh(path: String) -> Resource:
+	return ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
+
+
+## Item ids in a database file, read from its stored `items` list.
+func _db_ids(path: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	for item in _load_fresh(path).get("items"):
+		out.append(item.get("item_id"))
+	return out
+
+
+## The database with a @tool copy of its script, so its lookup methods run.
+func _tool_db(path: String) -> Resource:
+	var stored := _load_fresh(path)
+	var db := Resource.new()
+	db.set_script(_tool_copy(WORK_DIR + "/scripts/item_database.gd"))
+	db.set("items", stored.get("items"))
+	return db
+
+
+func _clear_items() -> void:
+	_remove_tree(ProjectSettings.globalize_path(ITEM_DIR))
+
+
+func test_item_csv_parser_handles_quotes_and_newlines() -> void:
+	var rows := ItemTools.parse_csv("a,b,c\r\n1,\"x, y\",\"he said \"\"hi\"\"\"\n2,\"multi\nline\",\n\n3,,", ",")
+	assert_eq(rows.size(), 4)
+	assert_eq(rows[1].cells, PackedStringArray(["1", "x, y", "he said \"hi\""]))
+	assert_eq(rows[2].cells, PackedStringArray(["2", "multi\nline", ""]))
+	assert_eq(rows[2].line, 3)
+	assert_eq(rows[3].line, 6, "line numbers count the newline inside quotes and the blank line")
+	assert_eq(rows[3].cells, PackedStringArray(["3", "", ""]))
+
+
+func test_item_db_import_creates_items_and_database() -> void:
+	_clear_items()
+	var result := _items.item_db_import(_item_params())
+	assert_has_key(result, "data", str(result))
+	var data: Dictionary = result.data
+	assert_eq(data.item_count, 3)
+	assert_eq(data.created, ["bandage", "ammo_9mm", "gold_watch"])
+	assert_eq(data.columns["이름"], "display_name")
+	assert_eq(data.columns["price"], "value")
+	assert_eq(data.extra_columns, ["durability"])
+	assert_eq(data.blank_or_comment_rows, 1)
+
+	var bandage := _load_fresh(ITEM_DIR + "/bandage.tres")
+	assert_true(bandage != null, "bandage.tres loads")
+	assert_eq(bandage.get("item_id"), "bandage")
+	assert_eq(bandage.get("category"), "medical")
+	assert_eq(bandage.get("weight"), 0.1)
+	assert_eq(bandage.get("value"), 50)
+	assert_eq(bandage.get("max_stack"), 5)
+	assert_eq(bandage.get("tags"), ["heal", "cheap"])
+	assert_eq(bandage.get("description"), "Stops bleeding, slowly")
+	assert_eq(bandage.get("extra"), {})
+	var ammo := _load_fresh(ITEM_DIR + "/ammo_9mm.tres")
+	assert_eq(ammo.get("rarity"), "common", "enum match ignores case")
+	var watch := _load_fresh(ITEM_DIR + "/gold_watch.tres")
+	assert_eq(watch.get("display_name"), "Gold \"Rolex\" Watch")
+	assert_eq(watch.get("description"), "Line one\nline two")
+	assert_eq(watch.get("extra"), {"durability": 80})
+
+	assert_eq(data.database.item_count, 3)
+	var db := _tool_db(data.database.path)
+	assert_eq(db.get_ids(), PackedStringArray(["bandage", "ammo_9mm", "gold_watch"]))
+	assert_eq(db.get_item("gold_watch").get("value"), 1500)
+	assert_true(db.has_item("bandage"))
+	assert_false(db.has_item("nope"))
+	assert_eq(db.find_by("category", "ammo").size(), 1)
+	assert_eq(db.find_by_tag("heal").size(), 1)
+
+
+func test_item_db_import_reimport_updates_in_place_and_merges_database() -> void:
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+	var result := _items.item_db_import(_item_params({"csv_text": "id,price,name\nbandage,75,\nmedkit,300,Medkit\n"}))
+	assert_has_key(result, "data", str(result))
+	assert_eq(result.data.updated, ["bandage"])
+	assert_eq(result.data.created, ["medkit"])
+	var bandage := _load_fresh(ITEM_DIR + "/bandage.tres")
+	assert_eq(bandage.get("value"), 75)
+	assert_eq(bandage.get("display_name"), "Bandage", "blank cell keeps the old value")
+	assert_eq(bandage.get("max_stack"), 5, "missing column keeps the old value")
+	assert_eq(_db_ids(result.data.database.path), PackedStringArray(["bandage", "ammo_9mm", "gold_watch", "medkit"]))
+
+
+func test_item_db_import_existing_modes() -> void:
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+	var sheet := "id,price\nbandage,99\n"
+	assert_is_error(_items.item_db_import(_item_params({"csv_text": sheet, "existing": "error"})), "ALREADY_EXISTS")
+	var skipped := _items.item_db_import(_item_params({"csv_text": sheet, "existing": "skip"}))
+	assert_eq(skipped.data.skipped, ["bandage"])
+	assert_eq(_load_fresh(ITEM_DIR + "/bandage.tres").get("value"), 50)
+	var replaced := _items.item_db_import(_item_params({"csv_text": sheet, "existing": "replace"}))
+	assert_eq(replaced.data.replaced, ["bandage"])
+	var bandage := _load_fresh(ITEM_DIR + "/bandage.tres")
+	assert_eq(bandage.get("value"), 99)
+	assert_eq(bandage.get("max_stack"), 1, "replace starts from a fresh item")
+
+
+func test_item_db_import_bad_rows_write_nothing() -> void:
+	_clear_items()
+	var sheet := "id,category,weight,price\ngood_item,misc,1,5\nbad item!,misc,1,5\nworse,food_court,heavy,1.5\ngood_item,misc,1,5\n"
+	var result := _items.item_db_import(_item_params({"csv_text": sheet}))
+	assert_is_error(result, "INVALID_PARAMS")
+	var msg: String = result.error.message
+	assert_contains(msg, "line 3")
+	assert_contains(msg, "'food_court' is not one of")
+	assert_contains(msg, "'heavy' is not a number")
+	assert_contains(msg, "'1.5' is not a whole number")
+	assert_contains(msg, "repeats line 2")
+	assert_false(FileAccess.file_exists(ITEM_DIR + "/good_item.tres"), "nothing written")
+	assert_false(FileAccess.file_exists(ITEM_DIR + "/item_database.tres"))
+
+
+func test_item_db_import_param_errors() -> void:
+	assert_is_error(_items.item_db_import({"data_dir": ITEM_DIR}), "INVALID_PARAMS", "no source")
+	assert_is_error(_items.item_db_import(_item_params({"csv_path": WORK_DIR + "/x.csv"})), "INVALID_PARAMS", "both sources")
+	assert_is_error(_items.item_db_import({"csv_path": WORK_DIR + "/missing.csv"}), "NODE_NOT_FOUND")
+	assert_is_error(_items.item_db_import(_item_params({"csv_text": "name,price\nA,1\n"})), "INVALID_PARAMS", "no id column")
+	assert_is_error(_items.item_db_import(_item_params({"data_dir": "res://addons/x"})), "INVALID_PARAMS")
+	assert_is_error(_items.item_db_import(_item_params({"existing": "merge"})), "INVALID_PARAMS")
+	assert_is_error(_items.item_db_import(_item_params({"column_map": {"price": "nope"}})), "INVALID_PARAMS")
+
+
+func test_item_db_import_dry_run_writes_nothing() -> void:
+	_clear_items()
+	var result := _items.item_db_import(_item_params({"dry_run": true}))
+	assert_has_key(result, "data", str(result))
+	assert_true(result.data.dry_run)
+	assert_eq(result.data.created.size(), 3)
+	assert_false(DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(ITEM_DIR)), "no item folder")
+
+
+func test_item_db_import_reads_file_tsv_column_map_and_weapon() -> void:
+	_clear_items()
+	assert_has_key(_tools.weapon_create(_weapon_params("test_item_rifle")), "data")
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORK_DIR))
+	var path := WORK_DIR + "/sheet.tsv"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_buffer(PackedByteArray([0xEF, 0xBB, 0xBF]))
+	f.store_string("Code\tGun\tKind\t#note\tSize\nrifle_item\ttest_item_rifle\tweapon\tignored\t4\n")
+	f.close()
+	var result := _items.item_db_import(_item_params({
+		"csv_text": null,
+		"csv_path": path,
+		"column_map": {"Code": "item_id", "Gun": "weapon", "Kind": "category", "Size": "grid_width"},
+	}))
+	assert_has_key(result, "data", str(result))
+	assert_eq(result.data.ignored_columns, ["#note"])
+	var rifle := _load_fresh(ITEM_DIR + "/rifle_item.tres")
+	assert_eq(rifle.get("grid_width"), 4)
+	assert_true(rifle.get("weapon") != null, "weapon id resolves to the weapon .tres")
+	assert_eq(rifle.get("weapon").resource_path, WORK_DIR + "/data/test_item_rifle.tres")
+
+	var latin1 := WORK_DIR + "/latin1.csv"
+	var g := FileAccess.open(latin1, FileAccess.WRITE)
+	g.store_buffer(PackedByteArray([0x69, 0x64, 0x0A, 0xE9, 0x0A]))
+	g.close()
+	assert_is_error(_items.item_db_import(_item_params({"csv_text": null, "csv_path": latin1})), "INVALID_PARAMS", "non-UTF-8 file")
+
+
+func test_item_db_import_undo_restores_files() -> void:
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+	var result := _items.item_db_import(_item_params({"csv_text": "id,price\nbandage,75\nmedkit,300\n"}))
+	assert_has_key(result, "data", str(result))
+	assert_has_key(result.data, "undo")
+	var global_ur := _undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+	assert_true(global_ur.undo(), "undo runs")
+	assert_false(FileAccess.file_exists(ITEM_DIR + "/medkit.tres"), "undo deletes the new item")
+	assert_eq(_load_fresh(ITEM_DIR + "/bandage.tres").get("value"), 50, "undo restores the old value")
+	assert_eq(_db_ids(ITEM_DIR + "/item_database.tres").size(), 3)
+	assert_true(global_ur.redo(), "redo runs")
+	assert_true(FileAccess.file_exists(ITEM_DIR + "/medkit.tres"))
+	assert_eq(_load_fresh(ITEM_DIR + "/bandage.tres").get("value"), 75)
