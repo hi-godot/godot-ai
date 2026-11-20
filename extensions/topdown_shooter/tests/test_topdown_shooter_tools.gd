@@ -18,6 +18,7 @@ const RaidTools := preload("res://addons/topdown_shooter_tools/handlers/raid_too
 const PlaytestTools := preload("res://addons/topdown_shooter_tools/handlers/playtest_tools.gd")
 const HideoutTools := preload("res://addons/topdown_shooter_tools/handlers/hideout_tools.gd")
 const NotesTools := preload("res://addons/topdown_shooter_tools/handlers/notes_tools.gd")
+const FeedbackTools := preload("res://addons/topdown_shooter_tools/handlers/feedback_tools.gd")
 const ToolSpecs := preload("res://addons/topdown_shooter_tools/tool_specs.gd")
 
 const WORK_DIR := "res://zz_mcp_test_topdown"
@@ -32,6 +33,7 @@ var _playtest: PlaytestTools
 var _hideout: HideoutTools
 var _main_scene_before := ""
 var _notes: NotesTools
+var _feedback: FeedbackTools
 var _undo_redo: EditorUndoRedoManager
 var _added: Array[Node] = []
 
@@ -51,6 +53,7 @@ func suite_setup(ctx: Dictionary) -> void:
 	_hideout = HideoutTools.new()
 	_main_scene_before = str(ProjectSettings.get_setting("application/run/main_scene", ""))
 	_notes = NotesTools.new()
+	_feedback = FeedbackTools.new()
 	_notes.notes_dir = WORK_DIR + "/notes/"
 	if EditorInterface.get_edited_scene_root() == null:
 		skip_suite("needs an open scene")
@@ -146,7 +149,7 @@ func _weapon_params(id: String, extra: Dictionary = {}) -> Dictionary:
 
 func test_specs_validate() -> void:
 	var specs := ToolSpecs.build()
-	assert_eq(specs.size(), 11)
+	assert_eq(specs.size(), 12)
 	var names := []
 	for spec in specs:
 		assert_eq(spec.validate(), [] as Array[String], "spec %s" % spec.name)
@@ -156,7 +159,7 @@ func test_specs_validate() -> void:
 		assert_eq(spec.requires_writable, not spec.name in ["raid_playtest", "playtest_notes"], "requires_writable of %s" % spec.name)
 		assert_eq(spec.deferred, spec.name == "raid_playtest", "deferred of %s" % spec.name)
 		names.append(spec.name)
-	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold", "raid_map_blockout", "raid_playtest", "playtest_notes", "hideout_scaffold"])
+	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "combat_feedback_setup", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold", "raid_map_blockout", "raid_playtest", "playtest_notes", "hideout_scaffold"])
 
 
 # --- player ------------------------------------------------------------------
@@ -2503,3 +2506,159 @@ func test_notes_overlay_pin_and_ring() -> void:
 	var tool_pin := NotesTools.make_pin(Vector3.ZERO, Color.RED, "x")
 	assert_eq(tool_pin.get_child_count(), 4, "editor pins match the game's")
 	tool_pin.free()
+
+
+# --- combat feedback -----------------------------------------------------------
+
+func _feedback_params(extra: Dictionary = {}) -> Dictionary:
+	var params := {"script_dir": WORK_DIR + "/scripts", "name": "TestCombatFeedback"}
+	params.merge(extra, true)
+	return params
+
+
+func test_combat_feedback_setup_adds_node_with_undo() -> void:
+	if not _root() is Node3D:
+		skip("needs a 3D scene open")
+		return
+	var result := _feedback.combat_feedback_setup(_feedback_params({"shell_casings": false, "shake_strength": 0.5}))
+	assert_has_key(result, "data", str(result))
+	assert_eq(result.data.mode, "created")
+	var node := _track(result.data.node_path)
+	assert_true(node != null, "node added")
+	assert_eq((node.get_script() as Script).resource_path, WORK_DIR + "/scripts/combat_feedback.gd")
+	assert_eq(node.get("shell_casings"), false, "switch applied")
+	assert_eq(node.get("shake_strength"), 0.5, "tuning applied")
+	assert_eq(result.data.effects.shell_casings, false)
+	assert_eq(result.data.effects.muzzle_flash, true, "untouched switches keep the script default")
+	assert_true(FileAccess.file_exists(WORK_DIR + "/scripts/combat_feedback.gd"))
+	_undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root())).undo()
+	assert_true(McpScenePath.resolve(result.data.node_path, _root()) == null, "undo removes the node")
+	_undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root())).redo()
+	assert_true(McpScenePath.resolve(result.data.node_path, _root()) != null, "redo adds it back")
+
+
+func test_combat_feedback_rerun_retunes_existing_node() -> void:
+	if not _root() is Node3D:
+		skip("needs a 3D scene open")
+		return
+	var first := _feedback.combat_feedback_setup(_feedback_params())
+	assert_has_key(first, "data", str(first))
+	var node := _track(first.data.node_path)
+	var second := _feedback.combat_feedback_setup(_feedback_params({"screen_shake": false, "hitmarker_size": 20}))
+	assert_has_key(second, "data", str(second))
+	assert_eq(second.data.mode, "updated")
+	assert_eq(second.data.node_path, first.data.node_path, "no second node")
+	assert_eq(node.get("screen_shake"), false)
+	assert_eq(node.get("hitmarker_size"), 20.0)
+	assert_has_key(second.data.changed, "screen_shake")
+	_undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root())).undo()
+	assert_eq(node.get("screen_shake"), true, "undo restores the old settings")
+
+
+func test_combat_feedback_rejects_bad_params() -> void:
+	if not _root() is Node3D:
+		skip("needs a 3D scene open")
+		return
+	for bad in [{"shake_strength": 9}, {"hitmarker": "yes"}, {"damage_number_font_size": 1.5}, {"name": "a/b"}, {"parent_path": "Nope/Missing"}, {"flesh_color": "not a color"}]:
+		var result := _feedback.combat_feedback_setup(_feedback_params(bad))
+		assert_eq(result.get("status"), "error", "rejects %s" % bad)
+
+
+func _health_body_script(base: String) -> GDScript:
+	var script := GDScript.new()
+	script.source_code = "@tool\nextends " + base + "\nsignal health_changed(current: float, maximum: float)\nvar health := 30.0\nvar max_health := 30.0\nfunc take_damage(amount: float, _info: Dictionary = {}) -> void:\n\thealth = maxf(health - amount, 0.0)\n\thealth_changed.emit(health, max_health)\n"
+	assert_eq(script.reload(), OK)
+	return script
+
+
+func test_combat_feedback_reacts_to_shots_hits_kills_and_hurt() -> void:
+	var weapon_result := _tools.weapon_create(_weapon_params("test_fx_gun", {"damage": 20, "spread_degrees": 0, "fire_rate": 100}))
+	assert_has_key(weapon_result, "data", str(weapon_result))
+	var setup := _feedback.combat_feedback_setup(_feedback_params({"name": "FxProbe"}))
+	if not _root() is Node3D:
+		skip("needs a 3D scene open")
+		return
+	assert_has_key(setup, "data", str(setup))
+	_track(setup.data.node_path)
+
+	var arena := Node3D.new()
+	arena.name = "FxArena"
+	_root().add_child(arena)
+	_added.append(arena)
+	arena.global_position = Vector3(0, 700, 0)
+	var camera := Camera3D.new()
+	camera.name = "Cam"
+	arena.add_child(camera)
+	## The shooter: a body in the player group, hurt by take_damage.
+	var player := StaticBody3D.new()
+	player.name = "FxPlayer"
+	player.set_script(_health_body_script("StaticBody3D"))
+	player.add_to_group(&"player")
+	arena.add_child(player)
+	var weapon := Node3D.new()
+	weapon.name = "Gun"
+	var muzzle := Marker3D.new()
+	muzzle.name = "Muzzle"
+	weapon.add_child(muzzle)
+	weapon.set_script(_tool_copy(weapon_result.data.scripts.weapon.path))
+	weapon.set("data", ResourceLoader.load(weapon_result.data.data_path, "", ResourceLoader.CACHE_MODE_IGNORE))
+	player.add_child(weapon)
+	weapon.set_physics_process(false)
+	var target := StaticBody3D.new()
+	target.name = "FxTarget"
+	target.set_script(_health_body_script("StaticBody3D"))
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(4, 4, 1)
+	shape.shape = box
+	target.add_child(shape)
+	arena.add_child(target)
+	target.position = Vector3(0, 0, -5)
+	PhysicsServer3D.body_set_state(target.get_rid(), PhysicsServer3D.BODY_STATE_TRANSFORM, target.global_transform)
+
+	var fx := Node.new()
+	fx.name = "Fx"
+	fx.set_script(_tool_copy(WORK_DIR + "/scripts/combat_feedback.gd"))
+	fx.set("camera_path", NodePath("../Cam"))
+	arena.add_child(fx)
+
+	assert_true(weapon.try_fire(target.global_position), "shot 1")
+	var stats: Dictionary = fx.get("stats")
+	assert_eq(stats.shots, 1)
+	assert_eq(stats.hits, 1, "hit on a damageable body")
+	assert_eq(stats.kills, 0)
+	var flash := muzzle.get_node_or_null("MuzzleFlash") as Node3D
+	assert_true(flash != null and flash.visible, "muzzle flash shown at the muzzle")
+	var effects: Node = fx.get_node("Effects")
+	var labels := effects.get_children().filter(func(n: Node) -> bool: return n is Label3D)
+	assert_eq(labels.size(), 1, "one damage number")
+	assert_eq(labels[0].text, "20")
+	assert_true(effects.get_children().any(func(n: Node) -> bool: return n is CPUParticles3D), "hit particles")
+	assert_true(effects.get_children().any(func(n: Node) -> bool: return n is MeshInstance3D), "shell casing")
+	assert_eq(fx.get("_markers").size(), 1, "hitmarker")
+
+	weapon.set("_cooldown", 0.0)
+	assert_true(weapon.try_fire(target.global_position), "shot 2")
+	assert_eq(stats.kills, 1, "second hit kills (10 hp left)")
+	labels = effects.get_children().filter(func(n: Node) -> bool: return n is Label3D)
+	assert_eq(labels.size(), 1, "quick hits merge into one number")
+	assert_eq(labels[0].text, "30", "merged total counts only the health actually lost")
+	assert_eq(labels[0].modulate.r, (fx.get("kill_number_color") as Color).r, "kill color")
+	assert_true(fx.get("_markers").back().kill, "kill marker")
+
+	weapon.set("_cooldown", 0.0)
+	weapon.try_fire(target.global_position)
+	assert_eq(stats.hits, 2, "no hit counted on a dead body")
+
+	player.take_damage(15.0)
+	assert_eq(stats.hurts, 1, "player hurt")
+	assert_true(float(fx.get("_vignette_alpha")) > 0.0, "vignette")
+	assert_true(float(fx.get("_trauma")) > 0.0, "screen shake")
+	fx.call("_update_shake", 0.016)
+	assert_true(absf(camera.h_offset) + absf(camera.v_offset) > 0.0, "camera shakes")
+
+	fx.set("enabled", false)
+	weapon.set("_cooldown", 0.0)
+	weapon.try_fire(target.global_position + Vector3(3, 0, 0))
+	assert_eq(stats.shots, 3, "master switch off: nothing reacts")
+
