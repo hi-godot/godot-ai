@@ -76,6 +76,193 @@ func _track_node(node: Node) -> void:
 	_created_nodes.append(node)
 
 
+func _framing_camera(scene_root: Node) -> Camera3D:
+	var viewport := SubViewport.new()
+	viewport.name = "FramingViewport"
+	viewport.size = Vector2i(400, 200)
+	viewport.own_world_3d = true
+	scene_root.add_child(viewport)
+	_track_node(viewport)
+	var camera := Camera3D.new()
+	camera.name = "FramingCamera"
+	camera.keep_aspect = Camera3D.KEEP_HEIGHT
+	camera.set_perspective(90.0, 1.0, 20.0)
+	viewport.add_child(camera)
+	return camera
+
+
+func _framing_box(parent: Node, node_name: String, position: Vector3, size := Vector3.ONE) -> MeshInstance3D:
+	var target := MeshInstance3D.new()
+	target.name = node_name
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	target.mesh = mesh
+	target.position = position
+	parent.add_child(target)
+	return target
+
+
+func _framing_request(camera: Camera3D, scene_root: Node, targets: Array[Node]) -> Dictionary:
+	var target_paths: Array[String] = []
+	for target in targets:
+		target_paths.append(McpScenePath.from_node(target, scene_root))
+	return {
+		"camera_path": McpScenePath.from_node(camera, scene_root),
+		"target_paths": target_paths,
+		"scene_file": scene_root.scene_file_path,
+	}
+
+
+func test_check_framing_perspective_uses_viewport_aspect_and_clip_planes() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("Framing needs an edited scene")
+		return
+	var camera := _framing_camera(scene_root)
+	var viewport := camera.get_viewport()
+	var inside := _framing_box(viewport, "Inside", Vector3(6.0, 0.0, -5.0))
+	var crosses_right := _framing_box(viewport, "Crosses", Vector3(10.0, 0.0, -5.0))
+	var left := _framing_box(viewport, "Left", Vector3(-15.0, 0.0, -5.0))
+	var near := _framing_box(viewport, "Near", Vector3(0.0, 0.0, -0.5), Vector3.ONE * 0.1)
+	var far := _framing_box(viewport, "Far", Vector3(0.0, 0.0, -25.0))
+	var active_before := viewport.get_camera_3d()
+	var transform_before := camera.transform
+	var request := _framing_request(camera, scene_root, [inside, crosses_right, left, near, far])
+	var result := _handler.check_framing(request)
+	assert_has_key(result, "data")
+	if not result.has("data"):
+		return
+	assert_eq(result.data.camera_path, request.camera_path)
+	assert_eq(result.data.projection, "perspective")
+	assert_eq(result.data.viewport_size, {"x": 400.0, "y": 200.0})
+	assert_eq(result.data.targets, [
+		{"path": request.target_paths[0], "status": "contained", "outside_planes": [], "crossed_planes": []},
+		{"path": request.target_paths[1], "status": "possible_overlap", "outside_planes": [], "crossed_planes": ["right"]},
+		{"path": request.target_paths[2], "status": "outside", "outside_planes": ["left"], "crossed_planes": []},
+		{"path": request.target_paths[3], "status": "outside", "outside_planes": ["near"], "crossed_planes": []},
+		{"path": request.target_paths[4], "status": "outside", "outside_planes": ["far"], "crossed_planes": []},
+	])
+	assert_eq(viewport.get_camera_3d(), active_before, "Framing must leave the active camera intact")
+	assert_eq(camera.transform, transform_before)
+	assert_eq(camera.projection, Camera3D.PROJECTION_PERSPECTIVE)
+
+
+func test_check_framing_orthogonal_uses_transformed_bounds_and_accepts_planar_mesh() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("Framing needs an edited scene")
+		return
+	var camera := _framing_camera(scene_root)
+	camera.set_orthogonal(4.0, 1.0, 20.0)
+	var parent := Node3D.new()
+	parent.rotation.z = PI * 0.5
+	parent.scale = Vector3(2.0, 1.0, 1.0)
+	camera.get_parent().add_child(parent)
+	var rotated := _framing_box(parent, "Rotated", Vector3(0.7, 0.0, -5.0))
+	var planar := _framing_box(camera.get_parent(), "Planar", Vector3(0.0, 0.0, -5.0))
+	planar.mesh = PlaneMesh.new()
+	var result := _handler.check_framing(_framing_request(camera, scene_root, [rotated, planar]))
+	assert_has_key(result, "data")
+	if not result.has("data"):
+		return
+	assert_eq(result.data.projection, "orthogonal")
+	assert_eq(result.data.targets.size(), 2)
+	if result.data.targets.size() != 2:
+		return
+	assert_eq(result.data.targets[0].status, "possible_overlap")
+	assert_eq(result.data.targets[0].crossed_planes, ["top"])
+	assert_eq(result.data.targets[1].status, "contained")
+
+
+func test_check_framing_frustum_uses_projection_and_camera_offsets() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("Framing needs an edited scene")
+		return
+	var camera := _framing_camera(scene_root)
+	camera.set_frustum(2.0, Vector2(1.0, 0.0), 1.0, 20.0)
+	var target := _framing_box(camera.get_parent(), "OffsetTarget", Vector3(-3.5, 0.0, -4.0), Vector3.ONE * 0.25)
+	var request := _framing_request(camera, scene_root, [target])
+	var before := _handler.check_framing(request)
+	assert_has_key(before, "data")
+	if not before.has("data"):
+		return
+	assert_eq(before.data.projection, "frustum")
+	assert_eq(before.data.targets[0].status, "contained")
+	camera.h_offset = 1.0
+	var after := _handler.check_framing(request)
+	assert_has_key(after, "data")
+	if not after.has("data"):
+		return
+	assert_eq(after.data.targets[0].status, "outside")
+	assert_eq(after.data.targets[0].outside_planes, ["left"])
+
+
+func test_check_framing_rejects_paths_outside_edited_scene_and_world() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("Framing needs an edited scene")
+		return
+	var camera := _framing_camera(scene_root)
+	var other_world := SubViewport.new()
+	other_world.own_world_3d = true
+	scene_root.add_child(other_world)
+	_track_node(other_world)
+	var foreign := _framing_box(other_world, "Foreign", Vector3(0.0, 0.0, -5.0))
+	var request := _framing_request(camera, scene_root, [foreign])
+	assert_is_error(_handler.check_framing(request), ErrorCodes.INVALID_PARAMS)
+	request.target_paths = [str(EditorInterface.get_base_control().get_path())]
+	assert_is_error(_handler.check_framing(request), ErrorCodes.NODE_NOT_FOUND)
+	request.target_paths = [".."]
+	assert_is_error(_handler.check_framing(request), ErrorCodes.NODE_NOT_FOUND)
+	request.camera_path = str(EditorInterface.get_base_control().get_path())
+	assert_is_error(_handler.check_framing(request), ErrorCodes.NODE_NOT_FOUND)
+	request.scene_file = "res://other_scene.tscn"
+	assert_is_error(_handler.check_framing(request), ErrorCodes.EDITED_SCENE_MISMATCH)
+
+
+func test_check_framing_rejects_bad_targets_and_camera_types() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		skip("Framing needs an edited scene")
+		return
+	var camera := _framing_camera(scene_root)
+	var empty := MeshInstance3D.new()
+	camera.get_parent().add_child(empty)
+	var request := _framing_request(camera, scene_root, [empty])
+	assert_is_error(_handler.check_framing(request), ErrorCodes.RESOURCE_NOT_FOUND)
+	empty.mesh = ArrayMesh.new()
+	assert_is_error(_handler.check_framing(request), ErrorCodes.VALUE_OUT_OF_RANGE)
+	request.target_paths = [request.camera_path]
+	assert_is_error(_handler.check_framing(request), ErrorCodes.WRONG_TYPE)
+	request.target_paths = [17]
+	assert_is_error(_handler.check_framing(request), ErrorCodes.WRONG_TYPE)
+	request.target_paths = "not-an-array"
+	assert_is_error(_handler.check_framing(request), ErrorCodes.WRONG_TYPE)
+	request.target_paths = [""]
+	assert_is_error(_handler.check_framing(request), ErrorCodes.MISSING_REQUIRED_PARAM)
+	request.target_paths = []
+	assert_is_error(_handler.check_framing(request), ErrorCodes.VALUE_OUT_OF_RANGE)
+	var too_many: Array[String] = []
+	too_many.resize(17)
+	too_many.fill(McpScenePath.from_node(empty, scene_root))
+	request.target_paths = too_many
+	assert_is_error(_handler.check_framing(request), ErrorCodes.VALUE_OUT_OF_RANGE)
+	request.target_paths = [McpScenePath.from_node(empty, scene_root)]
+	var camera_2d := Camera2D.new()
+	camera.get_parent().add_child(camera_2d)
+	request.camera_path = McpScenePath.from_node(camera_2d, scene_root)
+	assert_is_error(_handler.check_framing(request), ErrorCodes.WRONG_TYPE)
+
+
+func test_check_framing_refuses_nonfinite_bounds_and_transform() -> void:
+	var planes: Array[Plane] = []
+	var invalid_bounds := AABB(Vector3(INF, 0.0, 0.0), Vector3.ONE)
+	assert_is_error(CameraHandler._classify_framing_bounds(planes, invalid_bounds, Transform3D.IDENTITY, "/Main/BadBounds"), ErrorCodes.VALUE_OUT_OF_RANGE)
+	var invalid_transform := Transform3D(Basis.IDENTITY, Vector3(0.0, NAN, 0.0))
+	assert_is_error(CameraHandler._classify_framing_bounds(planes, AABB(Vector3.ZERO, Vector3.ONE), invalid_transform, "/Main/BadTransform"), ErrorCodes.VALUE_OUT_OF_RANGE)
+
+
 func _clear_camera_current_for_removal(node: Node) -> void:
 	if node == null or not is_instance_valid(node) or not node.has_method("clear_current"):
 		return

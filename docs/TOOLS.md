@@ -285,7 +285,7 @@ Calls take the form:
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
 | `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
-| `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
+| `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `check_framing`, `apply_preset` |
 | `signal_manage` | `list`, `connect`, `disconnect` |
 | `input_map_manage` | `list`, `add_action`, `ensure_action`, `remove_action`, `bind_event`, `ensure_binding` |
 | `game_manage` | `get_scene_tree`, `get_node_info`, `get_ui_elements`, `suspend`, `resume`, `next_frame`, `debug_status`, `input_key`, `input_mouse`, `input_gamepad`, `input_action`, `input_sequence`, `input_state` |
@@ -302,6 +302,26 @@ Calls take the form:
 | `navigation_manage` | `bake`, `path_get` |
 | `csg_manage` | `csg_create`, `csg_set_operation` |
 | `custom_manage` | `list`, `invoke` |
+
+`camera_manage(op="check_framing", params={"camera_path":"/Main/Camera3D",
+"target_paths":["/Main/AssetMesh"]})` checks the static mesh bounds of 1–16
+explicit `MeshInstance3D` nodes in the named `Camera3D`'s world. Use `scene_file`
+to pin the edited scene. The response includes the camera's scene path,
+projection and actual viewport size used for the test. Each target has a
+scene path, a `status`, and the named `outside_planes` and `crossed_planes`.
+
+- `contained` means all eight transformed bounds corners are inside or on every plane.
+- `outside` means at least one plane excludes every corner.
+- `possible_overlap` means one or more planes split the corners and none
+  excludes the whole box. Edge and corner cases may still put the box wholly
+  outside the view.
+
+The operation reads the edited scene without capturing an image. Check
+`viewport_size` when comparing the result with a running game. A headless
+editor or a differently sized game window can give the camera a different
+aspect ratio. Results cover static mesh bounds. Render
+layers, hidden nodes, occlusion, runtime animation and shader deformation are
+outside the check.
 
 `resource_manage(op="physics_shape_generate")` keeps `shape_type="box"` as its default.
 Explicit `shape_type="auto"` chooses box, sphere, capsule or cylinder for the corresponding

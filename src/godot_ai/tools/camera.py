@@ -43,6 +43,14 @@ Ops:
         resolves to the currently-active camera, falling back to the first.
   • list()
         List every Camera2D/Camera3D in the scene.
+  • check_framing(camera_path, target_paths, scene_file="")
+        Check which clip planes intersect or exclude the bounds of 1–16 explicit
+        MeshInstance3D targets in a Camera3D's world. Uses the camera's current
+        viewport size, perspective/orthogonal/frustum projection and offsets.
+        Computes static mesh bounds directly from the edited scene. A target is
+        contained if all bounds corners fit, outside if a plane excludes all
+        corners, and possible_overlap otherwise. Results are independent of
+        render layers, hidden nodes, occlusion and deformation.
   • apply_preset(parent_path, name, preset, type=None, make_current=True,
                   overrides=None)
         Spawn with opinionated defaults. Presets: topdown_2d, platformer_2d,
@@ -63,10 +71,12 @@ def register_camera_tools(mcp: FastMCP) -> None:
             "follow_2d": camera_handlers.camera_follow_2d,
             "get": camera_handlers.camera_get,
             "list": camera_handlers.camera_list,
+            "check_framing": camera_handlers.camera_check_framing,
             "apply_preset": camera_handlers.camera_apply_preset,
         },
         read_resource_forms={
             "get": None,  ## No per-camera resource.
             "list": None,  ## No aggregate cameras resource.
+            "check_framing": None,  ## Depends on the requested camera and target paths.
         },
     )

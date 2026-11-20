@@ -114,6 +114,18 @@ async def camera_list(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("camera_list", {})
 
 
+async def camera_check_framing(
+    runtime: DirectRuntime,
+    camera_path: str,
+    target_paths: list[str],
+    scene_file: str = "",
+) -> dict:
+    params: dict[str, Any] = {"camera_path": camera_path, "target_paths": target_paths}
+    if scene_file:
+        params["scene_file"] = scene_file
+    return await runtime.send_command("camera_check_framing", params)
+
+
 async def camera_apply_preset(
     runtime: DirectRuntime,
     parent_path: str,
