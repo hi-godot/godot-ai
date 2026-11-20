@@ -34,7 +34,7 @@
 | `raid_map_blockout` | 열린 3D 씬에 레이드 맵 뼈대를 만듦. 방과 복도를 1m 격자에 배치(방 개수 + 시드로 자동 생성, 또는 방 좌표·크기와 연결을 직접 지정)하고 바닥·벽·엄폐물(낮은 벽, 상자, 기둥)을 StaticBody3D 상자로 생성. 플레이어 스폰(플레이어를 옮김), 방마다 적 스폰 지점(적 씬을 주면 방을 도는 순찰 경로와 함께 배치), 루팅 상자(E로 수색, 드롭표를 주면 바닥에 아이템), 탈출 지점(안에 몇 초 서 있으면 탈출)을 배치. 내비 메시를 다시 굽고 ASCII 미리보기를 돌려줌. 맵 전체가 실행 취소 한 번 |
 | `weapon_create` | 무기 스탯 `.tres`(데미지, 연사, 자동, 탄창, 재장전, 탄퍼짐, 산탄 수, 사거리)와 무기 씬 생성. 히트스캔 또는 투사체로 발사하고, 맞은 대상의 `take_damage(amount, info)`를 호출. `attach_to`로 플레이어에 바로 장착 |
 | `raid_playtest` | 게임을 실행해 봇이 레이드를 직접 플레이하고 보고. 실제 입력 액션으로 내비 메시를 따라 걷고, 마우스 이동으로 조준하고, 쏘고 재장전하고, 상자에서 interact를 눌러 열고, 떨어진 아이템을 줍고, 보이는 적과 싸우고, 시간 안에 탈출 지점으로 감. 결과(탈출/사망/시간 초과), 게임 중 오류, FPS, 전투·루팅 수치, 막힌 위치, 스크린샷과 문제 목록(`issues`), 판정(`verdict`)을 돌려줌. 처음 한 번 `RaidPlaytest` 자동 로드를 등록(평소 플레이에서는 아무것도 안 함, 실행 취소 한 번). `hideout_scaffold`가 있으면 은신처로 돌아가 창고·세이브를 확인하고 다시 출격까지 검사 |
-| `hideout_scaffold` | 레이드 루프를 닫음. 은신처 씬(큰 창고 격자 + 출격 가방, 둘 사이 드래그, 출격 버튼)을 만들고 `HideoutState` 자동 로드를 등록. 출격하면 가방이 레이드 플레이어의 인벤토리가 되고, 탈출하면 가방 전체(가져간 것 + 주운 것)가 창고로, 죽으면 가방을 잃은 채 은신처로 돌아옴. 창고·가방·전적은 `user://` JSON에 바로바로 저장. 레이드 중에 게임을 끄면 사망 처리. 레이드 씬은 건드리지 않음. 은신처를 메인 씬으로 지정. 실행 취소 한 번 |
+| `hideout_scaffold` | 레이드 루프를 닫음. 은신처 씬(큰 창고 격자 + 출격 가방, 둘 사이 드래그, 출격 버튼)을 만들고 `HideoutState` 자동 로드를 등록. 출격하면 가방이 레이드 플레이어의 인벤토리가 되고, 탈출하면 가방 전체(가져간 것 + 주운 것)가 창고로, 죽으면 가방을 잃은 채 은신처로 돌아옴. 창고·가방·전적은 `user://` JSON에 바로바로 저장. 레이드 중에 게임을 끄면 사망 처리. 레이드 씬은 건드리지 않음. `style="map"`이면 걸어 다니는 3D 은신처 방(창고 사물함에서 E로 창고 화면, 출격 문 앞에 서 있으면 출격)도 만들고, 레이드에서 그 방으로 돌아옴. 은신처를 메인 씬으로 지정. 실행 취소 한 번 |
 | `playtest_notes` | 플레이 중 메모. 게임에서 F8(또는 Ctrl/Cmd+N)을 누르면 일시정지하고 화면을 찍은 뒤, 마우스가 가리키는 바닥(Tab으로 플레이어 위치)에 핀을 꽂고 메모 창을 띄움. 메모·종류·씬·좌표·카메라·커서 아래 노드·최근 엔진 오류·시각과 스크린샷(표시한 곳에 빨간 원)을 `res://playtest_notes/`에 저장. Claude가 목록·내용·사진을 읽고 고친 뒤 `resolve`로 닫음. 열린 씬에 메모 핀 표시(보기 전용, 저장 안 됨). 닫기·다시 열기·삭제는 실행 취소 한 번. 처음 한 번 `PlaytestNotes` 자동 로드를 등록(디버그 빌드에서만 동작) |
 
 Claude에게는 이렇게 말하면 됩니다.
@@ -55,6 +55,8 @@ Claude에게는 이렇게 말하면 됩니다.
 > 레이드 한 판 자동으로 돌려 보고 문제 있으면 알려 줘. 2배속으로.
 
 > 은신처 만들어 줘. 창고는 10x14, 새 게임은 붕대 5개랑 9mm 탄 60발 들고 시작.
+
+> 은신처를 걸어 다니는 3D 맵으로 만들어 줘. 방은 16x12, 출격 문은 2초.
 
 > 플레이 메모 기능 켜 줘. (플레이하며 F8로 메모를 남긴 뒤) 내가 남긴 메모 보고 고쳐 줘.
 
@@ -224,6 +226,41 @@ gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
 | `track_direct_raids` | 레이드 씬을 따로 실행해도(F6, `raid_playtest`) 탈출하면 창고에 넣음. 기본 true |
 | `set_main_scene` | 은신처를 메인 씬(F5)으로. 기본 true |
 
+### 3D 은신처 맵 (`style="map"`)
+
+`style="map"`이면 위의 은신처 화면을 그대로 두고, 그 화면을 품은 걸어 다니는 3D 방(`map_scene`, 기본
+`res://scenes/hideout_map.tscn`)을 하나 더 만듭니다. 게임 시작(F5)과 레이드 뒤 복귀가 이 방으로 갑니다.
+
+```
+은신처 방 --사물함에서 E--> 창고·가방 화면 (E/Tab/Esc로 닫기)
+        --출격 문 패드에 3초--> 레이드 --탈출/사망--> 은신처 방 (위쪽에 결과 표시)
+```
+
+| 매개변수 | 내용 |
+|---|---|
+| `style` | `menu`(기본, 화면만) 또는 `map`(3D 방 추가) |
+| `map_scene` | 만들 3D 방. 이미 있으면 그대로 두고 설정만 바꿈(`overwrite=true`면 다시 만듦) |
+| `map_size` | 방 `[가로, 세로]` m. 기본 `[14, 10]` (10~40, 8~40) |
+| `deploy_time` | 출격 문 패드에 서 있어야 하는 초. 기본 3 |
+| `player_scene` | 방에 둘 플레이어 씬. 기본은 레이드 씬의 플레이어 씬(없으면 `res://scenes/player/player.tscn`) |
+| `interact_action` | 사물함을 여는 입력 액션. 없으면 E로 만듦. 기본 `interact` |
+
+방에는 바닥·벽(카메라 쪽 벽은 낮게), 안쪽 벽의 출격 문(`DeployDoor`, `hideout_door.gd`), 왼쪽 벽의 창고 사물함
+(`StashLocker`, `hideout_locker.gd`), 탁자·상자·간이침대, 플레이어, 탑뷰 카메라, 그리고 숨겨 둔 창고 화면
+(`StashScreen` 아래 `hideout.tscn` 인스턴스)이 들어갑니다. 전부 평범한 노드라 옮기거나 지우거나 더 놓으면
+됩니다(사물함은 여러 개 둬도 가장 가까운 것이 열림).
+
+게임에서는(`hideout_map.gd`):
+
+- 사물함 `interact_radius`(2.2m) 안에서 E를 누르면 창고 화면이 열리고 플레이어가 멈춥니다. 화면의 출격 버튼은
+  **닫기** 버튼으로 바뀝니다(`hide_menu_deploy_button`).
+- 출격 문 패드에 `deploy_time`초 서 있으면 출격합니다. 패드에서 벗어나면 취소, 창고 화면이 열려 있으면 멈춥니다.
+- 플레이어 씬에 총이 붙어 있으면 은신처에서는 떼어 냅니다(`allow_weapons`).
+- 왼쪽 위에 창고·가방 가치와 전적, 아래에 안내(`[E] 창고 열기`, `출격까지 2.1초`), 레이드에서 돌아오면 위쪽에
+  결과(탈출 성공·사망)가 몇 초 동안 보입니다.
+- 신호: `stash_opened`, `stash_closed`, `deploying(scene)`. 코드에서는 `open_stash()`, `close_stash()`, `deploy()`.
+- `raid_playtest`의 은신처 검사는 3D 방에서도 그대로 동작합니다(방 안의 창고 화면으로 검사하고 다시 출격).
+
 은신처 화면에서는 드래그로 창고와 가방 사이를 옮기고(R 회전, Shift+클릭 나누기), 우클릭으로
 반대편에 바로 보냅니다. 가방 무게 제한을 넘으면 들어가지 않습니다. 위에는 전적(레이드·탈출·사망·
 생존율·총 수익)과 지난 레이드 결과가 보이고, **처음부터**를 두 번 누르면 세이브를 지웁니다.
@@ -305,6 +342,7 @@ res://scripts/topdown/   topdown_camera_rig.gd, player_controller.gd,
                          loot_crate.gd, raid_extraction.gd,
                          raid_playtest_agent.gd (자동 로드 RaidPlaytest),
                          hideout.gd, hideout_state.gd (자동 로드 HideoutState)
+                         hideout_map.gd, hideout_door.gd, hideout_locker.gd (style=map)
                          playtest_notes_overlay.gd (자동 로드 PlaytestNotes)
 res://playtest_notes/    <id>.json, <id>.png  (플레이 중 메모)
 res://scenes/player/     player.tscn
@@ -313,7 +351,7 @@ res://scenes/enemies/    <enemy_id>.tscn  (스크립트는 scripts/topdown/enemy
 res://data/weapons/      <weapon_id>.tres
 res://data/items/        <item_id>.tres, item_database.tres
 res://data/loot/         <table_id>.tres
-res://scenes/            hideout.tscn
+res://scenes/            hideout.tscn, hideout_map.tscn (style=map)
 user://hideout/          save.json (게임이 씀)
 ```
 

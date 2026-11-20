@@ -83,7 +83,7 @@ func suite_teardown() -> void:
 		ProjectSettings.set_setting("autoload/" + HideoutTools.AUTOLOAD_NAME, null)
 		changed = true
 	if str(ProjectSettings.get_setting(HideoutTools.SETTINGS_PREFIX + "raid_scene", "")).contains(WORK_DIR):
-		for key in ["hideout_scene", "raid_scene", "save_path", "item_database", "return_delay", "quit_counts_as_death", "track_direct_raids", "starting_stash"]:
+		for key in ["hideout_scene", "menu_scene", "raid_scene", "save_path", "item_database", "return_delay", "quit_counts_as_death", "track_direct_raids", "starting_stash"]:
 			ProjectSettings.set_setting(HideoutTools.SETTINGS_PREFIX + key, null)
 		changed = true
 	if str(ProjectSettings.get_setting("application/run/main_scene", "")).contains(WORK_DIR):
@@ -2223,6 +2223,168 @@ func test_hideout_scaffold_rejects_bad_params() -> void:
 		assert_is_error(none, "INVALID_PARAMS", "no raid scene to find")
 	assert_false(FileAccess.file_exists(WORK_DIR + "/hideout.tscn"), "errors write nothing")
 	assert_false(ProjectSettings.has_setting("game/hideout/raid_scene"))
+
+
+func test_hideout_map_scaffold_builds_room_and_undo() -> void:
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+	var raid := _hideout_raid_scene()
+	var key := "autoload/" + HideoutTools.AUTOLOAD_NAME
+	var autoload_before: Variant = ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null
+	var main_before := str(ProjectSettings.get_setting("application/run/main_scene", ""))
+	var menu_path := WORK_DIR + "/hideout.tscn"
+	var map_path := WORK_DIR + "/hideout_map.tscn"
+	var params := _hideout_params(raid, {"style": "map", "map_scene": map_path, "map_size": [16, 12], "deploy_time": 2.0, "interact_action": ACTION_PREFIX + "interact"})
+
+	var dry := _hideout.hideout_scaffold(params.merged({"dry_run": true}))
+	assert_has_key(dry, "data", str(dry))
+	assert_eq(dry.data.would.map_scene, "create")
+	assert_eq(dry.data.map.room, [16.0, 12.0])
+	assert_false(FileAccess.file_exists(map_path), "dry run writes nothing")
+
+	var result := _hideout.hideout_scaffold(params)
+	assert_has_key(result, "data", str(result))
+	assert_eq(result.data.map.status, "created")
+	assert_eq(result.data.hideout_scene_status, "created")
+	assert_true(FileAccess.file_exists(map_path))
+	for f in ["hideout_map.gd", "hideout_door.gd", "hideout_locker.gd", "topdown_camera_rig.gd"]:
+		assert_true(FileAccess.file_exists(WORK_DIR + "/scripts/" + f), f)
+	assert_true(InputMap.has_action(ACTION_PREFIX + "interact"), "interact action created")
+	assert_eq(ProjectSettings.get_setting("game/hideout/hideout_scene"), map_path, "raids come home to the map")
+	assert_eq(ProjectSettings.get_setting("game/hideout/menu_scene"), menu_path)
+	assert_eq(ProjectSettings.get_setting("application/run/main_scene"), map_path)
+
+	var map := (ResourceLoader.load(map_path, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate()
+	assert_eq((map.get_script() as Script).resource_path.get_file(), "hideout_map.gd")
+	assert_eq(map.get("interact_action"), StringName(ACTION_PREFIX + "interact"))
+	for path in ["Player", "TopdownCamera/Camera3D", "StashLocker/Label", "DeployDoor/Shape", "Room/Floor", "Room/WallFarLeft", "PlayerSpawn", "StashScreen/Hideout/Stash", "StashScreen/Hideout/Loadout"]:
+		assert_true(map.get_node_or_null(path) != null, "map has " + path)
+	assert_eq(map.get_node("StashScreen/Hideout").scene_file_path, menu_path, "stash screen is the menu hideout")
+	assert_false(map.get_node("StashScreen").visible, "stash screen starts hidden")
+	assert_eq(map.get_node("DeployDoor").get("deploy_time"), 2.0)
+	assert_eq(map.get_node("TopdownCamera").get("target_path"), NodePath("../Player"))
+	assert_true(map.get_node("Player").get_script() != null, "player has a controller")
+	## The room is 16 x 12: the door pad sits inside, at the far wall.
+	assert_true(absf(map.get_node("DeployDoor").position.z - (-6.0 + 1.2)) < 0.01)
+	map.free()
+
+	var again := _hideout.hideout_scaffold(params)
+	assert_eq(again.data.map.status, "kept")
+	assert_true(again.data.warnings.any(func(w): return String(w).contains("hideout_map.tscn exists")), "says the map was kept")
+
+	var global_ur := _undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+	assert_true(global_ur.undo(), "undo the rerun")
+	assert_true(FileAccess.file_exists(map_path), "the rerun did not write the map")
+	assert_true(global_ur.undo(), "undo the scaffold")
+	assert_false(FileAccess.file_exists(map_path), "map file removed")
+	assert_false(FileAccess.file_exists(menu_path), "menu scene removed")
+	assert_eq(ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null, autoload_before, "autoload removed")
+	assert_eq(str(ProjectSettings.get_setting("application/run/main_scene", "")), main_before, "main scene restored")
+	assert_false(ProjectSettings.has_setting("game/hideout/hideout_scene"))
+
+
+func test_hideout_map_rejects_bad_params() -> void:
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+	var raid := _hideout_raid_scene()
+	var base := {"style": "map", "map_scene": WORK_DIR + "/hideout_map.tscn"}
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, {"style": "3d"})), "INVALID_PARAMS")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, base.merged({"map_size": [4, 4]}, true))), "INVALID_PARAMS")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, base.merged({"map_size": "big"}, true))), "INVALID_PARAMS")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, base.merged({"map_scene": raid}, true))), "INVALID_PARAMS")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, base.merged({"player_scene": WORK_DIR + "/nope.tscn"}, true))), "NODE_NOT_FOUND")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, base.merged({"interact_action": "bad action"}, true))), "INVALID_PARAMS")
+	assert_false(FileAccess.file_exists(WORK_DIR + "/hideout_map.tscn"), "errors write nothing")
+	assert_false(FileAccess.file_exists(WORK_DIR + "/hideout.tscn"))
+
+
+func test_hideout_map_locker_door_and_disarm() -> void:
+	var db := _hideout_db()
+	var inv_script := _tool_copy(_install_template("inventory"))
+	_install_template("player_controller")
+	var map := Node3D.new()
+	map.name = "HideoutMapTest"
+	map.set_script(_tool_copy(_install_template("hideout_map")))
+	map.set("interact_action", StringName(ACTION_PREFIX + "interact"))
+	var screen := CanvasLayer.new()
+	screen.name = "StashScreen"
+	map.add_child(screen)
+	var ui := Control.new()
+	ui.name = "Hideout"
+	ui.set_script(_tool_copy(_install_template("hideout")))
+	ui.set("raid_scene", "res://zz_mcp_test_topdown/nope.tscn")
+	for spec in [["Stash", 6, 4, 0.0], ["Loadout", 3, 3, 0.0]]:
+		var inv := Node.new()
+		inv.name = spec[0]
+		inv.set_script(inv_script)
+		inv.set("grid_width", spec[1])
+		inv.set("grid_height", spec[2])
+		inv.set("max_weight", spec[3])
+		inv.set("item_database", db)
+		ui.add_child(inv)
+	screen.add_child(ui)
+	var player := CharacterBody3D.new()
+	player.name = "Player"
+	player.set_script(_tool_copy(WORK_DIR + "/scripts/player_controller.gd"))
+	var aim := Node3D.new()
+	aim.name = "Aim"
+	player.add_child(aim)
+	var mount := Node3D.new()
+	mount.name = "WeaponMount"
+	aim.add_child(mount)
+	var gun_script := GDScript.new()
+	gun_script.source_code = "@tool\nextends Node3D\nfunc try_fire(_at: Vector3) -> bool:\n\treturn true\n"
+	assert_eq(gun_script.reload(), OK)
+	var gun := Node3D.new()
+	gun.name = "Gun"
+	gun.set_script(gun_script)
+	mount.add_child(gun)
+	map.add_child(player)
+	var locker := StaticBody3D.new()
+	locker.name = "StashLocker"
+	locker.set_script(_tool_copy(_install_template("hideout_locker")))
+	locker.position = Vector3(-5, 0, 0)
+	map.add_child(locker)
+	var door := Area3D.new()
+	door.name = "DeployDoor"
+	door.set_script(_tool_copy(_install_template("hideout_door")))
+	door.position = Vector3(0, 0, -5)
+	map.add_child(door)
+	_root().add_child(map)
+	_added.append(map)
+
+	assert_true(map.is_hideout())
+	assert_eq(map.get("player"), player)
+	assert_eq(map.get("ui"), ui)
+	assert_false(screen.visible, "stash screen starts hidden")
+	assert_true(gun.is_queued_for_deletion() or gun.get_parent() == null, "no guns at home")
+	var deploy_button: Button = ui.get("_deploy_button")
+	assert_false(deploy_button.visible, "the menu's deploy button gives way to the door")
+	assert_true(ui.find_child("CloseButton", true, false) is Button, "close button instead")
+	assert_eq(map.get_stash(), ui.get("stash"))
+
+	player.global_position = Vector3(0, 0, 3)
+	assert_true(map.nearest_locker() == null, "locker out of reach")
+	player.global_position = Vector3(-3.5, 0, 0.5)
+	assert_eq(map.nearest_locker(), locker, "locker in reach")
+	map.open_stash()
+	assert_true(screen.visible)
+	assert_true(map.is_stash_open)
+	assert_false(player.is_physics_processing(), "player frozen while the stash is open")
+	map.close_stash()
+	assert_false(screen.visible)
+	assert_true(player.is_physics_processing())
+
+	ui.get("stash").add_item("bandage", 2)
+	map._refresh_info()
+	assert_contains(map.get("_info").text, "창고 ₩100")
+
+	assert_eq(door.get_map(), map)
+	assert_eq(door.time_left(), -1.0, "nobody on the pad")
+	assert_eq(door.deploy(player), ERR_FILE_NOT_FOUND, "missing raid scene")
+	assert_false(door.is_done, "the door stays usable after a failed deploy")
+	assert_false(map.is_deploying)
+	assert_eq(map.key_label(&"mcp_test_td_nope"), "mcp_test_td_nope")
 
 
 func test_playtest_hideout_issues() -> void:
