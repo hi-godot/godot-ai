@@ -276,7 +276,7 @@ func test_input_activity_without_an_active_run_does_not_adopt() -> void:
 func test_input_activity_leaves_a_live_run_untouched() -> void:
 	var plugin := _plugin_with_log()
 	plugin._setup_session(1)
-	plugin.begin_game_run(0, true)
+	plugin.note_editor_play_started()
 	plugin._capture("mcp:hello", [], 1)
 	var token_before: int = plugin._game_run_token
 	var logged_before: int = plugin._log_buffer.total_logged()
