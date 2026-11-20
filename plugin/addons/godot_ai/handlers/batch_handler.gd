@@ -37,6 +37,8 @@ const FORBIDDEN_SUBCOMMANDS := {
 	"remove_client":
 		"remove_client is deferred and has no completion channel inside a batch — "
 		+ "run it as its own tool call",
+	"inherit_scene_prepare": "Call scene_manage(op='inherit') directly to create an inherited scene",
+	"inherit_scene_open": "Call scene_manage(op='inherit') directly to create an inherited scene",
 }
 
 ## The whole batch executes synchronously inside one dispatcher tick,

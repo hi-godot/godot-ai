@@ -277,6 +277,11 @@ jobs:
         timeout-minutes: 3
         run: GODOT_BIN=godot pytest -v -s tests/integration/test_filesystem_mutations.py
 
+      - name: Native scene inheritance across editor restarts
+        shell: bash
+        timeout-minutes: 3
+        run: GODOT_BIN=godot pytest -v -s tests/integration/test_scene_inheritance.py
+
       - name: Startup call timing regression
         shell: bash
         timeout-minutes: 3

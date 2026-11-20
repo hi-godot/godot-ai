@@ -274,7 +274,7 @@ Calls take the form:
 
 | Tool | Ops |
 |------|-----|
-| `scene_manage` | `create`, `save_as`, `close`, `get_roots` |
+| `scene_manage` | `create`, `inherit`, `save_as`, `close`, `get_roots` |
 | `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `set_editable_children`, `add_to_group`, `remove_from_group` |
 | `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |
@@ -302,6 +302,22 @@ Calls take the form:
 | `navigation_manage` | `bake`, `path_get` |
 | `csg_manage` | `csg_create`, `csg_set_operation` |
 | `custom_manage` | `list`, `invoke` |
+
+`scene_manage(op="inherit", params={"base_path": "res://doors/DoorBase.tscn", "path": "res://doors/LockedDoor.tscn"})`
+creates and opens a native inherited scene. Both paths must be `res://` paths
+ending in `.tscn`. The base must already be saved and the destination must be
+new, with an existing parent directory. The tool publishes the complete file
+atomically and refuses an occupied destination, including a file created by
+another process during the call. The backend needs filesystem access to the
+selected editor's project to publish the file.
+
+The derived scene inherits the last saved base. Unsaved edits to the base and
+its embedded resources stay in the base tab. Success verifies the inheritance
+link on disk and opens the derived scene for editing. The result includes
+`base_path`, `path`, `undoable: false`, and a reason. If the file is published
+and the editor cannot finish opening it, the error includes
+`disk_committed: true`. Use `scene_open` on `path` once the editor is ready.
+Call `scene_manage` directly so it can wait for the inherited tab to open.
 
 `resource_manage(op="physics_shape_generate")` keeps `shape_type="box"` as its default.
 Explicit `shape_type="auto"` chooses box, sphere, capsule or cylinder for the corresponding
