@@ -260,7 +260,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "audio",
         "  audio_manage     player_create, player_set_stream, player_set_playback,\n"
         "                   play, stop, list, bus_list/add/remove/set,\n"
-        "                   bus_effect_add/set/remove, bus_layout_save\n",
+        "                   bus_effect_add/set/remove, bus_layout_save, wav_clip\n",
     ),
     (
         "particle",

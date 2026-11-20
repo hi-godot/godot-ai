@@ -283,7 +283,7 @@ Calls take the form:
 | `test_manage` | `results_get` |
 | `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
-| `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
+| `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list`, `wav_clip` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
 | `signal_manage` | `list`, `connect`, `disconnect` |
@@ -302,6 +302,27 @@ Calls take the form:
 | `navigation_manage` | `bake`, `path_get` |
 | `csg_manage` | `csg_create`, `csg_set_operation` |
 | `custom_manage` | `list`, `invoke` |
+
+`audio_manage(op="wav_clip")` copies a time range from a saved `res://` WAV to
+a fresh `res://` `.wav` path in the selected editor's local project. Supply
+`source_path`, `path`, `start_seconds`, and `end_seconds`. The destination
+directory must exist. Source and destination paths must use ordinary project
+directories. The operation refuses symbolic links, junctions and occupied output paths.
+
+The source must contain 16-bit PCM mono or stereo audio, including standard
+`WAVE_FORMAT_EXTENSIBLE` PCM. The output keeps the source sample rate and
+channels. The cut includes the start frame and excludes the end frame.
+Times and optional `fade_in_seconds` and `fade_out_seconds` are
+rounded to the nearest sample frame, with ties rounded up. Fades default to zero
+and must fit without overlapping. A one-frame fade mutes that frame.
+The cut must be within the source duration
+and contain at least one frame. Selected audio is limited to 64 MiB of PCM data.
+
+The reply includes `sample_rate`, `channels`, `start_frame`, `end_frame`,
+`frame_count`, `fade_in_frames`, `fade_out_frames`, and `undoable: false`.
+To use the output as an `AudioStream`, choose a directory Godot imports.
+Call `filesystem_manage(op="scan")` in the same editor (reuse `session_id`
+when pinned) if the new clip is not yet available to assign to a player.
 
 `resource_manage(op="physics_shape_generate")` keeps `shape_type="box"` as its default.
 Explicit `shape_type="auto"` chooses box, sphere, capsule or cylinder for the corresponding

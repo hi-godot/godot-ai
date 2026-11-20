@@ -57,6 +57,14 @@ Ops:
         Stop editor preview playback. Not undoable.
   • list(root="res://", include_duration=True)
         Scan project for AudioStream resources (every subclass + .tres/.res).
+  • wav_clip(source_path, path, start_seconds, end_seconds,
+             fade_in_seconds=0.0, fade_out_seconds=0.0)
+        Trim a 16-bit PCM mono or stereo WAV to a new .wav file in the selected
+        editor's local project. Both paths use res:// and the destination directory
+        must exist. The end time is exclusive. Optional nonoverlapping linear
+        fades are measured in seconds. The source and any existing destination
+        are preserved. File creation is outside editor undo. Use
+        filesystem_manage(op="scan") if the new audio file needs importing.
 """
 
 
@@ -80,6 +88,7 @@ def register_audio_tools(mcp: FastMCP) -> None:
             "play": audio_handlers.audio_play,
             "stop": audio_handlers.audio_stop,
             "list": audio_handlers.audio_list,
+            "wav_clip": audio_handlers.audio_wav_clip,
         },
         read_resource_forms={
             ## Audio reads are stateful and per-player; no aggregate resource.
