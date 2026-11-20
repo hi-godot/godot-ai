@@ -53,7 +53,6 @@ func suite_teardown() -> void:
 			InputMap.erase_action(action)
 	if changed:
 		ProjectSettings.save()
-	EditorInterface.get_resource_filesystem().scan()
 
 
 func _root() -> Node:

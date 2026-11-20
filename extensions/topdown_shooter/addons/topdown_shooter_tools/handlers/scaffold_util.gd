@@ -172,7 +172,10 @@ static func save_resource(res: Resource, path: String) -> String:
 	return ""
 
 
-## Tells the editor's file system about new or changed files.
+## Tells the editor's file system about new or changed files, one file at a
+## time. Never a full scan(): Godot AI documents (script_handler.gd,
+## _register_written_file) that a scan() per write stacks editor background
+## tasks ("Task ... already exists") and can crash the GUI editor.
 static func refresh_filesystem(paths: Array) -> void:
 	if not Engine.is_editor_hint():
 		return
@@ -181,8 +184,6 @@ static func refresh_filesystem(paths: Array) -> void:
 		return
 	for path in paths:
 		efs.update_file(path)
-	if not efs.is_scanning():
-		efs.scan()
 
 
 ## Sets `node.owner = owner_node` on every descendant (not node itself).
