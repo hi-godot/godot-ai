@@ -159,7 +159,61 @@ func test_mutation_cancel_before_commit_preserves_source() -> void:
 	var result: Dictionary = await Mutation.new().run({"path": source, "new_path": MUTATION_ROOT + "_moved.txt"}, "move", func() -> bool: return false)
 	assert_is_error(result, "FILESYSTEM_DISCOVERY_FAILED")
 	assert_eq(result.error.data.outcome, "unchanged")
+	assert_eq(result.error.data.sub_code, "DISCOVERY_CANCELLED", "a caller that stopped waiting is a cancellation, not an expiry")
 	assert_eq(FileAccess.get_file_as_string(source), "source")
+	_mutation_cleanup()
+
+
+func test_mutation_deadline_expiry_is_reported_as_expired() -> void:
+	_mutation_cleanup()
+	var source := MUTATION_ROOT + ".txt"
+	_mutation_write(source, "source")
+	var job := Mutation.new()
+	## The caller is still waiting; only the deadline has passed.
+	var still_waiting := func() -> bool:
+		job._deadline = 0
+		return true
+	var result: Dictionary = await job.run({"path": source, "new_path": MUTATION_ROOT + "_moved.txt"}, "move", still_waiting)
+	assert_is_error(result, "FILESYSTEM_DISCOVERY_FAILED")
+	assert_eq(result.error.data.sub_code, "DISCOVERY_EXPIRED")
+	assert_eq(result.error.data.outcome, "unchanged")
+	assert_eq(FileAccess.get_file_as_string(source), "source")
+	assert_false(FileAccess.file_exists(MUTATION_ROOT + "_moved.txt"))
+	_mutation_cleanup()
+
+
+func test_mutation_owner_change_during_discovery_is_reported() -> void:
+	_mutation_cleanup()
+	var source := MUTATION_ROOT + ".txt"
+	var owner := MUTATION_ROOT + "_owner.gd"
+	_mutation_write(source, "source")
+	_mutation_write(owner, "extends RefCounted\n")
+	var job := Mutation.new()
+	job._deadline = Time.get_ticks_msec() + Mutation.DEADLINE_MSEC
+	assert_true(await job._collect_tree("res://", [] as Array[String]), "fixture walk must succeed")
+	assert_true(await job._read_bounded(owner) != null, "fixture owner must read")
+	_mutation_write(owner, "extends RefCounted\n# edited mid-discovery\n")
+	assert_false(await job._revalidate(), "a changed owner must fail revalidation")
+	assert_eq(job._fault_code, "FILESYSTEM_DISCOVERY_FAILED")
+	assert_eq(job._fault_sub_code, "DISCOVERY_CHANGED")
+	assert_eq(job._fault_result().error.data.sub_code, "DISCOVERY_CHANGED")
+	_mutation_cleanup()
+
+
+func test_mutation_large_owner_expiry_is_not_reported_as_changed() -> void:
+	_mutation_cleanup()
+	var owner := MUTATION_ROOT + ".txt"
+	_mutation_write(owner, "unchanged owner")
+	var job := Mutation.new()
+	job._large_owners[owner] = {
+		"modified": FileAccess.get_modified_time(owner),
+		"size": FileAccess.get_file_as_bytes(owner).size(),
+		"dependencies": job._owner_dependencies(owner),
+	}
+	## The owner is unchanged; only the deadline has passed.
+	job._deadline = 0
+	assert_false(await job._large_owners_unchanged(), "an expired check must not pass")
+	assert_eq(job._fault_sub_code, "DISCOVERY_EXPIRED", "an unchanged owner must not be reported as changed")
 	_mutation_cleanup()
 
 
@@ -307,12 +361,14 @@ func test_mutation_linked_entry_refused_without_touching_external_sentinel() -> 
 	var source := MUTATION_ROOT + ".txt"
 	_mutation_write(source, "inside")
 	var result: Dictionary = await Mutation.new().run({"path": source, "new_path": MUTATION_ROOT + "_moved.txt"}, "move")
-	assert_is_error(result, "INVALID_PARAMS")
+	assert_is_error(result, "FILESYSTEM_DISCOVERY_FAILED", "a link elsewhere in the project is a discovery failure")
 	assert_contains(result.error.message, "linked")
+	assert_eq(result.error.data.sub_code, "DISCOVERY_LINKED_ENTRY")
 	assert_eq(FileAccess.get_file_as_string(source), "inside")
 	assert_eq(FileAccess.get_file_as_string(sentinel), "outside sentinel")
 	var remove_link: Dictionary = await Mutation.new().run({"path": link, "force": true}, "remove")
-	assert_is_error(remove_link, "INVALID_PARAMS")
+	assert_is_error(remove_link, "INVALID_PARAMS", "mutating the link itself stays a request refusal")
+	assert_false(remove_link.error.data.has("sub_code"))
 	assert_eq(FileAccess.get_file_as_string(sentinel), "outside sentinel")
 	assert_eq(DirAccess.rename_absolute(ProjectSettings.globalize_path(link), parked), OK)
 	_mutation_cleanup()
@@ -372,6 +428,7 @@ func test_mutation_large_tree_yields_and_cancels_before_disk_effects() -> void:
 	assert_true(frames[0] > 0, "discovery must return control to a real process frame")
 	assert_is_error(result, "FILESYSTEM_DISCOVERY_FAILED")
 	assert_eq(result.error.data.outcome, "unchanged")
+	assert_eq(result.error.data.sub_code, "DISCOVERY_CANCELLED")
 	assert_eq(FileAccess.get_file_as_string(source), "keep")
 	assert_false(FileAccess.file_exists(MUTATION_ROOT + "_moved.txt"))
 	for index in 512:
@@ -683,6 +740,7 @@ func test_mutation_compressed_container_expands_across_blocks() -> void:
 			var truncated := Mutation.new()
 			assert_true(truncated._binary_scan_bytes(path, raw.slice(0, raw.size() / 2)) == null, "a truncated container cannot be inspected")
 			assert_eq(truncated._fault_code, "FILESYSTEM_DISCOVERY_FAILED")
+			assert_eq(truncated._fault_sub_code, "DISCOVERY_BINARY_UNREADABLE")
 
 
 func test_mutation_malformed_compressed_binary_owner_fails_discovery() -> void:
@@ -696,6 +754,7 @@ func test_mutation_malformed_compressed_binary_owner_fails_discovery() -> void:
 	assert_is_error(result, "FILESYSTEM_DISCOVERY_FAILED")
 	if result.has("error"):
 		assert_contains(result.error.message, "compressed binary owner")
+		assert_eq(result.error.data.sub_code, "DISCOVERY_BINARY_UNREADABLE")
 	assert_true(FileAccess.file_exists(source), "an unreadable owner must preserve source")
 	assert_false(FileAccess.file_exists(destination), "an unreadable owner must not move")
 	for path in [owner, owner + ".uid"]:
@@ -721,6 +780,7 @@ func test_mutation_large_text_owner_fails_closed() -> void:
 	var result: Dictionary = await Mutation.new().run({"path": source, "new_path": destination}, "move")
 	assert_is_error(result, "FILESYSTEM_DISCOVERY_FAILED")
 	assert_contains(result.error.message, "exceeds")
+	assert_eq(result.error.data.sub_code, "DISCOVERY_OWNER_TOO_LARGE")
 	assert_true(FileAccess.file_exists(source), "oversized text owner must preserve source")
 	assert_false(FileAccess.file_exists(destination), "oversized text owner must not move")
 	for path in [owner, owner + ".uid"]:

@@ -31,9 +31,12 @@ class ErrorCode(StrEnum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
     DEFERRED_TIMEOUT = "DEFERRED_TIMEOUT"
     # #1120: filesystem mutation discovery failed before any disk effect
-    # (deadline/cancellation, entry/byte limits, or unreadable owner metadata).
-    # Kept separate from INVALID_PARAMS so callers can distinguish an
-    # environmental discovery failure from a bad filesystem_manage request.
+    # (deadline/cancellation, entry/byte limits, unreadable owner metadata, a
+    # linked entry in the project walk, entries changing mid-discovery, or a
+    # UID the cache does not resolve). Kept separate from INVALID_PARAMS so
+    # callers can distinguish an environmental discovery failure from a bad
+    # filesystem_manage request. ``error.data.sub_code`` carries a
+    # FilesystemDiscoverySubCode naming the refusal path.
     FILESYSTEM_DISCOVERY_FAILED = "FILESYSTEM_DISCOVERY_FAILED"
     # A test run aborted at its between-test ceiling before finishing;
     # error.data carries the partial summary and get_test_results keeps the
@@ -112,6 +115,32 @@ class EditorNotReadySubCode(StrEnum):
     # command arrived while a synchronous test run held the editor main
     # thread and was rejected (retryable) instead of buffered.
     EDITOR_TEST_RUNNING = "EDITOR_TEST_RUNNING"
+
+
+class FilesystemDiscoverySubCode(StrEnum):
+    """#1120: sub-codes carried in ``error.data.sub_code`` on
+    FILESYSTEM_DISCOVERY_FAILED errors.
+
+    Never emitted as a top-level ``error.code``. Each value names one refusal
+    path in ``handlers/filesystem_mutation.gd`` and carries no path, name or
+    size, so telemetry can count them. Keep in sync with the
+    ``DISCOVERY_SUB_*`` constants in utils/error_codes.gd — enforced by
+    tests/unit/test_filesystem_discovery_sub_codes.py.
+    """
+
+    DISCOVERY_EXPIRED = "DISCOVERY_EXPIRED"
+    # Local to the plugin job: a cancelled job's result is never delivered,
+    # so this value does not reach callers or telemetry.
+    DISCOVERY_CANCELLED = "DISCOVERY_CANCELLED"
+    DISCOVERY_ENTRY_LIMIT = "DISCOVERY_ENTRY_LIMIT"
+    DISCOVERY_BYTE_LIMIT = "DISCOVERY_BYTE_LIMIT"
+    DISCOVERY_OWNER_TOO_LARGE = "DISCOVERY_OWNER_TOO_LARGE"
+    DISCOVERY_DIRECTORY_UNREADABLE = "DISCOVERY_DIRECTORY_UNREADABLE"
+    DISCOVERY_OWNER_UNREADABLE = "DISCOVERY_OWNER_UNREADABLE"
+    DISCOVERY_BINARY_UNREADABLE = "DISCOVERY_BINARY_UNREADABLE"
+    DISCOVERY_LINKED_ENTRY = "DISCOVERY_LINKED_ENTRY"
+    DISCOVERY_CHANGED = "DISCOVERY_CHANGED"
+    DISCOVERY_UID_UNRESOLVED = "DISCOVERY_UID_UNRESOLVED"
 
 
 class EditorTransportSubCode(StrEnum):

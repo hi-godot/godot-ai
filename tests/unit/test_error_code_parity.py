@@ -39,8 +39,14 @@ def _parse_gdscript_codes() -> dict[str, str]:
     ## top-level `error.code`, so they're deliberately absent from
     ## ErrorCode. Their own GDScript↔Python sync (against
     ## EditorNotReadySubCode) is enforced by
-    ## test_editor_not_ready_hint_contract.py.
-    return {name: value for name, value in _CONST_RE.findall(text) if not name.startswith("SUB_")}
+    ## test_editor_not_ready_hint_contract.py. `DISCOVERY_SUB_` constants are
+    ## the #1120 FILESYSTEM_DISCOVERY_FAILED sub-codes, synced against
+    ## FilesystemDiscoverySubCode by test_filesystem_discovery_sub_codes.py.
+    return {
+        name: value
+        for name, value in _CONST_RE.findall(text)
+        if not name.startswith(("SUB_", "DISCOVERY_SUB_"))
+    }
 
 
 def test_gdscript_codes_parsed_non_empty() -> None:

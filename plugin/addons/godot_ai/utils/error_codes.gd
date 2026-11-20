@@ -27,10 +27,42 @@ const UNKNOWN_COMMAND := "UNKNOWN_COMMAND"
 const INTERNAL_ERROR := "INTERNAL_ERROR"
 const DEFERRED_TIMEOUT := "DEFERRED_TIMEOUT"
 ## #1120: filesystem mutation discovery failed before any disk effect
-## (deadline/cancellation, entry/byte limits, or unreadable owner metadata).
-## Keep this separate from INVALID_PARAMS so callers can distinguish an
-## environmental discovery failure from a bad filesystem_manage request.
+## (deadline/cancellation, entry/byte limits, unreadable owner metadata, a
+## linked entry in the project walk, entries changing mid-discovery, or a UID
+## the cache does not resolve). Keep this separate from INVALID_PARAMS so
+## callers can distinguish an environmental discovery failure from a bad
+## filesystem_manage request. `error.data.sub_code` names which refusal path.
 const FILESYSTEM_DISCOVERY_FAILED := "FILESYSTEM_DISCOVERY_FAILED"
+## #1120: why discovery refused, in `error.data.sub_code` of a
+## FILESYSTEM_DISCOVERY_FAILED error, never as the top-level `error.code`.
+## Each names one refusal path in handlers/filesystem_mutation.gd and carries
+## no path, name or size, so it is safe to count in telemetry. Keep in sync
+## with protocol/errors.py::FilesystemDiscoverySubCode — enforced by
+## tests/unit/test_filesystem_discovery_sub_codes.py.
+## The 25 s discovery deadline passed.
+const DISCOVERY_SUB_EXPIRED := "DISCOVERY_EXPIRED"
+## The caller stopped waiting (deferred response gone) before the deadline.
+## Local to the job: a cancelled job's result is never delivered, so this
+## never reaches the caller or telemetry.
+const DISCOVERY_SUB_CANCELLED := "DISCOVERY_CANCELLED"
+## The project walk passed MAX_ENTRIES.
+const DISCOVERY_SUB_ENTRY_LIMIT := "DISCOVERY_ENTRY_LIMIT"
+## Owner bytes read across the pass passed MAX_TOTAL_BYTES.
+const DISCOVERY_SUB_BYTE_LIMIT := "DISCOVERY_BYTE_LIMIT"
+## A script or text-resource owner is larger than MAX_FILE_BYTES.
+const DISCOVERY_SUB_OWNER_TOO_LARGE := "DISCOVERY_OWNER_TOO_LARGE"
+## A project directory could not be opened or listed.
+const DISCOVERY_SUB_DIRECTORY_UNREADABLE := "DISCOVERY_DIRECTORY_UNREADABLE"
+## An owner file could not be opened, sized or fully read.
+const DISCOVERY_SUB_OWNER_UNREADABLE := "DISCOVERY_OWNER_UNREADABLE"
+## A compressed binary owner's container could not be expanded.
+const DISCOVERY_SUB_BINARY_UNREADABLE := "DISCOVERY_BINARY_UNREADABLE"
+## The project walk met a symlink or junction it would have to look through.
+const DISCOVERY_SUB_LINKED_ENTRY := "DISCOVERY_LINKED_ENTRY"
+## Entries or owner bytes changed between discovery and revalidation.
+const DISCOVERY_SUB_CHANGED := "DISCOVERY_CHANGED"
+## An owner refers to a target by a UID the UID cache does not map to it.
+const DISCOVERY_SUB_UID_UNRESOLVED := "DISCOVERY_UID_UNRESOLVED"
 ## Python-originated transport/attach bridge codes. GDScript has no emit path,
 ## but the public registry intentionally mirrors protocol/errors.py.
 const TRANSPORT_OUTCOME_UNKNOWN := "TRANSPORT_OUTCOME_UNKNOWN"

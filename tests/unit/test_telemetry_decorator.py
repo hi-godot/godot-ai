@@ -121,6 +121,48 @@ class TestTelemetryToolSync:
         assert rec.data["error"] == "EDITOR_NOT_READY"
         assert rec.data["error_sub_code"] == "EDITOR_IMPORTING"
 
+    def test_records_filesystem_discovery_sub_code(self, isolated_collector) -> None:
+        """#1120: FILESYSTEM_DISCOVERY_FAILED carries data.sub_code naming the
+        discovery refusal path; telemetry records it as error_sub_code, and the
+        message (which names project paths) still stays local."""
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("filesystem_manage")
+        def my_tool() -> None:
+            raise GodotCommandError(
+                code="FILESYSTEM_DISCOVERY_FAILED",
+                message="Cannot establish ownership through a linked entry: res://secret-project/link",
+                data={"sub_code": "DISCOVERY_LINKED_ENTRY", "outcome": "unchanged"},
+            )
+
+        with pytest.raises(GodotCommandError):
+            my_tool()
+        _wait_for(sent, 1)
+
+        rec = sent[0]
+        assert rec.data["error"] == "FILESYSTEM_DISCOVERY_FAILED"
+        assert rec.data["error_sub_code"] == "DISCOVERY_LINKED_ENTRY"
+        assert "secret-project" not in str(rec.data)
+
+    def test_discovery_drops_other_families_sub_codes(self, isolated_collector) -> None:
+        """Each error code admits only its own vocabulary: an EDITOR_NOT_READY
+        sub-code on a discovery failure is dropped, not mis-attributed."""
+        _, sent = isolated_collector
+
+        @tel.telemetry_tool("filesystem_manage")
+        def my_tool() -> None:
+            raise GodotCommandError(
+                code="FILESYSTEM_DISCOVERY_FAILED",
+                message="nope",
+                data={"sub_code": "EDITOR_IMPORTING"},
+            )
+
+        with pytest.raises(GodotCommandError):
+            my_tool()
+        _wait_for(sent, 1)
+
+        assert "error_sub_code" not in sent[0].data
+
     def test_sub_code_extraction_tolerates_non_dict_data(self) -> None:
         """_safe_error_sub_code duck-types on the class NAME (mirroring
         _safe_exception_category), so a foreign GodotCommandError whose
