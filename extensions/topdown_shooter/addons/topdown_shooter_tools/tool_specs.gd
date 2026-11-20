@@ -409,7 +409,7 @@ static func definitions() -> Array[Dictionary]:
 			"name": "playtest_notes",
 			"method": &"playtest_notes",
 			"script": NOTES_HANDLER_PATH,
-			"description": "Read and close notes the user left while playing. In game F8 (or Ctrl/Cmd+N) pauses, saves a screenshot, pins the spot under the mouse (or the player) and takes a note: res://playtest_notes/<id>.json + .png with text, category, scene, position, camera, node under cursor, recent errors. op: list (default, open notes) | get (full note + screenshot_path) | resolve | reopen | delete (one undo step each) | markers (view-only pins in the open 3D scene) | clear_markers | install (PlaytestNotes autoload) | uninstall.",
+			"description": "Read and close notes the user left while playing. In game F9 (or Ctrl/Cmd+N; F8 on macOS, since the Windows/Linux editor uses F8 to stop the game) pauses, saves a screenshot, pins the spot under the mouse (or the player) and takes a note: res://playtest_notes/<id>.json + .png with text, category, scene, position, camera, node under cursor, recent errors. op: list (default, open notes) | get (full note + screenshot_path) | resolve | reopen | delete (one undo step each) | markers (view-only pins in the open 3D scene) | clear_markers | install (PlaytestNotes autoload) | uninstall.",
 			"requires_writable": false,
 			"schema": {
 				"type": "object",

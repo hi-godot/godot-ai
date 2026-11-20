@@ -2602,6 +2602,9 @@ func test_notes_overlay_note_key() -> void:
 		skip("project defines its own playtest_note action")
 		return
 	assert_true(overlay.is_note_key(f8), "F8")
+	var f9 := f8.duplicate()
+	f9.physical_keycode = KEY_F9
+	assert_true(overlay.is_note_key(f9), "F9 (Windows editor eats F8)")
 	var echo := f8.duplicate()
 	echo.echo = true
 	assert_false(overlay.is_note_key(echo), "no key repeat")

@@ -1,7 +1,7 @@
 @tool
 extends RefCounted
 
-## Handler for playtest_notes: notes left in game with F8.
+## Handler for playtest_notes: notes left in game with F9 (F8 on macOS).
 ##
 ## The in-game side is playtest_notes_overlay.gd, copied from a template and
 ## registered as the PlaytestNotes autoload. It writes one <id>.json plus an
@@ -201,9 +201,9 @@ func _op_list(params: Dictionary) -> Dictionary:
 	if not loaded.broken.is_empty():
 		out["broken_files"] = loaded.broken
 	if not out.installed:
-		out["hint"] = "The in-game note key is not installed yet: call playtest_notes op='install', then press F8 while playing."
+		out["hint"] = "The in-game note key is not installed yet: call playtest_notes op='install', then press F9 while playing (F8 also works on macOS)."
 	elif all.is_empty():
-		out["hint"] = "No notes yet. Play the game and press F8 (or Ctrl/Cmd+N) where something is wrong."
+		out["hint"] = "No notes yet. Play the game and press F9 (or Ctrl/Cmd+N; F8 on macOS) where something is wrong."
 	else:
 		out["hint"] = "op='get' id=... returns the full note; open screenshot_path to see the screen (the red ring is the marked spot)."
 	return {"data": out}
@@ -585,7 +585,7 @@ func install(script_dir: String, overwrite: bool) -> Dictionary:
 		"autoload": AUTOLOAD_NAME,
 		"autoload_status": autoload_status,
 		"notes_dir": notes_dir,
-		"how_to": "Play the game and press F8 (or Ctrl/Cmd+N) where something is wrong. Tab switches the pin between the mouse spot and the player, Enter saves, Shift+Enter adds a line, Esc cancels. Add an input action named 'playtest_note' to use your own key.",
+		"how_to": "Play the game and press F9 (or Ctrl/Cmd+N; F8 on macOS) where something is wrong. Tab switches the pin between the mouse spot and the player, Enter saves, Shift+Enter adds a line, Esc cancels. Add an input action named 'playtest_note' to use your own key.",
 	}}
 
 
