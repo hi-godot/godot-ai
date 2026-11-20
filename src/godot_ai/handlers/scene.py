@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from godot_ai.handlers._readiness import require_writable_async
+from godot_ai.handlers.scene_inheritance import stage_and_open_scene
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -36,7 +37,7 @@ async def scene_create(
 
 async def scene_inherit(runtime: DirectRuntime, base_path: str, path: str) -> dict:
     await require_writable_async(runtime)
-    return await runtime.send_command("inherit_scene", {"base_path": base_path, "path": path})
+    return await stage_and_open_scene(runtime, base_path, path)
 
 
 async def scene_open(

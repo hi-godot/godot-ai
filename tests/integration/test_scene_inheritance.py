@@ -9,6 +9,7 @@ import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from unittest.mock import Mock
 
 import httpx2
 import psutil
@@ -18,6 +19,7 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from godot_ai.asgi import hardened_uvicorn_config
+from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.server import create_server
 from godot_ai.transport.capability import generate_capabilities
 from tests.conftest import isolate_capability_directory
@@ -27,6 +29,9 @@ pytestmark = pytest.mark.editor
 
 BASE = "res://doors/DoorBase.tscn"
 DERIVED = "res://doors/LockedDoor.tscn"
+BUSY = "res://doors/BusyBaseDoor.tscn"
+RACED = "res://doors/RacedDoor.tscn"
+LATE = "res://doors/CommittedDoor.tscn"
 ROOT_NODE = "/DoorBase"
 BASE_TEXT = """[gd_scene format=3]
 
@@ -50,6 +55,13 @@ shape = SubResource("RectangleShape2D_base")
 offset_right = 90.0
 offset_bottom = 100.0
 """
+COMPETING_SCENE = f'''[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="{BASE}" id="1"]
+
+[node name="DoorBase" instance=ExtResource("1")]
+process_priority = 29
+'''.encode()
 
 
 def _loopback_client(**kwargs):
@@ -106,25 +118,73 @@ def _write_project(project: Path, http_port: int, ws_port: int) -> None:
         '[plugin]\nname="Inheritance test"\nscript="ports.gd"\n',
         encoding="utf-8",
     )
-    (bootstrap / "ports.gd").write_text(
-        "@tool\nextends EditorPlugin\n\nfunc _enter_tree() -> void:\n"
-        "\tvar settings := EditorInterface.get_editor_settings()\n"
-        f'\tsettings.set_setting("godot_ai/http_port", {http_port})\n'
-        f'\tsettings.set_setting("godot_ai/ws_port", {ws_port})\n'
-        "\t_enable_addon.call_deferred()\n\n"
-        "func _enable_addon() -> void:\n"
-        '\tif not EditorInterface.is_plugin_enabled("godot_ai"):\n'
-        '\t\tEditorInterface.set_plugin_enabled("godot_ai", true)\n',
-        encoding="utf-8",
+    shutil.copyfile(
+        Path(__file__).with_name("_scene_inheritance_driver.gd"), bootstrap / "ports.gd"
     )
+    (project / ".inheritance-test").mkdir()
     (project / "project.godot").write_text(
         'config_version=5\n[application]\nconfig/name="Scene inheritance acceptance"\n'
-        '[editor_plugins]\nenabled=PackedStringArray("res://addons/inheritance_test/plugin.cfg")\n',
+        '[editor_plugins]\nenabled=PackedStringArray("res://addons/inheritance_test/plugin.cfg")\n'
+        f"[inheritance_test]\nhttp_port={http_port}\nws_port={ws_port}\n",
         encoding="utf-8",
     )
     base = project / BASE.removeprefix("res://")
     base.parent.mkdir()
     base.write_text(BASE_TEXT, encoding="utf-8")
+
+
+def _remember_children(launcher: psutil.Process, owned: set[psutil.Process]) -> None:
+    try:
+        owned.update(launcher.children(recursive=True))
+    except psutil.NoSuchProcess:
+        # Children observed earlier can outlive the launcher and stay owned.
+        pass
+
+
+def _stop_editor_processes(owned: set[psutil.Process]) -> None:
+    live = [process for process in owned if process.is_running()]
+    for process in live:
+        try:
+            process.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    _, survivors = psutil.wait_procs(live, timeout=5)
+    for process in survivors:
+        try:
+            process.kill()
+        except psutil.NoSuchProcess:
+            pass
+    _, survivors = psutil.wait_procs(survivors, timeout=5)
+    assert not survivors, f"Owned editor processes survived cleanup: {survivors}"
+
+
+@pytest.mark.parametrize("launcher_survives", [True, False])
+def test_editor_cleanup_kills_and_waits_for_editor_and_launcher(monkeypatch, launcher_survives):
+    launcher = Mock(spec=psutil.Process)
+    editor = Mock(spec=psutil.Process)
+    launcher.children.side_effect = [
+        [editor],
+        [editor] if launcher_survives else psutil.NoSuchProcess(181),
+    ]
+    launcher.is_running.return_value = launcher_survives
+    editor.is_running.return_value = True
+    owned = {launcher}
+    _remember_children(launcher, owned)
+    _remember_children(launcher, owned)
+
+    survivors = [launcher, editor] if launcher_survives else [editor]
+    wait = Mock(side_effect=[([], survivors), (survivors, [])])
+    monkeypatch.setattr(psutil, "wait_procs", wait)
+    _stop_editor_processes(owned)
+
+    for process in survivors:
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+    if not launcher_survives:
+        launcher.terminate.assert_not_called()
+        launcher.kill.assert_not_called()
+    assert set(wait.call_args_list[0].args[0]) == set(survivors)
+    assert set(wait.call_args_list[1].args[0]) == set(survivors)
 
 
 @asynccontextmanager
@@ -136,20 +196,24 @@ async def _editor(client: Client, project: Path, godot: str, log: Path):
             stdout=output,
             stderr=subprocess.STDOUT,
         )
+        launcher = None
+        owned = set()
         try:
+            launcher = psutil.Process(process.pid)
+            owned.add(launcher)
             try:
                 async with asyncio.timeout(60):
                     while True:
                         assert process.poll() is None, f"Editor exited during startup. See {log}"
+                        _remember_children(launcher, owned)
                         sessions = (await client.call_tool("session_manage", {"op": "list"})).data
                         if sessions["sessions"]:
                             assert len(sessions["sessions"]) == 1, sessions
                             session = sessions["sessions"][0]
                             assert Path(session["project_path"]).resolve() == project, session
                             identity = psutil.Process(session["editor_pid"])
-                            assert identity.pid == process.pid or process.pid in {
-                                parent.pid for parent in identity.parents()
-                            }, session
+                            assert identity == launcher or launcher in identity.parents(), session
+                            owned.add(identity)
                             if session["readiness"] != "importing":
                                 break
                         await asyncio.sleep(0.25)
@@ -184,17 +248,16 @@ async def _editor(client: Client, project: Path, godot: str, log: Path):
             try:
                 yield tool, (identity.pid, created, session["session_id"])
             finally:
+                _remember_children(launcher, owned)
                 assert (await tool("editor_manage", op="quit"))["status"] == "quitting"
                 assert await asyncio.to_thread(process.wait, 15) == 0, log
-                assert not identity.is_running(), f"Editor {identity.pid} survived requested quit"
+                _, live = await asyncio.to_thread(psutil.wait_procs, [identity], timeout=5)
+                assert not live, f"Editor {identity.pid} survived requested quit"
         finally:
-            if process.poll() is None:
-                # Some Windows Godot distributions have a console launcher
-                # process in front of the editor that also needs to be reaped.
-                for child in psutil.Process(process.pid).children(recursive=True):
-                    child.terminate()
-                process.terminate()
-                await asyncio.to_thread(process.wait, 10)
+            if launcher is not None:
+                _remember_children(launcher, owned)
+                await asyncio.to_thread(_stop_editor_processes, owned)
+            await asyncio.to_thread(process.wait, 5)
 
 
 async def _open(tool, path):
@@ -227,6 +290,114 @@ async def _shape_size(tool):
     assert shape["type"] == "RectangleShape2D", graph
     size = shape["properties"]["size"]
     return size["x"], size["y"]
+
+
+@asynccontextmanager
+async def _hold_threaded_load(project: Path, path: str):
+    controls = project / ".inheritance-test"
+    request = controls / "hold"
+    receipt = controls / "held"
+    staged = controls / "pending"
+    staged.write_text(path, encoding="utf-8")
+    staged.rename(request)
+    try:
+        async with asyncio.timeout(10):
+            while not receipt.exists() or not receipt.stat().st_size:
+                await asyncio.sleep(0.05)
+        assert receipt.read_text(encoding="utf-8") == "loaded", receipt
+        yield
+    finally:
+        request.unlink()
+        async with asyncio.timeout(10):
+            while receipt.exists():
+                await asyncio.sleep(0.05)
+
+
+async def _check_publish_race_and_open_refusal(tool, project: Path, monkeypatch):
+    from godot_ai.handlers import scene_inheritance
+
+    directory = project / "doors"
+    raced = project / RACED.removeprefix("res://")
+    late = project / LATE.removeprefix("res://")
+    original_tabs = await tool("scene_manage", op="get_roots")
+
+    async with _hold_threaded_load(project, BASE):
+        refusal = await tool(
+            "scene_manage",
+            op="inherit",
+            params={"base_path": BASE, "path": BUSY},
+            error="EDITOR_NOT_READY",
+        )
+    assert "resource load is already pending" in refusal["message"], refusal
+    assert not (project / BUSY.removeprefix("res://")).exists()
+    assert await tool("scene_manage", op="get_roots") == original_tabs
+    assert not list(directory.glob(".godot-ai-inherit-*"))
+
+    actual_publish = scene_inheritance._publish_scene
+    writer_reached = False
+
+    def publish_after_competing_writer(stage: Path, destination: Path) -> None:
+        nonlocal writer_reached
+        if destination == raced:
+            # The staged scene is complete. Let a different process create
+            # the exact destination before proceeding to the real syscall.
+            assert b"instance=ExtResource(" in stage.read_bytes() and not destination.exists()
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; open(sys.argv[1], 'xb').write(sys.stdin.buffer.read())",
+                    str(destination),
+                ],
+                input=COMPETING_SCENE,
+                timeout=10,
+                check=True,
+            )
+            writer_reached = True
+        actual_publish(stage, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(scene_inheritance, "_publish_scene", publish_after_competing_writer)
+        race_refusal = await tool(
+            "scene_manage",
+            op="inherit",
+            params={"base_path": BASE, "path": RACED},
+            error="INVALID_PARAMS",
+        )
+
+    assert writer_reached and raced.read_bytes() == COMPETING_SCENE
+    assert race_refusal["data"]["disk_committed"] is False, race_refusal
+    assert race_refusal["data"]["reason"] == "destination_exists", race_refusal
+    assert await tool("scene_manage", op="get_roots") == original_tabs
+    assert not list(directory.glob(".godot-ai-inherit-*"))
+
+    actual_send = DirectRuntime.send_command
+    committed_bytes = b""
+
+    async def contend_before_open(runtime, command, params=None, *args, **kwargs):
+        if command != "inherit_scene_open" or params["path"] != LATE:
+            return await actual_send(runtime, command, params, *args, **kwargs)
+        nonlocal committed_bytes
+        committed_bytes = late.read_bytes()
+        async with _hold_threaded_load(project, LATE):
+            return await actual_send(runtime, command, params, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(DirectRuntime, "send_command", contend_before_open)
+        refusal = await tool(
+            "scene_manage",
+            op="inherit",
+            params={"base_path": BASE, "path": LATE},
+            error="EDITOR_NOT_READY",
+        )
+
+    assert refusal["data"]["disk_committed"] is True, refusal
+    assert refusal["data"]["tab_opened"] is False, refusal
+    assert "resource load is already pending" in refusal["message"], refusal
+    assert refusal["data"]["path"] == LATE and refusal["data"]["base_path"] == BASE, refusal
+    assert b"instance=ExtResource(" in committed_bytes and late.read_bytes() == committed_bytes
+    assert await tool("scene_manage", op="get_roots") == original_tabs
+    assert not list(directory.glob(".godot-ai-inherit-*"))
 
 
 async def test_native_inheritance_survives_fresh_editor(tmp_path, monkeypatch):
@@ -286,6 +457,11 @@ async def test_native_inheritance_survives_fresh_editor(tmp_path, monkeypatch):
             )
             assert fit["shape_created"] is False, fit
             assert await _shape_size(tool) == (90, 100)
+            await _check_publish_race_and_open_refusal(tool, project, monkeypatch)
+            assert await _text(tool, "Override") == "dirty"
+            assert await _shape_size(tool) == (90, 100)
+            assert "UnsavedOnly" in await _names(tool)
+            assert base.read_bytes() == saved_base
 
             inherited = await tool(
                 "scene_manage",

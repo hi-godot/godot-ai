@@ -216,9 +216,12 @@ func _pack_and_save_with_uid(root: Node, path: String) -> Error:
 	return err
 
 
-## Open and save a native inherited scene from a saved .tscn base.
-func inherit_scene(params: Dictionary) -> Dictionary:
-	return SceneInheritance.start(_connection, params)
+func inherit_scene_prepare(params: Dictionary) -> Dictionary:
+	return SceneInheritance.start(_connection, params, true)
+
+
+func inherit_scene_open(params: Dictionary) -> Dictionary:
+	return SceneInheritance.start(_connection, params, false)
 
 
 ## How long open_scene waits for the editor to actually switch to the

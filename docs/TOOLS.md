@@ -304,15 +304,20 @@ Calls take the form:
 | `custom_manage` | `list`, `invoke` |
 
 `scene_manage(op="inherit", params={"base_path": "res://doors/DoorBase.tscn", "path": "res://doors/LockedDoor.tscn"})`
-creates, saves, and opens a native inherited scene. Both paths must be `res://`
-paths ending in `.tscn`. The base scene must already be saved and the destination
-must be new, with an existing parent directory. The derived scene inherits the
-last saved base. Unsaved changes to the scene and its embedded resources stay
-in the base tab if it is open. Godot's Save As can also save separately edited
-external resources, as it does when used in the editor.
-The tool verifies the inheritance link on disk before returning `base_path`,
-`path`, `undoable: false`, and a reason. Call the tool directly so it can wait
-for the inherited tab to open before saving.
+creates and opens a native inherited scene. Both paths must be `res://` paths
+ending in `.tscn`. The base must already be saved and the destination must be
+new, with an existing parent directory. The tool publishes the complete file
+atomically and refuses an occupied destination, including a file created by
+another process during the call. The backend needs filesystem access to the
+selected editor's project to publish the file.
+
+The derived scene inherits the last saved base. Unsaved edits to the base and
+its embedded resources stay in the base tab. Success verifies the inheritance
+link on disk and opens the derived scene for editing. The result includes
+`base_path`, `path`, `undoable: false`, and a reason. If the file is published
+and the editor cannot finish opening it, the error includes
+`disk_committed: true`. Use `scene_open` on `path` once the editor is ready.
+Call `scene_manage` directly so it can wait for the inherited tab to open.
 
 `resource_manage(op="physics_shape_generate")` keeps `shape_type="box"` as its default.
 Explicit `shape_type="auto"` chooses box, sphere, capsule or cylinder for the corresponding

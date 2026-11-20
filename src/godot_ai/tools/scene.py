@@ -28,9 +28,11 @@ Ops:
   • inherit(base_path, path)
         Create and open a native inherited scene from the last saved version
         of base_path. Both paths must start with res:// and end in .tscn. The destination
-        directory must exist and the destination must be new. Unsaved edits in
-        an open base tab stay there. Returns path, base_path and undoable=false.
-        Call directly as scene_manage, outside batch_execute.
+        directory must exist. The file is published atomically at a new path.
+        Unsaved edits in an open base tab stay there. Returns path, base_path and
+        undoable=false. An error with data.disk_committed=true means the file was
+        published before the editor's open operation failed. Call directly as
+        scene_manage, outside batch_execute.
   • save_as(path)
         Save the currently edited scene to a new file path.
   • close(path, discard_changes=False)

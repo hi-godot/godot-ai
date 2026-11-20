@@ -3,63 +3,29 @@ extends RefCounted
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const ScriptWork := preload("res://addons/godot_ai/utils/script_work.gd")
+const WORK_LABEL := "inherit_scene"
+const STAGE_PREFIX := ".godot-ai-inherit-"
+const STAGE_FILE := "scene.tscn"
 ## Leave headroom within the dispatcher's default 4500 ms deferred budget.
 const SETTLE_MAX_MSEC := 3000
 
-## EditorInterface uses CACHE_MODE_REPLACE, which can reset embedded resources
-## shared with an open, dirty base tab. Serve a fresh disk snapshot only during
-## the synchronous native operation on this exact scene path.
-class SceneSnapshotLoader:
-	extends ResourceFormatLoader
 
-	var scene_path: String
-	var packed_scene: PackedScene
-	var registered := false
-	var consulted := false
-	var served := false
-
-	func _init(path: String, packed: PackedScene) -> void:
-		scene_path = path
-		packed_scene = packed
-
-	func _get_recognized_extensions() -> PackedStringArray:
-		registered = true
-		return PackedStringArray()
-
-	func _recognize_path(path: String, type: StringName) -> bool:
-		if (
-			path == scene_path
-			and (type.is_empty() or type == &"PackedScene")
-			and OS.get_thread_caller_id() == OS.get_main_thread_id()
-		):
-			consulted = true
-			return true
-		return false
-
-	func _load(_path: String, _original_path: String, _use_sub_threads: bool, cache_mode: int) -> Variant:
-		if cache_mode == ResourceLoader.CACHE_MODE_REPLACE:
-			served = true
-			return packed_scene
-		return ERR_UNAVAILABLE
-
-	func run(operation: Callable) -> bool:
-		ResourceLoader.add_resource_format_loader(self, true)
-		# Registration returns void and fails if the loader table is full.
-		# Enumerating extensions visits every admitted loader without remapping.
-		ResourceLoader.get_recognized_extensions_for_type("")
-		if not registered:
-			return false
-		# A resource remap may send the requested file to a different path.
-		# Require an exact match before opening, and remove the loader either way.
-		ResourceLoader.get_dependencies(scene_path)
-		if consulted:
-			operation.call()
-		ResourceLoader.remove_resource_format_loader(self)
-		return served
+static func start(connection: McpConnection, params: Dictionary, prepare: bool) -> Dictionary:
+	var validated := _validate_paths(params, prepare)
+	if validated.has("error"):
+		return validated
+	var request_id: String = params.get("_request_id", "")
+	if connection == null or request_id.is_empty() or not connection.is_inside_tree():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Call scene_manage(op='inherit') directly")
+	if ScriptWork.active_count(WORK_LABEL) > 0:
+		var busy := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "Another inherited scene operation is running. Retry shortly.")
+		busy["error"]["data"] = {"retryable": true}
+		return busy
+	_finish(connection, request_id, validated, prepare)
+	return McpDispatcher.DEFERRED_RESPONSE
 
 
-## Open and save a native inherited scene from a saved .tscn base.
-static func start(connection: McpConnection, params: Dictionary) -> Dictionary:
+static func _validate_paths(params: Dictionary, prepare: bool) -> Dictionary:
 	var base_path = params.get("base_path", "")
 	var path = params.get("path", "")
 	if not base_path is String or not path is String:
@@ -77,179 +43,263 @@ static func start(connection: McpConnection, params: Dictionary) -> Dictionary:
 			"base_path and path must end in .tscn (got %s and %s)" % [base_path, path])
 	if not FileAccess.file_exists(base_path):
 		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Saved base scene not found: %s" % base_path)
-	var destination_err := _inherit_destination_error(path)
-	if not destination_err.is_empty():
-		return destination_err
-
-	var request_id: String = params.get("_request_id", "")
-	if connection == null or request_id.is_empty() or not connection.is_inside_tree():
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Call scene_manage(op='inherit') directly to wait for the new scene tab")
-	if ScriptWork.active_count("inherit_scene") > 0:
-		var busy := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "An inherited scene is already being created. Retry shortly.")
-		busy["error"]["data"] = {"retryable": true}
-		return busy
-	_finish_inherit_scene_deferred(connection, request_id, base_path, path)
-	return McpDispatcher.DEFERRED_RESPONSE
+	var paths := {"base_path": base_path, "path": path}
+	if prepare:
+		var destination_err := SceneJob._destination_error(path)
+		if not destination_err.is_empty():
+			return destination_err
+		var stage = params.get("stage_path", "")
+		if not stage is String or not SceneJob._valid_stage_path(stage, path.get_base_dir()):
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid inherited scene staging location")
+		paths["stage_path"] = stage
+	return paths
 
 
-static func _inherit_destination_error(path: String) -> Dictionary:
-	var parent := path.get_base_dir()
-	var directory := DirAccess.open(parent)
-	if directory == null:
-		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Destination directory is missing or inaccessible: %s" % parent)
-	var filename := path.get_file()
-	if (
-		directory.file_exists(filename)
-		or directory.dir_exists(filename)
-		or directory.is_link(filename)
-		or EditorInterface.get_open_scenes().has(path)
-	):
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Destination already exists: %s" % path)
-	return {}
-
-
-static func _inherit_request_pending(connection: McpConnection, request_id: String) -> bool:
-	return is_instance_valid(connection) and connection.dispatcher != null and connection.dispatcher.has_pending_deferred_response(request_id)
-
-
-static func _finish_inherit_scene_deferred(connection: McpConnection, request_id: String, base_path: String, path: String) -> void:
-	var work := ScriptWork.begin("inherit_scene")
-	var result := await _inherit_scene_in_editor(connection, request_id, base_path, path)
+static func _finish(connection: McpConnection, request_id: String, paths: Dictionary, prepare: bool) -> void:
+	var work := ScriptWork.begin(WORK_LABEL)
+	var job := SceneJob.new(connection, request_id, paths, prepare)
+	# The dispatcher registers the deferred reply before work can start.
+	await job.tree.process_frame
+	if job.pending():
+		var result := await job.run()
+		job.reply(result)
 	ScriptWork.finish(work)
-	if not result.is_empty() and _inherit_request_pending(connection, request_id):
+
+
+class SceneJob:
+	extends RefCounted
+
+	var connection: McpConnection
+	var request_id: String
+	var tree: SceneTree
+	var paths: Dictionary
+	var prepare: bool
+	var deadline: int
+	var replied := false
+
+	func _init(peer: McpConnection, request: String, validated: Dictionary, is_prepare: bool) -> void:
+		connection = peer
+		request_id = request
+		tree = peer.get_tree()
+		paths = validated
+		prepare = is_prepare
+		deadline = Time.get_ticks_msec() + SETTLE_MAX_MSEC
+
+	func pending() -> bool:
+		return (not replied and is_instance_valid(connection) and connection.dispatcher != null
+			and connection.dispatcher.has_pending_deferred_response(request_id))
+
+	func reply(result: Dictionary) -> void:
+		if not pending() or result.is_empty():
+			return
+		if not prepare and result.has("error"):
+			var details: Dictionary = result.error.get("data", {})
+			details.merge({
+				"disk_committed": true,
+				"tab_opened": EditorInterface.get_open_scenes().has(paths.path),
+				"base_path": paths.base_path,
+				"path": paths.path,
+			})
+			result.error["data"] = details
 		connection.send_deferred_response(request_id, result)
+		replied = true
 
+	func run() -> Dictionary:
+		var error := _check_editor()
+		if not error.is_empty():
+			return error
+		if prepare:
+			return await _prepare_scene()
+		return await _open_scene()
 
-static func _inherit_scene_in_editor(connection: McpConnection, request_id: String, base_path: String, path: String) -> Dictionary:
-	var deadline := Time.get_ticks_msec() + SETTLE_MAX_MSEC
-	var tree := connection.get_tree()
-	# Register the deferred request before opening any tab. No editor operation
-	# starts after the command loses its dispatcher entry.
-	await tree.process_frame
-	if not _inherit_request_pending(connection, request_id):
-		return {}
-	var err := _inherit_editor_error(deadline)
-	if not err.is_empty():
-		return err
-	err = _inherit_destination_error(path)
-	if not err.is_empty():
-		return err
-	if not FileAccess.file_exists(base_path):
-		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Saved base scene not found: %s" % base_path)
-	var packed := ResourceLoader.load(base_path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
-	if packed == null or not packed.can_instantiate():
-		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Could not load a saved PackedScene from %s" % base_path)
-	if not _inherit_request_pending(connection, request_id):
-		return {}
-	err = _inherit_editor_error(deadline)
-	if not err.is_empty():
-		return err
+	func _prepare_scene() -> Dictionary:
+		var base_path: String = paths.base_path
+		var path: String = paths.path
+		var stage: String = paths.stage_path
+		var loaded := await _wait_for_load(base_path, ResourceLoader.CACHE_MODE_IGNORE, base_path)
+		if not loaded.get("ready", false):
+			return loaded.get("result", {})
+		var base := ResourceLoader.load_threaded_get(base_path) as PackedScene
+		if base == null or not base.can_instantiate():
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Could not load a saved PackedScene from %s" % base_path)
+		var error := _check_editor()
+		if not error.is_empty():
+			return error
+		error = _destination_error(path)
+		if not error.is_empty():
+			return error
+		if not _valid_stage_path(stage, path.get_base_dir()):
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid inherited scene staging location")
+		var written := _write_stage(stage, base_path, String(base.get_state().get_node_name(0)))
+		if written.has("error"):
+			return written
+		loaded = await _wait_for_load(stage, ResourceLoader.CACHE_MODE_IGNORE, path)
+		if not loaded.get("ready", false):
+			return loaded.get("result", {})
+		var staged := ResourceLoader.load_threaded_get(stage) as PackedScene
+		if _packed_base_path(staged) != base_path or FileAccess.get_sha256(stage) != written.stage_sha256:
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not verify that the staged scene for %s inherits %s" % [path, base_path])
+		return {"data": paths.merged(written)}
 
-	var inherited_id := _open_inherited_tab(connection, base_path, packed)
-	if inherited_id == 0:
-		return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "Editor did not open a new inherited tab from the saved %s" % base_path)
-	# Wait for the editor to settle, then require this exact untitled root.
-	await tree.process_frame
-	if not _inherit_request_pending(connection, request_id):
-		return {}
-	err = _inherit_editor_error(deadline)
-	if not err.is_empty():
-		return err
-	return _save_inherited_tab(connection, request_id, base_path, path, inherited_id, deadline)
+	func _open_scene() -> Dictionary:
+		var path: String = paths.path
+		var base_path: String = paths.base_path
+		if not FileAccess.file_exists(path):
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Published scene not found: %s" % path)
+		# Verify the actual file before any tab change. Only the destination state
+		# is used here, so a shallow cache-ignore load is sufficient.
+		var loaded := await _wait_for_load(path, ResourceLoader.CACHE_MODE_IGNORE, path)
+		if not loaded.get("ready", false):
+			return loaded.get("result", {})
+		var saved := ResourceLoader.load_threaded_get(path) as PackedScene
+		if _packed_base_path(saved) != base_path:
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not verify that %s on disk inherits %s" % [path, base_path])
+		# An ordinary cached destination is the identity witness. EditorNode
+		# adopts the state of its actual input into this cached PackedScene.
+		loaded = await _wait_for_load(path, ResourceLoader.CACHE_MODE_REUSE, path)
+		if not loaded.get("ready", false):
+			return loaded.get("result", {})
+		var anchor := ResourceLoader.load_threaded_get(path) as PackedScene
+		if anchor == null:
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not cache published scene %s" % path)
+		var before := anchor.get_state()
+		loaded = await _wait_for_load(path, ResourceLoader.CACHE_MODE_IGNORE_DEEP, path)
+		if not loaded.get("ready", false):
+			return loaded.get("result", {})
+		# Keep the fresh destination token held while opening. Godot 4.7's
+		# ordinary editor load joins the settled exact-path task. Verify that
+		# identity after draining our token, so a competing load fails closed.
+		var error := _check_editor()
+		var opened := 0
+		if error.is_empty() and not EditorInterface.get_open_scenes().has(path):
+			opened = _open_published_tab(connection, path)
+		var fresh := ResourceLoader.load_threaded_get(path) as PackedScene
+		if not error.is_empty():
+			return error
+		if (opened == 0 or _packed_base_path(fresh) != base_path or ResourceLoader.get_cached_ref(path) != anchor
+			or anchor.get_state() != fresh.get_state() or anchor.get_state() == before):
+			return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "Scene %s was created, but the editor could not verify that it opened from disk" % path)
+		return {"data": {
+			"base_path": base_path,
+			"path": path,
+			"undoable": false,
+			"reason": "Creating a scene file cannot be undone via editor undo",
+		}}
 
-
-static func _open_inherited_tab(connection: McpConnection, base_path: String, packed: PackedScene) -> int:
-	# The native open selects its new root synchronously. Never search among
-	# untitled tabs, which may already include other scenes from this base.
-	var root := EditorInterface.get_edited_scene_root()
-	var previous_id := root.get_instance_id() if root != null else 0
-	var loader := SceneSnapshotLoader.new(base_path, packed)
-	connection.pause()
-	var served := loader.run(EditorInterface.open_scene_from_path.bind(base_path, true))
-	connection.resume()
-	root = EditorInterface.get_edited_scene_root()
-	if served and root != null and root.get_instance_id() != previous_id and root.scene_file_path.is_empty():
-		return root.get_instance_id()
-	return 0
-
-
-static func _save_inherited_tab(connection: McpConnection, request_id: String, base_path: String, path: String, inherited_id: int, deadline: int) -> Dictionary:
-	var root := _matching_root(inherited_id, "")
-	if root == null:
-		return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "Editor switched away from the new inherited tab for %s before it could be saved" % base_path)
-	var inherited := PackedScene.new()
-	var pack_error := inherited.pack(root)
-	if pack_error != OK:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not verify inherited tab for %s (%s)" % [base_path, error_string(pack_error)])
-	if _packed_base_path(inherited) != base_path:
-		return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "New scene tab does not inherit %s" % base_path)
-	if not _inherit_request_pending(connection, request_id):
-		return {}
-	var err := _inherit_editor_error(deadline)
-	if not err.is_empty():
-		return err
-	err = _inherit_destination_error(path)
-	if not err.is_empty():
-		return err
-	if _matching_root(inherited_id, "") == null:
-		return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "Editor switched away from the new inherited tab for %s before it could be saved" % base_path)
-
-	connection.pause()
-	EditorInterface.save_scene_as(path, false)
-	connection.resume()
-	if _matching_root(inherited_id, path) == null or not FileAccess.file_exists(path):
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Editor did not save the inherited tab to %s" % path)
-	# Save As returns void. Read the destination file itself to verify that
-	# the persisted scene still links directly to the requested source.
-	var saved := ResourceLoader.load(path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE_DEEP) as PackedScene
-	if _packed_base_path(saved) != base_path:
-		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not verify that %s on disk inherits %s" % [path, base_path])
-	# Save As can update the root's path without updating the editor tab's
-	# cached path. Reopen the verified file in its tab so get_roots and close
-	# can find it by path immediately.
-	if not EditorInterface.get_open_scenes().has(path):
-		if not _inherit_request_pending(connection, request_id):
+	## A ready result leaves exactly one owned token for the caller to drain.
+	## On timeout or disconnect, keep draining without editor effects until
+	## the worker finishes. Never block the editor on load_threaded_get().
+	func _wait_for_load(path: String, cache_mode: ResourceLoader.CacheMode, reported_path: String) -> Dictionary:
+		if not pending():
 			return {}
-		if _matching_root(inherited_id, path) == null:
-			return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "Editor switched away after saving %s" % path)
-		# Reuse the saved snapshot during the native reload so it instantiates
-		# the saved base rather than resolving a dirty base through the cache.
-		var loader := SceneSnapshotLoader.new(path, saved)
+		if ResourceLoader.load_threaded_get_status(path) != ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+			var busy := ErrorCodes.make(ErrorCodes.EDITOR_NOT_READY, "A resource load is already pending for %s" % reported_path)
+			busy["error"]["data"] = {"retryable": true}
+			return {"result": busy}
+		var error := ResourceLoader.load_threaded_request(path, "PackedScene", false, cache_mode)
+		if error != OK:
+			return {"result": ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Could not load %s (%s)" % [reported_path, error_string(error)])}
+		var status := ResourceLoader.load_threaded_get_status(path)
+		while status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			if Time.get_ticks_msec() >= deadline:
+				reply(_timeout_error())
+			await tree.process_frame
+			status = ResourceLoader.load_threaded_get_status(path)
+		if status != ResourceLoader.THREAD_LOAD_LOADED or not pending() or Time.get_ticks_msec() >= deadline:
+			if status != ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+				ResourceLoader.load_threaded_get(path)
+			if not pending():
+				return {}
+			if Time.get_ticks_msec() >= deadline:
+				return {"result": _timeout_error()}
+			return {"result": ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Could not load a saved PackedScene for %s" % reported_path)}
+		return {"ready": true}
+
+	func _check_editor() -> Dictionary:
+		if Time.get_ticks_msec() >= deadline:
+			return _timeout_error()
+		match McpConnection.get_readiness():
+			"playing":
+				return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_PLAYING, "Stop the game before creating an inherited scene", false)
+			"importing":
+				return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_IMPORTING, "Wait for the editor import before creating an inherited scene", true)
+		return {}
+
+	func _timeout_error() -> Dictionary:
+		return ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT, "Could not load the scene for %s before the editor deadline" % paths.path)
+
+
+	static func _valid_stage_path(stage: String, parent: String) -> bool:
+		if McpPathValidator.path_error(stage, "stage_path", true) != null or stage != stage.simplify_path():
+			return false
+		var directory := stage.get_base_dir()
+		if directory.get_base_dir() != parent or stage.get_file() != STAGE_FILE:
+			return false
+		var directory_name := directory.get_file()
+		if not directory_name.begins_with(STAGE_PREFIX):
+			return false
+		var suffix := directory_name.trim_prefix(STAGE_PREFIX)
+		if suffix.length() != 8 or not ("_" + suffix).is_valid_identifier():
+			return false
+		var parent_access := DirAccess.open(parent)
+		return parent_access != null and not parent_access.is_link(directory_name) and parent_access.dir_exists(directory_name)
+
+
+	static func _destination_error(path: String) -> Dictionary:
+		var directory := DirAccess.open(path.get_base_dir())
+		if directory == null:
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Destination directory is missing or inaccessible: %s" % path.get_base_dir())
+		var filename := path.get_file()
+		if (directory.file_exists(filename) or directory.dir_exists(filename)
+			or directory.is_link(filename) or EditorInterface.get_open_scenes().has(path)):
+			var error := ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Destination already exists: %s" % path)
+			error["error"]["data"] = {"reason": "destination_exists"}
+			return error
+		return {}
+
+
+	static func _write_stage(stage: String, base_path: String, root_name: String) -> Dictionary:
+		var directory := DirAccess.open(stage.get_base_dir())
+		if (directory == null or directory.file_exists(STAGE_FILE) or directory.dir_exists(STAGE_FILE)
+			or directory.is_link(STAGE_FILE)):
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "The inherited scene staging slot is unavailable")
+		var file := FileAccess.open(stage, FileAccess.WRITE)
+		if file == null:
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not stage the inherited scene: %s" % error_string(FileAccess.get_open_error()))
+		# This is Godot's native inherited-root form. The editor supplies the base's
+		# saved root name and Godot's own Variant string escaping for both values.
+		var uid := ResourceUID.id_to_text(ResourceUID.create_id())
+		var dependency_uid := ResourceLoader.get_resource_uid(base_path)
+		var uid_field := ""
+		if ResourceUID.has_id(dependency_uid) and ResourceUID.get_id_path(dependency_uid) == base_path:
+			uid_field = " uid=" + var_to_str(ResourceUID.id_to_text(dependency_uid))
+		var text := "[gd_scene format=3 uid=%s]\n\n[ext_resource type=\"PackedScene\"%s path=%s id=\"1\"]\n\n[node name=%s instance=ExtResource(\"1\")]\n" % [
+			var_to_str(uid), uid_field, var_to_str(base_path), var_to_str(root_name),
+		]
+		file.store_string(text)
+		file.flush()
+		var error := file.get_error()
+		file.close()
+		if error != OK:
+			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not write the staged inherited scene: %s" % error_string(error))
+		return {"stage_sha256": text.sha256_text()}
+
+
+	static func _open_published_tab(connection: McpConnection, path: String) -> int:
+		var root := EditorInterface.get_edited_scene_root()
+		var previous_id := root.get_instance_id() if root != null else 0
 		connection.pause()
-		var served := loader.run(EditorInterface.reload_scene_from_path.bind(path))
+		EditorInterface.open_scene_from_path(path)
 		connection.resume()
 		root = EditorInterface.get_edited_scene_root()
-		if not served or root == null or root.scene_file_path != path or not EditorInterface.get_open_scenes().has(path):
-			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Saved %s, but the editor did not reload its scene tab" % path)
-	return {"data": {
-		"base_path": base_path,
-		"path": path,
-		"undoable": false,
-		"reason": "Creating a scene file cannot be undone via editor undo",
-	}}
+		if root != null and root.get_instance_id() != previous_id and root.scene_file_path == path and EditorInterface.get_open_scenes().has(path):
+			return root.get_instance_id()
+		return 0
 
 
-static func _matching_root(instance_id: int, scene_path: String) -> Node:
-	var root := EditorInterface.get_edited_scene_root()
-	if root != null and root.get_instance_id() == instance_id and root.scene_file_path == scene_path:
-		return root
-	return null
-
-
-static func _inherit_editor_error(deadline: int) -> Dictionary:
-	if Time.get_ticks_msec() >= deadline:
-		return ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT, "The inherited scene tab did not settle before the save deadline")
-	match McpConnection.get_readiness():
-		"playing":
-			return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_PLAYING, "Stop the game before creating an inherited scene", false)
-		"importing":
-			return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_IMPORTING, "Wait for the editor import before creating an inherited scene", true)
-	return {}
-
-
-static func _packed_base_path(packed: PackedScene) -> String:
-	if packed != null:
-		var base := packed.get_state().get_base_scene_state()
-		if base != null:
-			return base.get_path()
-	return ""
+	static func _packed_base_path(packed: PackedScene) -> String:
+		if packed != null:
+			var base := packed.get_state().get_base_scene_state()
+			if base != null:
+				return base.get_path()
+		return ""
