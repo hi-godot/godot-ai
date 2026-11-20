@@ -34,6 +34,9 @@ def clean_env(monkeypatch) -> None:
         "GODOT_AI_TELEMETRY_ALLOW_INSECURE_HTTP",
     ):
         monkeypatch.delenv(name, raising=False)
+    ## Fork policy: telemetry is opt-in, so clean_env opts in for the
+    ## enabled-path tests. test_default_is_disabled_without_opt_in unsets it.
+    monkeypatch.setenv("GODOT_AI_ENABLE_TELEMETRY", "true")
 
 
 # --- hash_session_id -----------------------------------------------------
@@ -90,11 +93,25 @@ class TestHashSessionId:
 
 
 class TestTelemetryConfig:
+    def test_default_is_disabled_without_opt_in(
+        self, monkeypatch, clean_env, isolated_data_dir
+    ) -> None:
+        """Fork policy: with no env vars set, nothing is sent."""
+        monkeypatch.delenv("GODOT_AI_ENABLE_TELEMETRY", raising=False)
+        config = tel.TelemetryConfig()
+        assert config.enabled is False
+        assert config.live_enabled() is False
+        assert tel.live_telemetry_enabled() is False
+
+    def test_disable_wins_over_enable(self, monkeypatch, clean_env, isolated_data_dir) -> None:
+        monkeypatch.setenv("GODOT_AI_DISABLE_TELEMETRY", "true")
+        assert tel.TelemetryConfig().enabled is False
+
     def test_default_enabled_uses_baked_in_endpoint(
         self, monkeypatch, clean_env, isolated_data_dir
     ) -> None:
-        """A fresh install with no env overrides should resolve to the
-        baked-in production endpoint so the binary actually reports.
+        """An opted-in install with no endpoint override should resolve to
+        the baked-in production endpoint so the binary actually reports.
         Regression test for "telemetry on by default" — empty default
         endpoint used to mean zero traffic even when enabled."""
         monkeypatch.delenv("GODOT_AI_TELEMETRY_ENDPOINT", raising=False)

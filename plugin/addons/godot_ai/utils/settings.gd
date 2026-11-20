@@ -107,14 +107,16 @@ static func client_scope() -> String:
 ## Returns true if telemetry should be active, checking in priority order:
 ##   1. GODOT_AI_DISABLE_TELEMETRY / DISABLE_TELEMETRY env vars
 ##   2. The godot_ai/telemetry_enabled EditorSetting written by the dock UI
-## Defaults to true when neither source has set a preference.
+## Defaults to false (fork policy) when neither source has set a preference.
 static func telemetry_enabled() -> bool:
 	if env_truthy("GODOT_AI_DISABLE_TELEMETRY") or env_truthy("DISABLE_TELEMETRY"):
 		return false
 	var es := EditorInterface.get_editor_settings()
 	if es != null and es.has_setting(SETTING_TELEMETRY_ENABLED):
 		return bool(es.get_setting(SETTING_TELEMETRY_ENABLED))
-	return true
+	## Fork policy: telemetry is opt-in. Off unless the dock toggle or
+	## GODOT_AI_ENABLE_TELEMETRY turns it on.
+	return env_truthy("GODOT_AI_ENABLE_TELEMETRY")
 
 
 ## Returns whether MCP log lines should echo to the Godot console. Read at

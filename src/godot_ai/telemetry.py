@@ -221,10 +221,9 @@ def live_telemetry_enabled() -> bool:
 class TelemetryConfig:
     """Telemetry configuration resolved from env vars at construction time.
 
-    Telemetry is **on by default**: a fresh install posts anonymous
-    usage events to ``DEFAULT_ENDPOINT`` until the user sets
-    ``GODOT_AI_DISABLE_TELEMETRY=true`` (or the cross-tool
-    ``DISABLE_TELEMETRY=true``). ``GODOT_AI_TELEMETRY_ENDPOINT``
+    Telemetry is **off by default** in this fork: nothing is sent unless
+    ``GODOT_AI_ENABLE_TELEMETRY=true`` is set. ``GODOT_AI_DISABLE_TELEMETRY``
+    (or the cross-tool ``DISABLE_TELEMETRY``) still forces it off. ``GODOT_AI_TELEMETRY_ENDPOINT``
     overrides the default for self-hosters and during smoke testing.
 
     Privacy posture matches the docs in ``docs/TELEMETRY.md``: only
@@ -288,7 +287,12 @@ class TelemetryConfig:
 
     @classmethod
     def _is_disabled_via_env(cls) -> bool:
-        return cls._env_truthy("GODOT_AI_DISABLE_TELEMETRY") or cls._env_truthy("DISABLE_TELEMETRY")
+        ## Fork policy: telemetry is opt-in. Nothing is sent unless
+        ## GODOT_AI_ENABLE_TELEMETRY is truthy; the upstream opt-out vars
+        ## still win over it.
+        if cls._env_truthy("GODOT_AI_DISABLE_TELEMETRY") or cls._env_truthy("DISABLE_TELEMETRY"):
+            return True
+        return not cls._env_truthy("GODOT_AI_ENABLE_TELEMETRY")
 
     def _resolve_endpoint(self) -> str:
         ## Resolution order: env override -> baked-in default. Both go

@@ -1,0 +1,66 @@
+## Fork only: once a week, merge hi-godot/godot-ai main into a sync branch
+## and open (or refresh) a pull request so upstream fixes keep flowing in.
+## Requires: Actions enabled on the fork, and Settings > Actions > General >
+## "Allow GitHub Actions to create and approve pull requests" turned on.
+name: Fork sync from upstream
+
+on:
+  schedule:
+    - cron: "0 0 * * 1" # Mondays 00:00 UTC (09:00 KST)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: fork-sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository != 'hi-godot/godot-ai'
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM: https://github.com/hi-godot/godot-ai.git
+      SYNC_BRANCH: sync/upstream
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream main into the sync branch
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM"
+          git fetch --no-tags upstream main
+          base="${{ github.event.repository.default_branch }}"
+          if git merge-base --is-ancestor upstream/main "origin/$base"; then
+            echo "Already up to date with upstream."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git checkout -B "$SYNC_BRANCH" "origin/$base"
+          if ! git merge --no-edit upstream/main; then
+            echo "::error::Merge conflict with upstream. Resolve locally: git fetch upstream && git merge upstream/main"
+            git merge --abort
+            exit 1
+          fi
+          git push --force-with-lease origin "$SYNC_BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the sync pull request
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          base="${{ github.event.repository.default_branch }}"
+          count=$(git rev-list --count "origin/$base..upstream/main")
+          if gh pr view "$SYNC_BRANCH" --json state -q .state 2>/dev/null | grep -q OPEN; then
+            echo "Sync PR already open; branch updated."
+          else
+            gh pr create --base "$base" --head "$SYNC_BRANCH" \
+              --title "Sync from upstream hi-godot/godot-ai ($count commits)" \
+              --body "Automated weekly merge of upstream \`main\`. Check CI, then merge."
+          fi

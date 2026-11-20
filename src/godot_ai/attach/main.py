@@ -39,6 +39,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable anonymous telemetry in this bridge and any backend it spawns",
     )
+    parser.add_argument(
+        "--enable-telemetry",
+        action="store_true",
+        help="Opt in to anonymous telemetry (off by default in this fork)",
+    )
     return parser
 
 
@@ -89,6 +94,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         ## as an argv flag and the bridge translates it back into the env
         ## contract telemetry.py already honors.
         os.environ["GODOT_AI_DISABLE_TELEMETRY"] = "true"
+    elif args.enable_telemetry:
+        os.environ["GODOT_AI_ENABLE_TELEMETRY"] = "true"
     try:
         asyncio.run(run_attach(args.port, args.ws_port, exclude_domains))
     except AttachStartupError as exc:

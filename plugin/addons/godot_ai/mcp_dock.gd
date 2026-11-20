@@ -1167,7 +1167,7 @@ func _load_telemetry_setting() -> void:
 		if es != null and es.has_setting(McpSettings.SETTING_TELEMETRY_ENABLED):
 			enabled = bool(es.get_setting(McpSettings.SETTING_TELEMETRY_ENABLED))
 		else:
-			enabled = true
+			enabled = false
 
 	_telemetry_pending_enabled = enabled
 	_telemetry_saved_enabled = enabled
