@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from godot_ai.handlers._readiness import require_writable_async
+from godot_ai.handlers._wav_clip import write_wav_clip
 from godot_ai.runtime.direct import DirectRuntime
 
 
@@ -77,6 +78,29 @@ async def audio_list(
     return await runtime.send_command(
         "audio_list",
         {"root": root, "include_duration": include_duration},
+    )
+
+
+async def audio_wav_clip(
+    runtime: DirectRuntime,
+    source_path: str,
+    path: str,
+    start_seconds: float,
+    end_seconds: float,
+    fade_in_seconds: float = 0.0,
+    fade_out_seconds: float = 0.0,
+) -> dict:
+    session = runtime.get_active_session()
+    await require_writable_async(runtime)
+    return await write_wav_clip(
+        runtime,
+        session,
+        source_path,
+        path,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fade_in_seconds=fade_in_seconds,
+        fade_out_seconds=fade_out_seconds,
     )
 
 

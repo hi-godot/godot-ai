@@ -65,7 +65,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "                   visual_shader_edit\n"
     "  audio_manage     player_create, player_set_stream, player_set_playback,\n"
     "                   play, stop, list, bus_list/add/remove/set,\n"
-    "                   bus_effect_add/set/remove, bus_layout_save\n"
+    "                   bus_effect_add/set/remove, bus_layout_save, wav_clip\n"
     "  particle_manage  create, set_main, set_process, set_draw_pass, restart,\n"
     "                   get, apply_preset\n"
     "  camera_manage    create, configure, set_limits_2d, set_damping_2d,\n"
