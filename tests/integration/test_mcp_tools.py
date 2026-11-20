@@ -5860,6 +5860,54 @@ class TestAnimationAddMethodTrackTool:
         assert result.data["undoable"] is True
 
 
+class TestAnimationAddAudioTrackTool:
+    @pytest.mark.parametrize("stringified", [False, True], ids=["array", "json-string"])
+    async def test_add_audio_track_routes_keyframes(self, mcp_stack, stringified):
+        client, plugin = mcp_stack
+        params = {
+            "player_path": "/Main/Animator/AP",
+            "animation_name": "movement",
+            "target_node_path": "../Speaker",
+            "keyframes": [
+                {"time": 0, "stream_path": "res://step.wav"},
+                {
+                    "time": 1.5,
+                    "stream_path": "res://land.ogg",
+                    "start_offset": 0.2,
+                    "end_offset": 0.1,
+                },
+            ],
+        }
+        response = {
+            "player_path": "/Main/Animator/AP",
+            "animation_name": "movement",
+            "target_node_path": "../Speaker",
+            "keyframe_count": 2,
+            "undoable": True,
+        }
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "animation_add_audio_track"
+            assert cmd["params"] == params
+            await plugin.send_response(cmd["request_id"], response)
+
+        arguments = dict(params)
+        if stringified:
+            arguments["keyframes"] = json.dumps(params["keyframes"])
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "animation_manage",
+            {
+                "op": "add_audio_track",
+                "params": arguments,
+                "session_id": plugin.session_id,
+            },
+        )
+        await task
+        assert result.data == response
+
+
 class TestAnimationSetAutoplayTool:
     async def test_set_autoplay(self, mcp_stack):
         client, plugin = mcp_stack

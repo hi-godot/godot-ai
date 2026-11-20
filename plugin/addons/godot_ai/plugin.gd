@@ -500,6 +500,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("animation_create", "animation", &"create_animation")
 	_dispatcher.register_lazy("animation_add_property_track", "animation", &"add_property_track")
 	_dispatcher.register_lazy("animation_add_method_track", "animation", &"add_method_track")
+	_dispatcher.register_lazy("animation_add_audio_track", "animation", &"add_audio_track")
 	_dispatcher.register_lazy("animation_set_autoplay", "animation", &"set_autoplay")
 	_dispatcher.register_lazy("animation_play", "animation", &"play")
 	_dispatcher.register_lazy("animation_stop", "animation", &"stop")

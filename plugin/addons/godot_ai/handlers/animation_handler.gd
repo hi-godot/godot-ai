@@ -390,6 +390,131 @@ func _do_add_method_track(anim: Animation, target_path: String, keyframes: Array
 
 
 # ============================================================================
+# animation_add_audio_track
+# ============================================================================
+
+func add_audio_track(params: Dictionary) -> Dictionary:
+	var player_path = params.get("player_path", "")
+	var anim_name = params.get("animation_name", "")
+	var target_path = params.get("target_node_path", "")
+	var keyframes = params.get("keyframes", [])
+	if not (player_path is String and anim_name is String and target_path is String):
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "player_path, animation_name and target_node_path must be strings")
+	for param: String in ["player_path", "animation_name", "target_node_path"]:
+		if params.get(param, "").is_empty():
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param)
+	var target_node_path := NodePath(target_path)
+	if target_node_path.is_absolute() or target_path.contains(":"):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"target_node_path must be a relative node path from AnimationPlayer.root_node (got '%s')" % target_path)
+	if not keyframes is Array or keyframes.is_empty():
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "keyframes must be a non-empty array")
+
+	var resolved := _resolve_player(player_path)
+	if resolved.has("error"):
+		return resolved
+	var player: AnimationPlayer = resolved.player
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var anim_resolved := _resolve_animation(player, anim_name)
+	if anim_resolved.has("error"):
+		return anim_resolved
+	var anim: Animation = anim_resolved.animation
+	var animation_root := player.get_node_or_null(player.root_node)
+	if McpScenePath.from_node(animation_root, scene_root).is_empty():
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
+			"AnimationPlayer.root_node '%s' at %s must resolve inside the edited scene" % [player.root_node, player_path])
+	var target := animation_root.get_node_or_null(target_node_path)
+	if McpScenePath.from_node(target, scene_root).is_empty():
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND,
+			"target_node_path '%s' must resolve inside the edited scene relative to AnimationPlayer.root_node" % target_path)
+	if not (target is AudioStreamPlayer or target is AudioStreamPlayer2D or target is AudioStreamPlayer3D):
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE,
+			"target_node_path '%s' is not an AudioStreamPlayer, AudioStreamPlayer2D or AudioStreamPlayer3D (got %s)" % [target_path, target.get_class()])
+	var track_path := animation_root.get_path_to(target)
+	for i in anim.get_track_count():
+		if anim.track_get_type(i) == Animation.TYPE_AUDIO and animation_root.get_node_or_null(anim.track_get_path(i)) == target:
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+				"Animation '%s' already has an audio track for '%s'" % [anim_name, track_path])
+
+	var prepared := _prepare_audio_track(track_path, keyframes)
+	if prepared.has("error"):
+		return prepared
+	if EditorInterface.get_edited_scene_root() != scene_root:
+		return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "The edited scene changed while loading audio keyframes")
+	var scratch: Animation = prepared.animation
+	_create_scene_pinned_action("MCP: Add audio track %s to %s" % [track_path, anim_name])
+	_undo_redo.add_do_method(scratch, "copy_track", 0, anim)
+	_undo_redo.add_do_reference(scratch)
+	_undo_redo.add_undo_method(self, "_undo_remove_track_by_path", anim, String(track_path), Animation.TYPE_AUDIO)
+	_undo_redo.commit_action()
+	return {"data": {
+		"player_path": player_path,
+		"animation_name": anim_name,
+		"target_node_path": String(track_path),
+		"keyframe_count": scratch.track_get_key_count(0),
+		"undoable": true,
+	}}
+
+
+static func _prepare_audio_track(track_path: NodePath, keyframes: Array) -> Dictionary:
+	var frames: Array[Dictionary] = []
+	var streams := {}
+	var single_precision := not OS.has_feature("double")
+	for i in keyframes.size():
+		var key = keyframes[i]
+		var prefix := "keyframes[%d]" % i
+		if not key is Dictionary:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a dictionary" % prefix)
+		if not key.has("time"):
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "%s.time is required" % prefix)
+		var frame := {"input_index": i}
+		for field: String in ["time", "start_offset", "end_offset"]:
+			var value = key.get(field, 0.0)
+			if not (value is int or value is float):
+				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s.%s must be a number" % [prefix, field])
+			var number := float(value)
+			if not is_finite(number) or number < 0.0:
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "%s.%s must be finite and nonnegative (got %s)" % [prefix, field, number])
+			# Godot stores offsets and serializes audio key times as real_t.
+			# Build the track at that precision so saving cannot collapse its keys.
+			var stored: float = PackedFloat32Array([number])[0] if single_precision else number
+			if not is_finite(stored) or (number > 0.0 and stored == 0.0):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "%s.%s is outside Godot's audio track precision (got %s)" % [prefix, field, number])
+			frame[field] = stored
+		var stream_path = key.get("stream_path", "")
+		if not stream_path is String:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s.stream_path must be a string" % prefix)
+		var path_error = McpPathValidator.path_error(stream_path, prefix + ".stream_path")
+		if path_error != null:
+			return path_error
+		if not streams.has(stream_path):
+			if not FileAccess.file_exists(stream_path) or not ResourceLoader.exists(stream_path):
+				return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "%s AudioStream not found: %s" % [prefix, stream_path])
+			var stream := ResourceLoader.load(stream_path)
+			if stream == null:
+				return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "%s could not load AudioStream: %s" % [prefix, stream_path])
+			if not stream is AudioStream:
+				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s resource at %s is not an AudioStream (got %s)" % [prefix, stream_path, stream.get_class()])
+			streams[stream_path] = stream
+		frame["stream"] = streams[stream_path]
+		frames.append(frame)
+
+	# Use the same time order as copy_track. Native insertion can replace an
+	# existing key even for distinct times when they are approximately equal.
+	frames.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.time < b.time)
+	var scratch := Animation.new()
+	var track := scratch.add_track(Animation.TYPE_AUDIO)
+	scratch.track_set_path(track, track_path)
+	for i in frames.size():
+		var frame := frames[i]
+		var inserted := scratch.audio_track_insert_key(track, frame.time, frame.stream, frame.start_offset, frame.end_offset)
+		if inserted < 0 or scratch.track_get_key_count(track) != i + 1:
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
+				"keyframes[%d].time (%s) collides with another audio key in Godot" % [frame.input_index, frame.time])
+	return {"animation": scratch}
+
+
+# ============================================================================
 # animation_set_autoplay
 # ============================================================================
 

@@ -281,7 +281,7 @@ Calls take the form:
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
-| `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
+| `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `add_audio_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
 | `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
@@ -302,6 +302,18 @@ Calls take the form:
 | `navigation_manage` | `bake`, `path_get` |
 | `csg_manage` | `csg_create`, `csg_set_operation` |
 | `custom_manage` | `list`, `invoke` |
+
+`animation_manage(op="add_audio_track")` adds a native, undoable audio track to
+an existing animation. Pass `player_path`, `animation_name`, `target_node_path`,
+and a nonempty `keyframes` list with `time` and the `stream_path` of a saved
+`res://` AudioStream for each cue.
+Optional `start_offset` and `end_offset` trim the beginning and end of the stream
+and default to zero. Times and offsets are finite nonnegative seconds. Key times
+must be distinct at Godot's track precision. Pass `target_node_path` relative to
+the AnimationPlayer's `root_node`. The target must resolve to an `AudioStreamPlayer`,
+`AudioStreamPlayer2D`, or `AudioStreamPlayer3D` in the edited scene. An existing
+audio track for the same resolved target is refused before mutation. Use
+`animation_manage(op="get")` to inspect the stored audio keys.
 
 `resource_manage(op="physics_shape_generate")` keeps `shape_type="box"` as its default.
 Explicit `shape_type="auto"` chooses box, sphere, capsule or cylinder for the corresponding

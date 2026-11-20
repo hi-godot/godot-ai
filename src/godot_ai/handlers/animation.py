@@ -80,6 +80,25 @@ async def animation_add_method_track(
     )
 
 
+async def animation_add_audio_track(
+    runtime: DirectRuntime,
+    player_path: str,
+    animation_name: str,
+    target_node_path: str,
+    keyframes: list[dict],
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_add_audio_track",
+        {
+            "player_path": player_path,
+            "animation_name": animation_name,
+            "target_node_path": target_node_path,
+            "keyframes": keyframes,
+        },
+    )
+
+
 async def animation_set_autoplay(
     runtime: DirectRuntime,
     player_path: str,
