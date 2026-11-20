@@ -958,10 +958,12 @@ func _finalize_image(image: Image, source: String, max_resolution: int, use_hdr_
 func _get_visual_aabb(node: Node3D) -> AABB:
 	var geometry_bounds: Variant = null
 	var visual_bounds: Variant = null
-	var pending: Array[Node3D] = [node]
+	var world := node.get_world_3d()
+	var pending: Array[Node] = [node]
 	while not pending.is_empty():
-		var current: Node3D = pending.pop_back()
-		if current is VisualInstance3D and current.is_visible_in_tree():
+		var current: Node = pending.pop_back()
+		## A nested viewport can reuse the target world even under an isolated viewport.
+		if current is VisualInstance3D and current.is_visible_in_tree() and current.get_world_3d() == world:
 			var local_bounds: AABB = current.get_aabb()
 			if local_bounds.size != Vector3.ZERO:
 				var bounds: AABB = current.global_transform * local_bounds
@@ -969,9 +971,7 @@ func _get_visual_aabb(node: Node3D) -> AABB:
 					geometry_bounds = bounds if geometry_bounds == null else geometry_bounds.merge(bounds)
 				else:
 					visual_bounds = bounds if visual_bounds == null else visual_bounds.merge(bounds)
-		for child in current.get_children():
-			if child is Node3D:
-				pending.append(child)
+		pending.append_array(current.get_children())
 	if geometry_bounds != null:
 		return geometry_bounds
 	if visual_bounds != null:

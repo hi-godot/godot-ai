@@ -1123,6 +1123,66 @@ func test_issue1170_geometry_bounds_exclude_helper_volumes_and_empty_children() 
 	assert_eq(bounds.size, Vector3(2, 2, 2))
 
 
+func test_geometry_bounds_follow_mixed_node_descendants() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	root.position = Vector3(10, 0, 0)
+	var direct_mesh := MeshInstance3D.new()
+	direct_mesh.mesh = BoxMesh.new()
+	direct_mesh.mesh.size = Vector3(2, 2, 2)
+	root.add_child(direct_mesh)
+	var group := Node.new()
+	root.add_child(group)
+	var group_2d := Node2D.new()
+	group.add_child(group_2d)
+	var group_3d := Node3D.new()
+	group_3d.position = Vector3(3, 4, 5)
+	group_2d.add_child(group_3d)
+	var nested_mesh := MeshInstance3D.new()
+	nested_mesh.mesh = BoxMesh.new()
+	nested_mesh.mesh.size = Vector3(2, 4, 6)
+	nested_mesh.position = Vector3(1, 2, 3)
+	group_3d.add_child(nested_mesh)
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(3, -1, -1))
+	assert_eq(bounds.size, Vector3(8, 9, 12))
+
+
+func test_geometry_bounds_follow_effective_viewport_world() -> void:
+	var root := Node3D.new()
+	EditorInterface.get_base_control().get_tree().root.add_child(root)
+	var world := root.get_world_3d()
+	var shared_viewport := SubViewport.new()
+	root.add_child(shared_viewport)
+	var shared_mesh := MeshInstance3D.new()
+	shared_mesh.mesh = BoxMesh.new()
+	shared_mesh.mesh.size = Vector3(2, 2, 2)
+	shared_mesh.position = Vector3(4, 2, 6)
+	shared_viewport.add_child(shared_mesh)
+	var isolated_viewport := SubViewport.new()
+	isolated_viewport.own_world_3d = true
+	root.add_child(isolated_viewport)
+	var isolated_mesh := MeshInstance3D.new()
+	isolated_mesh.mesh = BoxMesh.new()
+	isolated_mesh.position = Vector3(1000, 0, 0)
+	isolated_viewport.add_child(isolated_mesh)
+	var rejoined_viewport := SubViewport.new()
+	rejoined_viewport.world_3d = world
+	isolated_viewport.add_child(rejoined_viewport)
+	var rejoined_mesh := MeshInstance3D.new()
+	rejoined_mesh.mesh = shared_mesh.mesh
+	rejoined_mesh.position = Vector3(-2, 6, 1)
+	rejoined_viewport.add_child(rejoined_mesh)
+	assert_eq(shared_mesh.get_world_3d(), world, "Default SubViewport inherits the target world")
+	assert_ne(isolated_mesh.get_world_3d(), world, "Own-world SubViewport isolates its geometry")
+	assert_eq(rejoined_mesh.get_world_3d(), world, "Nested viewport can explicitly reuse the target world")
+	var bounds := _handler._get_visual_aabb(root)
+	root.free()
+	assert_eq(bounds.position, Vector3(-3, 1, 0))
+	assert_eq(bounds.size, Vector3(8, 6, 7))
+
+
 func test_issue1170_helper_only_target_keeps_its_visual_bounds() -> void:
 	var light := OmniLight3D.new()
 	light.omni_range = 10
