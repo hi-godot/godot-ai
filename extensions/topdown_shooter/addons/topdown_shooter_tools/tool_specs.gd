@@ -11,6 +11,7 @@ const LOOT_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/loot_too
 const INVENTORY_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/inventory_tools.gd"
 const RAID_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/raid_tools.gd"
 const PLAYTEST_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/playtest_tools.gd"
+const HIDEOUT_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/hideout_tools.gd"
 const NOTES_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/notes_tools.gd"
 
 const _NUM := {"type": "number"}
@@ -326,7 +327,7 @@ static func definitions() -> Array[Dictionary]:
 			"name": "raid_playtest",
 			"method": &"raid_playtest",
 			"script": PLAYTEST_HANDLER_PATH,
-			"description": "Play a raid automatically and report: runs the game, a bot drives the real input actions (walks the nav mesh, aims with the mouse, fires, reloads, opens crates with interact, picks up loot, fights enemies it sees, extracts) and returns result, errors, FPS, combat, loot, stuck spots, screenshots and a verdict. Installs the RaidPlaytest autoload (inert in normal play). op: run|report|stop|install|uninstall.",
+			"description": "Play a raid automatically and report: runs the game, a bot drives the real input actions (walks the nav mesh, aims with the mouse, fires, reloads, opens crates with interact, picks up loot, fights enemies it sees, extracts) and returns result, errors, FPS, combat, loot, stuck spots, screenshots and a verdict. With hideout_scaffold's HideoutState it also checks the trip home: bag into the stash, save file, and a second deploy. Installs the RaidPlaytest autoload (inert in normal play). op: run|report|stop|install|uninstall.",
 			"timeout_ms": 120000,
 			"deferred": true,
 			"requires_writable": false,
@@ -356,6 +357,8 @@ static func definitions() -> Array[Dictionary]:
 					"show_hud": _desc(_BOOL, "Show the bot's goal and counters in game. Default true."),
 					"stop_after": _desc(_BOOL, "Stop the game after the report. Default true."),
 					"seed": _desc({"type": "integer"}, "Bot randomness (unstick moves). Default 1."),
+					"hideout_loop": _desc(_BOOL, "With the HideoutState autoload (hideout_scaffold): after the raid, wait for the hideout and check the bag reached the stash (or was lost) and the save matches, on a separate playtest save. Default true."),
+					"redeploy": _desc(_BOOL, "Hideout loop: then pack one stash item, deploy again and check the raid bag. Default true."),
 					"script_dir": _desc(_STR, "Where raid_playtest_agent.gd is copied. Default res://scripts/topdown."),
 					"overwrite_scripts": _desc(_BOOL, "Replace that script with the template. Default false."),
 				},
@@ -381,6 +384,47 @@ static func definitions() -> Array[Dictionary]:
 					"resolution": _desc(_STR, "resolve: what was changed, saved in the note."),
 					"script_dir": _desc(_STR, "install: where playtest_notes_overlay.gd is copied. Default res://scripts/topdown."),
 					"overwrite_scripts": _desc(_BOOL, "install: replace that script with the template. Default false."),
+				},
+			},
+		},
+		{
+			"name": "hideout_scaffold",
+			"method": &"hideout_scaffold",
+			"script": HIDEOUT_HANDLER_PATH,
+			"description": "Close the raid loop: write a hideout scene (stash grid + raid bag grid, drag between them, 출격 button) and register the HideoutState autoload, which saves stash, bag and stats to a user:// JSON file and switches scenes: hideout -> raid (the bag becomes the player's Inventory) -> extracted (the whole bag goes into the stash) or died (the bag is lost) -> hideout. Quitting mid-raid counts as death. The raid scene is not edited (found by groups at run time). Bag size defaults to the raid player's Inventory. Makes the hideout the main scene. One undo step; dry_run previews.",
+			"timeout_ms": 30000,
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"raid_scene": _desc(_STR, "res:// raid .tscn that 출격 loads. Default: the open scene, else the main scene, if it has extraction zones."),
+					"hideout_scene": _desc(_STR, "Hideout .tscn to write. Default res://scenes/hideout.tscn. An existing one is kept unless overwrite."),
+					"stash_width": _desc({"type": "integer", "minimum": 1, "maximum": 64}, "Stash columns. Default 10."),
+					"stash_height": _desc({"type": "integer", "minimum": 1, "maximum": 200}, "Stash rows (scrolls). Default 14."),
+					"loadout_grid_width": _desc({"type": "integer", "minimum": 1, "maximum": 64}, "Raid bag columns. Default: the raid player's Inventory (else 6)."),
+					"loadout_grid_height": _desc({"type": "integer", "minimum": 1, "maximum": 64}, "Raid bag rows. Default: the raid player's Inventory (else 8)."),
+					"loadout_max_weight": _desc(_range(0, 100000), "Raid bag kg limit, 0 none. Default: the raid player's Inventory (else 40)."),
+					"starting_stash": _desc({"type": "array", "maxItems": 200, "items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["item_id"],
+						"properties": {
+							"item_id": _desc(_STR, "Item id from the item database."),
+							"count": _desc({"type": "integer", "minimum": 1}, "Default 1."),
+						},
+					}}, "Stash of a new game. Default: kept from the last run, else the raid player's starting_items."),
+					"save_path": _desc(_STR, "user:// .json save file. Default user://hideout/save.json."),
+					"return_delay": _desc(_range(0, 60), "Seconds the raid result shows before the hideout loads. Default 3."),
+					"quit_counts_as_death": _desc(_BOOL, "Closing the game during a raid loses the bag. Default true."),
+					"track_direct_raids": _desc(_BOOL, "A raid scene run on its own (F6, raid_playtest) still banks loot on extraction. Default true."),
+					"set_main_scene": _desc(_BOOL, "Make the hideout the main scene (F5). Default true."),
+					"title": _desc(_STR, "Screen title. Default 은신처."),
+					"cell_size": _desc({"type": "integer", "minimum": 24, "maximum": 128}, "Grid cell size in pixels. Default 44."),
+					"database_path": _desc(_STR, "Item database. Default res://data/items/item_database.tres."),
+					"script_dir": _desc(_STR, "Default res://scripts/topdown (hideout.gd, hideout_state.gd, inventory.gd)."),
+					"overwrite": _desc(_BOOL, "Rebuild an existing hideout scene. Default false."),
+					"overwrite_scripts": _desc(_BOOL, "Replace hideout.gd / hideout_state.gd with the templates. Default false."),
+					"dry_run": _desc(_BOOL, "Check the raid scene and report the plan without changing anything. Default false."),
 				},
 			},
 		},

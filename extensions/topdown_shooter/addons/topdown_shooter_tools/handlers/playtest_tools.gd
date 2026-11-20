@@ -96,7 +96,7 @@ static func read_run_params(params: Dictionary) -> Variant:
 		"op", "scene", "duration", "wait", "time_scale", "crates", "loot", "fight", "hunt",
 		"extract", "explore", "max_crates", "engage_range", "loot_radius", "invulnerable",
 		"min_fps", "screenshots", "screenshot_interval", "max_screenshots", "show_hud",
-		"stop_after", "seed", "script_dir", "overwrite_scripts",
+		"stop_after", "seed", "script_dir", "overwrite_scripts", "hideout_loop", "redeploy",
 	]
 	for key in params:
 		if not allowed.has(key):
@@ -123,6 +123,8 @@ static func read_run_params(params: Dictionary) -> Variant:
 		["screenshots", "bool", true],
 		["show_hud", "bool", true],
 		["stop_after", "bool", true],
+		["hideout_loop", "bool", true],
+		["redeploy", "bool", true],
 		["overwrite_scripts", "bool", false],
 		["scene", "text", ""],
 	]
@@ -153,7 +155,7 @@ static func build_request(p: Dictionary, token: String) -> Dictionary:
 	for key in [
 		"duration", "time_scale", "crates", "loot", "fight", "hunt", "extract", "explore",
 		"max_crates", "engage_range", "loot_radius", "invulnerable", "min_fps", "screenshots",
-		"screenshot_interval", "max_screenshots", "show_hud", "seed",
+		"screenshot_interval", "max_screenshots", "show_hud", "seed", "hideout_loop", "redeploy",
 	]:
 		request[key] = p[key]
 	## The editor stops the game after reading the report; when it does not
@@ -268,6 +270,14 @@ static func summarize(report: Dictionary, base: Dictionary = {}) -> Dictionary:
 		float(perf.get("fps_avg", 0.0)), float(perf.get("fps_min", 0.0)),
 		int(errors.get("count", 0)),
 	]
+	var hideout: Dictionary = report.get("hideout", {})
+	if bool(hideout.get("linked", false)) and hideout.has("raid_result"):
+		var redeploy: Dictionary = hideout.get("redeploy", {})
+		out["hideout"] = "returned in %.1f s, stash value %d, missing %d, save %s%s" % [
+			float(hideout.get("seconds_to_hideout", -1.0)), int(hideout.get("stash_value", 0)),
+			hideout.get("missing", {}).size(), "ok" if bool(hideout.get("save_matches", false)) else "MISMATCH",
+			"" if redeploy.is_empty() else ", redeploy %s" % ("ok" if bool(redeploy.get("ok", false)) else "FAILED"),
+		] if bool(hideout.get("returned", false)) else "did not return to the hideout (%s)" % hideout.get("error", "?")
 	out["screenshots"] = report.get("screenshots", [])
 	out["report"] = report
 	return out
