@@ -22,10 +22,16 @@ edits to upstream files.
 1. **Actions** tab: enable workflows for this fork.
 2. **Settings → Actions → General → Workflow permissions**: tick
    "Allow GitHub Actions to create and approve pull requests".
-3. Run **Fork sync from upstream** once by hand (Actions tab → Run workflow).
+3. Create a fine-grained personal access token (GitHub → Settings →
+   Developer settings → Fine-grained tokens) limited to this repository, with
+   **Contents**, **Pull requests** and **Workflows** set to "Read and write".
+   Save it as the repository secret `FORK_SYNC_TOKEN` (Settings → Secrets and
+   variables → Actions). The built-in token cannot push anything that touches
+   `.github/workflows/`, which upstream tags and merges do.
+4. Run **Fork sync from upstream** once by hand (Actions tab → Run workflow).
    It copies upstream release tags into the fork; the Python test
    `test_self_update_smoke_harness.py` needs tag `v3.2.5` and fails without it.
-4. Disable the upstream-only workflows you do not need in the **Actions** tab
+5. Disable the upstream-only workflows you do not need in the **Actions** tab
    (for example `Release`, `Discord changelog`, `Star history`,
    `Nightly diagnostics`). They are left untouched in the tree to avoid merge
    conflicts.
