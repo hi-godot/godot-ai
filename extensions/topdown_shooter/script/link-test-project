@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Link the top-down shooter addon and its test suite into test_project/ so
+# the Godot AI test runner (script/ci-godot-tests, test_run) picks them up.
+#
+#   extensions/topdown_shooter/script/link-test-project          # link
+#   extensions/topdown_shooter/script/link-test-project --remove # unlink
+#
+# The links are local only (listed in .git/info/exclude), so test_project/
+# stays identical to upstream and syncs never conflict. Link BEFORE starting
+# the editor so the addon's files are in its file system.
+set -euo pipefail
+EXT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$EXT_DIR/../.." && pwd)"
+PROJECT="$REPO_ROOT/test_project"
+
+ADDON_LINK="$PROJECT/addons/topdown_shooter_tools"
+TEST_LINK="$PROJECT/tests/test_topdown_shooter_tools.gd"
+EXCLUDE="$(git -C "$REPO_ROOT" rev-parse --git-path info/exclude)"
+case "$EXCLUDE" in /*) ;; *) EXCLUDE="$REPO_ROOT/$EXCLUDE" ;; esac
+
+if [ "${1:-}" = "--remove" ]; then
+  rm -f "$ADDON_LINK" "$TEST_LINK" "$TEST_LINK.uid"
+  echo "Removed top-down shooter links from test_project/."
+  exit 0
+fi
+
+ln -sfn "../../extensions/topdown_shooter/addons/topdown_shooter_tools" "$ADDON_LINK"
+ln -sfn "../../extensions/topdown_shooter/tests/test_topdown_shooter_tools.gd" "$TEST_LINK"
+
+mkdir -p "$(dirname "$EXCLUDE")"
+touch "$EXCLUDE"
+for entry in /test_project/addons/topdown_shooter_tools /test_project/tests/test_topdown_shooter_tools.gd \
+  /test_project/tests/test_topdown_shooter_tools.gd.uid /test_project/zz_mcp_test_topdown/; do
+  grep -qxF "$entry" "$EXCLUDE" || echo "$entry" >> "$EXCLUDE"
+done
+echo "Linked addon and test suite into test_project/."
+echo "Run: script/ci-godot-tests   (or test_run with suite=topdown_shooter)"
