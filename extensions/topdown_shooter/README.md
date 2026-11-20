@@ -12,10 +12,10 @@
    복사합니다. 결과: `<게임 프로젝트>/addons/topdown_shooter_tools/plugin.cfg`
 2. Godot에서 **프로젝트 > 프로젝트 설정 > 플러그인**을 열고 `Godot AI`와
    `Top-down Shooter Tools`를 둘 다 켭니다.
-3. Godot AI 독의 **Tools** 탭에 도구 7개가 보이면 끝입니다. Claude Code나 Claude
+3. Godot AI 독의 **Tools** 탭에 도구 8개가 보이면 끝입니다. Claude Code나 Claude
    데스크톱에는 `custom_topdown_camera_setup`, `custom_player_controller_scaffold`,
    `custom_weapon_create`, `custom_enemy_ai_scaffold`, `custom_item_db_import`,
-   `custom_loot_table_edit`, `custom_inventory_ui_scaffold`라는
+   `custom_loot_table_edit`, `custom_inventory_ui_scaffold`, `custom_raid_map_blockout`라는
    이름으로 바로 나타납니다(승격 도구). 도구 목록이
    갱신되지 않는 클라이언트라면 `custom_manage(op="invoke", name=...)`로도 부를
    수 있습니다.
@@ -30,6 +30,7 @@
 | `item_db_import` | 아이템 스프레드시트(CSV/TSV)를 행마다 아이템 `.tres` 하나로 바꾸고, 전체를 묶은 `item_database.tres`(`get_item(id)`, `find_by`, `find_by_tag`)를 만들거나 갱신. 모든 행을 먼저 검사해서 한 칸이라도 틀리면 아무것도 쓰지 않음. 다시 가져오면 기존 아이템을 제자리에서 갱신. 실행 취소 한 번으로 이전 파일로 복원 |
 | `loot_table_edit` | 적·상자용 드롭 확률표 `.tres` 생성·수정. 아이템별 가중치, 개수 범위, 확정 드롭, 드롭당 굴림 횟수, "없음" 가중치. 아이템 id는 `item_database.tres`로 검사하고 `category`/`tag`로 해당 아이템을 한 번에 추가. 아이템마다 정확한 드롭 확률·기대 개수와 시드 고정 시뮬레이션 결과·샘플 드롭을 보고(`table_id`만 주면 시뮬레이션만). `attach_to`/`attach_to_group`으로 적에게 `LootDropper`를 붙이면 `died` 때 바닥에 아이템이 떨어짐. 표 파일과 드롭 노드 각각 실행 취소 한 번 |
 | `inventory_ui_scaffold` | 플레이어에 격자·무게 인벤토리(`Inventory` 자식)와 인벤토리 화면(`InventoryUI` CanvasLayer)을 붙임. Tab/I로 열고 닫기, 드래그로 이동, R로 회전, 우클릭으로 바닥에 버리기, Shift+클릭으로 나누기, 정렬 버튼, 무게·가치 표시, 툴팁, 획득 알림, 무게 HUD. 무거우면 이동 속도가 줄고, 가방이 가득 차거나 너무 무거우면 바닥 아이템이 그대로 남음. 플레이어 스크립트에 `add_item`이 없으면 짧게 추가해서 `loot_table_edit`의 바닥 아이템이 가방으로 들어감. 노드는 실행 취소 한 번, 스크립트 수정은 따로 한 번 |
+| `raid_map_blockout` | 열린 3D 씬에 레이드 맵 뼈대를 만듦. 방과 복도를 1m 격자에 배치(방 개수 + 시드로 자동 생성, 또는 방 좌표·크기와 연결을 직접 지정)하고 바닥·벽·엄폐물(낮은 벽, 상자, 기둥)을 StaticBody3D 상자로 생성. 플레이어 스폰(플레이어를 옮김), 방마다 적 스폰 지점(적 씬을 주면 방을 도는 순찰 경로와 함께 배치), 루팅 상자(E로 수색, 드롭표를 주면 바닥에 아이템), 탈출 지점(안에 몇 초 서 있으면 탈출)을 배치. 내비 메시를 다시 굽고 ASCII 미리보기를 돌려줌. 맵 전체가 실행 취소 한 번 |
 | `weapon_create` | 무기 스탯 `.tres`(데미지, 연사, 자동, 탄창, 재장전, 탄퍼짐, 산탄 수, 사거리)와 무기 씬 생성. 히트스캔 또는 투사체로 발사하고, 맞은 대상의 `take_damage(amount, info)`를 호출. `attach_to`로 플레이어에 바로 장착 |
 
 Claude에게는 이렇게 말하면 됩니다.
@@ -46,6 +47,9 @@ Claude에게는 이렇게 말하면 됩니다.
 > 확률 보여 주고, 씬의 적 전부(enemy 그룹)에 붙여 줘.
 
 > 플레이어한테 8x6 인벤토리 달아 줘. 최대 무게 35kg, 20kg부터 느려지게. 붕대 2개 들고 시작.
+
+> 방 7개짜리 레이드 맵 만들어 줘. 먼저 dry_run으로 미리보기 보여 주고, 괜찮으면 grunt랑 gunner를
+> 방마다 하나씩 두고 상자는 crate 드롭표로, 탈출구는 2개.
 
 ## 아이템 DB 가져오기
 
@@ -128,6 +132,37 @@ gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
 - 저장/불러오기: `to_data()` → `[{item_id, count, x, y, rotated}]`, `from_data(data)`
 - 신호: `changed`, `item_added`, `item_removed`, `item_dropped`
 
+## 레이드 맵
+
+맵은 `RaidMap` 노드 하나(이름은 `name`)이고, 그 아래에 `Floors`, `Walls`, `Cover`, `Rooms`(방마다
+`raid_room` 그룹 Marker3D), `PlayerSpawn`(`player_spawn` 그룹), `EnemySpawns`(`enemy_spawn` 그룹),
+`Enemies`, `Crates`(`loot_crate` 그룹), `Extractions`(`extraction` 그룹)가 들어갑니다. 벽·엄폐물·상자는
+평범한 노드라 지우거나 옮겨서 다듬으면 되고, 그 뒤에 `Navigation`에서 **Bake NavigationMesh**를 누르세요.
+
+| 매개변수 | 내용 |
+|---|---|
+| `room_count`, `seed`, `room_size_min`, `room_size_max`, `room_gap` | 자동 생성. 방을 격자로 놓고 이웃끼리 무작위 신장 트리로 잇고 `extra_connections`개를 더 이어 순환로를 만듦. 같은 시드면 같은 맵. 첫 방은 화면 아래(+z), 나머지는 위로 |
+| `rooms`, `connections` | 직접 지정. `rooms`: `[{name, position: [x, z], size: [가로, 세로], cover, crates, enemies}]`(위치는 방 중심), `connections`: `[["Gate", "Yard"], [1, 2]]`. 연결을 빼면 가까운 방끼리 이음 |
+| `corridor_width`, `wall_height`, `wall_thickness`, `build_floor` | 복도 폭(기본 3m), 벽 높이(3m)·두께(0.4m), 바닥(윗면 y=0) |
+| `cover_per_room`, `crates_per_room`, `enemies_per_room` | 방마다 개수(기본 3, 1, 1). 스폰 방에는 상자와 적을 두지 않음. 모두 벽에서 1.5m 안쪽에 두어 문과 벽을 따라 도는 길이 항상 열려 있음. 자리가 모자라면 건너뛰고 `warnings`에 알림 |
+| `player_spawn_room`, `move_player` | 스폰 방(이름이나 번호, 기본 첫 방)과 플레이어 이동 여부 |
+| `extraction_count`, `extraction_rooms`, `extract_time`, `restart_delay` | 탈출 지점 수(기본 1, 스폰에서 복도로 가장 먼 방), 직접 고를 방, 안에 있어야 하는 시간(5초), 탈출 뒤 씬을 다시 시작하기까지(4초, 0이면 안 함) |
+| `enemy_scenes` | `enemy_ai_scaffold`로 만든 적 `.tscn` 목록. 스폰 지점마다 번갈아 배치하고, `enemy_patrol`이면 방 네 모서리를 도는 `patrol_points`를 줌. 없으면 스폰 지점만 두고 좌표를 `enemy_spawn_positions`로 보고 |
+| `crate_loot_table` | `loot_table_edit`의 표 id(예: `crate`)나 경로. 상자마다 `LootDropper`(신호 `opened`)를 붙임 |
+| `setup_navigation` | 씬의 `NavigationRegion3D`를 다시 구움(실행 취소 따로 한 번). 없으면 새로 만들어 구움 |
+| `replace`, `dry_run` | 같은 이름의 맵을 지우고 다시 만들기(같은 실행 취소 단계), 쓰지 않고 미리보기만 |
+
+보고서의 `preview`는 1m당 한 글자인 지도입니다(위쪽이 -z): `.` 방, `,` 복도, `#` 벽, `o` 엄폐물,
+`C` 상자, `e` 적 스폰, `P` 플레이어 스폰, `X` 탈출 지점.
+
+게임에서는:
+
+- 상자(`loot_crate.gd`): 플레이어가 1.8m 안에서 `interact`(E)를 누르면 `search_time`초 동안 수색하고(멀어지면
+  취소), 열리면 `opened` 신호로 드롭합니다. 코드에서는 `open()`, `start_search(player)`.
+- 탈출 지점(`raid_extraction.gd`): 플레이어가 안에 `extract_time`초 머물면 `extracted(player)` 신호를 내고,
+  플레이어에 `on_extracted(zone)`가 있으면 부르고, 플레이어를 멈추고 "탈출 성공!"과 가방 가치를 띄운 뒤
+  `restart_delay`초 뒤 씬을 다시 시작합니다. 나가면 취소됩니다.
+
 ## 적 AI
 
 | 상태 | 하는 일 | 다음 상태 |
@@ -161,7 +196,8 @@ res://scripts/topdown/   topdown_camera_rig.gd, player_controller.gd,
                          weapon.gd, weapon_data.gd, projectile.gd, enemy_ai.gd,
                          item_data.gd, item_database.gd,
                          loot_table.gd, loot_dropper.gd, loot_pickup.gd,
-                         inventory.gd, inventory_ui.gd
+                         inventory.gd, inventory_ui.gd,
+                         loot_crate.gd, raid_extraction.gd
 res://scenes/player/     player.tscn
 res://scenes/weapons/    <weapon_id>.tscn, projectile.tscn
 res://scenes/enemies/    <enemy_id>.tscn  (스크립트는 scripts/topdown/enemy_ai.gd)
