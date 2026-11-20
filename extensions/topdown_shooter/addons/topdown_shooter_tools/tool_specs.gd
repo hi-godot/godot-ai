@@ -6,6 +6,7 @@ extends RefCounted
 
 const SOURCE_PATH := "res://addons/topdown_shooter_tools/plugin.cfg"
 const HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/topdown_tools.gd"
+const ITEM_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/item_tools.gd"
 
 const _NUM := {"type": "number"}
 const _BOOL := {"type": "boolean"}
@@ -140,6 +141,31 @@ static func definitions() -> Array[Dictionary]:
 				},
 			},
 		},
+		{
+			"name": "item_db_import",
+			"method": &"item_db_import",
+			"script": ITEM_HANDLER_PATH,
+			"description": "Import an item spreadsheet (CSV/TSV, header row first) into one item .tres per row plus an item_database.tres index. Columns match item_data.gd @export properties by name, alias (id, name, price, 이름, 무게...) or column_map, and cells convert to each type (numbers, enums, ;-separated tags, res:// paths, weapon ids). Unmatched columns go to extra. All rows are validated first; one bad cell writes nothing. Re-import updates items in place. One undo step; dry_run previews.",
+			"timeout_ms": 60000,
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"csv_path": _desc(_STR, "res:// or user:// .csv/.tsv file (UTF-8). Give this or csv_text."),
+					"csv_text": _desc(_STR, "The sheet itself, header row first. Give this or csv_path."),
+					"delimiter": _desc({"type": "string", "enum": ["auto", ",", ";", "|", "tab"]}, "Default auto (.tsv -> tab, else the most common of , tab ; | in the header)."),
+					"column_map": _desc({"type": "object", "additionalProperties": {"type": "string"}}, "{\"CSV header\": \"property\"} for headers that do not match; \"-\" ignores a column. Headers starting with # or _ are always ignored."),
+					"existing": _desc({"type": "string", "enum": ["update", "replace", "skip", "error"]}, "When an item .tres exists: update it in place (blank cells keep their value), replace it with a fresh item, skip it, or fail. Default update."),
+					"data_dir": _desc(_STR, "Default res://data/items. Files are <data_dir>/<item_id>.tres."),
+					"update_database": _desc(_BOOL, "Write/merge the item database .tres. Default true."),
+					"database_path": _desc(_STR, "Default <data_dir>/item_database.tres."),
+					"weapon_data_dir": _desc(_STR, "Where a bare weapon id in a 'weapon' column is looked up. Default res://data/weapons."),
+					"script_dir": _desc(_STR, "Default res://scripts/topdown (item_data.gd, item_database.gd)."),
+					"overwrite_scripts": _desc(_BOOL, "Replace item_data.gd / item_database.gd with the templates. Default false."),
+					"dry_run": _desc(_BOOL, "Validate and report what would happen without writing anything. Default false."),
+				},
+			},
+		},
 	]
 
 
@@ -150,13 +176,13 @@ static func build() -> Array[McpCustomToolSpec]:
 		spec.name = def.name
 		spec.description = def.description
 		spec.params_schema = def.schema
-		spec.script_path = HANDLER_PATH
+		spec.script_path = def.get("script", HANDLER_PATH)
 		spec.method = def.method
 		spec.source_path = SOURCE_PATH
 		spec.source = "Top-down Shooter Tools"
 		spec.promoted = true
 		spec.requires_writable = true
-		spec.timeout_ms = 15000
+		spec.timeout_ms = def.get("timeout_ms", 15000)
 		out.append(spec)
 	return out
 
