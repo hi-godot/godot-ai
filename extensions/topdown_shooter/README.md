@@ -12,11 +12,11 @@
    복사합니다. 결과: `<게임 프로젝트>/addons/topdown_shooter_tools/plugin.cfg`
 2. Godot에서 **프로젝트 > 프로젝트 설정 > 플러그인**을 열고 `Godot AI`와
    `Top-down Shooter Tools`를 둘 다 켭니다.
-3. Godot AI 독의 **Tools** 탭에 도구 10개가 보이면 끝입니다. Claude Code나 Claude
+3. Godot AI 독의 **Tools** 탭에 도구 11개가 보이면 끝입니다. Claude Code나 Claude
    데스크톱에는 `custom_topdown_camera_setup`, `custom_player_controller_scaffold`,
    `custom_weapon_create`, `custom_enemy_ai_scaffold`, `custom_item_db_import`,
    `custom_loot_table_edit`, `custom_inventory_ui_scaffold`, `custom_raid_map_blockout`,
-   `custom_raid_playtest`, `custom_hideout_scaffold`라는
+   `custom_raid_playtest`, `custom_playtest_notes`, `custom_hideout_scaffold`라는
    이름으로 바로 나타납니다(승격 도구). 도구 목록이
    갱신되지 않는 클라이언트라면 `custom_manage(op="invoke", name=...)`로도 부를
    수 있습니다.
@@ -35,6 +35,7 @@
 | `weapon_create` | 무기 스탯 `.tres`(데미지, 연사, 자동, 탄창, 재장전, 탄퍼짐, 산탄 수, 사거리)와 무기 씬 생성. 히트스캔 또는 투사체로 발사하고, 맞은 대상의 `take_damage(amount, info)`를 호출. `attach_to`로 플레이어에 바로 장착 |
 | `raid_playtest` | 게임을 실행해 봇이 레이드를 직접 플레이하고 보고. 실제 입력 액션으로 내비 메시를 따라 걷고, 마우스 이동으로 조준하고, 쏘고 재장전하고, 상자에서 interact를 눌러 열고, 떨어진 아이템을 줍고, 보이는 적과 싸우고, 시간 안에 탈출 지점으로 감. 결과(탈출/사망/시간 초과), 게임 중 오류, FPS, 전투·루팅 수치, 막힌 위치, 스크린샷과 문제 목록(`issues`), 판정(`verdict`)을 돌려줌. 처음 한 번 `RaidPlaytest` 자동 로드를 등록(평소 플레이에서는 아무것도 안 함, 실행 취소 한 번). `hideout_scaffold`가 있으면 은신처로 돌아가 창고·세이브를 확인하고 다시 출격까지 검사 |
 | `hideout_scaffold` | 레이드 루프를 닫음. 은신처 씬(큰 창고 격자 + 출격 가방, 둘 사이 드래그, 출격 버튼)을 만들고 `HideoutState` 자동 로드를 등록. 출격하면 가방이 레이드 플레이어의 인벤토리가 되고, 탈출하면 가방 전체(가져간 것 + 주운 것)가 창고로, 죽으면 가방을 잃은 채 은신처로 돌아옴. 창고·가방·전적은 `user://` JSON에 바로바로 저장. 레이드 중에 게임을 끄면 사망 처리. 레이드 씬은 건드리지 않음. 은신처를 메인 씬으로 지정. 실행 취소 한 번 |
+| `playtest_notes` | 플레이 중 메모. 게임에서 F8(또는 Ctrl/Cmd+N)을 누르면 일시정지하고 화면을 찍은 뒤, 마우스가 가리키는 바닥(Tab으로 플레이어 위치)에 핀을 꽂고 메모 창을 띄움. 메모·종류·씬·좌표·카메라·커서 아래 노드·최근 엔진 오류·시각과 스크린샷(표시한 곳에 빨간 원)을 `res://playtest_notes/`에 저장. Claude가 목록·내용·사진을 읽고 고친 뒤 `resolve`로 닫음. 열린 씬에 메모 핀 표시(보기 전용, 저장 안 됨). 닫기·다시 열기·삭제는 실행 취소 한 번. 처음 한 번 `PlaytestNotes` 자동 로드를 등록(디버그 빌드에서만 동작) |
 
 Claude에게는 이렇게 말하면 됩니다.
 
@@ -54,6 +55,8 @@ Claude에게는 이렇게 말하면 됩니다.
 > 레이드 한 판 자동으로 돌려 보고 문제 있으면 알려 줘. 2배속으로.
 
 > 은신처 만들어 줘. 창고는 10x14, 새 게임은 붕대 5개랑 9mm 탄 60발 들고 시작.
+
+> 플레이 메모 기능 켜 줘. (플레이하며 F8로 메모를 남긴 뒤) 내가 남긴 메모 보고 고쳐 줘.
 
 > 방 7개짜리 레이드 맵 만들어 줘. 먼저 dry_run으로 미리보기 보여 주고, 괜찮으면 grunt랑 gunner를
 > 방마다 하나씩 두고 상자는 crate 드롭표로, 탈출구는 2개.
@@ -236,6 +239,34 @@ gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
 - `raid_playtest`는 이 루프를 별도 세이브(`user://hideout/playtest_save.json`, 진짜 세이브를 복사해 시작)로
   검사합니다. 보고서의 `hideout`에 은신처 도착 시간, 창고로 옮긴 아이템, 빠진 아이템, 세이브 일치 여부,
   다시 출격했을 때 가방이 그대로 왔는지가 들어갑니다(`hideout_loop`, `redeploy`로 끔).
+## 플레이 중 메모
+
+`playtest_notes op="install"`을 한 번 부르면 `PlaytestNotes` 자동 로드가 등록됩니다. 그다음 평소처럼
+플레이하다가 이상한 곳에서 키를 누르면 됩니다.
+
+| 키 | 하는 일 |
+|---|---|
+| F8, Ctrl+N, Cmd+N | 메모 시작: 지금 화면을 찍고 일시정지, 마우스가 가리키는 곳에 노란 핀. 이 씬의 열린 메모 핀도 함께 보임 |
+| Tab | 핀 위치를 마우스 지점 ↔ 플레이어 위치로 전환 |
+| Enter / Shift+Enter / Esc | 저장 / 줄바꿈 / 취소 (한글 조합 중 Enter는 조합만 끝냄) |
+
+맥에서 F8은 기본이 미디어 키라 fn+F8이어야 하므로 Cmd+N이 편합니다. 다른 키를 쓰려면 입력 맵에
+`playtest_note` 액션을 만들면 그 키만 씁니다. 종류(버그·밸런스·레벨/맵·아이디어·기타)는 창에서 고릅니다.
+
+메모 하나는 `res://playtest_notes/<id>.json`과 `<id>.png`입니다(내보낸 게임에서는 `user://playtest_notes/`).
+폴더에 `.gdignore`가 생겨 에디터가 스크린샷을 가져오지 않습니다. JSON에는 `text`, `category`, `status`,
+`scene`, `position`(핀 좌표)과 `position_source`, `cursor_position`, `cursor_node`(커서 아래 충돌체의
+씬 경로), `player_position`, `player_state`(체력 등), `camera`, `mouse_screen`, `recent_errors`(최근
+오류 10개와 몇 초 전인지), `fps`, `game_time_sec`, `created`가 들어갑니다.
+
+| op | 하는 일 |
+|---|---|
+| `list` (기본) | 메모 목록. `status`(open 기본/resolved/all), `scene`(res:// 경로, `current`, `all`), `category`, `limit` |
+| `get` | 메모 전체와 `screenshot_path`(절대 경로, 빨간 원이 표시한 곳) |
+| `resolve`, `reopen` | `id`나 `ids`. `resolve`는 `resolution`(무엇을 고쳤는지)을 메모에 남김. 실행 취소 한 번 |
+| `delete` | 메모와 스크린샷 삭제. 실행 취소 한 번으로 되살림 |
+| `markers`, `clear_markers` | 열린 3D 씬에 메모 핀(종류별 색, 해결한 메모는 흐리게) 표시·제거. 소유자 없는 노드라 씬 파일에 저장되지 않음. 기본은 이 씬의 열린 메모, `status="all"`이면 해결한 것도 |
+| `install`, `uninstall` | 자동 로드 등록·해제(각각 실행 취소 한 번). 스크립트와 메모는 남김 |
 
 ## 적 AI
 
@@ -274,6 +305,8 @@ res://scripts/topdown/   topdown_camera_rig.gd, player_controller.gd,
                          loot_crate.gd, raid_extraction.gd,
                          raid_playtest_agent.gd (자동 로드 RaidPlaytest),
                          hideout.gd, hideout_state.gd (자동 로드 HideoutState)
+                         playtest_notes_overlay.gd (자동 로드 PlaytestNotes)
+res://playtest_notes/    <id>.json, <id>.png  (플레이 중 메모)
 res://scenes/player/     player.tscn
 res://scenes/weapons/    <weapon_id>.tscn, projectile.tscn
 res://scenes/enemies/    <enemy_id>.tscn  (스크립트는 scripts/topdown/enemy_ai.gd)

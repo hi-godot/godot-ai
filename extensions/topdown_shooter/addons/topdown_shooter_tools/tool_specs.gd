@@ -12,6 +12,7 @@ const INVENTORY_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/inv
 const RAID_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/raid_tools.gd"
 const PLAYTEST_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/playtest_tools.gd"
 const HIDEOUT_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/hideout_tools.gd"
+const NOTES_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/notes_tools.gd"
 
 const _NUM := {"type": "number"}
 const _BOOL := {"type": "boolean"}
@@ -360,6 +361,29 @@ static func definitions() -> Array[Dictionary]:
 					"redeploy": _desc(_BOOL, "Hideout loop: then pack one stash item, deploy again and check the raid bag. Default true."),
 					"script_dir": _desc(_STR, "Where raid_playtest_agent.gd is copied. Default res://scripts/topdown."),
 					"overwrite_scripts": _desc(_BOOL, "Replace that script with the template. Default false."),
+				},
+			},
+		},
+		{
+			"name": "playtest_notes",
+			"method": &"playtest_notes",
+			"script": NOTES_HANDLER_PATH,
+			"description": "Read and close notes the user left while playing. In game F8 (or Ctrl/Cmd+N) pauses, saves a screenshot, pins the spot under the mouse (or the player) and takes a note: res://playtest_notes/<id>.json + .png with text, category, scene, position, camera, node under cursor, recent errors. op: list (default, open notes) | get (full note + screenshot_path) | resolve | reopen | delete (one undo step each) | markers (view-only pins in the open 3D scene) | clear_markers | install (PlaytestNotes autoload) | uninstall.",
+			"requires_writable": false,
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"op": _desc({"type": "string", "enum": ["list", "get", "resolve", "reopen", "delete", "markers", "clear_markers", "install", "uninstall"]}, "Default list."),
+					"id": _desc(_STR, "Note id (get/resolve/reopen/delete)."),
+					"ids": _desc({"type": "array", "items": _STR, "maxItems": 200}, "Several note ids (resolve/reopen/delete)."),
+					"status": _desc({"type": "string", "enum": ["open", "resolved", "all"]}, "list/markers filter. Default open."),
+					"scene": _desc(_STR, "list/markers filter: res:// scene path, 'current' (open scene) or 'all'. Default: list all, markers current."),
+					"category": _desc({"type": "string", "enum": ["bug", "balance", "level", "idea", "other"]}, "list filter."),
+					"limit": _desc({"type": "integer", "minimum": 1, "maximum": 500}, "list: newest N. Default 50."),
+					"resolution": _desc(_STR, "resolve: what was changed, saved in the note."),
+					"script_dir": _desc(_STR, "install: where playtest_notes_overlay.gd is copied. Default res://scripts/topdown."),
+					"overwrite_scripts": _desc(_BOOL, "install: replace that script with the template. Default false."),
 				},
 			},
 		},
