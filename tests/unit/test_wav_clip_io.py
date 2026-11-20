@@ -8,10 +8,12 @@ import os
 import stat
 import struct
 import subprocess
+import sys
 import threading
 import wave
 from dataclasses import replace
 from datetime import timedelta
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -19,7 +21,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from godot_ai.godot_client.client import GodotCommandError
-from godot_ai.handlers import _wav_clip
+from godot_ai.handlers import _wav_clip, _wav_directory
 from godot_ai.handlers.audio import audio_wav_clip
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.sessions.registry import Session, SessionRegistry
@@ -569,3 +571,78 @@ async def test_wav_uses_same_device_protected_staging_for_shared_output(
 
     for directory in {root, staging}:
         assert not list(directory.glob(_STAGE_GLOB))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux mount IDs")
+async def test_wav_skips_staging_candidates_on_other_mounts(clip_editor, monkeypatch, tmp_path):
+    runtime, _, root, _ = clip_editor
+    clips = root / "shared-clips"
+    clips.mkdir()
+    clips.chmod(0o775)
+    other_mount = tmp_path / "other-mount"
+    staging = tmp_path / "same-mount"
+    other_mount.mkdir(mode=0o700)
+    staging.mkdir(mode=0o700)
+    clips_info = clips.stat()
+    staging_info = staging.stat()
+    assert (
+        root.stat().st_dev == other_mount.stat().st_dev == staging_info.st_dev == clips_info.st_dev
+    )
+
+    def mount_id(fd):
+        info = os.fstat(fd)
+        return (
+            10 if any(os.path.samestat(info, item) for item in (clips_info, staging_info)) else 20
+        )
+
+    reserve = _wav_clip._reserve_stage
+
+    def reserve_on_same_mount(parent, cleanup):
+        assert parent.path == staging
+        return reserve(parent, cleanup)
+
+    monkeypatch.setattr(_wav_clip, "linux_mount_id", mount_id)
+    monkeypatch.setattr(_wav_clip, "_temporary_stage_paths", lambda: (other_mount, staging))
+    monkeypatch.setattr(_wav_clip, "_reserve_stage", reserve_on_same_mount)
+
+    result = await _clip(runtime, "res://shared-clips/output.wav")
+
+    assert result["frame_count"] == 80
+    assert {entry.name for entry in clips.iterdir()} == {"output.wav"}
+    assert not list(root.glob(_STAGE_GLOB))
+    assert not list(other_mount.iterdir())
+    assert not list(staging.iterdir())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux mount IDs")
+async def test_wav_uses_same_device_staging_when_mount_metadata_is_unavailable(
+    clip_editor, monkeypatch
+):
+    runtime, _, root, _ = clip_editor
+    clips = root / "shared-clips"
+    clips.mkdir()
+    clips.chmod(0o775)
+    clips_info = clips.stat()
+    unavailable = []
+
+    def open_mount_info(path, mode):
+        assert path.startswith("/proc/self/fdinfo/") and mode == "rb"
+        info = os.fstat(int(path.rsplit("/", 1)[1]))
+        if os.path.samestat(info, clips_info):
+            return BytesIO(b"pos:\t0\nmnt_id:\t10\n")
+        unavailable.append(info)
+        raise FileNotFoundError(errno.ENOENT, "Mount metadata is unavailable", path)
+
+    monkeypatch.setattr(_wav_directory, "open", open_mount_info, raising=False)
+    monkeypatch.setattr(_wav_clip, "_temporary_stage_paths", lambda: ())
+
+    result = await _clip(runtime, "res://shared-clips/output.wav")
+
+    assert result["frame_count"] == 80
+    assert any(os.path.samestat(info, root.stat()) for info in unavailable)
+    assert {entry.name for entry in clips.iterdir()} == {"output.wav"}
+    assert {entry.name for entry in root.iterdir()} == {
+        "project.godot",
+        "source.wav",
+        "shared-clips",
+    }

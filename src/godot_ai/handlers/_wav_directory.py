@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import os
 import stat
+import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,21 @@ def is_link(info: os.stat_result) -> bool:
     return stat.S_ISLNK(info.st_mode) or bool(
         getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
     )
+
+
+def linux_mount_id(fd: int | None) -> int | None:
+    """Read a pinned descriptor's mount ID when Linux procfs exposes it."""
+    if fd is None or sys.platform != "linux":
+        return None
+    try:
+        with open(f"/proc/self/fdinfo/{fd}", "rb") as info:
+            for line in info.read(4096).splitlines():
+                key, _, value = line.partition(b":")
+                if key == b"mnt_id":
+                    return int(value)
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 def _real_directory(info: os.stat_result) -> os.stat_result:

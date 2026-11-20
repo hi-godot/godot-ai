@@ -24,7 +24,7 @@ from godot_ai.godot_client.session_diagnostics import (
     session_not_found_message,
 )
 from godot_ai.handlers._readiness import require_writable_async
-from godot_ai.handlers._wav_directory import DirectoryAnchor, is_link
+from godot_ai.handlers._wav_directory import DirectoryAnchor, is_link, linux_mount_id
 from godot_ai.handlers._wav_pcm import WavEditError, edit_pcm_wav
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
@@ -229,7 +229,11 @@ def _reserve_stage(parent: DirectoryAnchor, cleanup: ExitStack) -> _StageFile:
 
 
 def _protected_stage(
-    candidate: DirectoryAnchor, destination: DirectoryAnchor, cleanup: ExitStack
+    candidate: DirectoryAnchor,
+    destination: DirectoryAnchor,
+    cleanup: ExitStack,
+    *,
+    destination_mount: int | None = None,
 ) -> _StageFile | None:
     info = candidate.info
     if info.st_dev != destination.info.st_dev or info.st_uid not in {0, os.geteuid()}:
@@ -237,6 +241,11 @@ def _protected_stage(
     # A trusted owner can protect stage names even in a shared sticky directory.
     if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH) and not info.st_mode & stat.S_ISVTX:
         return None
+    # Bind mounts can share st_dev even though Linux forbids linking across them.
+    if destination_mount is not None:
+        candidate_mount = linux_mount_id(candidate.fd)
+        if candidate_mount is not None and candidate_mount != destination_mount:
+            return None
     try:
         return _reserve_stage(candidate, cleanup)
     except OSError as exc:
@@ -274,6 +283,7 @@ def _new_stage(
     stage = _protected_stage(destination, destination, cleanup)
     if stage is not None:
         return stage
+    destination_mount = linux_mount_id(destination.fd)
 
     for ancestor in destination.path.relative_to(project.path).parents:
         with ExitStack() as attempt:
@@ -283,7 +293,9 @@ def _new_stage(
                 continue
             if candidate is not project:
                 attempt.callback(candidate.close)
-            stage = _protected_stage(candidate, destination, attempt)
+            stage = _protected_stage(
+                candidate, destination, attempt, destination_mount=destination_mount
+            )
             if stage is not None:
                 cleanup.callback(attempt.pop_all().close)
                 return stage
@@ -295,7 +307,9 @@ def _new_stage(
             except OSError:
                 continue
             attempt.callback(candidate.close)
-            stage = _protected_stage(candidate, destination, attempt)
+            stage = _protected_stage(
+                candidate, destination, attempt, destination_mount=destination_mount
+            )
             if stage is not None:
                 cleanup.callback(attempt.pop_all().close)
                 return stage
