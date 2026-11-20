@@ -14,6 +14,7 @@ const Tools := preload("res://addons/topdown_shooter_tools/handlers/topdown_tool
 const ItemTools := preload("res://addons/topdown_shooter_tools/handlers/item_tools.gd")
 const LootTools := preload("res://addons/topdown_shooter_tools/handlers/loot_tools.gd")
 const InventoryTools := preload("res://addons/topdown_shooter_tools/handlers/inventory_tools.gd")
+const RaidTools := preload("res://addons/topdown_shooter_tools/handlers/raid_tools.gd")
 const ToolSpecs := preload("res://addons/topdown_shooter_tools/tool_specs.gd")
 
 const WORK_DIR := "res://zz_mcp_test_topdown"
@@ -23,6 +24,7 @@ var _tools: Tools
 var _items: ItemTools
 var _loot: LootTools
 var _inventory: InventoryTools
+var _raid: RaidTools
 var _undo_redo: EditorUndoRedoManager
 var _added: Array[Node] = []
 
@@ -37,6 +39,7 @@ func suite_setup(ctx: Dictionary) -> void:
 	_items = ItemTools.new()
 	_loot = LootTools.new()
 	_inventory = InventoryTools.new()
+	_raid = RaidTools.new()
 	if EditorInterface.get_edited_scene_root() == null:
 		skip_suite("needs an open scene")
 
@@ -53,7 +56,7 @@ func suite_teardown() -> void:
 	teardown()
 	_remove_tree(ProjectSettings.globalize_path(WORK_DIR))
 	var changed := false
-	for suffix in Tools.INPUT_ACTIONS.keys() + ["inventory"]:
+	for suffix in Tools.INPUT_ACTIONS.keys() + ["inventory", "interact"]:
 		var action: String = ACTION_PREFIX + suffix
 		if ProjectSettings.has_setting("input/" + action):
 			ProjectSettings.clear("input/" + action)
@@ -113,14 +116,14 @@ func _weapon_params(id: String, extra: Dictionary = {}) -> Dictionary:
 
 func test_specs_validate() -> void:
 	var specs := ToolSpecs.build()
-	assert_eq(specs.size(), 7)
+	assert_eq(specs.size(), 8)
 	var names := []
 	for spec in specs:
 		assert_eq(spec.validate(), [] as Array[String], "spec %s" % spec.name)
 		assert_true(spec.promoted)
 		assert_true(spec.requires_writable)
 		names.append(spec.name)
-	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold"])
+	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold", "raid_map_blockout"])
 
 
 # --- player ------------------------------------------------------------------
@@ -1354,3 +1357,283 @@ func test_inventory_scaffold_errors_change_nothing() -> void:
 	assert_eq(dry.data.player_script, "will patch")
 	assert_eq(player.get_child_count(), 0)
 	assert_false(FileAccess.get_file_as_string(WORK_DIR + "/scripts/inv_test_player.gd").contains("add_item"))
+
+
+# --- raid map ------------------------------------------------------------------
+
+func _raid_params(extra: Dictionary = {}) -> Dictionary:
+	var params := {
+		"name": "RaidTestMap",
+		"seed": 1234,
+		"room_count": 4,
+		"room_size_min": 9,
+		"room_size_max": 12,
+		"origin": [200, 0, 0],
+		"script_dir": WORK_DIR + "/scripts",
+		"interact_action": ACTION_PREFIX + "interact",
+		"move_player": false,
+		"add_light": false,
+		"setup_navigation": false,
+	}
+	params.merge(extra, true)
+	return params
+
+
+func _raid_layout(extra: Dictionary = {}) -> Dictionary:
+	var p: Variant = _raid._read_params(_raid_params(extra))
+	assert_false(p is Dictionary and p.has("status"), str(p))
+	var layout: Variant = _raid._plan(p)
+	assert_false(layout.has("status"), str(layout))
+	return layout
+
+
+## Walkable cells reachable from the first walkable cell.
+func _flood(grid: Dictionary) -> int:
+	var start := -1
+	for i in grid.cells.size():
+		if grid.cells[i] != 0:
+			start = i
+			break
+	var seen := {start: true}
+	var stack := [start]
+	while not stack.is_empty():
+		var c: int = stack.pop_back()
+		var x := c % int(grid.w)
+		var z := c / int(grid.w)
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var nx: int = x + d.x
+			var nz: int = z + d.y
+			var n: int = nz * int(grid.w) + nx
+			if nx >= 0 and nz >= 0 and nx < grid.w and nz < grid.h and grid.cells[n] != 0 and not seen.has(n):
+				seen[n] = true
+				stack.append(n)
+	return seen.size()
+
+
+func test_raid_layout_connected_walls_outside_and_seeded() -> void:
+	var layout := _raid_layout()
+	assert_eq(layout.rooms.size(), 4)
+	var walkable := 0
+	for c in layout.grid.cells:
+		if c != 0:
+			walkable += 1
+	assert_eq(_flood(layout.grid), walkable, "every room and corridor is reachable")
+	assert_true(layout.links.size() >= 3, "spanning tree plus extra")
+	assert_true(layout.walls.size() >= 8)
+	var grid: Dictionary = layout.grid
+	for r in layout.walls:
+		var c: Vector2 = r.get_center()
+		assert_false(RaidTools._walk(grid, int(floor(c.x)) - grid.x0, int(floor(c.y)) - grid.z0), "wall %s stands outside the floor" % r)
+	assert_eq(layout.extraction_indices.size(), 1)
+	assert_ne(layout.extraction_indices[0], layout.spawn_index, "extraction away from the spawn")
+	assert_eq(layout.enemy_spawns.size(), 3, "one per room except the spawn room")
+	assert_eq(layout.crates.size(), 3)
+	## Props keep ROOM_MARGIN from their room's walls.
+	for room in layout.rooms:
+		var inner := Rect2(room.rect).grow(-RaidTools.ROOM_MARGIN + 0.01)
+		for c in layout.cover:
+			if c.room == room.name:
+				assert_true(inner.encloses(c.rect), "cover %s inside %s" % [c.rect, inner])
+	var again := _raid_layout()
+	assert_eq(_raid._preview(again), _raid._preview(layout), "same seed, same map")
+	var other := _raid_layout({"seed": 99})
+	assert_ne(_raid._preview(other), _raid._preview(layout))
+
+
+func test_raid_explicit_rooms_connections_and_roles() -> void:
+	var layout := _raid_layout({
+		"rooms": [
+			{"name": "Gate", "position": [0, 20], "size": [10, 10], "enemies": 0},
+			{"name": "Yard", "position": [0, 0], "size": [16, 14], "cover": 5, "crates": 2, "enemies": 2},
+			{"name": "Bunker", "position": [24, 0], "size": [10, 10]},
+		],
+		"connections": [["Gate", "Yard"], ["Yard", 2]],
+		"extraction_rooms": ["Bunker", "Gate"],
+		"player_spawn_room": "Gate",
+	})
+	assert_eq(layout.links, [[0, 1], [1, 2]])
+	assert_eq(layout.spawn_index, 0)
+	assert_eq(layout.extractions.size(), 2)
+	assert_eq(layout.rooms[1].counts, {"cover": 5, "crates": 2, "enemies": 2})
+	assert_eq(layout.rooms[0].roles, ["player_spawn", "extraction"])
+	var walkable := 0
+	for c in layout.grid.cells:
+		if c != 0:
+			walkable += 1
+	assert_eq(_flood(layout.grid), walkable)
+	var spawn: Vector3 = layout.player_spawn
+	for e in layout.extractions:
+		assert_true(e.position.distance_to(spawn) >= 2.0, "zone and spawn do not overlap in a shared room")
+	assert_eq(layout.enemy_spawns[0].patrol.size(), 4)
+
+
+func test_raid_rejects_bad_params() -> void:
+	for bad in [
+		{"room_size_min": 14, "room_size_max": 8},
+		{"rooms": [{"position": [0, 0], "size": [2, 2]}]},
+		{"rooms": [{"position": [0, 0], "size": [8, 8], "color": "red"}]},
+		{"rooms": [{"position": [0, 0], "size": [8, 8]}], "connections": [[0, 5]]},
+		{"player_spawn_room": "Nowhere"},
+		{"enemy_scenes": ["res://zz_missing/enemy.tscn"]},
+		{"crate_loot_table": "no_such_table"},
+		{"script_dir": "res://addons/x"},
+		{"name": "bad/name"},
+		{"room_count": 64, "room_size_max": 100, "room_size_min": 100, "room_gap": 100},
+	]:
+		var result := _raid.raid_map_blockout(_raid_params(bad))
+		assert_has_key(result, "error", "%s -> %s" % [bad, result])
+	var dry := _raid.raid_map_blockout(_raid_params({"dry_run": true}))
+	assert_has_key(dry, "data", str(dry))
+	assert_eq(dry.data.status, "dry_run")
+	assert_true(dry.data.preview.size() > 5)
+	assert_true(_root().get_node_or_null(^"RaidTestMap") == null, "dry run adds nothing")
+
+
+func test_raid_builds_map_in_scene_with_navigation_and_undo() -> void:
+	var regions_before := _root().find_children("*", "NavigationRegion3D", true, false).size()
+	var result := _raid.raid_map_blockout(_raid_params({"setup_navigation": true, "room_count": 3, "seed": 5}))
+	assert_has_key(result, "data", str(result))
+	var data: Dictionary = result.data
+	assert_eq(data.status, "created")
+	var map := _track(data.map_path) as Node3D
+	assert_true(map != null)
+	assert_eq(map.owner, _root())
+	assert_eq(map.position, Vector3(200, 0, 0))
+	var wall := map.get_node("Walls").get_child(0) as StaticBody3D
+	assert_true(wall != null and wall.get_node("Shape").shape is BoxShape3D)
+	assert_eq(wall.owner, _root(), "walls are saved with the scene")
+	assert_eq(map.get_node("Walls").get_child_count(), data.counts.walls)
+	assert_eq(map.get_node("Rooms").get_child_count(), 3)
+	var spawn := map.get_node("PlayerSpawn") as Marker3D
+	assert_true(spawn.is_in_group(&"player_spawn"))
+	assert_eq(map.get_node("Extractions").get_child_count(), 1)
+	var zone := map.get_node("Extractions/Extraction1")
+	assert_eq(zone.get_script().resource_path, WORK_DIR + "/scripts/raid_extraction.gd")
+	var crate := map.get_node("Crates/Crate1")
+	assert_eq(crate.get_script().resource_path, WORK_DIR + "/scripts/loot_crate.gd")
+	assert_eq(crate.get("interact_action"), StringName(ACTION_PREFIX + "interact"))
+	assert_true(InputMap.has_action(ACTION_PREFIX + "interact"), "interact action created")
+	assert_true(data.counts.enemy_spawns >= 1)
+	assert_eq(map.get_node("EnemySpawns").get_child_count(), data.counts.enemy_spawns)
+	## Navigation: a new region baked from the map.
+	assert_eq(data.navigation.status, "created", str(data.navigation))
+	assert_true(data.navigation.polygons > 0, "nav mesh covers the floor")
+	assert_true(map.is_in_group(&"navigation_source") or _root().is_in_group(&"navigation_source"))
+	var region := McpScenePath.resolve(data.navigation.region_path, _root())
+	assert_true(region != null)
+
+	assert_true(editor_undo(_undo_redo))
+	assert_true(map.get_parent() == null, "undo removes the map")
+	assert_eq(_root().find_children("*", "NavigationRegion3D", true, false).size(), regions_before, "and the new region")
+
+
+func test_raid_replace_places_enemies_crate_loot_and_restores_on_undo() -> void:
+	_fresh_loot()
+	assert_has_key(_loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES})), "data")
+	var enemy_result := _tools.enemy_scaffold({
+		"enemy_id": "raid_test_grunt",
+		"scene_dir": WORK_DIR + "/enemies",
+		"script_dir": WORK_DIR + "/scripts",
+		"add_to_scene": false,
+		"overwrite": true,
+	})
+	assert_has_key(enemy_result, "data", str(enemy_result))
+	var first := _raid.raid_map_blockout(_raid_params({"room_count": 2, "enemies_per_room": 0}))
+	assert_has_key(first, "data", str(first))
+	var old_map := _track(first.data.map_path)
+	assert_is_error(_raid.raid_map_blockout(_raid_params()), "ALREADY_EXISTS")
+
+	var result := _raid.raid_map_blockout(_raid_params({
+		"replace": true,
+		"enemy_scenes": [enemy_result.data.scene_path],
+		"crate_loot_table": LOOT_DIR + "/test_grunt.tres",
+	}))
+	assert_has_key(result, "data", str(result))
+	assert_eq(result.data.status, "replaced")
+	assert_eq(result.data.enemies_placed, 3)
+	var map := _track(result.data.map_path)
+	assert_true(old_map.get_parent() == null, "old map removed")
+	var enemy := map.get_node("Enemies").get_child(0)
+	assert_eq(enemy.scene_file_path, enemy_result.data.scene_path)
+	assert_eq(enemy.owner, _root())
+	var route: PackedVector3Array = enemy.get("patrol_points")
+	assert_eq(route.size(), 4, "patrol loop through the room corners")
+	assert_true(route[0].x > 150.0, "route in world space (origin x=200)")
+	var dropper := map.get_node("Crates/Crate1/LootDropper")
+	assert_eq(dropper.get("trigger_signal"), &"opened")
+	assert_eq(dropper.get("loot_table").resource_path, LOOT_DIR + "/test_grunt.tres")
+	assert_eq(dropper.owner, _root())
+
+	assert_true(editor_undo(_undo_redo))
+	assert_true(map.get_parent() == null)
+	assert_eq(old_map.get_parent(), _root(), "undo brings the old map back")
+	assert_eq(old_map.get_node("Walls").get_child(0).owner, _root(), "with its owners, so it still saves")
+
+
+func test_raid_crate_search_and_open() -> void:
+	var crate := StaticBody3D.new()
+	crate.set_script(_tool_copy(_install_raid_template("loot_crate")))
+	crate.set("search_time", 0.5)
+	var holder := Node3D.new()
+	holder.name = "RaidCrateHolder"
+	_root().add_child(holder)
+	_added.append(holder)
+	holder.add_child(crate)
+	var player := Node3D.new()
+	player.add_to_group(&"player")
+	holder.add_child(player)
+	player.position = Vector3(5, 0, 0)
+	assert_true(crate.nearest_player() == null, "too far")
+	player.position = Vector3(1, 0, 0.5)
+	assert_eq(crate.nearest_player(), player)
+	var opened := []
+	crate.opened.connect(func(by): opened.append(by))
+	crate.start_search(player)
+	assert_false(crate.get("is_open"))
+	crate.open(player)
+	assert_true(crate.get("is_open"))
+	assert_eq(opened, [player])
+	crate.open(player)
+	assert_eq(opened.size(), 1, "opens once")
+
+
+func test_raid_extraction_extracts_player() -> void:
+	var zone := Area3D.new()
+	zone.set_script(_tool_copy(_install_raid_template("raid_extraction")))
+	zone.set("restart_delay", 0.0)
+	var holder := Node3D.new()
+	holder.name = "RaidZoneHolder"
+	_root().add_child(holder)
+	_added.append(holder)
+	holder.add_child(zone)
+	var bag_script := GDScript.new()
+	bag_script.source_code = "@tool\nextends Node\nfunc get_total_value():\n\treturn 1550\n"
+	bag_script.reload()
+	var player := CharacterBody3D.new()
+	player.add_to_group(&"player")
+	var bag := Node.new()
+	bag.name = "Inventory"
+	bag.set_script(bag_script)
+	player.add_child(bag)
+	holder.add_child(player)
+	var other := CharacterBody3D.new()
+	holder.add_child(other)
+	zone._on_body_entered(other)
+	assert_eq(zone.time_left(), -1.0, "only the player group")
+	zone._on_body_entered(player)
+	assert_eq(zone.time_left(), 5.0)
+	zone._on_body_exited(player)
+	assert_eq(zone.time_left(), -1.0, "leaving cancels")
+	var got := []
+	zone.extracted.connect(func(b): got.append(b))
+	zone.extract(player)
+	assert_eq(got, [player])
+	assert_eq(player.process_mode, Node.PROCESS_MODE_DISABLED, "player frozen")
+	assert_contains(zone._hud.text, "1550")
+	zone.extract(player)
+	assert_eq(got.size(), 1, "extracts once")
+
+
+func _install_raid_template(name: String) -> String:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORK_DIR + "/scripts"))
+	return _install_template(name)
