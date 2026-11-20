@@ -472,9 +472,10 @@ func _style_number(label: Label3D, amount: float, killed: bool) -> void:
 
 
 func _animate_number(label: Label3D, start: Vector3) -> void:
-	var old: Variant = label.get_meta("tween", null)
-	if old is Tween and old.is_valid():
-		old.kill()
+	if label.has_meta("tween"):
+		var old: Variant = label.get_meta("tween")
+		if old is Tween and old.is_valid():
+			old.kill()
 	label.global_position = start
 	label.scale = Vector3.ONE * 1.5
 	var color := label.modulate
