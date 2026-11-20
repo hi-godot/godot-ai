@@ -10,6 +10,7 @@ const ITEM_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/item_too
 const LOOT_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/loot_tools.gd"
 const INVENTORY_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/inventory_tools.gd"
 const RAID_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/raid_tools.gd"
+const PLAYTEST_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/playtest_tools.gd"
 
 const _NUM := {"type": "number"}
 const _BOOL := {"type": "boolean"}
@@ -320,6 +321,45 @@ static func definitions() -> Array[Dictionary]:
 				},
 			},
 		},
+		{
+			"name": "raid_playtest",
+			"method": &"raid_playtest",
+			"script": PLAYTEST_HANDLER_PATH,
+			"description": "Play a raid automatically and report: runs the game, a bot drives the real input actions (walks the nav mesh, aims with the mouse, fires, reloads, opens crates with interact, picks up loot, fights enemies it sees, extracts) and returns result, errors, FPS, combat, loot, stuck spots, screenshots and a verdict. Installs the RaidPlaytest autoload (inert in normal play). op: run|report|stop|install|uninstall.",
+			"timeout_ms": 120000,
+			"deferred": true,
+			"requires_writable": false,
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"op": _desc({"type": "string", "enum": ["run", "report", "stop", "install", "uninstall"]}, "run (default), report (last result), stop (close the game), install/uninstall the autoload."),
+					"scene": _desc(_STR, "res:// scene to play. Default the open scene, else the main scene."),
+					"duration": _desc(_range(5, 600), "Game seconds before giving up. Default 60. With wait, duration/time_scale <= 105."),
+					"wait": _desc(_BOOL, "Wait for the report (default true). false returns once the game runs; then op=report."),
+					"time_scale": _desc(_range(0.25, 4), "Engine.time_scale during the run. Default 1."),
+					"crates": _desc(_BOOL, "Open loot crates. Default true."),
+					"max_crates": _desc({"type": "integer", "minimum": -1}, "Stop looting after this many; -1 all. Default -1."),
+					"loot": _desc(_BOOL, "Walk over dropped items. Default true."),
+					"loot_radius": _desc(_range(0, 100), "Only items this close. Default 10."),
+					"fight": _desc(_BOOL, "Shoot visible enemies. Default true."),
+					"hunt": _desc(_BOOL, "Seek out every enemy. Default false."),
+					"engage_range": _desc(_range(1, 100), "Default 14 (capped by weapon range)."),
+					"extract": _desc(_BOOL, "End at an extraction zone, leaving in time. Default true."),
+					"explore": _desc(_BOOL, "Visit every raid room before extracting. Default false."),
+					"invulnerable": _desc(_BOOL, "Keep the player alive to test the whole route. Default false."),
+					"min_fps": _desc(_range(1, 1000), "FPS below this is an issue. Default 30."),
+					"screenshots": _desc(_BOOL, "Save PNGs at start, first contact, first crate, first stuck, end. Default true."),
+					"screenshot_interval": _desc(_range(0, 600), "Also every N game seconds; 0 off. Default 0."),
+					"max_screenshots": _desc({"type": "integer", "minimum": 0, "maximum": 50}, "Default 8."),
+					"show_hud": _desc(_BOOL, "Show the bot's goal and counters in game. Default true."),
+					"stop_after": _desc(_BOOL, "Stop the game after the report. Default true."),
+					"seed": _desc({"type": "integer"}, "Bot randomness (unstick moves). Default 1."),
+					"script_dir": _desc(_STR, "Where raid_playtest_agent.gd is copied. Default res://scripts/topdown."),
+					"overwrite_scripts": _desc(_BOOL, "Replace that script with the template. Default false."),
+				},
+			},
+		},
 	]
 
 
@@ -335,7 +375,8 @@ static func build() -> Array[McpCustomToolSpec]:
 		spec.source_path = SOURCE_PATH
 		spec.source = "Top-down Shooter Tools"
 		spec.promoted = true
-		spec.requires_writable = true
+		spec.requires_writable = def.get("requires_writable", true)
+		spec.deferred = def.get("deferred", false)
 		spec.timeout_ms = def.get("timeout_ms", 15000)
 		out.append(spec)
 	return out
