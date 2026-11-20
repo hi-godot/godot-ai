@@ -16,6 +16,7 @@ const LootTools := preload("res://addons/topdown_shooter_tools/handlers/loot_too
 const InventoryTools := preload("res://addons/topdown_shooter_tools/handlers/inventory_tools.gd")
 const RaidTools := preload("res://addons/topdown_shooter_tools/handlers/raid_tools.gd")
 const PlaytestTools := preload("res://addons/topdown_shooter_tools/handlers/playtest_tools.gd")
+const HideoutTools := preload("res://addons/topdown_shooter_tools/handlers/hideout_tools.gd")
 const ToolSpecs := preload("res://addons/topdown_shooter_tools/tool_specs.gd")
 
 const WORK_DIR := "res://zz_mcp_test_topdown"
@@ -27,6 +28,8 @@ var _loot: LootTools
 var _inventory: InventoryTools
 var _raid: RaidTools
 var _playtest: PlaytestTools
+var _hideout: HideoutTools
+var _main_scene_before := ""
 var _undo_redo: EditorUndoRedoManager
 var _added: Array[Node] = []
 
@@ -43,6 +46,8 @@ func suite_setup(ctx: Dictionary) -> void:
 	_inventory = InventoryTools.new()
 	_raid = RaidTools.new()
 	_playtest = PlaytestTools.new()
+	_hideout = HideoutTools.new()
+	_main_scene_before = str(ProjectSettings.get_setting("application/run/main_scene", ""))
 	if EditorInterface.get_edited_scene_root() == null:
 		skip_suite("needs an open scene")
 
@@ -69,6 +74,18 @@ func suite_teardown() -> void:
 	if ProjectSettings.has_setting(PlaytestTools.autoload_key()) and str(ProjectSettings.get_setting(PlaytestTools.autoload_key())).contains(WORK_DIR):
 		ProjectSettings.set_setting(PlaytestTools.autoload_key(), null)
 		changed = true
+	## hideout_scaffold settings left by a failed test.
+	if str(ProjectSettings.get_setting("autoload/" + HideoutTools.AUTOLOAD_NAME, "")).contains(WORK_DIR):
+		ProjectSettings.set_setting("autoload/" + HideoutTools.AUTOLOAD_NAME, null)
+		changed = true
+	if str(ProjectSettings.get_setting(HideoutTools.SETTINGS_PREFIX + "raid_scene", "")).contains(WORK_DIR):
+		for key in ["hideout_scene", "raid_scene", "save_path", "item_database", "return_delay", "quit_counts_as_death", "track_direct_raids", "starting_stash"]:
+			ProjectSettings.set_setting(HideoutTools.SETTINGS_PREFIX + key, null)
+		changed = true
+	if str(ProjectSettings.get_setting("application/run/main_scene", "")).contains(WORK_DIR):
+		ProjectSettings.set_setting("application/run/main_scene", _main_scene_before)
+		changed = true
+	_remove_tree(ProjectSettings.globalize_path(HIDEOUT_SAVE.get_base_dir()))
 	if changed:
 		ProjectSettings.save()
 
@@ -122,7 +139,7 @@ func _weapon_params(id: String, extra: Dictionary = {}) -> Dictionary:
 
 func test_specs_validate() -> void:
 	var specs := ToolSpecs.build()
-	assert_eq(specs.size(), 9)
+	assert_eq(specs.size(), 10)
 	var names := []
 	for spec in specs:
 		assert_eq(spec.validate(), [] as Array[String], "spec %s" % spec.name)
@@ -131,7 +148,7 @@ func test_specs_validate() -> void:
 		assert_eq(spec.requires_writable, spec.name != "raid_playtest", "requires_writable of %s" % spec.name)
 		assert_eq(spec.deferred, spec.name == "raid_playtest", "deferred of %s" % spec.name)
 		names.append(spec.name)
-	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold", "raid_map_blockout", "raid_playtest"])
+	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold", "raid_map_blockout", "raid_playtest", "hideout_scaffold"])
 
 
 # --- player ------------------------------------------------------------------
@@ -1826,3 +1843,397 @@ func test_playtest_install_registers_autoload_with_undo() -> void:
 	if before != null:
 		ProjectSettings.set_setting(key, before)
 		ProjectSettings.save()
+
+
+# --- hideout -------------------------------------------------------------------------
+
+const HIDEOUT_SAVE := "user://zz_mcp_test_hideout/save.json"
+
+
+## A @tool item database holding bandage (stack 5, 0.1 kg, 50), rifle (3x1,
+## 3.5 kg, 9000) and watch (0.2 kg, 1500).
+func _hideout_db() -> Resource:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORK_DIR + "/scripts"))
+	var db := Resource.new()
+	db.set_script(_tool_copy(_install_template("item_database")))
+	var items: Array[Resource] = [
+		_test_item("bandage", 1, 1, 5, 0.1, 50),
+		_test_item("rifle", 3, 1, 1, 3.5, 9000),
+		_test_item("watch", 1, 1, 1, 0.2, 1500),
+	]
+	db.set("items", items)
+	return db
+
+
+func _hideout_bag(db: Resource, w: int, h: int, max_weight := 0.0) -> Node:
+	var bag := _test_bag(w, h, max_weight)
+	bag.set("item_database", db)
+	return bag
+
+
+func _hideout_state_script() -> GDScript:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORK_DIR + "/scripts"))
+	return _tool_copy(_install_template("hideout_state"))
+
+
+## A HideoutState (tool copy) outside the tree, saving to HIDEOUT_SAVE.
+func _hideout_state(db: Resource) -> Node:
+	var state := Node.new()
+	state.set_script(_hideout_state_script())
+	state.set("save_path", HIDEOUT_SAVE)
+	state.set("hideout_scene", "")
+	state.set("_db", db)
+	_added.append(state)
+	return state
+
+
+func _read_json(path: String) -> Variant:
+	return JSON.parse_string(FileAccess.get_file_as_string(path))
+
+
+func test_hideout_fill_transfer_and_move_all() -> void:
+	var db := _hideout_db()
+	var S := _hideout_state_script()
+	var stash := _hideout_bag(db, 4, 3)
+	var bag := _hideout_bag(db, 2, 2, 4.0)
+	var left: Array = S.fill_inventory(stash, [
+		{"item_id": "rifle", "count": 1, "x": 1, "y": 0, "rotated": false},
+		{"item_id": "bandage", "count": 4, "x": 0, "y": 0, "rotated": false},
+		{"item_id": "bandage", "count": 3, "x": 1, "y": 0, "rotated": false},
+		{"item_id": "ghost", "count": 1, "x": 0, "y": 2, "rotated": false},
+	])
+	assert_eq(left, [{"item_id": "ghost", "count": 1, "unknown": true}], "unknown ids come back")
+	assert_eq([stash.entries[0].x, stash.entries[0].y], [1, 0], "saved cell kept")
+	assert_eq(stash.count_of("bandage"), 7, "a stack on a taken cell is placed elsewhere")
+	var rifle_index := 0
+	assert_eq(S.transfer(stash, rifle_index, bag, Vector2i(0, 0)), 0, "3x1 rifle does not fit a 2x2 bag")
+	assert_eq(S.transfer(stash, rifle_index, bag, Vector2i(0, 0), true), 0, "nor turned")
+	assert_eq(stash.count_of("rifle"), 1, "a failed move changes nothing")
+	var full_stack := -1
+	for i in stash.entries.size():
+		if stash.item_id_of(stash.entries[i].item) == "bandage" and int(stash.entries[i].count) == 5:
+			full_stack = i
+	assert_eq(S.transfer(stash, full_stack, bag, Vector2i(0, 0)), 5, "stack dropped on a cell")
+	assert_eq(S.transfer(stash, stash.entries.size() - 1, bag, Vector2i(0, 0)), 0, "full stack under it: no merge")
+	assert_eq(S.transfer(stash, stash.entries.size() - 1, bag, Vector2i(1, 0)), 2, "free cell")
+	assert_eq(stash.count_of("bandage"), 0)
+	assert_true(is_equal_approx(bag.get_total_weight(), 0.7), "0.7 kg in the bag")
+	bag.set("max_weight", 1.0)
+	stash.add_item("bandage", 5)
+	var idx: int = stash.entries.size() - 1
+	assert_eq(S.transfer(stash, idx, bag), 3, "weight limit lets 3 more in")
+	assert_eq(stash.count_of("bandage"), 2, "the rest stays")
+	assert_eq(S.move_all(bag, stash), {"bandage": 10})
+	assert_true(bag.entries.is_empty())
+	var tiny := _hideout_bag(db, 1, 1)
+	tiny.add_item("watch")
+	assert_eq(S.move_all(stash, tiny), {}, "nothing fits a full grid")
+	assert_eq(stash.count_of("rifle"), 1, "and nothing is lost")
+	assert_eq(S.count_items([{"item_id": "a", "count": 2}, {"item_id": "a", "count": 3}, {"item_id": "b", "count": 1}]), {"a": 5, "b": 1})
+
+
+func test_hideout_state_extract_death_mia_and_save() -> void:
+	_remove_tree(ProjectSettings.globalize_path(HIDEOUT_SAVE.get_base_dir()))
+	var db := _hideout_db()
+	var state := _hideout_state(db)
+	var bag := _hideout_bag(db, 4, 3)
+	bag.name = "Inventory"
+	var body: Node = bag.get_parent()
+	bag.add_item("bandage", 3)
+	bag.add_item("watch")
+	state.set("raid_active", true)
+	state.set("_player", body)
+	state.set("_kit_value", 150)
+	state._on_extracted(null)
+	assert_true(state.pending_return, "bag is on its way home")
+	assert_eq(state.loadout, bag.to_data())
+	assert_eq(state.stats.extracted, 1)
+	assert_eq(state.stats.raids, 1)
+	assert_eq(state.last_raid.value, 1650)
+	assert_eq(state.last_raid.profit, 1500)
+	assert_eq(state.last_raid.items, {"bandage": 3, "watch": 1})
+	var saved: Dictionary = _read_json(HIDEOUT_SAVE)
+	assert_true(saved.pending_return, "saved at extraction")
+	assert_eq(saved.loadout.size(), 2)
+	state._on_extracted(null)
+	assert_eq(state.stats.extracted, 1, "ends once")
+
+	## Back in the hideout: the bag moves into the stash.
+	var home := _hideout_state(db)
+	home.load_game()
+	assert_true(home.pending_return)
+	var stash := _hideout_bag(db, 4, 3)
+	var bag2 := _hideout_bag(db, 2, 2)
+	var got := []
+	home.hideout_ready.connect(func(_h, s): got.append(s))
+	var summary: Dictionary = home.enter_hideout(null, stash, bag2)
+	assert_true(summary.returned)
+	assert_eq(summary.moved, {"bandage": 3, "watch": 1})
+	assert_true(bag2.entries.is_empty(), "bag emptied into the stash")
+	assert_eq(stash.count_of("watch"), 1)
+	assert_false(home.pending_return)
+	assert_eq(got.size(), 1, "hideout_ready")
+	saved = _read_json(HIDEOUT_SAVE)
+	assert_eq(saved.stash.size(), 2)
+	assert_eq(saved.loadout, [])
+	assert_false(saved.pending_return)
+
+	## Dying loses the bag.
+	state.set("_ending", false)
+	state.set("raid_active", true)
+	state._on_player_died()
+	assert_eq(state.loadout, [])
+	assert_eq(state.stats.died, 1)
+	assert_eq(state.stats.raids, 2)
+	assert_eq(state.last_raid.result, "died")
+	assert_eq(state.last_raid.value_lost, 1650)
+	assert_eq(state.stats.value_lost, 1650)
+
+	## Closing the game mid-raid counts as a loss on the next start.
+	state.set("in_raid", true)
+	state.set("loadout", [{"item_id": "rifle", "count": 1, "x": 0, "y": 0, "rotated": false}])
+	state.save_game()
+	var next := _hideout_state(db)
+	next.load_game()
+	assert_eq(next.stats.mia, 1)
+	assert_eq(next.last_raid.result, "mia")
+	assert_eq(next.last_raid.value_lost, 9000)
+	assert_eq(next.loadout, [])
+	assert_false(next.in_raid)
+	assert_false(_read_json(HIDEOUT_SAVE).in_raid, "loss saved")
+
+	## A new game waits to put starting_stash into the stash.
+	next.set("starting_stash", [{"item_id": "bandage", "count": 2}])
+	next.new_game()
+	assert_eq(next.overflow, [{"item_id": "bandage", "count": 2}])
+	assert_eq(next.stats.raids, 0)
+	var fresh := _hideout_bag(db, 3, 3)
+	var s2: Dictionary = next.enter_hideout(null, fresh, _hideout_bag(db, 2, 2))
+	assert_eq(s2.placed_waiting, {"bandage": 2})
+	assert_eq(fresh.count_of("bandage"), 2)
+	assert_eq(next.overflow, [])
+
+	## A broken save is set aside.
+	var f := FileAccess.open(HIDEOUT_SAVE, FileAccess.WRITE)
+	f.store_string("not json")
+	f.close()
+	var broken := _hideout_state(db)
+	broken.load_game()
+	assert_true(FileAccess.file_exists(HIDEOUT_SAVE + ".bad"), "kept as .bad")
+	assert_eq(broken.stash, [])
+
+
+func test_hideout_state_deploy_gives_player_the_bag() -> void:
+	var db := _hideout_db()
+	var state := _hideout_state(db)
+	var bag := _hideout_bag(db, 4, 3)
+	bag.name = "Inventory"
+	var body: Node = bag.get_parent()
+	body.add_to_group(&"player")
+	bag.add_item("bandage", 2)
+	var zone := Area3D.new()
+	zone.set_script(_tool_copy(_install_raid_template("raid_extraction")))
+	zone.set("restart_delay", 4.0)
+	body.get_parent().add_child(zone)
+	_added.append(zone)
+	_root().add_child(state)
+	state.set_process(false)
+	state.set("save_path", HIDEOUT_SAVE)
+	state.set("hideout_scene", "res://zz_mcp_test_topdown/hideout.tscn")
+	state.set("_db", db)
+	state.set("loadout", [{"item_id": "rifle", "count": 1, "x": 0, "y": 0, "rotated": false}])
+	state.set("_deploy_pending", true)
+	var got := []
+	state.raid_started.connect(func(f): got.append(f))
+	state.begin_raid()
+	assert_eq(got, [true], "raid from the hideout")
+	assert_eq(bag.count_of("rifle"), 1, "the bag replaces the starting kit")
+	assert_eq(bag.count_of("bandage"), 0)
+	assert_true(state.raid_active)
+	assert_true(zone.is_connected(&"extracted", Callable(state, "_on_extracted")), "extraction hooked")
+	assert_eq(zone.get("restart_delay"), 0.0, "the zone no longer reloads the raid")
+	assert_eq(state.deploy(bag, bag, "res://zz_mcp_test_topdown/nope.tscn"), ERR_FILE_NOT_FOUND)
+
+
+func test_hideout_ui_builds_and_moves_between_grids() -> void:
+	var db := _hideout_db()
+	var inv_script := _tool_copy(_install_template("inventory"))
+	var ui := Control.new()
+	ui.name = "HideoutUiTest"
+	ui.set_script(_tool_copy(_install_template("hideout")))
+	ui.set("raid_scene", "res://zz_mcp_test_topdown/nope.tscn")
+	for spec in [["Stash", 6, 4, 0.0], ["Loadout", 2, 2, 5.0]]:
+		var inv := Node.new()
+		inv.name = spec[0]
+		inv.set_script(inv_script)
+		inv.set("grid_width", spec[1])
+		inv.set("grid_height", spec[2])
+		inv.set("max_weight", spec[3])
+		inv.set("item_database", db)
+		ui.add_child(inv)
+	_root().add_child(ui)
+	_added.append(ui)
+	assert_true(ui.is_hideout())
+	var stash: Node = ui.get("stash")
+	var bag: Node = ui.get("loadout")
+	assert_true(stash != null and bag != null, "finds both grids")
+	stash.add_item("rifle")
+	stash.add_item("watch")
+	assert_contains(ui.get("_stash_label").text, "10,500")
+	assert_eq(ui.transfer_entry(stash, 0), 0, "rifle does not fit the 2x2 bag")
+	assert_eq(ui.transfer_entry(stash, 1), 1, "watch goes in")
+	assert_eq(bag.count_of("watch"), 1)
+	assert_contains(ui.get("_bag_label").text, "0.2")
+	ui.unpack_bag()
+	assert_eq(stash.count_of("watch"), 1)
+	assert_true(bag.entries.is_empty())
+	assert_eq(ui.deploy(), ERR_FILE_NOT_FOUND, "missing raid scene")
+
+
+## A raid scene file with an extraction zone and a player whose Inventory
+## is 5x4 / 22 kg and starts with 2 bandages.
+func _hideout_raid_scene() -> String:
+	_install_raid_template("raid_extraction")
+	_install_template("inventory")
+	_install_template("player_controller")
+	var root := Node3D.new()
+	root.name = "RaidTest"
+	var zone := Area3D.new()
+	zone.name = "Exit"
+	zone.set_script(load(WORK_DIR + "/scripts/raid_extraction.gd"))
+	root.add_child(zone)
+	zone.owner = root
+	var player := CharacterBody3D.new()
+	player.name = "Player"
+	player.set_script(load(WORK_DIR + "/scripts/player_controller.gd"))
+	root.add_child(player)
+	player.owner = root
+	var inv := Node.new()
+	inv.name = "Inventory"
+	inv.set_script(load(WORK_DIR + "/scripts/inventory.gd"))
+	inv.set("grid_width", 5)
+	inv.set("grid_height", 4)
+	inv.set("max_weight", 22.0)
+	var start: Array[Dictionary] = [{"item_id": "bandage", "count": 2}]
+	inv.set("starting_items", start)
+	player.add_child(inv)
+	inv.owner = root
+	var path := WORK_DIR + "/raid_test.tscn"
+	var packed := PackedScene.new()
+	packed.pack(root)
+	root.free()
+	ResourceSaver.save(packed, path)
+	return path
+
+
+func _hideout_params(raid: String, extra: Dictionary = {}) -> Dictionary:
+	var params := {
+		"raid_scene": raid,
+		"hideout_scene": WORK_DIR + "/hideout.tscn",
+		"script_dir": WORK_DIR + "/scripts",
+		"database_path": ITEM_DIR + "/item_database.tres",
+		"save_path": HIDEOUT_SAVE,
+	}
+	params.merge(extra, true)
+	return params
+
+
+func test_hideout_scaffold_scene_settings_and_undo() -> void:
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+	var raid := _hideout_raid_scene()
+	var info := HideoutTools.inspect_scene(raid)
+	assert_eq(info.extractions, 1)
+	assert_true(info.player)
+	assert_eq(info.inventory.grid_width, 5)
+	var key := "autoload/" + HideoutTools.AUTOLOAD_NAME
+	var autoload_before: Variant = ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null
+	var main_before := str(ProjectSettings.get_setting("application/run/main_scene", ""))
+	var scene_path := WORK_DIR + "/hideout.tscn"
+
+	var dry := _hideout.hideout_scaffold(_hideout_params(raid, {"dry_run": true}))
+	assert_has_key(dry, "data", str(dry))
+	assert_eq(dry.data.loadout.grid, [5, 4], "bag size from the raid player's inventory")
+	assert_eq(dry.data.loadout.max_weight, 22.0)
+	assert_eq(dry.data.starting_stash, [{"item_id": "bandage", "count": 2}], "starting stash from its starting_items")
+	assert_false(FileAccess.file_exists(scene_path), "dry run writes nothing")
+	assert_eq(ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null, autoload_before)
+
+	var result := _hideout.hideout_scaffold(_hideout_params(raid, {"stash_width": 8, "stash_height": 9}))
+	assert_has_key(result, "data", str(result))
+	assert_eq(result.data.hideout_scene_status, "created")
+	assert_true(FileAccess.file_exists(scene_path))
+	assert_true(FileAccess.file_exists(WORK_DIR + "/scripts/hideout_state.gd"))
+	assert_true(FileAccess.file_exists(WORK_DIR + "/scripts/hideout.gd"))
+	var scene := (ResourceLoader.load(scene_path, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate()
+	assert_eq(scene.get_node("Stash").get("grid_width"), 8)
+	assert_eq(scene.get_node("Stash").get("grid_height"), 9)
+	assert_eq(scene.get_node("Stash").get("max_weight"), 0.0)
+	assert_eq(scene.get_node("Loadout").get("grid_width"), 5)
+	assert_eq(scene.get_node("Loadout").get("max_weight"), 22.0)
+	assert_eq(scene.get_node("Loadout").get("item_database").resource_path, ITEM_DIR + "/item_database.tres")
+	scene.free()
+	assert_eq(ProjectSettings.get_setting(key), "*" + WORK_DIR + "/scripts/hideout_state.gd")
+	assert_eq(ProjectSettings.get_setting("game/hideout/raid_scene"), raid)
+	assert_eq(ProjectSettings.get_setting("game/hideout/save_path"), HIDEOUT_SAVE)
+	assert_eq(ProjectSettings.get_setting("application/run/main_scene"), scene_path)
+	assert_contains(FileAccess.get_file_as_string("res://project.godot"), "hideout_state.gd", "saved to project.godot")
+
+	var again := _hideout.hideout_scaffold(_hideout_params(raid, {"stash_width": 12, "return_delay": 1.0}))
+	assert_eq(again.data.hideout_scene_status, "kept")
+	assert_eq(again.data.starting_stash_from, "kept")
+	assert_true(again.data.warnings.any(func(w): return String(w).contains("kept")), "says the scene was kept")
+	assert_eq(ProjectSettings.get_setting("game/hideout/return_delay"), 1.0)
+
+	var global_ur := _undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+	assert_true(global_ur.undo(), "undo the rerun")
+	assert_eq(ProjectSettings.get_setting("game/hideout/return_delay"), 3.0)
+	assert_true(FileAccess.file_exists(scene_path), "the rerun did not write the scene")
+	assert_true(global_ur.undo(), "undo the scaffold")
+	assert_eq(ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null, autoload_before, "autoload removed")
+	assert_eq(str(ProjectSettings.get_setting("application/run/main_scene", "")), main_before, "main scene restored")
+	assert_false(ProjectSettings.has_setting("game/hideout/raid_scene"))
+	assert_false(FileAccess.file_exists(scene_path), "scene file removed")
+
+
+func test_hideout_scaffold_rejects_bad_params() -> void:
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+	var raid := _hideout_raid_scene()
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, {"bogus": 1})), "INVALID_PARAMS")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, {"save_path": "res://save.json"})), "INVALID_PARAMS")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, {"save_path": "user://save.txt"})), "INVALID_PARAMS")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, {"hideout_scene": "res://addons/x.tscn"})), "INVALID_PARAMS")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, {"hideout_scene": raid})), "INVALID_PARAMS")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(WORK_DIR + "/missing.tscn")), "NODE_NOT_FOUND")
+	assert_is_error(_hideout.hideout_scaffold(_hideout_params(raid, {"stash_width": 0})), "INVALID_PARAMS")
+	var unknown := _hideout.hideout_scaffold(_hideout_params(raid, {"starting_stash": [{"item_id": "nope"}]}))
+	assert_is_error(unknown, "INVALID_PARAMS")
+	assert_contains(unknown.error.message, "nope")
+	var none := _hideout.hideout_scaffold(_hideout_params(""))
+	if str(ProjectSettings.get_setting("game/hideout/raid_scene", "")).is_empty():
+		assert_is_error(none, "INVALID_PARAMS", "no raid scene to find")
+	assert_false(FileAccess.file_exists(WORK_DIR + "/hideout.tscn"), "errors write nothing")
+	assert_false(ProjectSettings.has_setting("game/hideout/raid_scene"))
+
+
+func test_playtest_hideout_issues() -> void:
+	var agent := _agent()
+	var base := {"result": "extracted", "game_time": 30.0, "combat": {"weapon": "Rifle"}, "navigation": {"nav_ready": true}}
+	var good := base.duplicate(true)
+	good["hideout"] = {"linked": true, "raid_result": "extracted", "returned": true, "missing": {}, "unexpected": {}, "save_matches": true, "redeploy": {"ok": true}}
+	assert_eq(agent.find_issues(good, {}), [])
+	var not_linked := base.duplicate(true)
+	not_linked["hideout"] = {"linked": false}
+	assert_eq(agent.find_issues(not_linked, {}), [], "no hideout, no hideout issues")
+	var lost := base.duplicate(true)
+	lost["hideout"] = {"linked": true, "raid_result": "extracted", "returned": false, "error": "timeout while returning"}
+	assert_contains(str(agent.find_issues(lost, {})), "은신처로 돌아가지 못함")
+	var bad := base.duplicate(true)
+	bad["hideout"] = {"linked": true, "raid_result": "extracted", "returned": true, "missing": {"watch": 1}, "unexpected": {}, "save_matches": false, "redeploy": {"ok": false, "expected_bag": {"a": 1}, "bag": {}}}
+	var issues := str(agent.find_issues(bad, {}))
+	assert_contains(issues, "watch x1")
+	assert_contains(issues, "세이브")
+	assert_contains(issues, "다시 출격")
+	var summary: Dictionary = PlaytestTools.summarize({"result": "extracted", "issues": [], "hideout": good.hideout})
+	assert_contains(str(summary.get("hideout", "")), "redeploy ok")

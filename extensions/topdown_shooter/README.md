@@ -12,11 +12,11 @@
    복사합니다. 결과: `<게임 프로젝트>/addons/topdown_shooter_tools/plugin.cfg`
 2. Godot에서 **프로젝트 > 프로젝트 설정 > 플러그인**을 열고 `Godot AI`와
    `Top-down Shooter Tools`를 둘 다 켭니다.
-3. Godot AI 독의 **Tools** 탭에 도구 9개가 보이면 끝입니다. Claude Code나 Claude
+3. Godot AI 독의 **Tools** 탭에 도구 10개가 보이면 끝입니다. Claude Code나 Claude
    데스크톱에는 `custom_topdown_camera_setup`, `custom_player_controller_scaffold`,
    `custom_weapon_create`, `custom_enemy_ai_scaffold`, `custom_item_db_import`,
    `custom_loot_table_edit`, `custom_inventory_ui_scaffold`, `custom_raid_map_blockout`,
-   `custom_raid_playtest`라는
+   `custom_raid_playtest`, `custom_hideout_scaffold`라는
    이름으로 바로 나타납니다(승격 도구). 도구 목록이
    갱신되지 않는 클라이언트라면 `custom_manage(op="invoke", name=...)`로도 부를
    수 있습니다.
@@ -33,7 +33,8 @@
 | `inventory_ui_scaffold` | 플레이어에 격자·무게 인벤토리(`Inventory` 자식)와 인벤토리 화면(`InventoryUI` CanvasLayer)을 붙임. Tab/I로 열고 닫기, 드래그로 이동, R로 회전, 우클릭으로 바닥에 버리기, Shift+클릭으로 나누기, 정렬 버튼, 무게·가치 표시, 툴팁, 획득 알림, 무게 HUD. 무거우면 이동 속도가 줄고, 가방이 가득 차거나 너무 무거우면 바닥 아이템이 그대로 남음. 플레이어 스크립트에 `add_item`이 없으면 짧게 추가해서 `loot_table_edit`의 바닥 아이템이 가방으로 들어감. 노드는 실행 취소 한 번, 스크립트 수정은 따로 한 번 |
 | `raid_map_blockout` | 열린 3D 씬에 레이드 맵 뼈대를 만듦. 방과 복도를 1m 격자에 배치(방 개수 + 시드로 자동 생성, 또는 방 좌표·크기와 연결을 직접 지정)하고 바닥·벽·엄폐물(낮은 벽, 상자, 기둥)을 StaticBody3D 상자로 생성. 플레이어 스폰(플레이어를 옮김), 방마다 적 스폰 지점(적 씬을 주면 방을 도는 순찰 경로와 함께 배치), 루팅 상자(E로 수색, 드롭표를 주면 바닥에 아이템), 탈출 지점(안에 몇 초 서 있으면 탈출)을 배치. 내비 메시를 다시 굽고 ASCII 미리보기를 돌려줌. 맵 전체가 실행 취소 한 번 |
 | `weapon_create` | 무기 스탯 `.tres`(데미지, 연사, 자동, 탄창, 재장전, 탄퍼짐, 산탄 수, 사거리)와 무기 씬 생성. 히트스캔 또는 투사체로 발사하고, 맞은 대상의 `take_damage(amount, info)`를 호출. `attach_to`로 플레이어에 바로 장착 |
-| `raid_playtest` | 게임을 실행해 봇이 레이드를 직접 플레이하고 보고. 실제 입력 액션으로 내비 메시를 따라 걷고, 마우스 이동으로 조준하고, 쏘고 재장전하고, 상자에서 interact를 눌러 열고, 떨어진 아이템을 줍고, 보이는 적과 싸우고, 시간 안에 탈출 지점으로 감. 결과(탈출/사망/시간 초과), 게임 중 오류, FPS, 전투·루팅 수치, 막힌 위치, 스크린샷과 문제 목록(`issues`), 판정(`verdict`)을 돌려줌. 처음 한 번 `RaidPlaytest` 자동 로드를 등록(평소 플레이에서는 아무것도 안 함, 실행 취소 한 번) |
+| `raid_playtest` | 게임을 실행해 봇이 레이드를 직접 플레이하고 보고. 실제 입력 액션으로 내비 메시를 따라 걷고, 마우스 이동으로 조준하고, 쏘고 재장전하고, 상자에서 interact를 눌러 열고, 떨어진 아이템을 줍고, 보이는 적과 싸우고, 시간 안에 탈출 지점으로 감. 결과(탈출/사망/시간 초과), 게임 중 오류, FPS, 전투·루팅 수치, 막힌 위치, 스크린샷과 문제 목록(`issues`), 판정(`verdict`)을 돌려줌. 처음 한 번 `RaidPlaytest` 자동 로드를 등록(평소 플레이에서는 아무것도 안 함, 실행 취소 한 번). `hideout_scaffold`가 있으면 은신처로 돌아가 창고·세이브를 확인하고 다시 출격까지 검사 |
+| `hideout_scaffold` | 레이드 루프를 닫음. 은신처 씬(큰 창고 격자 + 출격 가방, 둘 사이 드래그, 출격 버튼)을 만들고 `HideoutState` 자동 로드를 등록. 출격하면 가방이 레이드 플레이어의 인벤토리가 되고, 탈출하면 가방 전체(가져간 것 + 주운 것)가 창고로, 죽으면 가방을 잃은 채 은신처로 돌아옴. 창고·가방·전적은 `user://` JSON에 바로바로 저장. 레이드 중에 게임을 끄면 사망 처리. 레이드 씬은 건드리지 않음. 은신처를 메인 씬으로 지정. 실행 취소 한 번 |
 
 Claude에게는 이렇게 말하면 됩니다.
 
@@ -51,6 +52,8 @@ Claude에게는 이렇게 말하면 됩니다.
 > 플레이어한테 8x6 인벤토리 달아 줘. 최대 무게 35kg, 20kg부터 느려지게. 붕대 2개 들고 시작.
 
 > 레이드 한 판 자동으로 돌려 보고 문제 있으면 알려 줘. 2배속으로.
+
+> 은신처 만들어 줘. 창고는 10x14, 새 게임은 붕대 5개랑 9mm 탄 60발 들고 시작.
 
 > 방 7개짜리 레이드 맵 만들어 줘. 먼저 dry_run으로 미리보기 보여 주고, 괜찮으면 grunt랑 gunner를
 > 방마다 하나씩 두고 상자는 crate 드롭표로, 탈출구는 2개.
@@ -189,11 +192,50 @@ gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
 | `fight`, `hunt`, `engage_range` | 보이는 적 쏘기, 적을 찾아다니기, 교전 거리(무기 사거리로 제한) |
 | `extract`, `explore`, `invulnerable` | 탈출로 끝내기, 모든 방 들르기, 죽지 않게(경로 점검용) |
 | `min_fps`, `screenshots`, `screenshot_interval`, `max_screenshots`, `show_hud` | FPS 기준, 스크린샷(시작·첫 교전·첫 상자·첫 막힘·끝 + N초마다), 게임 화면의 봇 상태 표시 |
+| `hideout_loop`, `redeploy` | `HideoutState`(hideout_scaffold)가 있으면 레이드 뒤 은신처까지 기다려 창고·세이브를 검사하고, 창고 아이템 하나를 가방에 넣어 다시 출격해 봄(기본 둘 다 true, 별도 세이브 사용) |
 
 보고서는 `user://raid_playtest/report.json`(맥: `~/Library/Application Support/Godot/app_userdata/<프로젝트>/raid_playtest/`),
 스크린샷은 같은 폴더의 `shots/`에 저장됩니다. `issues`가 비어 있으면 `verdict`가 `pass`입니다. 문제로
 잡는 것: 게임 중 오류, 사망, 시간 안에 탈출 못 함, 무기 없음, 내비 메시 없음, 막힘, 못 간 목표, 못 주운
 아이템, `min_fps` 아래로 떨어진 FPS.
+
+## 은신처·창고·세이브
+
+`hideout_scaffold`는 게임 루프를 이렇게 만듭니다.
+
+```
+은신처(창고 + 출격 가방) --출격--> 레이드 --탈출--> 은신처 (가방 → 창고)
+                                         --사망--> 은신처 (가방 잃음)
+```
+
+| 매개변수 | 내용 |
+|---|---|
+| `raid_scene` | 출격하면 여는 레이드 씬. 기본은 열린 씬, 아니면 메인 씬(탈출 지점이 있는 씬) |
+| `hideout_scene` | 만들 은신처 씬. 기본 `res://scenes/hideout.tscn`. 이미 있으면 그대로 두고 설정만 바꿈(`overwrite=true`면 다시 만듦) |
+| `stash_width`, `stash_height` | 창고 칸 수(무게 제한 없음, 스크롤). 기본 10 x 14 |
+| `loadout_grid_width`, `loadout_grid_height`, `loadout_max_weight` | 출격 가방. 기본은 레이드 플레이어 `Inventory`와 같은 크기·무게 제한 |
+| `starting_stash` | 새 게임의 창고 `[{item_id, count}]`. 기본은 지난 설정, 없으면 레이드 플레이어의 `starting_items` |
+| `save_path` | 세이브 파일. 기본 `user://hideout/save.json`(맥: `~/Library/Application Support/Godot/app_userdata/<프로젝트>/hideout/`) |
+| `return_delay` | 탈출·사망 결과를 보여 주고 은신처로 가기까지 초. 기본 3 |
+| `quit_counts_as_death` | 레이드 중에 게임을 끄면 가방을 잃음. 기본 true |
+| `track_direct_raids` | 레이드 씬을 따로 실행해도(F6, `raid_playtest`) 탈출하면 창고에 넣음. 기본 true |
+| `set_main_scene` | 은신처를 메인 씬(F5)으로. 기본 true |
+
+은신처 화면에서는 드래그로 창고와 가방 사이를 옮기고(R 회전, Shift+클릭 나누기), 우클릭으로
+반대편에 바로 보냅니다. 가방 무게 제한을 넘으면 들어가지 않습니다. 위에는 전적(레이드·탈출·사망·
+생존율·총 수익)과 지난 레이드 결과가 보이고, **처음부터**를 두 번 누르면 세이브를 지웁니다.
+
+게임에서는(`HideoutState` 자동 로드):
+
+- 출격하면 저장한 뒤 레이드 씬을 열고, 플레이어 `Inventory`의 시작 아이템을 가방 내용으로 바꿉니다.
+- 탈출 지점의 `extracted`, 플레이어의 `died`를 그룹으로 찾아 연결하고, 탈출 지점이 레이드를 다시
+  시작하지 않게 합니다. 결과는 그 순간 바로 저장되고, 화면에 결과를 띄운 뒤 은신처로 갑니다.
+- 은신처에 오면 가방이 창고로 옮겨지고, 창고가 가득 차면 남은 것은 가방에 그대로 있습니다.
+- 신호: `raid_started(from_hideout)`, `raid_ended(result, summary)`, `hideout_ready(hideout, summary)`, `saved(path)`.
+  상인·퀘스트처럼 돈이나 진행도를 더할 때는 `to_save_data()`/`apply_save_data()`에 키를 추가하세요.
+- `raid_playtest`는 이 루프를 별도 세이브(`user://hideout/playtest_save.json`, 진짜 세이브를 복사해 시작)로
+  검사합니다. 보고서의 `hideout`에 은신처 도착 시간, 창고로 옮긴 아이템, 빠진 아이템, 세이브 일치 여부,
+  다시 출격했을 때 가방이 그대로 왔는지가 들어갑니다(`hideout_loop`, `redeploy`로 끔).
 
 ## 적 AI
 
@@ -230,13 +272,16 @@ res://scripts/topdown/   topdown_camera_rig.gd, player_controller.gd,
                          loot_table.gd, loot_dropper.gd, loot_pickup.gd,
                          inventory.gd, inventory_ui.gd,
                          loot_crate.gd, raid_extraction.gd,
-                         raid_playtest_agent.gd (자동 로드 RaidPlaytest)
+                         raid_playtest_agent.gd (자동 로드 RaidPlaytest),
+                         hideout.gd, hideout_state.gd (자동 로드 HideoutState)
 res://scenes/player/     player.tscn
 res://scenes/weapons/    <weapon_id>.tscn, projectile.tscn
 res://scenes/enemies/    <enemy_id>.tscn  (스크립트는 scripts/topdown/enemy_ai.gd)
 res://data/weapons/      <weapon_id>.tres
 res://data/items/        <item_id>.tres, item_database.tres
 res://data/loot/         <table_id>.tres
+res://scenes/            hideout.tscn
+user://hideout/          save.json (게임이 씀)
 ```
 
 스크립트는 템플릿에서 프로젝트로 **복사**되므로 마음대로 고쳐도 됩니다. 이미

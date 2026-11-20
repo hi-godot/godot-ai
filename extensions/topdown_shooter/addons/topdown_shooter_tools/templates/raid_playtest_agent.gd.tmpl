@@ -12,6 +12,12 @@ extends Node
 ## errors, FPS, combat, loot, stuck spots and screenshots, and writes
 ## user://raid_playtest/report.json for the editor tool.
 ##
+## With the HideoutState autoload (hideout_scaffold) it also checks the
+## loop around the raid, on a separate playtest save: after extracting (or
+## dying) it waits for the hideout, checks that the bag reached the stash
+## (or was lost) and the save file matches, then moves one stash item into
+## the bag, deploys again and checks the raid player got that bag.
+##
 ## Free to edit: this file was copied into your project and is yours now.
 
 const DIR := "user://raid_playtest/"
@@ -44,6 +50,9 @@ const DEFAULTS := {
 	"show_hud": true,
 	"quit_on_finish": true,
 	"seed": 1,
+	"hideout_loop": true,
+	"redeploy": true,
+	"hideout_timeout": 20.0,
 }
 
 ## Collects engine errors/warnings while the bot runs. Logger virtuals can be
@@ -175,6 +184,17 @@ var _stats := {
 	"rooms_visited": {},
 }
 var _events: Array = []
+## Hideout loop check (HideoutState autoload): "" while raiding, then
+## "returning" (raid over, waiting for the hideout) and "redeploying".
+var _hideout_state: Node = null
+var _hideout_phase := ""
+var _hideout_report := {}
+var _phase_msec := 0
+var _end_result := ""
+var _end_snap := {}
+var _counts_before := {}
+var _bag_counts := {}
+var _redeploy_expected := {}
 var _last_pos := Vector3.ZERO
 var _last_health := -1.0
 var _connected: Dictionary = {}
@@ -233,6 +253,8 @@ func _begin() -> void:
 	if bool(config.show_hud):
 		_make_hud()
 	get_tree().node_added.connect(_on_node_added)
+	## Other autoloads (HideoutState) may be added after this one.
+	_link_hideout.call_deferred()
 	set_process(true)
 	set_physics_process(true)
 	_event("start", {})
@@ -264,6 +286,9 @@ func _process(_delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	if not active or _done:
 		return
+	if not _hideout_phase.is_empty():
+		_hideout_tick()
+		return
 	_t += delta
 	if not _ensure_player():
 		if _t > 5.0:
@@ -272,7 +297,7 @@ func _physics_process(delta: float) -> void:
 	if bool(config.invulnerable) and "health" in _player:
 		_player.set("health", maxf(float(_player.get("health")), float(_player.get("max_health")) * 0.5))
 	if _player.get("is_dead") == true:
-		_finish("died")
+		_end_raid("died")
 		return
 	if _t >= float(config.duration):
 		_finish("timeout")
@@ -921,7 +946,150 @@ func _count_item(id: String, count: int) -> void:
 func _on_extracted(_body: Node, zone: Node) -> void:
 	_stats.extracted_at = _t
 	_event("extracted", {"zone": str(zone.name)})
-	_finish("extracted")
+	_end_raid("extracted")
+
+
+# --- hideout loop -------------------------------------------------------------
+
+func _link_hideout() -> void:
+	if not bool(config.get("hideout_loop", true)):
+		return
+	_hideout_state = get_node_or_null(^"/root/HideoutState")
+	if _hideout_state == null or not _hideout_state.has_method(&"enter_hideout"):
+		_hideout_state = null
+		return
+	if _hideout_state.has_method(&"use_sandbox"):
+		_hideout_state.use_sandbox()
+	_counts_before = _sum_counts([_hideout_state.stash, _hideout_state.loadout, _hideout_state.overflow])
+	_hideout_report = {
+		"linked": true,
+		"save_path": ProjectSettings.globalize_path(str(_hideout_state.save_path)),
+		"sandbox": bool(_hideout_state.get("sandbox")),
+		"hideout_scene": str(_hideout_state.hideout_scene),
+		"items_before": _counts_before,
+		"returned": false,
+	}
+	_hideout_state.hideout_ready.connect(_on_hideout_ready)
+	_hideout_state.raid_started.connect(_on_raid_restarted)
+
+
+## The raid is over (extracted or died). With a linked HideoutState, wait for
+## the hideout before reporting; else report now.
+func _end_raid(result: String) -> void:
+	if _done or not _hideout_phase.is_empty():
+		return
+	_end_snap = _snapshot_player()
+	if _hideout_state == null or not is_instance_valid(_hideout_state) or str(_hideout_state.hideout_scene).is_empty():
+		_finish(result)
+		return
+	_release_all()
+	_end_result = result
+	_bag_counts = _hideout_state.count_items(_inventory.to_data()) if _inventory != null and is_instance_valid(_inventory) and _inventory.has_method("to_data") else {}
+	_hideout_report["raid_result"] = result
+	_hideout_report["bag"] = _bag_counts
+	_hideout_phase = "returning"
+	_phase_msec = Time.get_ticks_msec()
+	_event("raid_end", {"result": result})
+
+
+func _hideout_tick() -> void:
+	if float(Time.get_ticks_msec() - _phase_msec) / 1000.0 > float(config.get("hideout_timeout", 20.0)):
+		_hideout_report["error"] = "timeout while %s" % _hideout_phase
+		_finish(_end_result)
+
+
+func _on_hideout_ready(hideout: Node, summary: Dictionary) -> void:
+	if _hideout_phase != "returning" or _done:
+		return
+	var stash_inv: Node = hideout.get("stash")
+	var bag_inv: Node = hideout.get("loadout")
+	_hideout_report["returned"] = true
+	_hideout_report["seconds_to_hideout"] = snappedf(float(Time.get_ticks_msec() - _phase_msec) / 1000.0, 0.1)
+	_hideout_report["moved_to_stash"] = summary.get("moved", {})
+	_hideout_report["left_in_bag"] = summary.get("left_in_bag", {})
+	var after := _sum_counts([stash_inv.to_data(), bag_inv.to_data(), _hideout_state.overflow])
+	var expected := _counts_before.duplicate()
+	if _end_result == "extracted":
+		for id in _bag_counts:
+			expected[id] = int(expected.get(id, 0)) + int(_bag_counts[id])
+	var missing := {}
+	var extra := {}
+	for id in expected:
+		var d := int(expected[id]) - int(after.get(id, 0))
+		if d > 0:
+			missing[id] = d
+	for id in after:
+		var d := int(after[id]) - int(expected.get(id, 0))
+		if d > 0:
+			extra[id] = d
+	_hideout_report["items_after"] = after
+	_hideout_report["missing"] = missing
+	_hideout_report["unexpected"] = extra
+	_hideout_report["stash_value"] = int(stash_inv.get_total_value())
+	## The save on disk must hold what the hideout shows.
+	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(str(_hideout_state.save_path)))
+	var saved_counts := _sum_counts([saved.get("stash", []), saved.get("loadout", []), saved.get("overflow", [])]) if saved is Dictionary else {}
+	_hideout_report["save_matches"] = saved is Dictionary and saved_counts == after
+	_shot("hideout")
+	if not bool(config.get("redeploy", true)) or not hideout.has_method(&"deploy"):
+		_finish(_end_result)
+		return
+	## Pack one stash item and go again.
+	var redeploy := {"ok": false}
+	if not stash_inv.entries.is_empty():
+		var id: String = stash_inv.item_id_of(stash_inv.entries[0].item)
+		var moved: int = _hideout_state.transfer(stash_inv, 0, bag_inv)
+		redeploy["packed"] = {id: moved}
+	_redeploy_expected = _hideout_state.count_items(bag_inv.to_data())
+	redeploy["expected_bag"] = _redeploy_expected
+	_hideout_report["redeploy"] = redeploy
+	_hideout_phase = "redeploying"
+	_phase_msec = Time.get_ticks_msec()
+	var err: int = hideout.deploy()
+	if err != OK:
+		redeploy["error"] = error_string(err)
+		_finish(_end_result)
+
+
+func _on_raid_restarted(from_hideout: bool) -> void:
+	if _hideout_phase != "redeploying" or _done:
+		return
+	var redeploy: Dictionary = _hideout_report.get("redeploy", {})
+	var player := get_tree().get_first_node_in_group(&"player")
+	var bag: Node = player.get_node_or_null(^"Inventory") if player != null else null
+	var got: Dictionary = _hideout_state.count_items(bag.to_data()) if bag != null else {}
+	redeploy["bag"] = got
+	redeploy["scene"] = get_tree().current_scene.scene_file_path if get_tree().current_scene != null else ""
+	redeploy["seconds"] = snappedf(float(Time.get_ticks_msec() - _phase_msec) / 1000.0, 0.1)
+	redeploy["ok"] = from_hideout and bag != null and got == _redeploy_expected
+	_shot("redeploy")
+	_finish(_end_result)
+
+
+static func _sum_counts(lists: Array) -> Dictionary:
+	var out := {}
+	for list in lists:
+		if not list is Array:
+			continue
+		for d in list:
+			if d is Dictionary:
+				var id := str(d.get("item_id", ""))
+				out[id] = int(out.get(id, 0)) + int(d.get("count", 0))
+	return out
+
+
+func _snapshot_player() -> Dictionary:
+	var snap := {}
+	if _player != null and is_instance_valid(_player):
+		snap["pos"] = _player.global_position
+		snap["health"] = float(_player.get("health")) if "health" in _player else 0.0
+		snap["nav_ready"] = NavigationServer3D.map_get_iteration_id(_player.get_world_3d().navigation_map) > 0
+	if _inventory != null and is_instance_valid(_inventory):
+		if _inventory.has_method("get_total_value"):
+			snap["inv_value"] = int(_inventory.get_total_value())
+		if _inventory.has_method("get_total_weight"):
+			snap["inv_weight"] = snappedf(float(_inventory.get_total_weight()), 0.01)
+	return snap
 
 
 func _event(type: String, data: Dictionary) -> void:
@@ -991,6 +1159,8 @@ func _hud_text() -> String:
 func _finish(result: String) -> void:
 	if _done:
 		return
+	if _end_snap.is_empty():
+		_end_snap = _snapshot_player()
 	_done = true
 	_release_all()
 	_event("finish", {"result": result})
@@ -1011,15 +1181,12 @@ func _finish(result: String) -> void:
 
 
 func build_report(result: String) -> Dictionary:
-	var pos: Vector3 = _player.global_position if _player != null and is_instance_valid(_player) else Vector3.ZERO
-	var health_end: float = float(_player.get("health")) if _player != null and is_instance_valid(_player) and "health" in _player else 0.0
-	var inv_value := 0
-	var inv_weight := 0.0
-	if _inventory != null and is_instance_valid(_inventory):
-		if _inventory.has_method("get_total_value"):
-			inv_value = int(_inventory.get_total_value())
-		if _inventory.has_method("get_total_weight"):
-			inv_weight = snappedf(float(_inventory.get_total_weight()), 0.01)
+	## Values from the end of the raid (the scene may have changed since).
+	var snap := _end_snap if not _end_snap.is_empty() else _snapshot_player()
+	var pos: Vector3 = snap.get("pos", Vector3.ZERO)
+	var health_end: float = float(snap.get("health", 0.0))
+	var inv_value := int(snap.get("inv_value", 0))
+	var inv_weight := float(snap.get("inv_weight", 0.0))
 	var real_time := float(Time.get_ticks_usec() - _real_start_usec) / 1000000.0
 	var report := {
 		"version": VERSION,
@@ -1065,7 +1232,7 @@ func build_report(result: String) -> Dictionary:
 			"extracted_at": float(_stats.extracted_at),
 		},
 		"navigation": {
-			"nav_ready": _player != null and is_instance_valid(_player) and NavigationServer3D.map_get_iteration_id(_player.get_world_3d().navigation_map) > 0,
+			"nav_ready": bool(snap.get("nav_ready", false)),
 			"stuck": _stats.stuck,
 			"unreachable": _stats.unreachable,
 			"rooms_total": _rooms.size(),
@@ -1075,6 +1242,7 @@ func build_report(result: String) -> Dictionary:
 		"errors": _catcher.snapshot() if _catcher != null else {"count": 0, "warning_count": 0, "messages": [], "warnings": [], "printerr": []},
 		"events": _events,
 		"screenshots": _shots_taken,
+		"hideout": _hideout_report if not _hideout_report.is_empty() else {"linked": false},
 	}
 	report["issues"] = find_issues(report, config)
 	return report
@@ -1145,6 +1313,22 @@ static func find_issues(report: Dictionary, cfg: Dictionary) -> Array:
 	var loot: Dictionary = report.get("loot", {})
 	if int(loot.get("pickups_refused", 0)) > 0:
 		issues.append("바닥 아이템 %d개를 줍지 못함 (가방이 가득 찼거나 너무 무거움)" % int(loot.pickups_refused))
+	var hideout: Dictionary = report.get("hideout", {})
+	if bool(hideout.get("linked", false)) and hideout.has("raid_result"):
+		if not bool(hideout.get("returned", false)):
+			issues.append("레이드가 끝난 뒤 은신처로 돌아가지 못함 (%s)" % hideout.get("error", "?"))
+		else:
+			var missing: Dictionary = hideout.get("missing", {})
+			if not missing.is_empty():
+				issues.append("은신처에 없는 아이템: %s" % ", ".join(missing.keys().map(func(k): return "%s x%d" % [k, int(missing[k])])))
+			var unexpected: Dictionary = hideout.get("unexpected", {})
+			if not unexpected.is_empty():
+				issues.append("은신처에 생긴 예상 밖 아이템 (사망했는데 남았거나 복사됨): %s" % ", ".join(unexpected.keys().map(func(k): return "%s x%d" % [k, int(unexpected[k])])))
+			if not bool(hideout.get("save_matches", true)):
+				issues.append("세이브 파일 내용이 은신처 창고·가방과 다름")
+			var redeploy: Dictionary = hideout.get("redeploy", {})
+			if not redeploy.is_empty() and not bool(redeploy.get("ok", false)):
+				issues.append("은신처에서 다시 출격했을 때 가방이 그대로 오지 않음 (%s)" % redeploy.get("error", "기대 %s, 실제 %s" % [redeploy.get("expected_bag", {}), redeploy.get("bag", "?")]))
 	var perf: Dictionary = report.get("performance", {})
 	var min_fps := float(cfg.get("min_fps", 30.0))
 	if int(perf.get("frames", 0)) > 0 and float(perf.get("fps_min", 0.0)) < min_fps:
