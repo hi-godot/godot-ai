@@ -12,9 +12,10 @@
    복사합니다. 결과: `<게임 프로젝트>/addons/topdown_shooter_tools/plugin.cfg`
 2. Godot에서 **프로젝트 > 프로젝트 설정 > 플러그인**을 열고 `Godot AI`와
    `Top-down Shooter Tools`를 둘 다 켭니다.
-3. Godot AI 독의 **Tools** 탭에 도구 5개가 보이면 끝입니다. Claude Code나 Claude
+3. Godot AI 독의 **Tools** 탭에 도구 6개가 보이면 끝입니다. Claude Code나 Claude
    데스크톱에는 `custom_topdown_camera_setup`, `custom_player_controller_scaffold`,
-   `custom_weapon_create`, `custom_enemy_ai_scaffold`, `custom_item_db_import`라는
+   `custom_weapon_create`, `custom_enemy_ai_scaffold`, `custom_item_db_import`,
+   `custom_loot_table_edit`라는
    이름으로 바로 나타납니다(승격 도구). 도구 목록이
    갱신되지 않는 클라이언트라면 `custom_manage(op="invoke", name=...)`로도 부를
    수 있습니다.
@@ -27,6 +28,7 @@
 | `player_controller_scaffold` | 플레이어 씬 생성: CharacterBody3D, 캡슐 충돌·메시, 조준 피벗(`Aim`), 무기 장착점(`Aim/WeaponMount`). 카메라 기준 WASD 이동, 마우스 조준(바닥 평면 레이캐스트), 무적 구르기, 체력·`take_damage`, 발사·재장전 입력. 없는 입력 액션만 `project.godot`에 추가하고, 기본으로 열린 씬에 배치 |
 | `enemy_ai_scaffold` | 적 씬 생성: CharacterBody3D, 캡슐, `NavigationAgent3D`, `WeaponMount`. 상태 머신 AI(순찰 → 추격 → 공격 → 수색 → 순찰, 사망). 시야각 + 시선 레이로 감지하고, 맞으면 쏜 쪽을 쫓고, 주변 적에게 알림. 근접 공격 또는 원거리(자체 레이, 또는 `weapon_create` 무기 장착). 체력·`take_damage`. 열린 씬에 여러 마리 배치하고, 씬에 `NavigationRegion3D`가 없으면 정적 충돌체로 내비 메시를 구워 추가. 실행 취소 한 번으로 제거 |
 | `item_db_import` | 아이템 스프레드시트(CSV/TSV)를 행마다 아이템 `.tres` 하나로 바꾸고, 전체를 묶은 `item_database.tres`(`get_item(id)`, `find_by`, `find_by_tag`)를 만들거나 갱신. 모든 행을 먼저 검사해서 한 칸이라도 틀리면 아무것도 쓰지 않음. 다시 가져오면 기존 아이템을 제자리에서 갱신. 실행 취소 한 번으로 이전 파일로 복원 |
+| `loot_table_edit` | 적·상자용 드롭 확률표 `.tres` 생성·수정. 아이템별 가중치, 개수 범위, 확정 드롭, 드롭당 굴림 횟수, "없음" 가중치. 아이템 id는 `item_database.tres`로 검사하고 `category`/`tag`로 해당 아이템을 한 번에 추가. 아이템마다 정확한 드롭 확률·기대 개수와 시드 고정 시뮬레이션 결과·샘플 드롭을 보고(`table_id`만 주면 시뮬레이션만). `attach_to`/`attach_to_group`으로 적에게 `LootDropper`를 붙이면 `died` 때 바닥에 아이템이 떨어짐. 표 파일과 드롭 노드 각각 실행 취소 한 번 |
 | `weapon_create` | 무기 스탯 `.tres`(데미지, 연사, 자동, 탄창, 재장전, 탄퍼짐, 산탄 수, 사거리)와 무기 씬 생성. 히트스캔 또는 투사체로 발사하고, 맞은 대상의 `take_damage(amount, info)`를 호출. `attach_to`로 플레이어에 바로 장착 |
 
 Claude에게는 이렇게 말하면 됩니다.
@@ -38,6 +40,9 @@ Claude에게는 이렇게 말하면 됩니다.
 > gunner 하나를 (0,0,-20)에 둬. grunt는 (-8,0,-10)과 (8,0,-10) 사이를 순찰하게.
 
 > 이 아이템 시트(CSV 붙여 넣기)를 아이템 DB로 가져와 줘. 먼저 dry_run으로 확인해 줘.
+
+> grunt 드롭표 만들어 줘. 붕대 가중치 3에 1~2개, 9mm 탄 가중치 1에 10~30개, 꽝 4. 1000번 돌려서
+> 확률 보여 주고, 씬의 적 전부(enemy 그룹)에 붙여 줘.
 
 ## 아이템 DB 가져오기
 
@@ -64,6 +69,35 @@ gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
 `item_data.gd`에 `@export var armor_class := 0`처럼 속성을 추가하고 같은 이름의 열을
 시트에 넣으면 다음 가져오기부터 자동으로 채워집니다. `item_database.tres`는 같은
 폴더의 이전 항목을 유지하고 이번 시트의 아이템을 추가하거나 교체합니다.
+
+## 드롭 확률표
+
+표는 `res://data/loot/<table_id>.tres`(`loot_table.gd`)에 저장됩니다. 한 번 드롭할 때
+`rolls_min`~`rolls_max`번 굴리고, 굴릴 때마다 가중치에 비례해 항목 하나(또는
+`empty_weight` 비율로 "없음")를 고릅니다. `guaranteed` 항목은 굴림과 별개로 항상
+떨어집니다. 같은 아이템이 여러 번 뽑히면 개수가 합쳐집니다.
+
+| 매개변수 | 내용 |
+|---|---|
+| `entries` | `[{item_id, weight, min_count, max_count, guaranteed}]`. `item_id` 대신 `category`나 `tag`를 주면 DB에서 맞는 아이템을 모두 같은 가중치로 추가. 이미 표에 있는 아이템은 값만 바꿈. 같은 아이템을 여러 항목이 가리키면 뒤의 것이 이김 |
+| `remove_items`, `replace_entries` | 아이템 빼기, 기존 항목을 비우고 새로 쓰기 |
+| `rolls_min`, `rolls_max`, `empty_weight` | 드롭당 굴림 횟수, "없음" 가중치. 새 표 기본값은 1, 1, 0 |
+| `simulate`, `seed`, `samples` | 시뮬레이션 횟수(기본 1000), 시드(같은 시드면 같은 결과), 보여 줄 샘플 드롭 수 |
+| `attach_to`, `attach_to_group`, `trigger_signal` | 열린 씬의 노드나 그룹(예: `enemy`)에 `LootDropper` 자식을 붙임. 이미 있으면 표만 바꿈. 기본으로 부모의 `died` 신호에 드롭 |
+
+보고서의 `drop_percent`는 한 번 드롭할 때 그 아이템이 하나 이상 나올 정확한 확률,
+`expected_count`는 평균 개수, `simulated_*`는 시뮬레이션 결과, `nothing_chance_percent`는
+아무것도 안 나올 확률입니다. DB에 없는 id는 오류입니다(`allow_unknown_items=true`로 허용).
+
+게임에서는:
+
+- `LootDropper`는 부모가 `died`를 내면 표를 굴려, 부모 옆(부모의 부모 아래)에 아이템마다
+  `loot_pickup.gd` 노드 하나를 흩뿌립니다. 상자처럼 신호가 없으면 `trigger_signal`을 비우고
+  `$LootDropper.drop()`을 직접 부르세요. `dropped(drops)` 신호도 냅니다.
+- 바닥 아이템은 희귀도 색 상자와 이름표를 띄우고, `player` 그룹 몸체가 닿으면 주워집니다.
+  그 몸체에 `add_item(item, count)`가 있으면 호출하고, `false`를 돌려주면(가방이 가득 참)
+  그대로 남습니다. 없으면 그냥 사라지고 `picked_up` 신호만 냅니다.
+- 코드에서 바로 굴리려면 `table.roll()` → `[{item_id, count, item}]`, 확률은 `table.get_roll_chances()`.
 
 ## 적 AI
 
@@ -96,12 +130,14 @@ gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
 ```
 res://scripts/topdown/   topdown_camera_rig.gd, player_controller.gd,
                          weapon.gd, weapon_data.gd, projectile.gd, enemy_ai.gd,
-                         item_data.gd, item_database.gd
+                         item_data.gd, item_database.gd,
+                         loot_table.gd, loot_dropper.gd, loot_pickup.gd
 res://scenes/player/     player.tscn
 res://scenes/weapons/    <weapon_id>.tscn, projectile.tscn
 res://scenes/enemies/    <enemy_id>.tscn  (스크립트는 scripts/topdown/enemy_ai.gd)
 res://data/weapons/      <weapon_id>.tres
 res://data/items/        <item_id>.tres, item_database.tres
+res://data/loot/         <table_id>.tres
 ```
 
 스크립트는 템플릿에서 프로젝트로 **복사**되므로 마음대로 고쳐도 됩니다. 이미
