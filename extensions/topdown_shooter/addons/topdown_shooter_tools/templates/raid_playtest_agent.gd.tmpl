@@ -952,14 +952,16 @@ func _on_extracted(_body: Node, zone: Node) -> void:
 # --- hideout loop -------------------------------------------------------------
 
 func _link_hideout() -> void:
+	var state := get_node_or_null(^"/root/HideoutState")
+	if state == null or not state.has_method(&"enter_hideout"):
+		return
+	## Loot banked during a playtest must never reach the player's real
+	## save, even without the hideout check.
+	if state.has_method(&"use_sandbox"):
+		state.use_sandbox()
 	if not bool(config.get("hideout_loop", true)):
 		return
-	_hideout_state = get_node_or_null(^"/root/HideoutState")
-	if _hideout_state == null or not _hideout_state.has_method(&"enter_hideout"):
-		_hideout_state = null
-		return
-	if _hideout_state.has_method(&"use_sandbox"):
-		_hideout_state.use_sandbox()
+	_hideout_state = state
 	_counts_before = _sum_counts([_hideout_state.stash, _hideout_state.loadout, _hideout_state.overflow])
 	_hideout_report = {
 		"linked": true,
@@ -1084,6 +1086,8 @@ func _snapshot_player() -> Dictionary:
 		snap["pos"] = _player.global_position
 		snap["health"] = float(_player.get("health")) if "health" in _player else 0.0
 		snap["nav_ready"] = NavigationServer3D.map_get_iteration_id(_player.get_world_3d().navigation_map) > 0
+	if _weapon != null and is_instance_valid(_weapon):
+		snap["weapon"] = str(_weapon.name)
 	if _inventory != null and is_instance_valid(_inventory):
 		if _inventory.has_method("get_total_value"):
 			snap["inv_value"] = int(_inventory.get_total_value())
@@ -1208,7 +1212,7 @@ func build_report(result: String) -> Dictionary:
 			"invulnerable": bool(config.invulnerable),
 		},
 		"combat": {
-			"weapon": str(_weapon.name) if _weapon != null and is_instance_valid(_weapon) else "",
+			"weapon": str(snap.get("weapon", "")),
 			"shots": int(_stats.shots),
 			"hits": int(_stats.hits),
 			"accuracy": snappedf(float(_stats.hits) / float(_stats.shots), 0.01) if int(_stats.shots) > 0 else 0.0,
