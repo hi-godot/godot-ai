@@ -233,24 +233,41 @@ static func scene_path_of(node: Node, root: Node) -> String:
 ## `extra` is an Array of [object, property, new_value, old_value] tuples
 ## applied in the same action.
 static func add_to_scene(action_name: String, parent: Node, node: Node, root: Node, extra: Array = []) -> void:
+	add_nodes_to_scene(action_name, [[parent, node]], root, extra)
+
+
+## Adds several [parent, node] pairs in one undoable action. `extra` holds
+## [object, property, new_value, old_value] tuples; `calls` holds
+## [object, do_method, do_args, undo_method, undo_args] tuples (e.g.
+## add_to_group / remove_from_group) applied after the nodes are added.
+static func add_nodes_to_scene(action_name: String, items: Array, root: Node, extra: Array = [], calls: Array = []) -> void:
 	var ur := EditorInterface.get_editor_undo_redo()
 	ur.create_action(action_name, UndoRedo.MERGE_DISABLE, root)
-	ur.add_do_method(parent, "add_child", node, true)
-	ur.add_do_method(node, "set_owner", root)
-	for child in _descendants_owned_by_node(node):
-		ur.add_do_method(child, "set_owner", root)
-	for item in extra:
-		ur.add_do_property(item[0], item[1], item[2])
-		ur.add_undo_property(item[0], item[1], item[3])
-	## A child added inside an instanced scene (e.g. a weapon under the
-	## player instance's WeaponMount) is only saved when that instance has
-	## Editable Children on.
-	for inst in _instances_containing(parent, root):
-		if not root.is_editable_instance(inst):
-			ur.add_do_method(root, "set_editable_instance", inst, true)
-			ur.add_undo_method(root, "set_editable_instance", inst, false)
-	ur.add_do_reference(node)
-	ur.add_undo_method(parent, "remove_child", node)
+	var editable := {}
+	for item in items:
+		var parent: Node = item[0]
+		var node: Node = item[1]
+		ur.add_do_method(parent, "add_child", node, true)
+		ur.add_do_method(node, "set_owner", root)
+		for child in _descendants_owned_by_node(node):
+			ur.add_do_method(child, "set_owner", root)
+		## A child added inside an instanced scene (e.g. a weapon under the
+		## player instance's WeaponMount) is only saved when that instance has
+		## Editable Children on.
+		for inst in _instances_containing(parent, root):
+			if not root.is_editable_instance(inst) and not editable.has(inst):
+				editable[inst] = true
+				ur.add_do_method(root, "set_editable_instance", inst, true)
+				ur.add_undo_method(root, "set_editable_instance", inst, false)
+		ur.add_do_reference(node)
+	for tuple in extra:
+		ur.add_do_property(tuple[0], tuple[1], tuple[2])
+		ur.add_undo_property(tuple[0], tuple[1], tuple[3])
+	for call in calls:
+		ur.add_do_method.callv([call[0], call[1]] + call[2])
+		ur.add_undo_method.callv([call[0], call[3]] + call[4])
+	for i in range(items.size() - 1, -1, -1):
+		ur.add_undo_method(items[i][0], "remove_child", items[i][1])
 	ur.commit_action()
 
 

@@ -104,14 +104,14 @@ func _weapon_params(id: String, extra: Dictionary = {}) -> Dictionary:
 
 func test_specs_validate() -> void:
 	var specs := ToolSpecs.build()
-	assert_eq(specs.size(), 3)
+	assert_eq(specs.size(), 4)
 	var names := []
 	for spec in specs:
 		assert_eq(spec.validate(), [] as Array[String], "spec %s" % spec.name)
 		assert_true(spec.promoted)
 		assert_true(spec.requires_writable)
 		names.append(spec.name)
-	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create"])
+	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold"])
 
 
 # --- player ------------------------------------------------------------------
@@ -359,3 +359,295 @@ func test_weapon_create_rejects_bad_params() -> void:
 	assert_is_error(_tools.weapon_create(_weapon_params("ok_id", {"fire_mode": "laser"})), "INVALID_PARAMS")
 	assert_is_error(_tools.weapon_create(_weapon_params("ok_id", {"pellets": 1.5})), "INVALID_PARAMS")
 	assert_is_error(_tools.weapon_create(_weapon_params("ok_id", {"attach_to": "Nope"})), "NODE_NOT_FOUND")
+
+
+# --- enemy -------------------------------------------------------------------
+
+const TARGET_GROUP := &"mcp_test_td_target"
+
+
+func _enemy_params(id: String, extra: Dictionary = {}) -> Dictionary:
+	var params := {
+		"enemy_id": id,
+		"scene_dir": WORK_DIR + "/enemies",
+		"script_dir": WORK_DIR + "/scripts",
+		"overwrite": true,
+		"add_to_scene": false,
+	}
+	params.merge(extra, true)
+	return params
+
+
+func test_enemy_scaffold_writes_scene() -> void:
+	var result := _tools.enemy_scaffold(_enemy_params("test_grunt", {"max_health": 80, "sight_angle_degrees": 90}))
+	assert_has_key(result, "data", str(result))
+	var data: Dictionary = result.data
+	assert_true(FileAccess.file_exists(WORK_DIR + "/scripts/enemy_ai.gd"))
+	assert_eq(data.instances, [])
+	var packed := ResourceLoader.load(data.scene_path, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	var enemy := packed.instantiate()
+	assert_true(enemy is CharacterBody3D)
+	assert_eq(String(enemy.name), "TestGrunt")
+	assert_true(enemy.is_in_group(&"enemy"))
+	for child in ["CollisionShape3D", "Body", "Nose", "WeaponMount", "NavigationAgent3D"]:
+		assert_true(enemy.get_node_or_null(child) != null, "has %s" % child)
+	assert_eq(enemy.get("max_health"), 80.0)
+	assert_eq(enemy.get("sight_angle_degrees"), 90.0)
+	assert_eq(enemy.get("attack_mode"), "melee")
+	assert_eq(enemy.get("attack_range"), 1.8)
+	assert_eq(enemy.get("target_group"), &"player")
+	enemy.free()
+
+
+func test_enemy_scaffold_ranged_mounts_weapon_scene() -> void:
+	var weapon := _tools.weapon_create(_weapon_params("test_enemy_rifle"))
+	assert_has_key(weapon, "data", str(weapon))
+	var result := _tools.enemy_scaffold(_enemy_params("test_gunner", {"attack_mode": "ranged", "weapon_scene": weapon.data.scene_path}))
+	assert_has_key(result, "data", str(result))
+	var packed := ResourceLoader.load(result.data.scene_path, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	var enemy := packed.instantiate()
+	assert_eq(enemy.get("attack_mode"), "ranged")
+	assert_eq(enemy.get("attack_range"), 12.0, "ranged default range")
+	var mount := enemy.get_node("WeaponMount")
+	assert_eq(mount.get_child_count(), 1)
+	assert_eq(mount.get_child(0).scene_file_path, weapon.data.scene_path, "weapon is linked as an instance")
+	enemy.free()
+
+
+func test_enemy_scaffold_rejects_bad_params() -> void:
+	assert_is_error(_tools.enemy_scaffold({}), "INVALID_PARAMS")
+	assert_is_error(_tools.enemy_scaffold(_enemy_params("Bad-Id")), "INVALID_PARAMS")
+	assert_is_error(_tools.enemy_scaffold(_enemy_params("ok_enemy", {"attack_mode": "magic"})), "INVALID_PARAMS")
+	assert_is_error(_tools.enemy_scaffold(_enemy_params("ok_enemy", {"weapon_scene": "res://x.tscn"})), "INVALID_PARAMS", "weapon on melee")
+	assert_is_error(_tools.enemy_scaffold(_enemy_params("ok_enemy", {"attack_mode": "ranged", "weapon_scene": WORK_DIR + "/nope.tscn"})), "NODE_NOT_FOUND")
+	assert_is_error(_tools.enemy_scaffold(_enemy_params("ok_enemy", {"positions": [[1, 2]]})), "INVALID_PARAMS")
+	assert_is_error(_tools.enemy_scaffold(_enemy_params("ok_enemy", {"patrol_points": "here"})), "INVALID_PARAMS")
+	assert_is_error(_tools.enemy_scaffold(_enemy_params("ok_enemy", {"sight_angle_degrees": 400})), "INVALID_PARAMS")
+	assert_is_error(_tools.enemy_scaffold(_enemy_params("ok_enemy", {"add_to_scene": true, "parent_path": "Nope"})), "NODE_NOT_FOUND")
+
+
+func test_enemy_scaffold_refuses_existing_scene_without_overwrite() -> void:
+	_tools.enemy_scaffold(_enemy_params("test_dupe"))
+	assert_is_error(_tools.enemy_scaffold(_enemy_params("test_dupe", {"overwrite": false})), "ALREADY_EXISTS")
+
+
+func test_enemy_scaffold_places_instances_and_bakes_navigation() -> void:
+	var floor_body := StaticBody3D.new()
+	floor_body.name = "TestNavFloor"
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(30, 1, 30)
+	shape.shape = box
+	floor_body.add_child(shape)
+	_root().add_child(floor_body)
+	floor_body.owner = _root()
+	shape.owner = _root()
+	_added.append(floor_body)
+	floor_body.position = Vector3(0, -300.5, 0)
+	var was_in_group := _root().is_in_group(Tools.NAV_SOURCE_GROUP)
+
+	var result := _tools.enemy_scaffold(_enemy_params("test_patroller", {
+		"add_to_scene": true,
+		"positions": [[2, -300, 3], [-2, -300, 3]],
+		"patrol_points": [[0, -300, 0], [5, -300, 5]],
+	}))
+	assert_has_key(result, "data", str(result))
+	var data: Dictionary = result.data
+	assert_eq(data.instances.size(), 2)
+	var first := _track(data.instances[0]) as Node3D
+	var second := _track(data.instances[1]) as Node3D
+	assert_true(first != null and second != null)
+	assert_ne(String(first.name), String(second.name))
+	assert_eq(first.position, Vector3(2, -300, 3))
+	assert_eq(first.owner, _root())
+	assert_eq(first.get("patrol_points"), PackedVector3Array([Vector3(0, -300, 0), Vector3(5, -300, 5)]))
+	assert_eq(data.navigation.status, "created", str(data.navigation))
+	var region := _track(data.navigation.region_path) as NavigationRegion3D
+	assert_true(region != null, "navigation region added")
+	assert_gt(data.navigation.polygons, 0, "bake found the floor")
+	assert_true(_root().is_in_group(Tools.NAV_SOURCE_GROUP))
+
+	assert_true(editor_undo(_undo_redo))
+	assert_true(not is_instance_valid(first) or first.get_parent() == null, "undo removes the enemies")
+	assert_true(not is_instance_valid(region) or region.get_parent() == null, "undo removes the region")
+	assert_eq(_root().is_in_group(Tools.NAV_SOURCE_GROUP), was_in_group, "undo restores the root's groups")
+
+
+## Builds a running (@tool copy) enemy far from the open scene's geometry.
+func _tool_enemy(extra: Dictionary = {}) -> CharacterBody3D:
+	var result := _tools.enemy_scaffold(_enemy_params("test_ai"))
+	assert_has_key(result, "data", str(result))
+	var enemy := CharacterBody3D.new()
+	enemy.name = "ToolEnemy"
+	var shape := CollisionShape3D.new()
+	var capsule := CapsuleShape3D.new()
+	shape.shape = capsule
+	shape.position = Vector3(0, 0.9, 0)
+	enemy.add_child(shape)
+	enemy.set_script(_tool_copy(result.data.script.path))
+	enemy.set("target_group", TARGET_GROUP)
+	enemy.set("free_on_death", false)
+	enemy.set("perception_interval", 0.0)
+	enemy.set("alert_radius", 0.0)
+	for key in extra:
+		enemy.set(key, extra[key])
+	_root().add_child(enemy)
+	_added.append(enemy)
+	enemy.set_physics_process(false)
+	enemy.global_position = Vector3(0, 500, 0)
+	_sync_body(enemy)
+	return enemy
+
+
+func _target(offset: Vector3, enemy: Node3D) -> StaticBody3D:
+	var target := StaticBody3D.new()
+	target.name = "AiTarget"
+	target.set_script(_damage_receiver_script())
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(0.8, 3.0, 0.8)
+	shape.shape = box
+	shape.position = Vector3(0, 1.5, 0)
+	target.add_child(shape)
+	target.add_to_group(TARGET_GROUP)
+	_root().add_child(target)
+	_added.append(target)
+	target.global_position = enemy.global_position + offset
+	_sync_body(target)
+	return target
+
+
+func _wall(at: Vector3) -> StaticBody3D:
+	var wall := StaticBody3D.new()
+	wall.name = "AiWall"
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(6, 6, 0.5)
+	shape.shape = box
+	wall.add_child(shape)
+	_root().add_child(wall)
+	_added.append(wall)
+	wall.global_position = at
+	_sync_body(wall)
+	return wall
+
+
+## Lets the physics server see a body's transform without a physics step.
+func _sync_body(body: CollisionObject3D) -> void:
+	PhysicsServer3D.body_set_state(body.get_rid(), PhysicsServer3D.BODY_STATE_TRANSFORM, body.global_transform)
+
+
+func test_enemy_sees_target_in_cone_and_chases() -> void:
+	var enemy := _tool_enemy()
+	var target := _target(Vector3(0, 0, -6), enemy)
+	var spotted := []
+	enemy.target_spotted.connect(func(t): spotted.append(t))
+	assert_true(enemy.can_see(target), "in front, in range, clear line")
+	enemy.think(0.1)
+	assert_eq(enemy.get_state_name(), "CHASE")
+	assert_eq(enemy.target, target)
+	assert_eq(spotted, [target])
+
+
+func test_enemy_ignores_target_behind_or_out_of_range() -> void:
+	var enemy := _tool_enemy({"sight_range": 10.0})
+	var behind := _target(Vector3(0, 0, 6), enemy)
+	assert_false(enemy.can_see(behind), "outside the vision cone")
+	enemy.think(0.1)
+	assert_eq(enemy.get_state_name(), "PATROL")
+	behind.global_position = enemy.global_position + Vector3(0, 0, 2)
+	_sync_body(behind)
+	assert_true(enemy.can_see(behind), "within proximity_radius any direction counts")
+	behind.global_position = enemy.global_position + Vector3(0, 0, -12)
+	_sync_body(behind)
+	assert_false(enemy.can_see(behind), "beyond sight_range")
+
+
+func test_enemy_sight_blocked_by_wall() -> void:
+	var enemy := _tool_enemy()
+	var target := _target(Vector3(0, 0, -8), enemy)
+	_wall(enemy.global_position + Vector3(0, 1, -4))
+	assert_false(enemy.can_see(target), "wall blocks line of sight")
+	enemy.think(0.1)
+	assert_eq(enemy.get_state_name(), "PATROL")
+
+
+func test_enemy_melee_windup_then_damage() -> void:
+	var enemy := _tool_enemy({"attack_windup": 0.3, "attack_damage": 15.0, "attack_cooldown": 1.0})
+	var target := _target(Vector3(0, 0, -1.5), enemy)
+	var started := []
+	enemy.attack_started.connect(func(t): started.append(t))
+	enemy.think(0.1)
+	assert_eq(enemy.get_state_name(), "ATTACK", "in range goes straight to attack")
+	enemy.think(0.1)
+	assert_eq(started.size(), 1, "windup started")
+	assert_eq(target.received, 0.0, "no damage during windup")
+	enemy.think(0.35)
+	assert_eq(target.received, 15.0, "hit after windup")
+	enemy.think(0.1)
+	enemy.think(0.5)
+	assert_eq(target.received, 15.0, "cooldown blocks the next hit")
+	enemy.think(0.5)
+	enemy.think(0.4)
+	assert_eq(target.received, 30.0, "second hit after cooldown and windup")
+
+
+func test_enemy_ranged_ray_damages_target() -> void:
+	var enemy := _tool_enemy({"attack_mode": "ranged", "attack_range": 12.0, "attack_windup": 0.0, "aim_error_degrees": 0.0, "attack_damage": 7.0})
+	var target := _target(Vector3(0, 0, -8), enemy)
+	enemy.think(0.1)
+	assert_eq(enemy.get_state_name(), "ATTACK")
+	enemy.think(0.1)
+	assert_eq(target.received, 7.0, "ranged ray hit")
+
+
+func test_enemy_damage_aggro_and_death() -> void:
+	var enemy := _tool_enemy({"max_health": 30.0})
+	var attacker := _target(Vector3(0, 0, 10), enemy)
+	var deaths := []
+	enemy.died.connect(func(): deaths.append(true))
+	enemy.take_damage(10.0, {"source": attacker, "position": enemy.global_position})
+	assert_eq(enemy.health, 20.0)
+	assert_eq(enemy.get_state_name(), "CHASE", "damage from an unseen attacker starts a chase")
+	assert_eq(enemy.target, attacker)
+	enemy.take_damage(25.0, {"source": attacker})
+	assert_eq(enemy.get_state_name(), "DEAD")
+	assert_true(enemy.is_dead)
+	assert_eq(deaths.size(), 1)
+	assert_eq(enemy.collision_layer, 0, "corpse stops blocking bullets")
+	enemy.take_damage(5.0, {})
+	assert_eq(deaths.size(), 1, "dies once")
+
+
+func test_enemy_loses_target_searches_then_patrols() -> void:
+	var enemy := _tool_enemy({"lose_sight_time": 0.5, "search_time": 0.5})
+	var target := _target(Vector3(0, 0, -6), enemy)
+	var lost := []
+	enemy.target_lost.connect(func(): lost.append(true))
+	enemy.think(0.1)
+	assert_eq(enemy.get_state_name(), "CHASE")
+	target.remove_from_group(TARGET_GROUP)
+	enemy.think(0.1)
+	assert_eq(enemy.target, null, "a target that left the group is dropped")
+	assert_eq(enemy.get_state_name(), "SEARCH")
+	## The enemy cannot walk here (no physics step), so the search gives up on
+	## reaching the spot after its leg timer and looks around instead.
+	for i in 25:
+		enemy.think(0.5)
+	assert_eq(enemy.get_state_name(), "PATROL")
+	assert_eq(lost.size(), 1)
+
+
+func test_enemy_alerts_nearby_allies() -> void:
+	var enemy := _tool_enemy({"alert_radius": 10.0})
+	var ally := _tool_enemy({"alert_radius": 0.0})
+	ally.name = "ToolAlly"
+	ally.global_position = enemy.global_position + Vector3(3, 0, 0)
+	ally.rotation.y = PI
+	_sync_body(ally)
+	var target := _target(Vector3(0, 0, -6), enemy)
+	assert_false(ally.can_see(target), "ally faces away")
+	enemy.think(0.1)
+	assert_eq(enemy.get_state_name(), "CHASE")
+	assert_eq(ally.get_state_name(), "CHASE", "ally joins the chase")
+	assert_eq(ally.target, target)
