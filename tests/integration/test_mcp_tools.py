@@ -7501,6 +7501,43 @@ class TestCameraListTool:
         assert len(result.data["cameras"]) == 2
 
 
+class TestCameraCheckFramingTool:
+    async def test_check_framing_round_trips_with_scene_and_session_pins(self, mcp_stack):
+        client, plugin = mcp_stack
+        params = {
+            "camera_path": "/Main/Cam",
+            "target_paths": ["/Main/Target"],
+            "scene_file": "res://main.tscn",
+        }
+        data = {
+            "camera_path": "/Main/Cam",
+            "projection": "orthogonal",
+            "viewport_size": {"x": 400.0, "y": 200.0},
+            "targets": [
+                {
+                    "path": "/Main/Target",
+                    "status": "possible_overlap",
+                    "outside_planes": [],
+                    "crossed_planes": ["top"],
+                },
+            ],
+        }
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "camera_check_framing"
+            assert cmd["params"] == params
+            await plugin.send_response(cmd["request_id"], data)
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "camera_manage",
+            {"op": "check_framing", "params": params, "session_id": plugin.session_id},
+        )
+        await task
+        assert result.data == data
+
+
 class TestCameraApplyPresetTool:
     async def test_topdown_2d(self, mcp_stack):
         client, plugin = mcp_stack

@@ -5983,6 +5983,23 @@ async def test_camera_list_handler():
     assert client.calls[-1]["command"] == "camera_list"
 
 
+@pytest.mark.parametrize("scene_file", ["", "res://main.tscn"])
+async def test_camera_check_framing_forwards_targets_as_a_pinned_read(scene_file):
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client, session_id="framing-editor")
+    targets = ["/Main/Box", "/Main/Plane"]
+    await camera_handlers.camera_check_framing(runtime, "/Main/Cam", targets, scene_file)
+
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert call["command"] == "camera_check_framing"
+    assert call["session_id"] == "framing-editor"
+    expected = {"camera_path": "/Main/Cam", "target_paths": targets}
+    if scene_file:
+        expected["scene_file"] = scene_file
+    assert call["params"] == expected
+
+
 # ---------------------------------------------------------------------------
 # Audio handler tests
 # ---------------------------------------------------------------------------

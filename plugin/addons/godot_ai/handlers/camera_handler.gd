@@ -70,6 +70,14 @@ const _NODE_TRANSFORM_KEYS := [
 const _DAMPING_MARGIN_KEYS := ["left", "top", "right", "bottom"]
 const _CURRENT_SETTLE_ATTEMPTS := 8
 const _CURRENT_SETTLE_DELAY_MSEC := 10
+const _FRAMING_TARGET_LIMIT := 16
+## Camera3D.get_frustum() returns planes in this order, with outward normals.
+const _FRUSTUM_PLANES := ["near", "far", "left", "top", "right", "bottom"]
+const _FRAMING_PROJECTIONS := {
+	Camera3D.PROJECTION_PERSPECTIVE: "perspective",
+	Camera3D.PROJECTION_ORTHOGONAL: "orthogonal",
+	Camera3D.PROJECTION_FRUSTUM: "frustum",
+}
 
 
 var _undo_redo: EditorUndoRedoManager
@@ -962,6 +970,118 @@ func list_cameras(_params: Dictionary) -> Dictionary:
 			"current": _resolve_current_with_logicals(cam, logical_2d, logical_3d),
 		})
 	return {"data": {"cameras": out}}
+
+
+# ============================================================================
+# camera_check_framing
+# ============================================================================
+
+func check_framing(params: Dictionary) -> Dictionary:
+	var camera_path: Variant = params.get("camera_path", "")
+	var target_paths: Variant = params.get("target_paths", [])
+	var scene_file: Variant = params.get("scene_file", "")
+	if not camera_path is String or not scene_file is String:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "camera_path and scene_file must be strings")
+	if not target_paths is Array:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "target_paths must be an array of MeshInstance3D paths")
+	if target_paths.is_empty() or target_paths.size() > _FRAMING_TARGET_LIMIT:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"target_paths has %d entries. Supply 1 to %d." % [target_paths.size(), _FRAMING_TARGET_LIMIT])
+	var scene_check := McpNodeValidator.require_scene_or_error(scene_file)
+	if scene_check.has("error"):
+		return scene_check
+	var scene_root: Node = scene_check.scene_root
+	var camera_result := _resolve_framing_node(scene_root, camera_path, "camera_path")
+	if camera_result.has("error"):
+		return camera_result
+	var camera := camera_result.node as Camera3D
+	if camera == null:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a Camera3D" % camera_path)
+	var viewport := camera.get_viewport()
+	if viewport == null or camera.get_world_3d() == null:
+		return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE,
+			"Camera %s needs a viewport and World3D" % camera_path, false)
+	if not camera.global_transform.is_finite() or not camera.get_camera_transform().is_finite():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Camera %s needs a finite transform" % camera_path)
+	var viewport_size := viewport.get_visible_rect().size
+	if not viewport_size.is_finite() or viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Camera %s needs a viewport with positive dimensions" % camera_path)
+	var planes := camera.get_frustum()
+	if planes.size() != _FRUSTUM_PLANES.size():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Camera %s has no valid frustum" % camera_path)
+	for plane in planes:
+		if not plane.is_finite() or plane.normal.is_zero_approx():
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Camera %s has an invalid frustum plane" % camera_path)
+	var camera_world := camera.get_world_3d()
+	var targets: Array[Dictionary] = []
+	for target_path in target_paths:
+		if not target_path is String:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Each target_paths entry must be a string (got %s)" % type_string(typeof(target_path)))
+		var target_result := _resolve_framing_node(scene_root, target_path, "target_paths entry")
+		if target_result.has("error"):
+			return target_result
+		var target := target_result.node as MeshInstance3D
+		if target == null:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a MeshInstance3D" % target_path)
+		if target.get_viewport() == null or target.get_world_3d() != camera_world:
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Target %s must share a World3D with camera %s" % [target_path, camera_path])
+		if target.mesh == null:
+			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "%s has no Mesh resource" % target_path)
+		var result := _classify_framing_bounds(planes, target.get_aabb(), target.global_transform, target_result.path)
+		if result.has("error"):
+			return result
+		targets.append(result)
+	return {"data": {
+		"camera_path": camera_result.path,
+		"projection": _FRAMING_PROJECTIONS[camera.projection],
+		"viewport_size": CameraValues.serialize(viewport_size),
+		"targets": targets,
+	}}
+
+
+static func _resolve_framing_node(scene_root: Node, path: String, param: String) -> Dictionary:
+	if path.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % param)
+	var node := McpScenePath.resolve(path, scene_root)
+	if node == null or (node != scene_root and not scene_root.is_ancestor_of(node)):
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(path, scene_root))
+	return {"node": node, "path": McpScenePath.from_node(node, scene_root)}
+
+
+static func _classify_framing_bounds(planes: Array[Plane], bounds: AABB, transform: Transform3D, path: String) -> Dictionary:
+	if not bounds.is_finite() or not transform.is_finite() or bounds.size == Vector3.ZERO or bounds.size != bounds.size.abs():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "%s has empty or invalid mesh bounds or transform" % path)
+	var corners: Array[Vector3] = []
+	for index in range(8):
+		var corner := transform * bounds.get_endpoint(index)
+		if not corner.is_finite():
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "%s has a nonfinite world-space bound" % path)
+		corners.append(corner)
+	var outside_planes: Array[String] = []
+	var crossed_planes: Array[String] = []
+	for index in planes.size():
+		var outside_count := 0
+		for corner in corners:
+			var distance := planes[index].distance_to(corner)
+			if not is_finite(distance):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "%s has a nonfinite distance to the %s plane" % [path, _FRUSTUM_PLANES[index]])
+			if distance > 0.0:
+				outside_count += 1
+		if outside_count == corners.size():
+			outside_planes.append(_FRUSTUM_PLANES[index])
+		elif outside_count > 0:
+			crossed_planes.append(_FRUSTUM_PLANES[index])
+	var status := "contained"
+	if not outside_planes.is_empty():
+		status = "outside"
+	elif not crossed_planes.is_empty():
+		status = "possible_overlap"
+	return {
+		"path": path,
+		"status": status,
+		"outside_planes": outside_planes,
+		"crossed_planes": crossed_planes,
+	}
 
 
 # ============================================================================
