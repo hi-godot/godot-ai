@@ -7,8 +7,9 @@ import errno
 import logging
 import os
 import re
+import secrets
 import stat
-import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from godot_ai.godot_client.session_diagnostics import (
     session_not_found_message,
 )
 from godot_ai.handlers._readiness import require_writable_async
+from godot_ai.handlers._wav_directory import DirectoryAnchor, is_link
 from godot_ai.handlers._wav_pcm import WavEditError, edit_pcm_wav
 from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
@@ -37,10 +39,14 @@ _UNSUPPORTED_ERRNOS = {errno.EXDEV, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUP
 
 @dataclass(frozen=True)
 class _StagedClip:
-    path: Path
+    anchor: DirectoryAnchor
+    name: str
     file_info: os.stat_result
-    parent_info: os.stat_result
     metadata: dict[str, int]
+
+    @property
+    def path(self) -> Path:
+        return self.anchor.path / self.name
 
 
 def _relative_wav_path(value: str, parameter: str, *, for_write: bool = False) -> Path:
@@ -77,19 +83,13 @@ def _relative_wav_path(value: str, parameter: str, *, for_write: bool = False) -
     return Path(*segments)
 
 
-def _is_link(info: os.stat_result) -> bool:
-    return stat.S_ISLNK(info.st_mode) or bool(
-        getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
-    )
-
-
 def _project_root(session: Session) -> Path:
     try:
         root = Path(session.project_path)
         if root.is_absolute():
             root = root.resolve(strict=True)
             manifest = (root / "project.godot").lstat()
-            if stat.S_ISREG(manifest.st_mode) and not _is_link(manifest):
+            if stat.S_ISREG(manifest.st_mode) and not is_link(manifest):
                 return root
     except (OSError, RuntimeError, ValueError):
         pass
@@ -100,38 +100,42 @@ def _project_root(session: Session) -> Path:
     )
 
 
-def _project_entry(root: Path, relative: Path, *, directory: bool) -> os.stat_result:
-    current = root
-    try:
-        info = current.lstat()
-        for part in relative.parts:
-            if _is_link(info) or not stat.S_ISDIR(info.st_mode):
-                break
-            current /= part
-            info = current.lstat()
-        if _is_link(info):
-            raise GodotCommandError(
-                ErrorCode.VALUE_OUT_OF_RANGE,
-                f"WAV paths must stay inside the project without links: res://{relative.as_posix()}",
-                {"reason": "linked_project_path"},
-            )
-        expected = stat.S_ISDIR if directory else stat.S_ISREG
-        if current == root / relative and expected(info.st_mode):
-            return info
-    except OSError as exc:
-        path_error = _path_length_error(exc, f"res://{relative.as_posix()}")
-        if path_error is not None:
-            raise path_error from exc
-    label = "Destination directory" if directory else "Source WAV"
-    raise GodotCommandError(
-        ErrorCode.RESOURCE_NOT_FOUND, f"{label} not accessible: res://{relative.as_posix()}"
+def _entry_error(error: OSError, relative: Path, label: str) -> GodotCommandError:
+    path = f"res://{relative.as_posix()}"
+    if error.errno == errno.ELOOP:
+        return GodotCommandError(
+            ErrorCode.VALUE_OUT_OF_RANGE,
+            f"WAV paths must stay inside the project without links: {path}",
+            {"reason": "linked_project_path"},
+        )
+    return _path_length_error(error, path) or GodotCommandError(
+        ErrorCode.RESOURCE_NOT_FOUND, f"{label} not accessible: {path}"
     )
+
+
+def _open_project_directory(root: Path, relative: Path, *, label: str) -> DirectoryAnchor:
+    try:
+        return DirectoryAnchor.open(root / relative)
+    except OSError as exc:
+        raise _entry_error(exc, relative, label) from exc
+
+
+def _source_info(anchor: DirectoryAnchor, relative: Path) -> os.stat_result:
+    try:
+        info = anchor.stat(relative.name)
+        if is_link(info):
+            raise OSError(errno.ELOOP, "Linked source WAV")
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(errno.EINVAL, "Source WAV must be a regular file")
+        return info
+    except OSError as exc:
+        raise _entry_error(exc, relative, "Source WAV") from exc
 
 
 def _same_file(expected: os.stat_result, current: os.stat_result) -> bool:
     return (
         os.path.samestat(expected, current)
-        and not _is_link(current)
+        and not is_link(current)
         and stat.S_ISREG(current.st_mode)
         and (expected.st_size, expected.st_mtime_ns) == (current.st_size, current.st_mtime_ns)
     )
@@ -151,9 +155,9 @@ def _path_length_error(error: OSError, path: str) -> GodotCommandError | None:
     return None
 
 
-def _require_new_destination(target: Path, path: str) -> None:
+def _require_new_destination(anchor: DirectoryAnchor, name: str, path: str) -> None:
     try:
-        target.lstat()
+        anchor.stat(name)
     except FileNotFoundError:
         return
     except OSError as exc:
@@ -164,62 +168,69 @@ def _require_new_destination(target: Path, path: str) -> None:
     raise _destination_exists(path)
 
 
-def _remove_stage(path: Path, expected: os.stat_result) -> None:
+def _remove_stage(anchor: DirectoryAnchor, name: str, expected: os.stat_result) -> None:
     try:
-        current = path.lstat()
-        if os.path.samestat(expected, current) and not _is_link(current):
-            path.unlink()
+        current = anchor.stat(name)
+        if os.path.samestat(expected, current) and not is_link(current):
+            anchor.unlink(name)
     except FileNotFoundError:
         pass
     except OSError:
-        logger.warning("Could not clean owned WAV staging file %s", path)
+        logger.warning("Could not clean owned WAV staging file %s", anchor.path / name)
+
+
+def _new_stage(anchor: DirectoryAnchor) -> tuple[int, str]:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for _ in range(8):
+        # Hidden, non-WAV staging files stay out of Godot's importer.
+        name = f"{_STAGE_PREFIX}{secrets.token_hex(12)}.tmp"
+        try:
+            return anchor.open_file(name, flags), name
+        except FileExistsError:
+            continue
+    raise OSError(errno.EEXIST, "Could not reserve a private WAV staging file")
 
 
 def _stage_clip(
     root: Path, source: Path, destination: Path, edit_options: dict[str, float]
 ) -> _StagedClip:
-    source_info = _project_entry(root, source, directory=False)
-    parent_info = _project_entry(root, destination.parent, directory=True)
+    anchor = _open_project_directory(root, destination.parent, label="Destination directory")
     output_path = f"res://{destination.as_posix()}"
-    _require_new_destination(root / destination, output_path)
-
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
-    stage = None
+    name = None
     owned = None
     clip = None
     try:
-        with os.fdopen(os.open(root / source, flags), "rb") as source_data:
-            if not _same_file(source_info, os.fstat(source_data.fileno())):
-                raise GodotCommandError(
-                    ErrorCode.INVALID_PARAMS, "The source WAV changed before reading"
-                )
-            # The tempfile is on the destination volume and hidden from Godot's scanner.
-            fd, name = tempfile.mkstemp(
-                prefix=_STAGE_PREFIX, suffix=".tmp", dir=root / destination.parent
-            )
-            stage = Path(name)
-            with os.fdopen(fd, "wb") as output:
-                owned = os.fstat(output.fileno())
-                metadata = edit_pcm_wav(source_data, output, **edit_options)
-                output.flush()
-                if not _same_file(source_info, os.fstat(source_data.fileno())):
+        _require_new_destination(anchor, destination.name, output_path)
+        with closing(
+            _open_project_directory(root, source.parent, label="Source WAV directory")
+        ) as inputs:
+            expected_source = _source_info(inputs, source)
+            with os.fdopen(inputs.open_file(source.name, flags), "rb") as source_data:
+                if not _same_file(expected_source, os.fstat(source_data.fileno())):
                     raise GodotCommandError(
-                        ErrorCode.INVALID_PARAMS, "The source WAV changed while reading"
+                        ErrorCode.INVALID_PARAMS, "The source WAV changed before reading"
                     )
-                written_size = os.fstat(output.fileno()).st_size
-        complete = stage.lstat()
+                fd, name = _new_stage(anchor)
+                with os.fdopen(fd, "wb") as output:
+                    owned = os.fstat(output.fileno())
+                    metadata = edit_pcm_wav(source_data, output, **edit_options)
+                    output.flush()
+                    if not _same_file(expected_source, os.fstat(source_data.fileno())):
+                        raise GodotCommandError(
+                            ErrorCode.INVALID_PARAMS, "The source WAV changed while reading"
+                        )
+                    written_size = os.fstat(output.fileno()).st_size
+        complete = anchor.stat(name)
         if (
             not os.path.samestat(owned, complete)
-            or _is_link(complete)
+            or is_link(complete)
             or complete.st_size != written_size
         ):
-            raise GodotCommandError(
-                ErrorCode.INVALID_PARAMS,
-                f"The staged WAV changed while closing: {output_path}",
-                {"reason": "publication_path_changed", "path": output_path},
-            )
-        clip = _StagedClip(stage, complete, parent_info, metadata)
+            raise _publication_path_changed(output_path)
+        clip = _StagedClip(anchor, name, complete, metadata)
         return clip
     except WavEditError as exc:
         code = (
@@ -238,37 +249,58 @@ def _stage_clip(
             )
         ) from exc
     finally:
-        # Windows cannot unlink the file while its writer is still open.
-        if clip is None and stage is not None and owned is not None:
-            _remove_stage(stage, owned)
+        if clip is None:
+            try:
+                if name is not None and owned is not None:
+                    _remove_stage(anchor, name, owned)
+            finally:
+                anchor.close()
+
+
+def _close_clip(clip: _StagedClip) -> None:
+    try:
+        _remove_stage(clip.anchor, clip.name, clip.file_info)
+    finally:
+        clip.anchor.close()
 
 
 def _discard_worker_result(future: asyncio.Future[_StagedClip]) -> None:
     if not future.cancelled() and future.exception() is None:
-        clip = future.result()
-        _remove_stage(clip.path, clip.file_info)
+        _close_clip(future.result())
+
+
+def _publication_path_changed(path: str) -> GodotCommandError:
+    return GodotCommandError(
+        ErrorCode.INVALID_PARAMS,
+        f"The destination directory or staged file changed before publication: {path}",
+        {"reason": "publication_path_changed", "path": path},
+    )
+
+
+def _entry_exists(anchor: DirectoryAnchor, name: str) -> bool:
+    try:
+        anchor.stat(name)
+        return True
+    except OSError:
+        return False
 
 
 def _publish_clip(root: Path, destination: Path, clip: _StagedClip) -> None:
     path = f"res://{destination.as_posix()}"
-    parent = _project_entry(root, destination.parent, directory=True)
-    target = root / destination
+    anchor = clip.anchor
     try:
-        if not os.path.samestat(clip.parent_info, parent) or not _same_file(
-            clip.file_info, clip.path.lstat()
-        ):
-            raise GodotCommandError(
-                ErrorCode.INVALID_PARAMS,
-                f"The destination directory or staged file changed before publication: {path}",
-                {"reason": "publication_path_changed", "path": path},
-            )
-        if os.name == "nt":
-            # Windows rename refuses an occupied destination.
-            os.rename(clip.path, target)
-        else:
-            os.link(clip.path, target, follow_symlinks=False)
+        current = _open_project_directory(root, destination.parent, label="Destination directory")
+    except GodotCommandError as exc:
+        raise _publication_path_changed(path) from exc
+    try:
+        with closing(current):
+            if not os.path.samestat(anchor.info, current.info) or not _same_file(
+                clip.file_info, anchor.stat(clip.name)
+            ):
+                raise _publication_path_changed(path)
+            anchor.publish(clip.name, destination.name)
     except (OSError, NotImplementedError) as exc:
-        if isinstance(exc, FileExistsError) or os.path.lexists(target):
+        if isinstance(exc, FileExistsError) or _entry_exists(anchor, destination.name):
             raise _destination_exists(path) from exc
         if isinstance(exc, OSError):
             path_error = _path_length_error(exc, path)
@@ -344,7 +376,7 @@ async def write_wav_clip(
             )
         _publish_clip(root, destination, clip)
     finally:
-        _remove_stage(clip.path, clip.file_info)
+        _close_clip(clip)
     return {
         "source_path": source_path,
         "path": path,
