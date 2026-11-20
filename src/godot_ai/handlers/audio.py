@@ -2,10 +2,52 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
+from godot_ai.godot_client.client import GodotCommandError
+from godot_ai.godot_client.session_diagnostics import (
+    NO_ACTIVE_SESSION_MESSAGE,
+    no_active_session_data,
+    session_not_found_data,
+    session_not_found_message,
+)
 from godot_ai.handlers._readiness import require_writable_async
+from godot_ai.handlers._wav_loop_file import analyze_project_wav
+from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
+
+
+async def audio_wav_loop_find(
+    runtime: DirectRuntime,
+    source_path: str,
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
+    min_loop_seconds: float = 0.5,
+    max_candidates: int = 3,
+) -> dict:
+    session = runtime.get_active_session()
+    if session is None:
+        session_id = runtime.active_session_id
+        if session_id is None:
+            raise GodotCommandError(
+                ErrorCode.PLUGIN_DISCONNECTED, NO_ACTIVE_SESSION_MESSAGE, no_active_session_data()
+            )
+        raise GodotCommandError(
+            ErrorCode.PLUGIN_DISCONNECTED,
+            session_not_found_message(session_id),
+            session_not_found_data(session_id),
+        )
+
+    return await asyncio.to_thread(
+        analyze_project_wav,
+        session,
+        source_path,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        min_loop_seconds=min_loop_seconds,
+        max_candidates=max_candidates,
+    )
 
 
 async def audio_player_create(
