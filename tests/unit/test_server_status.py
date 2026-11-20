@@ -94,6 +94,7 @@ def test_status_route_telemetry_enabled_rereads_env(monkeypatch) -> None:
     ## construction-time snapshot (#913).
     monkeypatch.delenv("GODOT_AI_DISABLE_TELEMETRY", raising=False)
     monkeypatch.delenv("DISABLE_TELEMETRY", raising=False)
+    monkeypatch.setenv("GODOT_AI_ENABLE_TELEMETRY", "true")
     server = create_server(ws_port=9557)
     app = server.http_app(transport="streamable-http")
     client = TestClient(

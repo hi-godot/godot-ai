@@ -99,17 +99,23 @@ func test_disabled_telemetry_renders_flag_and_participates_in_drift() -> void:
 		["-m", "godot_ai", "attach", "--port", "8123", "--ws-port", "9623", "--disable-telemetry"],
 	)
 
-	## Enabled AND absent (hand-built contexts, stale pre-upgrade snapshots)
-	## must both render without the flag — send-by-default matches the server.
+	## Fork policy: telemetry is opt-in. Absent (hand-built contexts, stale
+	## pre-upgrade snapshots) renders no flag because the server is off by
+	## default; an explicit opt-in renders --enable-telemetry.
+	var absent := McpClientConfigurator.resolve_attach_launch(_context(), overrides)
+	assert_eq(
+		absent.get("args"),
+		["-m", "godot_ai", "attach", "--port", "8123", "--ws-port", "9623"],
+		"unspecified telemetry must not add a flag",
+	)
 	var enabled_context := _context()
 	enabled_context["telemetry_enabled"] = true
-	for ctx in [enabled_context, _context()]:
-		var clean := McpClientConfigurator.resolve_attach_launch(ctx, overrides)
-		assert_eq(
-			clean.get("args"),
-			["-m", "godot_ai", "attach", "--port", "8123", "--ws-port", "9623"],
-			"telemetry on (or unspecified) must not add the flag",
-		)
+	var opted_in := McpClientConfigurator.resolve_attach_launch(enabled_context, overrides)
+	assert_eq(
+		opted_in.get("args"),
+		["-m", "godot_ai", "attach", "--port", "8123", "--ws-port", "9623", "--enable-telemetry"],
+		"an explicit opt-in must render --enable-telemetry",
+	)
 
 	## A toggle is launch drift: distinct cache keys, so a stale resolution
 	## cannot serve an argv rendered under the old preference.

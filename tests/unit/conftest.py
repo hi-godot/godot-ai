@@ -33,6 +33,8 @@ def isolated_data_dir(monkeypatch, tmp_path: Path) -> Path:
     """
     monkeypatch.delenv("GODOT_AI_DISABLE_TELEMETRY", raising=False)
     monkeypatch.delenv("DISABLE_TELEMETRY", raising=False)
+    ## Fork policy: telemetry is opt-in, so the enabled-path tests opt in.
+    monkeypatch.setenv("GODOT_AI_ENABLE_TELEMETRY", "true")
     monkeypatch.setenv("GODOT_AI_TELEMETRY_ENDPOINT", "ftp://test-leak-guard.invalid/")
     monkeypatch.setattr(tel.TelemetryConfig, "_get_data_directory", lambda self: tmp_path)
     monkeypatch.setattr(

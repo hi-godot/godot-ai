@@ -214,7 +214,7 @@ static func ensure_settings_registered() -> void:
 	_register_bool_setting(es, SETTING_AUTO_REPAIR, false)
 	_register_bool_setting(es, SETTING_KEEP_SERVER_ON_EXIT, false)
 	_register_string_setting(es, McpSettings.SETTING_EXCLUDED_DOMAINS, "")
-	_register_bool_setting(es, McpSettings.SETTING_TELEMETRY_ENABLED, true)
+	_register_bool_setting(es, McpSettings.SETTING_TELEMETRY_ENABLED, false)
 	_register_string_setting(es, McpSettings.SETTING_ALLOW_HOSTS, "")
 	_register_client_scope_setting(es)
 	_register_string_setting(es, SETTING_EXTERNAL_CLIENT_CWD, "")
@@ -418,7 +418,7 @@ static func capture_launch_context(endpoint_policy: Dictionary = {}) -> Dictiona
 		## The opt-out must ride the attach argv: the client spawns the bridge
 		## (and the bridge its backend) with no editor in the loop, so the
 		## env-injection path in server_lifecycle.gd never runs for them.
-		"telemetry_enabled": bool(policy.get("telemetry_enabled", true)),
+		"telemetry_enabled": bool(policy.get("telemetry_enabled", false)),
 	}
 	_launch_context_snapshot_mutex.lock()
 	_endpoint_policy_snapshot = policy.duplicate(true)
@@ -1548,13 +1548,16 @@ static func _resolve_attach_launch_uncached(
 	var exclusions := str(launch_context.get("excluded_domains", "")).strip_edges()
 	if not exclusions.is_empty():
 		common_args.append_array(["--exclude-domains", exclusions])
-	## Default true when the key is absent (hand-built contexts in tests, stale
-	## pre-upgrade snapshots) — matching the server's send-by-default posture.
-	## Toggling the setting changes the rendered argv, so existing entries read
-	## CONFIGURED_MISMATCH and the dock offers Reconfigure, like any other
-	## launch-affecting value.
-	if not bool(launch_context.get("telemetry_enabled", true)):
-		common_args.append("--disable-telemetry")
+	## Fork policy: telemetry is opt-in. An absent key (hand-built contexts,
+	## stale snapshots) renders no flag and the server stays off by default;
+	## only an explicit opt-in renders --enable-telemetry. Toggling the setting
+	## changes the rendered argv, so existing entries read CONFIGURED_MISMATCH
+	## and the dock offers Reconfigure, like any other launch-affecting value.
+	if launch_context.has("telemetry_enabled"):
+		if bool(launch_context.get("telemetry_enabled")):
+			common_args.append("--enable-telemetry")
+		else:
+			common_args.append("--disable-telemetry")
 
 	var venv_python := ""
 	if discovery_override.has("venv_python"):

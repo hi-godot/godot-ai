@@ -111,12 +111,21 @@ func test_telemetry_enabled_reads_editor_setting_when_no_env() -> void:
 	EditorInterface.get_editor_settings().set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, true)
 	assert_true(McpSettings.telemetry_enabled())
 
-func test_telemetry_enabled_defaults_true_when_no_env_and_no_setting() -> void:
+func test_telemetry_enabled_defaults_false_when_no_env_and_no_setting() -> void:
+	## Fork policy: telemetry is opt-in.
 	OS.unset_environment(_TENV1)
 	OS.unset_environment(_TENV2)
+	var saved_enable := OS.get_environment("GODOT_AI_ENABLE_TELEMETRY")
+	OS.unset_environment("GODOT_AI_ENABLE_TELEMETRY")
 	var es := EditorInterface.get_editor_settings()
 	es.set_setting(McpSettings.SETTING_TELEMETRY_ENABLED, null)
-	assert_true(McpSettings.telemetry_enabled(), "absent setting must default to enabled")
+	assert_false(McpSettings.telemetry_enabled(), "absent setting must default to disabled")
+	OS.set_environment("GODOT_AI_ENABLE_TELEMETRY", "1")
+	assert_true(McpSettings.telemetry_enabled(), "GODOT_AI_ENABLE_TELEMETRY opts in")
+	if saved_enable.is_empty():
+		OS.unset_environment("GODOT_AI_ENABLE_TELEMETRY")
+	else:
+		OS.set_environment("GODOT_AI_ENABLE_TELEMETRY", saved_enable)
 
 func test_telemetry_env_overrides_editor_setting() -> void:
 	OS.set_environment(_TENV1, "1")

@@ -1463,7 +1463,7 @@ func _capture_lifecycle_plan() -> Dictionary:
 		"keep_alive": bool(policy.get("keep_alive", false)),
 		"worktree_src": worktree_src,
 		"ambient_pythonpath": OS.get_environment("PYTHONPATH"),
-		"disable_telemetry": not bool(policy.get("telemetry_enabled", true)),
+		"disable_telemetry": not bool(policy.get("telemetry_enabled", false)),
 		"automatic_effects": true,
 		"defer_effects": true,
 	}
