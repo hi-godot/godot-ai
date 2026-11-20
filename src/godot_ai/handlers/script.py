@@ -52,3 +52,28 @@ async def script_detach(runtime: DirectRuntime, path: str) -> dict:
 
 async def script_find_symbols(runtime: DirectRuntime, path: str) -> dict:
     return await runtime.send_command("find_symbols", {"path": path})
+
+
+## Server-side wait for ``build_csharp``: the plugin's own build timeout plus
+## headroom for its kill-and-report path and the dispatcher's deferred grace,
+## so the build's ``timed_out`` result arrives before the transport gives up.
+SCRIPT_BUILD_TIMEOUT_GRACE_SECONDS = 15.0
+SCRIPT_BUILD_DEFAULT_TIMEOUT_SECONDS = 180
+
+
+async def script_build(
+    runtime: DirectRuntime,
+    timeout_sec: int = SCRIPT_BUILD_DEFAULT_TIMEOUT_SECONDS,
+    include_warnings: bool = True,
+    max_diagnostics: int = 200,
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "build_csharp",
+        {
+            "timeout_sec": timeout_sec,
+            "include_warnings": include_warnings,
+            "max_diagnostics": max_diagnostics,
+        },
+        timeout=float(timeout_sec) + SCRIPT_BUILD_TIMEOUT_GRACE_SECONDS,
+    )

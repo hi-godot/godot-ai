@@ -220,9 +220,10 @@ sessions" above, #766).
 
 ### C# support
 
-GDScript (`.gd`) is the full contract above. C# (`.cs`) is **text-only**
-(#908): the plugin writes, reads, patches and outlines `.cs` files, but it
-never compiles .NET, so nothing on this surface reports a C# compiler error.
+GDScript (`.gd`) is the full contract above. C# (`.cs`) writes are
+**text-only** (#908): `script_create` / `script_patch` write, read and
+outline `.cs` files without compiling them. Compiler errors come from an
+explicit build, `script_manage(op="build")` (#1251), described below.
 
 - `script_create` and `script_patch` accept `.cs`. The response carries
   `language: "csharp"`, an empty `diagnostics` array with
@@ -231,10 +232,43 @@ never compiles .NET, so nothing on this surface reports a C# compiler error.
   (whether the connected editor build has .NET at all). Overwrites and
   patches report `reloaded: false, reload_reason: "csharp_requires_build"`
   — C# only picks up new source when the assembly is rebuilt.
-- To see compiler errors, use the editor **Build** button and inspect its
-  Build panel, or run `dotnet build` and inspect the terminal output.
-  `logs_read` can surface engine runtime/load errors; it does not capture
-  the .NET build output.
+- To see compiler errors, call `script_manage(op="build")`. It runs
+  `dotnet build` on the project's `.csproj` (named by
+  `dotnet/project/assembly_name`, else the only `.csproj` in the project
+  root) in the Debug configuration the editor uses, without blocking the
+  editor, and returns `succeeded`, `exit_code`, `duration_ms`,
+  `error_count`, `warning_count`, `diagnostics_status: "checked"` and
+  `diagnostics: [{severity, code, message, path, line, column}]`. `path` is
+  `res://...` for project files, absolute for files outside the project
+  (SDK `.targets`), and empty with an `origin` (`CSC`, `MSBUILD`) for
+  diagnostics not tied to a file. Duplicate MSBuild lines are collapsed;
+  past `max_diagnostics` (default 200) the list keeps errors first and sets
+  `diagnostics_truncated`. A failed build with no parseable diagnostic
+  (restore failure, missing SDK) carries `output_tail` and reports
+  `diagnostics_status: "not_checked"`, since the compiler's verdict is not
+  in the list.
+  - Params: `timeout_sec` (10–900, default 180; the process tree is killed
+    and the result says `timed_out: true`, `diagnostics_status:
+    "not_checked"` even if some errors were printed before the kill, and
+    `termination_confirmed`, true only when Windows `taskkill /T` proved the
+    whole tree gone; POSIX kills the exact PID only),
+    `include_warnings` (default true; counts always include warnings),
+    `max_diagnostics` (1–1000).
+  - A second request while a build runs joins it and receives the same
+    result (`shared_build: true`) instead of starting a parallel build. A
+    joiner whose `timeout_sec` would expire before the running build can
+    finish is refused (`VALUE_OUT_OF_RANGE`, naming the `timeout_sec` that
+    would cover it) rather than left to time out.
+  - It builds only. The editor loads the rebuilt assembly when its window
+    regains focus or after its own Build button (`reload_hint`).
+  - Refusals: a non-.NET editor (`VALUE_OUT_OF_RANGE`), no `.csproj`
+    (`RESOURCE_NOT_FOUND`), several `.csproj` with none matching the
+    assembly name (`VALUE_OUT_OF_RANGE`), `dotnet` not launchable
+    (`RESOURCE_NOT_FOUND`), and `EDITOR_NOT_READY` while the game is
+    playing (the running game holds the assembly). Must be called as a
+    top-level op, not inside `batch_execute`.
+  - `logs_read` does not capture .NET build output; the editor's own Build
+    panel remains available.
 - On a non-.NET editor build a `.cs` is not a resource: `script_create`
   replies synchronously (no import-settle wait), `cleanup.rm` lists only the
   `.cs` (no `.uid` sidecar), and `script_attach` returns
@@ -250,8 +284,6 @@ never compiles .NET, so nothing on this surface reports a C# compiler error.
 - Any other extension is still rejected; `filesystem_manage(op="write_text")`
   handles arbitrary text files.
 
-A .NET build/diagnostics channel is tracked separately from this text-only
-contract.
 
 ## Domain rollups (`<domain>_manage`)
 
@@ -276,7 +308,7 @@ Calls take the form:
 |------|-----|
 | `scene_manage` | `create`, `save_as`, `close`, `get_roots` |
 | `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `set_editable_children`, `add_to_group`, `remove_from_group` |
-| `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
+| `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`), `build` (C# / .NET) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |

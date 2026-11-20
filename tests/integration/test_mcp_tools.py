@@ -2060,6 +2060,49 @@ class TestScriptFindSymbolsTool:
         assert result.data["signals"] == ["health_changed"]
 
 
+class TestScriptBuildTool:
+    async def test_build_routes_to_build_csharp(self, mcp_stack):
+        client, plugin = mcp_stack
+        diagnostic = {
+            "severity": "error",
+            "code": "CS0103",
+            "message": "The name 'speed' does not exist in the current context",
+            "path": "res://Player.cs",
+            "line": 12,
+            "column": 5,
+        }
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "build_csharp"
+            assert cmd["params"]["timeout_sec"] == 60
+            assert cmd["params"]["include_warnings"] is True
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "project": "res://Game.csproj",
+                    "succeeded": False,
+                    "exit_code": 1,
+                    "timed_out": False,
+                    "diagnostics_status": "checked",
+                    "diagnostics": [diagnostic],
+                    "error_count": 1,
+                    "warning_count": 0,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "script_manage", {"op": "build", "params": {"timeout_sec": 60}}
+        )
+        await task
+
+        assert result.data["succeeded"] is False
+        assert result.data["diagnostics_status"] == "checked"
+        assert result.data["diagnostics"][0]["code"] == "CS0103"
+        assert result.data["diagnostics"][0]["path"] == "res://Player.cs"
+
+
 # ---------------------------------------------------------------------------
 # resource_search
 # ---------------------------------------------------------------------------

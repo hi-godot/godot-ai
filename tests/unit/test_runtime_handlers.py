@@ -3199,6 +3199,61 @@ async def test_script_find_symbols_handler():
     assert client.calls[-1]["params"] == {"path": "res://scripts/player.gd"}
 
 
+async def test_script_build_handler_sends_build_csharp_with_long_timeout():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await script_handlers.script_build(
+        runtime, timeout_sec=240, include_warnings=False, max_diagnostics=50
+    )
+    call = client.calls[-1]
+    assert call["command"] == "build_csharp"
+    assert call["params"] == {
+        "timeout_sec": 240,
+        "include_warnings": False,
+        "max_diagnostics": 50,
+    }
+    ## The server must outwait the plugin's own build timeout, or a slow build
+    ## surfaces as a transport timeout instead of the plugin's timed_out result.
+    assert call["timeout"] == 240 + script_handlers.SCRIPT_BUILD_TIMEOUT_GRACE_SECONDS
+
+
+async def test_script_build_handler_defaults():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await script_handlers.script_build(runtime)
+    call = client.calls[-1]
+    assert call["params"] == {
+        "timeout_sec": script_handlers.SCRIPT_BUILD_DEFAULT_TIMEOUT_SECONDS,
+        "include_warnings": True,
+        "max_diagnostics": 200,
+    }
+    assert call["timeout"] > script_handlers.SCRIPT_BUILD_DEFAULT_TIMEOUT_SECONDS
+
+
+async def test_script_build_requires_writable_while_playing():
+    """A running game holds the built assembly; the build must not start."""
+    from godot_ai.godot_client.client import GodotCommandError
+    from godot_ai.sessions.registry import Session
+
+    client = StubClient()
+    client.live_readiness = "playing"
+    registry = SessionRegistry()
+    registry.register(
+        Session(
+            session_id="s1",
+            godot_version="4.7",
+            project_path="/tmp/p",
+            plugin_version="0.1",
+            readiness="playing",
+        )
+    )
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError) as error:
+        await script_handlers.script_build(runtime)
+    assert error.value.code == "EDITOR_NOT_READY"
+    assert not any(c["command"] == "build_csharp" for c in client.calls)
+
+
 # ---------------------------------------------------------------------------
 # Resource handler tests
 # ---------------------------------------------------------------------------

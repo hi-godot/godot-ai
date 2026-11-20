@@ -27,11 +27,18 @@ Ops:
         Outline a script. .gd: class_name, extends, functions, signals,
         @export vars. .cs: class, base type, methods, [Signal] delegates,
         [Export] members. Response ``language`` says which parser ran.
+  • build(timeout_sec=180, include_warnings=true, max_diagnostics=200)
+        Compile the project's C# (.NET) assembly with ``dotnet build`` and
+        return compiler errors / warnings: ``succeeded``, ``exit_code``,
+        ``error_count``, ``warning_count`` and ``diagnostics`` [{severity,
+        code, message, path (res:// inside the project), line, column}].
+        Needs a .NET-enabled editor, a .csproj and the .NET SDK. Builds only;
+        the editor loads the new assembly on window focus or its own Build.
 
-Language support: GDScript is the full contract. C# (.cs) is text-only —
-files are written, read and outlined, but Godot AI does not build .NET or
-report C# compiler errors; inspect the editor Build panel or ``dotnet build``
-terminal output. ``logs_read`` does not capture .NET compiler output.
+Language support: GDScript is the full contract. C# (.cs) writes are
+text-only (``diagnostics_status="not_checked"``); call op="build" to compile
+and get the C# compiler errors. ``logs_read`` does not capture .NET compiler
+output.
 """
 
 
@@ -52,10 +59,10 @@ def register_script_tools(mcp: FastMCP) -> None:
 
         .gd: source is parse-validated and the response carries
         ``diagnostics`` (``diagnostics_status="checked"``); an already-loaded
-        script is refreshed in place. .cs: written as text only — Godot AI
-        does not compile .NET, so ``diagnostics_status="not_checked"`` and
-        ``validation_hint`` says to build the project (editor Build button
-        or ``dotnet build``) to see compiler errors. ``dotnet_editor``
+        script is refreshed in place. .cs: written as text only (not
+        compiled), so ``diagnostics_status="not_checked"`` and
+        ``validation_hint`` points at script_manage op="build" for compiler
+        errors. ``dotnet_editor``
         reports whether the connected editor build has .NET at all. Any
         other extension is rejected; use filesystem_manage op="write_text".
 
@@ -137,6 +144,7 @@ def register_script_tools(mcp: FastMCP) -> None:
             "read": script_handlers.script_read,
             "detach": script_handlers.script_detach,
             "find_symbols": script_handlers.script_find_symbols,
+            "build": script_handlers.script_build,
         },
         read_resource_forms={
             "read": "godot://script/{path*}",

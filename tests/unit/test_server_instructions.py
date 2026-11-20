@@ -46,7 +46,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "  node_manage      get_children, get_groups, delete, duplicate, rename,\n"
     "                   move, reparent, add_to_group, remove_from_group,\n"
     "                   set_editable_children\n"
-    "  script_manage    read, detach, find_symbols\n"
+    "  script_manage    read, detach, find_symbols, build\n"
     "  project_manage   stop, settings_get, settings_set, set_main_scene\n"
     "  editor_manage    state, selection_get/set, monitors_get, quit, logs_clear,\n"
     "                   game_eval\n"

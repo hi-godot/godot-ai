@@ -4,15 +4,16 @@ extends "res://addons/godot_ai/handlers/command_handler.gd"
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const DiagnosticsCapture := preload("res://addons/godot_ai/utils/diagnostics_capture.gd")
 const ValidationLogger := preload("res://addons/godot_ai/runtime/validation_logger.gd")
+const DotnetBuild := preload("res://addons/godot_ai/utils/dotnet_build.gd")
 
 ## Handles script creation, reading, attaching, detaching, and symbol inspection.
 ##
 ## Two script languages cross this surface (#908). GDScript (`.gd`) is the
 ## full contract: parse-validated on write, hot-reloaded when already loaded,
 ## outlined by `find_symbols`. C# (`.cs`) is text-only: the plugin writes the
-## bytes and outlines the file, but it never compiles .NET — the caller has
-## to build the project (editor Build button or `dotnet build`) to learn
-## about compiler errors. Loading a `.cs` requires a .NET-enabled editor;
+## bytes and outlines the file, but a write never compiles .NET — the caller
+## builds explicitly (`build_csharp`, below, or the editor Build button) to
+## learn about compiler errors. Loading a `.cs` requires a .NET-enabled editor;
 ## resource recognition does not prove its managed class was built. Every
 ## `.cs` write says so
 ## (`diagnostics_status: "not_checked"`, `validation_hint`, `dotnet_editor`)
@@ -22,8 +23,8 @@ const ValidationLogger := preload("res://addons/godot_ai/runtime/validation_logg
 const LANGUAGE_GDSCRIPT := "gdscript"
 const LANGUAGE_CSHARP := "csharp"
 const CSHARP_VALIDATION_HINT := (
-	"C# is written as text only; Godot AI does not compile .NET. Build the "
-	+ "project (editor Build button or `dotnet build`) to surface compiler "
+	"C# is written as text only and was not compiled. Call "
+	+ "script_manage(op=\"build\") (runs `dotnet build`) to get compiler "
 	+ "errors, then filesystem_manage(op=\"scan\") before attaching the script."
 )
 const UNSUPPORTED_EXTENSION_MESSAGE := (
@@ -558,8 +559,9 @@ static func _csharp_load_hint(is_csharp: bool) -> String:
 	if not is_csharp:
 		return ""
 	return (
-		" (check the C# source path and build the project assembly using the "
-		+ "editor Build button or `dotnet build`, then filesystem_manage(op=\"scan\"); "
+		" (check the C# source path and build the project assembly with "
+		+ "script_manage(op=\"build\") or the editor Build button, then "
+		+ "filesystem_manage(op=\"scan\"); "
 		+ "resource recognition alone does not verify a compiled class)"
 	)
 
@@ -591,6 +593,78 @@ func detach_script(params: Dictionary) -> Dictionary:
 			"removed_script": old_script.resource_path if old_script.resource_path else "(inline)",
 			"undoable": true,
 		}
+	}
+
+
+## Build the project's C# assembly and report the compiler's diagnostics
+## (#1251). The text-only `.cs` contract above never compiles; this is the
+## explicit build a caller asks for once its edits are in. The process runs
+## off the frame budget (see DotnetBuild) and replies as a deferred response.
+func build_csharp(params: Dictionary) -> Dictionary:
+	var timeout_sec := int(params.get("timeout_sec", DotnetBuild.DEFAULT_TIMEOUT_SEC))
+	if timeout_sec < DotnetBuild.MIN_TIMEOUT_SEC or timeout_sec > DotnetBuild.MAX_TIMEOUT_SEC:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"timeout_sec must be between %d and %d (got %d)"
+			% [DotnetBuild.MIN_TIMEOUT_SEC, DotnetBuild.MAX_TIMEOUT_SEC, timeout_sec],
+		)
+	var max_diagnostics := int(params.get("max_diagnostics", DotnetBuild.DEFAULT_MAX_DIAGNOSTICS))
+	if max_diagnostics < 1 or max_diagnostics > DotnetBuild.MAX_MAX_DIAGNOSTICS:
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"max_diagnostics must be between 1 and %d (got %d)"
+			% [DotnetBuild.MAX_MAX_DIAGNOSTICS, max_diagnostics],
+		)
+	var include_warnings := bool(params.get("include_warnings", true))
+
+	if not editor_has_dotnet():
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"This editor build has no .NET support, so it cannot build or load C#. "
+			+ "Open the project in the .NET (mono) build of Godot.",
+		)
+
+	var project := DotnetBuild.find_project_file()
+	if project.is_empty():
+		var candidates := DotnetBuild.list_project_files()
+		if candidates.size() > 1:
+			return ErrorCodes.make(
+				ErrorCodes.VALUE_OUT_OF_RANGE,
+				"Several .csproj files in the project root (%s) and none matches "
+				% ", ".join(candidates)
+				+ "dotnet/project/assembly_name; set that project setting to pick one.",
+			)
+		return ErrorCodes.make(
+			ErrorCodes.RESOURCE_NOT_FOUND,
+			"No C# project file (.csproj) in the project root. Create one with "
+			+ "Project > Tools > C# > Create C# solution, or by creating a C# script in the editor.",
+		)
+
+	var request_id: String = params.get("_request_id", "")
+	if _connection == null or request_id.is_empty():
+		return ErrorCodes.make(
+			ErrorCodes.INTERNAL_ERROR,
+			"build_csharp must run as a top-level deferred command (not inside batch_execute).",
+		)
+	var started := DotnetBuild.start(
+		_connection, request_id, project, timeout_sec, include_warnings, max_diagnostics
+	)
+	if bool(started.get("join_refused", false)):
+		return ErrorCodes.make(
+			ErrorCodes.VALUE_OUT_OF_RANGE,
+			"A C# build is already running and would outlast this request's timeout_sec=%d. " % timeout_sec
+			+ "Retry with timeout_sec >= %d to share its result, or retry after it finishes."
+			% int(started.needed_timeout_sec),
+		)
+	if bool(started.get("spawn_failed", false)):
+		return ErrorCodes.make(
+			ErrorCodes.RESOURCE_NOT_FOUND,
+			"Could not start '%s'. Install the .NET SDK and make sure `dotnet` " % started.executable
+			+ "is on PATH (or set DOTNET_ROOT) for the process that launched the editor.",
+		)
+	return {
+		"_deferred": true,
+		"_deferred_timeout_ms": timeout_sec * 1000 + DotnetBuild.DEFERRED_GRACE_MS,
 	}
 
 
