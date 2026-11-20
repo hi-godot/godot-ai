@@ -227,3 +227,62 @@ func test_boot_output_stays_visible_under_the_adopted_run_id() -> void:
 	assert_eq(entries.size(), 1,
 		"the boot line must be readable in the current run, the way logs_read returns it")
 	assert_eq(str(entries[0].get("text", "")), "boot line from _ready")
+
+
+## Plugin reload during play: `_setup_session` adopts the already-running game
+## (here via the play-state edge, since the suite has no game playing), but the
+## helper's one-shot boot hello is long gone. Its periodic mcp:input_activity
+## beacon must stand in for it, or the run stays not-live until a restart.
+
+func test_reload_mid_run_adopts_running_game_from_input_activity() -> void:
+	var plugin := _plugin_with_log()
+	plugin._setup_session(1)
+	plugin.note_editor_play_started()
+	assert_false(plugin.is_game_capture_ready(),
+		"precondition: adopted run with no hello is not live")
+	var consumed := plugin._capture("mcp:input_activity", [250], 1)
+	assert_true(consumed, "the beacon is consumed off the debugger wire")
+	assert_true(plugin.is_game_capture_ready(),
+		"a running helper's input_activity must make the adopted run live")
+	assert_eq(plugin._game_session_id, 1, "the run stays bound to the beaconing session")
+	assert_eq(plugin._input_sample_age_msec, 250,
+		"the same beacon is also recorded as the input sample")
+	assert_contains(str(plugin._log_buffer.get_recent(5)), "adopted without mcp:hello",
+		"the re-adoption is logged once, under its own name")
+	assert_false(str(plugin._log_buffer.get_recent(5)).contains("<- mcp:hello"),
+		"no hello was received, so none is logged")
+
+
+func test_input_activity_from_another_session_does_not_adopt() -> void:
+	var plugin := _plugin_with_log()
+	plugin._setup_session(1)
+	plugin.note_editor_play_started()
+	plugin._capture("mcp:input_activity", [0], 2)
+	assert_false(plugin.is_game_capture_ready(),
+		"another debugger session's beacon must not make this run live")
+
+
+func test_input_activity_without_an_active_run_does_not_adopt() -> void:
+	var plugin := _plugin_with_log()
+	plugin._setup_session(1)
+	plugin._capture("mcp:input_activity", [0], 1)
+	assert_false(plugin._game_run_active, "a beacon must not start run tracking")
+	assert_false(plugin.is_game_capture_ready(), "no run, so nothing is live")
+	plugin.note_editor_play_started()
+	assert_false(plugin.is_game_capture_ready(),
+		"a beacon before adoption is not held: unlike the hello, the next one follows within a second")
+
+
+func test_input_activity_leaves_a_live_run_untouched() -> void:
+	var plugin := _plugin_with_log()
+	plugin._setup_session(1)
+	plugin.begin_game_run(0, true)
+	plugin._capture("mcp:hello", [], 1)
+	var token_before: int = plugin._game_run_token
+	var logged_before: int = plugin._log_buffer.total_logged()
+	plugin._capture("mcp:input_activity", [40], 1)
+	assert_eq(plugin._game_run_token, token_before, "a live run is not re-adopted")
+	assert_true(plugin.is_game_capture_ready(), "the run stays live")
+	assert_eq(plugin._log_buffer.total_logged(), logged_before,
+		"routine beacons on a live run log nothing")
+	assert_eq(plugin._input_sample_age_msec, 40, "the input sample is still recorded")

@@ -317,8 +317,9 @@ func note_editor_play_stopped() -> void:
 ## this, Godot's debugger drops our messages silently. Shared by the live
 ## `mcp:hello` branch in `_capture` and by the buffered replay in
 ## `_replay_pending_hello`, so a held beacon produces exactly the same state
-## and side effects as one that arrived after adoption (#891).
-func _accept_game_hello(session_id: int) -> void:
+## and side effects as one that arrived after adoption (#891). Also used by
+## `_readopt_from_beacon`, which logs its own line instead (`log_hello` false).
+func _accept_game_hello(session_id: int, log_hello: bool = true) -> void:
 	_pending_hello_session_id = -1
 	## Bind the run to the game that actually announced itself. Adoption
 	## clears `_game_session_id`, so without this a replayed beacon would
@@ -335,7 +336,7 @@ func _accept_game_hello(session_id: int) -> void:
 	## promoted into the watermark even if no tool call follows.
 	if _surfaced_error_tracker != null:
 		_surfaced_error_tracker.schedule_deferred_scans()
-	if _log_buffer:
+	if _log_buffer and log_hello:
 		if _game_log_buffer:
 			_log_buffer.log("[debug] <- mcp:hello from game_helper (run %s)" % _game_log_buffer.run_id())
 		else:
@@ -358,6 +359,26 @@ func _replay_pending_hello() -> void:
 	if _log_buffer:
 		_log_buffer.log("[debug] replaying held mcp:hello from debugger session %d" % held)
 	_accept_game_hello(held)
+
+
+## Reloading the plugin while a game runs re-runs `_setup_session`, which adopts
+## the already-running game -- but the helper sent its one-shot `mcp:hello` at
+## boot and never sends another, so the run stayed not-live for its whole
+## lifetime: game_eval, game logs and runtime input all failed until the game
+## was restarted. The helper's once-a-second `mcp:input_activity` proves what
+## the hello proves (capture registered in `_ready`, main loop ticking; a game
+## parked at a break sends none), so it stands in for the hello on an adopted run
+## that is still waiting. Same session rule as the hello: never another game's.
+## Only for runs the editor side adopted (`_manual_run_armed`, which the reload
+## adoption is): a run `project_run` spawned still waits for its own hello.
+func _readopt_from_beacon(session_id: int) -> void:
+	if not _game_run_active or not _manual_run_armed or is_game_capture_ready():
+		return
+	if _game_session_id != -1 and session_id != _game_session_id:
+		return
+	if _log_buffer:
+		_log_buffer.log("[debug] game_helper already running (mcp:input_activity from debugger session %d); adopted without mcp:hello" % session_id)
+	_accept_game_hello(session_id, false)
 
 
 func _connect_session_stopped(session_id: int) -> void:
@@ -835,6 +856,7 @@ func _capture(message: String, data: Array, session_id: int) -> bool:
 	## Godot passes the full "prefix:tail" string as `message`.
 	match message:
 		"mcp:input_activity":
+			_readopt_from_beacon(session_id)
 			if is_game_capture_ready() and session_id == _game_session_id and data.size() == 1 and data[0] is int and data[0] >= 0:
 				_input_sample_age_msec = data[0]
 				_input_sample_received_msec = Time.get_ticks_msec()

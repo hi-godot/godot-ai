@@ -5,6 +5,16 @@ this file at the release's exact source commit, and its "What's Changed"
 section lists every merged pull request; this file keeps the part worth
 reading. Release engineering: [docs/releasing.md](docs/releasing.md).
 
+## Unreleased
+
+### Fixed
+
+- Keep the runtime tools working when the plugin reloads while a game is
+  running. The reloaded plugin adopted the game but waited for the helper's
+  boot-time hello, which the game never sends twice, so `game_eval`, game logs
+  and runtime input failed until the game was restarted. The helper's
+  once-a-second activity beacon now stands in for it.
+
 ## 4.4.2 (2026-11-16)
 
 ### Fixed
