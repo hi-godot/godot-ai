@@ -12,6 +12,7 @@ extends McpTestSuite
 
 const Tools := preload("res://addons/topdown_shooter_tools/handlers/topdown_tools.gd")
 const ItemTools := preload("res://addons/topdown_shooter_tools/handlers/item_tools.gd")
+const LootTools := preload("res://addons/topdown_shooter_tools/handlers/loot_tools.gd")
 const ToolSpecs := preload("res://addons/topdown_shooter_tools/tool_specs.gd")
 
 const WORK_DIR := "res://zz_mcp_test_topdown"
@@ -19,6 +20,7 @@ const ACTION_PREFIX := "mcp_test_td_"
 
 var _tools: Tools
 var _items: ItemTools
+var _loot: LootTools
 var _undo_redo: EditorUndoRedoManager
 var _added: Array[Node] = []
 
@@ -31,6 +33,7 @@ func suite_setup(ctx: Dictionary) -> void:
 	_undo_redo = ctx.get("undo_redo")
 	_tools = Tools.new()
 	_items = ItemTools.new()
+	_loot = LootTools.new()
 	if EditorInterface.get_edited_scene_root() == null:
 		skip_suite("needs an open scene")
 
@@ -107,14 +110,14 @@ func _weapon_params(id: String, extra: Dictionary = {}) -> Dictionary:
 
 func test_specs_validate() -> void:
 	var specs := ToolSpecs.build()
-	assert_eq(specs.size(), 5)
+	assert_eq(specs.size(), 6)
 	var names := []
 	for spec in specs:
 		assert_eq(spec.validate(), [] as Array[String], "spec %s" % spec.name)
 		assert_true(spec.promoted)
 		assert_true(spec.requires_writable)
 		names.append(spec.name)
-	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import"])
+	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit"])
 
 
 # --- player ------------------------------------------------------------------
@@ -859,3 +862,296 @@ func test_item_db_import_undo_restores_files() -> void:
 	assert_true(global_ur.redo(), "redo runs")
 	assert_true(FileAccess.file_exists(ITEM_DIR + "/medkit.tres"))
 	assert_eq(_load_fresh(ITEM_DIR + "/bandage.tres").get("value"), 75)
+
+
+# --- loot tables ---------------------------------------------------------------
+
+const LOOT_DIR := WORK_DIR + "/loot"
+
+
+func _loot_params(extra: Dictionary = {}) -> Dictionary:
+	var params := {
+		"table_id": "test_grunt",
+		"data_dir": LOOT_DIR,
+		"script_dir": WORK_DIR + "/scripts",
+		"database_path": ITEM_DIR + "/item_database.tres",
+		"seed": 7,
+		"simulate": 4000,
+	}
+	params.merge(extra, true)
+	return params
+
+
+const LOOT_ENTRIES := [
+	{"item_id": "bandage", "weight": 3, "min_count": 1, "max_count": 2},
+	{"item_id": "ammo_9mm", "weight": 1, "min_count": 10, "max_count": 30},
+	{"item_id": "gold_watch", "guaranteed": true},
+]
+
+
+func _fresh_loot() -> void:
+	_remove_tree(ProjectSettings.globalize_path(LOOT_DIR))
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+
+
+func _row(data: Dictionary, id: String) -> Dictionary:
+	for row in data.entries:
+		if row.item_id == id:
+			return row
+	return {}
+
+
+func test_loot_chances_math() -> void:
+	var t := {"rolls_min": 1, "rolls_max": 1, "empty_weight": 0.0, "entries": [
+		{"item_id": "a", "weight": 1.0, "min": 1, "max": 1, "guaranteed": false},
+		{"item_id": "b", "weight": 3.0, "min": 2, "max": 4, "guaranteed": false},
+	]}
+	var odds := LootTools.chances(t)
+	assert_eq(odds.per_item.a.drop, 0.25)
+	assert_eq(odds.per_item.b.expected, 0.75 * 3.0)
+	assert_eq(odds.nothing, 0.0)
+	t.rolls_max = 2
+	t.rolls_min = 2
+	odds = LootTools.chances(t)
+	assert_eq(odds.per_item.a.drop, 1.0 - 0.75 * 0.75)
+	t.rolls_min = 1
+	t.rolls_max = 1
+	t.empty_weight = 4.0
+	odds = LootTools.chances(t)
+	assert_eq(odds.per_item.a.drop, 0.125)
+	assert_eq(odds.nothing, 0.5)
+	t.entries.append({"item_id": "g", "weight": 0.0, "min": 0, "max": 1, "guaranteed": true})
+	odds = LootTools.chances(t)
+	assert_eq(odds.per_item.g.drop, 0.5, "min 0 guaranteed drops half the time")
+	assert_eq(odds.nothing, 0.25)
+
+
+func test_loot_table_create_and_simulate() -> void:
+	_fresh_loot()
+	var result := _loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES, "empty_weight": 4}))
+	assert_has_key(result, "data", str(result))
+	var data: Dictionary = result.data
+	assert_eq(data.status, "created")
+	assert_eq(data.added, ["bandage", "ammo_9mm", "gold_watch"])
+	assert_eq(data.total_weight, 8.0)
+	assert_eq(_row(data, "bandage").roll_percent, 37.5)
+	assert_eq(_row(data, "gold_watch").drop_percent, 100.0)
+	assert_eq(_row(data, "gold_watch").simulated_drop_percent, 100.0)
+	for id in ["bandage", "ammo_9mm"]:
+		var row := _row(data, id)
+		assert_true(absf(row.drop_percent - row.simulated_drop_percent) < 3.0, "%s simulated %s vs exact %s" % [id, row.simulated_drop_percent, row.drop_percent])
+		assert_true(absf(row.expected_count - row.simulated_avg_count) < row.expected_count * 0.15 + 0.05, "%s average count" % id)
+	assert_eq(data.nothing_chance_percent, 0.0, "the watch always drops")
+	assert_eq(data.simulation.samples.size(), 5)
+	assert_contains(data.simulation.samples[0], "gold_watch")
+
+	var again := _loot.loot_table_edit(_loot_params())
+	assert_eq(again.data.status, "unchanged", "table_id alone only simulates")
+	assert_eq(again.data.simulation.samples, data.simulation.samples, "same seed, same samples")
+
+	var table := _load_fresh(LOOT_DIR + "/test_grunt.tres")
+	assert_eq(table.get("table_id"), "test_grunt")
+	assert_eq(table.get("empty_weight"), 4.0)
+	assert_eq(table.get("entries").size(), 3)
+	assert_eq(table.get("entries")[1], {"item_id": "ammo_9mm", "weight": 1.0, "min": 10, "max": 30, "guaranteed": false})
+	assert_eq(table.get("item_database").resource_path, ITEM_DIR + "/item_database.tres")
+
+
+func test_loot_table_roll_resolves_items() -> void:
+	_fresh_loot()
+	assert_has_key(_loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES})), "data")
+	var stored := _load_fresh(LOOT_DIR + "/test_grunt.tres")
+	var t := Resource.new()
+	t.set_script(_tool_copy(WORK_DIR + "/scripts/loot_table.gd"))
+	t.set("entries", stored.get("entries"))
+	t.set("item_database", _tool_db(ITEM_DIR + "/item_database.tres"))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3
+	var drops: Array = t.roll(rng)
+	assert_eq(drops.size(), 2, "the watch plus one rolled item")
+	assert_eq(drops[0].item_id, "gold_watch")
+	assert_eq(drops[0].item.get("value"), 1500)
+	assert_eq(t.get_roll_chances().bandage, 0.75)
+
+
+func test_loot_table_edit_upserts_removes_and_expands_categories() -> void:
+	_fresh_loot()
+	assert_has_key(_loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES})), "data")
+	var result := _loot.loot_table_edit(_loot_params({
+		"entries": [{"item_id": "bandage", "weight": 10}, {"category": "valuable", "weight": 2, "max_count": 2}],
+		"remove_items": ["ammo_9mm"],
+		"rolls_max": 3,
+	}))
+	assert_has_key(result, "data", str(result))
+	assert_eq(result.data.status, "updated")
+	assert_eq(result.data.changed, ["bandage", "gold_watch"])
+	assert_eq(result.data.removed, ["ammo_9mm"])
+	assert_eq(result.data.rolls, [1, 3])
+	var entries: Array = _load_fresh(LOOT_DIR + "/test_grunt.tres").get("entries")
+	assert_eq(entries.size(), 2)
+	assert_eq(entries[0].weight, 10.0)
+	assert_eq(entries[1], {"item_id": "gold_watch", "weight": 2.0, "min": 1, "max": 2, "guaranteed": false})
+
+	result = _loot.loot_table_edit(_loot_params({"entries": [{"tag": "heal", "weight": 1}], "replace_entries": true}))
+	assert_eq(result.data.added, ["bandage"])
+	assert_eq(_load_fresh(LOOT_DIR + "/test_grunt.tres").get("entries").size(), 1)
+
+
+func test_loot_table_errors_write_nothing() -> void:
+	_fresh_loot()
+	assert_is_error(_loot.loot_table_edit({}), "INVALID_PARAMS", "no table_id")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"table_id": "Bad Id"})), "INVALID_PARAMS")
+	assert_is_error(_loot.loot_table_edit(_loot_params()), "INVALID_PARAMS", "new table without entries")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"entries": [{"item_id": "nope"}]})), "INVALID_PARAMS", "unknown item")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"entries": [{"item_id": "bandage", "chance": 1}]})), "INVALID_PARAMS", "unknown key")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"entries": [{"item_id": "bandage", "tag": "heal"}]})), "INVALID_PARAMS", "two selectors")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"entries": [{"item_id": "bandage", "min_count": 3, "max_count": 1}]})), "INVALID_PARAMS")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"entries": [{"category": "weapon"}]})), "INVALID_PARAMS", "no matching items")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES, "rolls_min": 3, "rolls_max": 1})), "INVALID_PARAMS")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES, "data_dir": "res://addons/x"})), "INVALID_PARAMS")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES, "database_path": WORK_DIR + "/none.tres"})), "NODE_NOT_FOUND")
+	assert_is_error(_loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES, "attach_to": ["/Nope"]})), "NODE_NOT_FOUND")
+	assert_false(FileAccess.file_exists(LOOT_DIR + "/test_grunt.tres"))
+	var loose := _loot.loot_table_edit(_loot_params({"entries": [{"item_id": "mystery"}], "allow_unknown_items": true, "database_path": WORK_DIR + "/none.tres"}))
+	assert_has_key(loose, "data", str(loose))
+	assert_eq(loose.data.warnings.size(), 1)
+
+
+func test_loot_table_dry_run_writes_nothing() -> void:
+	_fresh_loot()
+	var result := _loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES, "dry_run": true}))
+	assert_has_key(result, "data", str(result))
+	assert_eq(result.data.status, "would create")
+	assert_eq(_row(result.data, "bandage").drop_percent, 75.0)
+	assert_false(FileAccess.file_exists(LOOT_DIR + "/test_grunt.tres"))
+
+
+func test_loot_table_undo_restores_file() -> void:
+	_fresh_loot()
+	assert_has_key(_loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES})), "data")
+	var result := _loot.loot_table_edit(_loot_params({"entries": [{"item_id": "bandage", "weight": 50}]}))
+	assert_has_key(result.data, "undo")
+	var global_ur := _undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+	assert_true(global_ur.undo(), "undo runs")
+	assert_eq(_load_fresh(LOOT_DIR + "/test_grunt.tres").get("entries")[0].weight, 3.0)
+	assert_true(global_ur.redo(), "redo runs")
+	assert_eq(_load_fresh(LOOT_DIR + "/test_grunt.tres").get("entries")[0].weight, 50.0)
+
+
+func _died_source() -> Node3D:
+	var script := GDScript.new()
+	script.source_code = "@tool\nextends Node3D\nsignal died\n"
+	script.reload()
+	var node := Node3D.new()
+	node.set_script(script)
+	node.name = "LootTestEnemy"
+	node.add_to_group(&"mcp_test_loot", true)
+	_root().add_child(node)
+	node.owner = _root()
+	_added.append(node)
+	return node
+
+
+func test_loot_attach_adds_dropper_with_undo() -> void:
+	_fresh_loot()
+	var enemy := _died_source()
+	var plain := Node3D.new()
+	plain.name = "LootTestCrate"
+	_root().add_child(plain)
+	plain.owner = _root()
+	_added.append(plain)
+	var result := _loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES, "attach_to": [Util_path(plain)], "attach_to_group": "mcp_test_loot"}))
+	assert_has_key(result, "data", str(result))
+	assert_eq(result.data.attached.size(), 2)
+	assert_eq(result.data.warnings.size(), 1, "the crate has no died signal: " + str(result.data.warnings))
+	var dropper := enemy.get_node_or_null(^"LootDropper")
+	assert_true(dropper != null, "dropper added under the enemy")
+	assert_eq(dropper.owner, _root())
+	assert_eq(dropper.get("loot_table").resource_path, LOOT_DIR + "/test_grunt.tres")
+	assert_eq(dropper.get("pickup_script_path"), WORK_DIR + "/scripts/loot_pickup.gd")
+	assert_true(FileAccess.file_exists(WORK_DIR + "/scripts/loot_dropper.gd"))
+
+	var again := _loot.loot_table_edit(_loot_params({"attach_to": [Util_path(enemy)], "trigger_signal": "opened"}))
+	assert_eq(again.data.attached, [Util_path(enemy) + "/LootDropper (updated)"])
+	assert_eq(enemy.get_child_count(), 1, "no second dropper")
+	assert_eq(dropper.get("trigger_signal"), &"opened")
+
+	var scene_ur := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root()))
+	assert_true(scene_ur.undo(), "undo the update")
+	assert_eq(dropper.get("trigger_signal"), &"died")
+	assert_true(scene_ur.undo(), "undo the attach")
+	assert_eq(enemy.get_child_count(), 0)
+	assert_eq(plain.get_child_count(), 0)
+
+
+func Util_path(node: Node) -> String:
+	return "/" + String(_root().name) + "/" + String(_root().get_path_to(node))
+
+
+func test_loot_dropper_spawns_pickups_and_pickup_collects() -> void:
+	_fresh_loot()
+	assert_has_key(_loot.loot_table_edit(_loot_params({"entries": LOOT_ENTRIES, "attach_to": []})), "data")
+	var stored := _load_fresh(LOOT_DIR + "/test_grunt.tres")
+	var t := Resource.new()
+	t.set_script(_tool_copy(WORK_DIR + "/scripts/loot_table.gd"))
+	t.set("entries", stored.get("entries"))
+	t.set("item_database", _tool_db(ITEM_DIR + "/item_database.tres"))
+
+	var holder := Node3D.new()
+	holder.name = "LootTestHolder"
+	_root().add_child(holder)
+	_added.append(holder)
+	var enemy := Node3D.new()
+	holder.add_child(enemy)
+	enemy.position = Vector3(4, 0, 2)
+	var dropper := Node3D.new()
+	dropper.set_script(_tool_copy(_install_template("loot_dropper")))
+	dropper.set("loot_table", t)
+	dropper.set("pickup_script_path", _install_template("loot_pickup"))
+	enemy.add_child(dropper)
+	var got := []
+	dropper.dropped.connect(func(d): got.append(d))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	var drops: Array = dropper.drop(rng)
+	assert_eq(drops.size(), 2)
+	assert_eq(got.size(), 1, "dropped signal")
+	assert_eq(dropper.drop(rng), [], "drops once")
+	var pickups := holder.get_children().filter(func(n): return n != enemy)
+	assert_eq(pickups.size(), 2, "pickups land next to the enemy, not under it")
+	var watch: Node3D = pickups[0]
+	assert_eq(watch.get("item_id"), "gold_watch")
+	assert_eq(watch.get("count"), 1)
+	assert_true(watch.global_position.distance_to(enemy.global_position) <= 0.81)
+
+	var pickup := Area3D.new()
+	pickup.set_script(_tool_copy(_install_template("loot_pickup")))
+	pickup.set("item_id", "bandage")
+	pickup.set("count", 2)
+	holder.add_child(pickup)
+	assert_true(pickup.get_node_or_null(^"Visual") != null, "builds its visual")
+	var bag_script := GDScript.new()
+	bag_script.source_code = "@tool\nextends Node3D\nvar got := {}\nvar full := false\nfunc add_item(item, count):\n\tif full: return false\n\tgot[item] = count\n\treturn true\n"
+	bag_script.reload()
+	var bag := Node3D.new()
+	bag.set_script(bag_script)
+	bag.add_to_group(&"player")
+	holder.add_child(bag)
+	bag.set("full", true)
+	assert_false(pickup._try_collect(bag), "a full inventory leaves it")
+	bag.set("full", false)
+	assert_false(pickup._try_collect(enemy), "only the collector group")
+	assert_true(pickup._try_collect(bag))
+	assert_eq(bag.get("got"), {"bandage": 2})
+	assert_true(pickup.is_queued_for_deletion())
+
+
+## Installs a loot template into the test scripts folder and returns its path.
+func _install_template(name: String) -> String:
+	var path := WORK_DIR + "/scripts/%s.gd" % name
+	if not FileAccess.file_exists(path):
+		var f := FileAccess.open(path, FileAccess.WRITE)
+		f.store_string(FileAccess.get_file_as_string("res://addons/topdown_shooter_tools/templates/%s.gd.tmpl" % name))
+		f.close()
+	return path

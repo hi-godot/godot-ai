@@ -7,6 +7,7 @@ extends RefCounted
 const SOURCE_PATH := "res://addons/topdown_shooter_tools/plugin.cfg"
 const HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/topdown_tools.gd"
 const ITEM_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/item_tools.gd"
+const LOOT_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/loot_tools.gd"
 
 const _NUM := {"type": "number"}
 const _BOOL := {"type": "boolean"}
@@ -163,6 +164,52 @@ static func definitions() -> Array[Dictionary]:
 					"script_dir": _desc(_STR, "Default res://scripts/topdown (item_data.gd, item_database.gd)."),
 					"overwrite_scripts": _desc(_BOOL, "Replace item_data.gd / item_database.gd with the templates. Default false."),
 					"dry_run": _desc(_BOOL, "Validate and report what would happen without writing anything. Default false."),
+				},
+			},
+		},
+		{
+			"name": "loot_table_edit",
+			"method": &"loot_table_edit",
+			"script": LOOT_HANDLER_PATH,
+			"description": "Create or edit a drop table .tres for an enemy or crate (res://data/loot/<table_id>.tres): weighted entries with count ranges, guaranteed drops, rolls per drop and an empty weight. Item ids are checked against item_database.tres from item_db_import; category/tag entries add every matching item. Reports each item's exact drop chance, expected count and a seeded simulation with sample drops (only table_id: just simulate). attach_to / attach_to_group add a LootDropper child that drops pickups when the parent emits 'died'. Table and droppers are each one undo step; dry_run previews.",
+			"timeout_ms": 30000,
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["table_id"],
+				"properties": {
+					"table_id": _desc(_STR, "lower_snake_case id, also the file name (e.g. grunt, medical_crate)."),
+					"entries": _desc({"type": "array", "maxItems": 500, "items": {
+						"type": "object",
+						"additionalProperties": false,
+						"properties": {
+							"item_id": _desc(_STR, "Item id from the item database."),
+							"category": _desc(_STR, "Instead of item_id: every item of this category, each with this weight."),
+							"tag": _desc(_STR, "Instead of item_id: every item with this tag, each with this weight."),
+							"weight": _desc(_range(0, 1e9), "Relative weight per roll. Default 1."),
+							"min_count": _desc({"type": "integer", "minimum": 0}, "Default 1."),
+							"max_count": _desc({"type": "integer", "minimum": 0}, "Default min_count."),
+							"guaranteed": _desc(_BOOL, "Drops every time, outside the rolls. Default false."),
+						},
+					}}, "Entries to add, or to change when the item is already in the table (matched by item_id)."),
+					"replace_entries": _desc(_BOOL, "Start from an empty entry list instead of editing the existing one. Default false."),
+					"remove_items": _desc({"type": "array", "items": _STR}, "Item ids to take out of the table."),
+					"rolls_min": _desc({"type": "integer", "minimum": 0, "maximum": 100}, "Rolls per drop, low end. Default 1 (new table)."),
+					"rolls_max": _desc({"type": "integer", "minimum": 0, "maximum": 100}, "Rolls per drop, high end. Default 1 (new table)."),
+					"empty_weight": _desc(_range(0, 1e9), "Weight of 'nothing' on each roll. Default 0 (new table)."),
+					"database_path": _desc(_STR, "Item database. Default res://data/items/item_database.tres."),
+					"allow_unknown_items": _desc(_BOOL, "Accept ids not in the database (or no database). Default false."),
+					"simulate": _desc({"type": "integer", "minimum": 0, "maximum": 100000}, "Drops to simulate for the report; 0 skips. Default 1000."),
+					"samples": _desc({"type": "integer", "minimum": 0, "maximum": 20}, "Sample drops listed in the report. Default 5."),
+					"seed": _desc({"type": "integer", "minimum": 0}, "Simulation seed for repeatable results. Default random (reported)."),
+					"attach_to": _desc({"type": "array", "items": _STR}, "Scene paths of enemies/crates in the open scene to give a LootDropper (updated if they have one)."),
+					"attach_to_group": _desc(_STR, "Also attach to every 3D node in this group in the open scene (e.g. enemy)."),
+					"trigger_signal": _desc(_STR, "Parent signal that drops the loot. Default died; empty means only drop() calls."),
+					"dropper_name": _desc(_STR, "Dropper node name. Default LootDropper."),
+					"data_dir": _desc(_STR, "Default res://data/loot."),
+					"script_dir": _desc(_STR, "Default res://scripts/topdown (loot_table.gd, loot_dropper.gd, loot_pickup.gd)."),
+					"overwrite_scripts": _desc(_BOOL, "Replace the loot scripts with the templates. Default false."),
+					"dry_run": _desc(_BOOL, "Validate and report odds without writing anything. Default false."),
 				},
 			},
 		},
