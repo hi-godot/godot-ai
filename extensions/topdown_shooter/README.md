@@ -12,10 +12,10 @@
    복사합니다. 결과: `<게임 프로젝트>/addons/topdown_shooter_tools/plugin.cfg`
 2. Godot에서 **프로젝트 > 프로젝트 설정 > 플러그인**을 열고 `Godot AI`와
    `Top-down Shooter Tools`를 둘 다 켭니다.
-3. Godot AI 독의 **Tools** 탭에 도구 6개가 보이면 끝입니다. Claude Code나 Claude
+3. Godot AI 독의 **Tools** 탭에 도구 7개가 보이면 끝입니다. Claude Code나 Claude
    데스크톱에는 `custom_topdown_camera_setup`, `custom_player_controller_scaffold`,
    `custom_weapon_create`, `custom_enemy_ai_scaffold`, `custom_item_db_import`,
-   `custom_loot_table_edit`라는
+   `custom_loot_table_edit`, `custom_inventory_ui_scaffold`라는
    이름으로 바로 나타납니다(승격 도구). 도구 목록이
    갱신되지 않는 클라이언트라면 `custom_manage(op="invoke", name=...)`로도 부를
    수 있습니다.
@@ -29,6 +29,7 @@
 | `enemy_ai_scaffold` | 적 씬 생성: CharacterBody3D, 캡슐, `NavigationAgent3D`, `WeaponMount`. 상태 머신 AI(순찰 → 추격 → 공격 → 수색 → 순찰, 사망). 시야각 + 시선 레이로 감지하고, 맞으면 쏜 쪽을 쫓고, 주변 적에게 알림. 근접 공격 또는 원거리(자체 레이, 또는 `weapon_create` 무기 장착). 체력·`take_damage`. 열린 씬에 여러 마리 배치하고, 씬에 `NavigationRegion3D`가 없으면 정적 충돌체로 내비 메시를 구워 추가. 실행 취소 한 번으로 제거 |
 | `item_db_import` | 아이템 스프레드시트(CSV/TSV)를 행마다 아이템 `.tres` 하나로 바꾸고, 전체를 묶은 `item_database.tres`(`get_item(id)`, `find_by`, `find_by_tag`)를 만들거나 갱신. 모든 행을 먼저 검사해서 한 칸이라도 틀리면 아무것도 쓰지 않음. 다시 가져오면 기존 아이템을 제자리에서 갱신. 실행 취소 한 번으로 이전 파일로 복원 |
 | `loot_table_edit` | 적·상자용 드롭 확률표 `.tres` 생성·수정. 아이템별 가중치, 개수 범위, 확정 드롭, 드롭당 굴림 횟수, "없음" 가중치. 아이템 id는 `item_database.tres`로 검사하고 `category`/`tag`로 해당 아이템을 한 번에 추가. 아이템마다 정확한 드롭 확률·기대 개수와 시드 고정 시뮬레이션 결과·샘플 드롭을 보고(`table_id`만 주면 시뮬레이션만). `attach_to`/`attach_to_group`으로 적에게 `LootDropper`를 붙이면 `died` 때 바닥에 아이템이 떨어짐. 표 파일과 드롭 노드 각각 실행 취소 한 번 |
+| `inventory_ui_scaffold` | 플레이어에 격자·무게 인벤토리(`Inventory` 자식)와 인벤토리 화면(`InventoryUI` CanvasLayer)을 붙임. Tab/I로 열고 닫기, 드래그로 이동, R로 회전, 우클릭으로 바닥에 버리기, Shift+클릭으로 나누기, 정렬 버튼, 무게·가치 표시, 툴팁, 획득 알림, 무게 HUD. 무거우면 이동 속도가 줄고, 가방이 가득 차거나 너무 무거우면 바닥 아이템이 그대로 남음. 플레이어 스크립트에 `add_item`이 없으면 짧게 추가해서 `loot_table_edit`의 바닥 아이템이 가방으로 들어감. 노드는 실행 취소 한 번, 스크립트 수정은 따로 한 번 |
 | `weapon_create` | 무기 스탯 `.tres`(데미지, 연사, 자동, 탄창, 재장전, 탄퍼짐, 산탄 수, 사거리)와 무기 씬 생성. 히트스캔 또는 투사체로 발사하고, 맞은 대상의 `take_damage(amount, info)`를 호출. `attach_to`로 플레이어에 바로 장착 |
 
 Claude에게는 이렇게 말하면 됩니다.
@@ -43,6 +44,8 @@ Claude에게는 이렇게 말하면 됩니다.
 
 > grunt 드롭표 만들어 줘. 붕대 가중치 3에 1~2개, 9mm 탄 가중치 1에 10~30개, 꽝 4. 1000번 돌려서
 > 확률 보여 주고, 씬의 적 전부(enemy 그룹)에 붙여 줘.
+
+> 플레이어한테 8x6 인벤토리 달아 줘. 최대 무게 35kg, 20kg부터 느려지게. 붕대 2개 들고 시작.
 
 ## 아이템 DB 가져오기
 
@@ -96,8 +99,34 @@ gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
   `$LootDropper.drop()`을 직접 부르세요. `dropped(drops)` 신호도 냅니다.
 - 바닥 아이템은 희귀도 색 상자와 이름표를 띄우고, `player` 그룹 몸체가 닿으면 주워집니다.
   그 몸체에 `add_item(item, count)`가 있으면 호출하고, `false`를 돌려주면(가방이 가득 참)
-  그대로 남습니다. 없으면 그냥 사라지고 `picked_up` 신호만 냅니다.
+  그대로 남습니다. 없으면 그냥 사라지고 `picked_up` 신호만 냅니다. `inventory_ui_scaffold`가
+  이 `add_item`을 플레이어에 연결합니다.
 - 코드에서 바로 굴리려면 `table.roll()` → `[{item_id, count, item}]`, 확률은 `table.get_roll_chances()`.
+
+## 인벤토리
+
+`Inventory` 노드(`inventory.gd`)는 플레이어 아래에 들어가고, 아이템마다 `item_data.gd`의
+`grid_width` x `grid_height` 칸을 차지합니다(회전하면 가로세로가 바뀜). 같은 아이템은
+`max_stack`까지 한 칸에 쌓입니다.
+
+| 매개변수 | 내용 |
+|---|---|
+| `grid_width`, `grid_height` | 가방 칸 수. 기본 6 x 8 |
+| `max_weight` | 들 수 있는 최대 무게(kg). 넘으면 줍지 못함. 0이면 제한 없음. 기본 40 |
+| `encumbered_weight`, `min_speed_factor` | 이 무게부터 플레이어 `move_speed`가 줄어 `max_weight`에서 `min_speed_factor`배가 됨. 기본 25, 0.5 |
+| `starting_items` | 시작할 때 가방에 넣을 아이템 `[{item_id, count}]`. id는 `item_database.tres`로 검사 |
+| `toggle_action` | 화면을 여는 입력 액션. 없으면 Tab과 I로 만듦. 기본 `inventory` |
+| `block_player_while_open` | 화면이 열려 있으면 플레이어가 멈추고 쏘지 않음. 기본 true |
+| `patch_player_script` | 플레이어 스크립트에 `add_item`이 없으면 끝에 추가. 기본 true |
+
+다시 실행하면 노드를 새로 만들지 않고 설정만 바꿉니다. 게임 코드에서는:
+
+- `add_item(item_or_id, count)`는 전부 들어가거나 아무것도 안 들어갑니다(가득 차거나 너무
+  무거우면 `false`, `add_failed(item, count, reason)` 신호). 바닥 아이템이 이걸 부릅니다.
+- `remove_item(id, count)`, `count_of(id)`, `has_item(id, count)`, `get_total_weight()`,
+  `get_total_value()`, `drop_entry(index)`, `sort_items()`
+- 저장/불러오기: `to_data()` → `[{item_id, count, x, y, rotated}]`, `from_data(data)`
+- 신호: `changed`, `item_added`, `item_removed`, `item_dropped`
 
 ## 적 AI
 
@@ -131,7 +160,8 @@ gold_watch,금시계,valuable,epic,0.2,1500,1,sell,,80
 res://scripts/topdown/   topdown_camera_rig.gd, player_controller.gd,
                          weapon.gd, weapon_data.gd, projectile.gd, enemy_ai.gd,
                          item_data.gd, item_database.gd,
-                         loot_table.gd, loot_dropper.gd, loot_pickup.gd
+                         loot_table.gd, loot_dropper.gd, loot_pickup.gd,
+                         inventory.gd, inventory_ui.gd
 res://scenes/player/     player.tscn
 res://scenes/weapons/    <weapon_id>.tscn, projectile.tscn
 res://scenes/enemies/    <enemy_id>.tscn  (스크립트는 scripts/topdown/enemy_ai.gd)

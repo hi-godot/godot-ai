@@ -8,6 +8,7 @@ const SOURCE_PATH := "res://addons/topdown_shooter_tools/plugin.cfg"
 const HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/topdown_tools.gd"
 const ITEM_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/item_tools.gd"
 const LOOT_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/loot_tools.gd"
+const INVENTORY_HANDLER_PATH := "res://addons/topdown_shooter_tools/handlers/inventory_tools.gd"
 
 const _NUM := {"type": "number"}
 const _BOOL := {"type": "boolean"}
@@ -210,6 +211,48 @@ static func definitions() -> Array[Dictionary]:
 					"script_dir": _desc(_STR, "Default res://scripts/topdown (loot_table.gd, loot_dropper.gd, loot_pickup.gd)."),
 					"overwrite_scripts": _desc(_BOOL, "Replace the loot scripts with the templates. Default false."),
 					"dry_run": _desc(_BOOL, "Validate and report odds without writing anything. Default false."),
+				},
+			},
+		},
+		{
+			"name": "inventory_ui_scaffold",
+			"method": &"inventory_ui_scaffold",
+			"script": INVENTORY_HANDLER_PATH,
+			"description": "Give the player a grid + weight inventory (Inventory child: items cover grid_width x grid_height cells, stack to max_stack, all-or-nothing add_item, max_weight cap, slower above encumbered_weight) and an inventory screen (CanvasLayer: Tab/I toggles, drag moves, R rotates, right click drops, Shift+click splits, sort, tooltips, pickup toasts, weight HUD). Adds the toggle action and, if the player script lacks add_item, appends one so loot pickups fill the bag. Rerun updates settings. Nodes are one undo step, the script change another.",
+			"timeout_ms": 30000,
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"player_path": _desc(_STR, "Player in the open scene. Default: first node in group 'player'."),
+					"grid_width": _desc({"type": "integer", "minimum": 1, "maximum": 64}, "Columns. Default 6."),
+					"grid_height": _desc({"type": "integer", "minimum": 1, "maximum": 64}, "Rows. Default 8."),
+					"max_weight": _desc(_range(0, 100000), "Kilograms the bag holds; 0 = no limit. Default 40."),
+					"encumbered_weight": _desc(_range(0, 100000), "Above this the player slows down; 0 = never. Default 25."),
+					"min_speed_factor": _desc(_range(0.05, 1), "Speed multiplier at max_weight. Default 0.5."),
+					"allow_rotation": _desc(_BOOL, "Items may turn 90 degrees to fit. Default true."),
+					"starting_items": _desc({"type": "array", "maxItems": 200, "items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["item_id"],
+						"properties": {
+							"item_id": _desc(_STR, "Item id from the item database."),
+							"count": _desc({"type": "integer", "minimum": 1}, "Default 1."),
+						},
+					}}, "Items in the bag when the game starts (replaces the list)."),
+					"database_path": _desc(_STR, "Item database. Default res://data/items/item_database.tres."),
+					"toggle_action": _desc(_STR, "Input action that opens the screen. Default inventory (created with Tab and I)."),
+					"create_input_action": _desc(_BOOL, "Add the toggle action to project.godot when missing. Default true."),
+					"title": _desc(_STR, "Screen title. Default 인벤토리."),
+					"cell_size": _desc({"type": "integer", "minimum": 24, "maximum": 128}, "Grid cell size in pixels. Default 56."),
+					"block_player_while_open": _desc(_BOOL, "Player stops moving and shooting while the screen is open. Default true."),
+					"show_hud": _desc(_BOOL, "Bag weight line at the bottom left while closed. Default true."),
+					"patch_player_script": _desc(_BOOL, "Append add_item(item, count) to the player script when it has none. Default true."),
+					"inventory_name": _desc(_STR, "Inventory node name under the player. Default Inventory."),
+					"ui_name": _desc(_STR, "UI node name under the scene root. Default InventoryUI."),
+					"script_dir": _desc(_STR, "Default res://scripts/topdown (inventory.gd, inventory_ui.gd)."),
+					"overwrite_scripts": _desc(_BOOL, "Replace inventory.gd / inventory_ui.gd with the templates. Default false."),
+					"dry_run": _desc(_BOOL, "Validate and report without changing anything. Default false."),
 				},
 			},
 		},

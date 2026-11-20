@@ -13,6 +13,7 @@ extends McpTestSuite
 const Tools := preload("res://addons/topdown_shooter_tools/handlers/topdown_tools.gd")
 const ItemTools := preload("res://addons/topdown_shooter_tools/handlers/item_tools.gd")
 const LootTools := preload("res://addons/topdown_shooter_tools/handlers/loot_tools.gd")
+const InventoryTools := preload("res://addons/topdown_shooter_tools/handlers/inventory_tools.gd")
 const ToolSpecs := preload("res://addons/topdown_shooter_tools/tool_specs.gd")
 
 const WORK_DIR := "res://zz_mcp_test_topdown"
@@ -21,6 +22,7 @@ const ACTION_PREFIX := "mcp_test_td_"
 var _tools: Tools
 var _items: ItemTools
 var _loot: LootTools
+var _inventory: InventoryTools
 var _undo_redo: EditorUndoRedoManager
 var _added: Array[Node] = []
 
@@ -34,6 +36,7 @@ func suite_setup(ctx: Dictionary) -> void:
 	_tools = Tools.new()
 	_items = ItemTools.new()
 	_loot = LootTools.new()
+	_inventory = InventoryTools.new()
 	if EditorInterface.get_edited_scene_root() == null:
 		skip_suite("needs an open scene")
 
@@ -50,7 +53,7 @@ func suite_teardown() -> void:
 	teardown()
 	_remove_tree(ProjectSettings.globalize_path(WORK_DIR))
 	var changed := false
-	for suffix in Tools.INPUT_ACTIONS:
+	for suffix in Tools.INPUT_ACTIONS.keys() + ["inventory"]:
 		var action: String = ACTION_PREFIX + suffix
 		if ProjectSettings.has_setting("input/" + action):
 			ProjectSettings.clear("input/" + action)
@@ -110,14 +113,14 @@ func _weapon_params(id: String, extra: Dictionary = {}) -> Dictionary:
 
 func test_specs_validate() -> void:
 	var specs := ToolSpecs.build()
-	assert_eq(specs.size(), 6)
+	assert_eq(specs.size(), 7)
 	var names := []
 	for spec in specs:
 		assert_eq(spec.validate(), [] as Array[String], "spec %s" % spec.name)
 		assert_true(spec.promoted)
 		assert_true(spec.requires_writable)
 		names.append(spec.name)
-	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit"])
+	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold"])
 
 
 # --- player ------------------------------------------------------------------
@@ -1157,3 +1160,197 @@ func _install_template(name: String) -> String:
 		f.store_string(FileAccess.get_file_as_string("res://addons/topdown_shooter_tools/templates/%s.gd.tmpl" % name))
 		f.close()
 	return path
+
+
+# --- inventory -------------------------------------------------------------------
+
+## A @tool item resource with the item_data.gd fields the inventory reads.
+func _test_item(id: String, w := 1, h := 1, stack := 1, weight := 1.0, value := 10) -> Resource:
+	var script := _tool_copy(_install_item_template())
+	var item := Resource.new()
+	item.set_script(script)
+	item.set("item_id", id)
+	item.set("display_name", id)
+	item.set("grid_width", w)
+	item.set("grid_height", h)
+	item.set("max_stack", stack)
+	item.set("weight", weight)
+	item.set("value", value)
+	return item
+
+
+func _install_item_template() -> String:
+	var path := WORK_DIR + "/scripts/item_data.gd"
+	if not FileAccess.file_exists(path):
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORK_DIR + "/scripts"))
+		var f := FileAccess.open(path, FileAccess.WRITE)
+		f.store_string(FileAccess.get_file_as_string("res://addons/topdown_shooter_tools/templates/item_data.gd.tmpl"))
+		f.close()
+	return path
+
+
+## An inventory (tool copy of the template) under a body with move_speed.
+func _test_bag(w := 4, h := 3, max_weight := 0.0) -> Node:
+	_install_item_template()
+	var body_script := GDScript.new()
+	body_script.source_code = "@tool\nextends Node3D\nvar move_speed := 6.0\n"
+	body_script.reload()
+	var body := Node3D.new()
+	body.set_script(body_script)
+	body.name = "InvTestBody"
+	var bag := Node.new()
+	bag.set_script(_tool_copy(_install_template("inventory")))
+	bag.set("grid_width", w)
+	bag.set("grid_height", h)
+	bag.set("max_weight", max_weight)
+	bag.set("encumbered_weight", 0.0)
+	body.add_child(bag)
+	_root().add_child(body)
+	_added.append(body)
+	return bag
+
+
+func test_inventory_stacks_and_fills_grid_all_or_nothing() -> void:
+	var bag := _test_bag(4, 3)
+	var ammo := _test_item("ammo", 1, 1, 30, 0.01)
+	var rifle := _test_item("rifle", 4, 2, 1, 3.5)
+	assert_true(bag.add_item(ammo, 45), "45 rounds")
+	assert_eq(bag.entries.size(), 2, "two stacks of up to 30")
+	assert_eq(bag.count_of(ammo), 45)
+	assert_true(bag.add_item(ammo, 15), "tops up the partial stack")
+	assert_eq(bag.entries.size(), 2)
+	assert_true(bag.add_item(rifle), "4x2 rifle fits under the ammo")
+	assert_eq([bag.entries[2].x, bag.entries[2].y], [0, 1])
+	var before: Array = bag.to_data()
+	assert_false(bag.add_item(rifle), "no room for a second rifle")
+	assert_false(bag.add_item(ammo, 100), "no room for 100 more rounds")
+	assert_eq(bag.to_data(), before, "a failed add changes nothing")
+	assert_true(bag.add_item(ammo, 30), "one more stack fits in the last free cells")
+	assert_eq(bag.remove_item(ammo, 50), 50)
+	assert_eq(bag.count_of(ammo), 40)
+
+
+func test_inventory_rotates_to_fit_and_respects_weight() -> void:
+	var bag := _test_bag(2, 4, 5.0)
+	var long := _test_item("long", 3, 1, 1, 1.0)
+	assert_true(bag.add_item(long), "3x1 fits a 2-wide bag turned")
+	assert_true(bag.entries[0].rotated)
+	assert_eq(bag.entry_size(0), Vector2i(1, 3))
+	bag.set("allow_rotation", false)
+	assert_false(bag.add_item(long), "not without rotation")
+	bag.set("allow_rotation", true)
+	var brick := _test_item("brick", 1, 1, 10, 1.0)
+	assert_true(bag.add_item(brick, 4), "4 kg more: 5 kg total")
+	assert_false(bag.add_item(brick, 1), "over max_weight")
+	assert_true(is_equal_approx(bag.get_total_weight(), 5.0), "5 kg")
+
+
+func test_inventory_move_merge_split_sort_and_speed() -> void:
+	var bag := _test_bag(4, 2)
+	var med := _test_item("med", 1, 1, 5, 0.5, 100)
+	var box := _test_item("box", 2, 2, 1, 2.0, 300)
+	assert_true(bag.add_item(med, 4))
+	assert_true(bag.split_entry(0), "split 4 into 2 + 2")
+	assert_eq(bag.entries.size(), 2)
+	assert_true(bag.move_entry(1, Vector2i(0, 0)), "drop on the same item merges")
+	assert_eq(bag.entries.size(), 1)
+	assert_eq(int(bag.entries[0].count), 4)
+	assert_true(bag.add_item(box))
+	assert_false(bag.move_entry(1, Vector2i(3, 0)), "2x2 does not fit at the right edge")
+	assert_true(bag.move_entry(1, Vector2i(2, 0)))
+	assert_eq(bag.entry_at(Vector2i(3, 1)), 1)
+	assert_true(bag.sort_items())
+	assert_eq([bag.entries[0].x, bag.entries[0].y], [0, 0], "largest first")
+	assert_eq(bag.item_id_of(bag.entries[0].item), "box")
+	assert_eq(bag.get_total_value(), 700)
+	var body := bag.get_parent()
+	bag.set("encumbered_weight", 1.0)
+	bag.set("max_weight", 6.0)
+	bag._base_speed = 6.0
+	bag._update_speed()
+	assert_true(is_equal_approx(float(body.get("move_speed")), 4.2), "4 kg of 1..6 kg slows to 70%%: %s" % body.get("move_speed"))
+
+
+func _inventory_player() -> Node3D:
+	var path := WORK_DIR + "/scripts/inv_test_player.gd"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORK_DIR + "/scripts"))
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string("extends Node3D\n\nvar move_speed := 6.0\n")
+	f.close()
+	var player := Node3D.new()
+	player.name = "InvTestPlayer"
+	player.set_script(ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_REPLACE))
+	_root().add_child(player)
+	player.owner = _root()
+	_added.append(player)
+	return player
+
+
+func _inventory_params(extra: Dictionary = {}) -> Dictionary:
+	var params := {
+		"player_path": "InvTestPlayer",
+		"script_dir": WORK_DIR + "/scripts",
+		"database_path": ITEM_DIR + "/item_database.tres",
+		"toggle_action": ACTION_PREFIX + "inventory",
+	}
+	params.merge(extra, true)
+	return params
+
+
+func test_inventory_scaffold_adds_nodes_patches_player_with_undo() -> void:
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+	var player := _inventory_player()
+	var result := _inventory.inventory_ui_scaffold(_inventory_params({"grid_width": 5, "starting_items": [{"item_id": "bandage", "count": 2}]}))
+	assert_has_key(result, "data", str(result))
+	var inv := player.get_node_or_null(^"Inventory")
+	assert_true(inv != null, "Inventory under the player")
+	assert_eq(inv.owner, _root())
+	assert_eq(inv.get("grid_width"), 5)
+	assert_eq(inv.get("starting_items").size(), 1)
+	assert_eq(inv.get("starting_items")[0], {"item_id": "bandage", "count": 2})
+	assert_eq(inv.get("item_database").resource_path, ITEM_DIR + "/item_database.tres")
+	var ui := _root().get_node_or_null(^"InventoryUI")
+	assert_true(ui != null and ui is CanvasLayer, "InventoryUI under the scene root")
+	_added.append(ui)
+	assert_eq(ui.get("inventory_path"), NodePath("../InvTestPlayer/Inventory"))
+	assert_eq(ui.get("toggle_action"), StringName(ACTION_PREFIX + "inventory"))
+	assert_true(InputMap.has_action(ACTION_PREFIX + "inventory"), "toggle action added")
+	var source := FileAccess.get_file_as_string(WORK_DIR + "/scripts/inv_test_player.gd")
+	assert_true(source.contains("func add_item(item: Variant, count: int = 1) -> bool:"), "add_item appended")
+	assert_true(player.get_script().get_script_method_list().any(func(m): return m.name == "add_item"), "cached script reloaded")
+
+	var again := _inventory.inventory_ui_scaffold(_inventory_params({"max_weight": 80}))
+	assert_eq(again.data.inventory, "/%s/InvTestPlayer/Inventory (updated)" % _root().name)
+	assert_eq(again.data.player_script, "kept (already has add_item)")
+	assert_eq(inv.get("max_weight"), 80.0)
+	assert_eq(player.get_child_count(), 1, "no second inventory")
+
+	var scene_ur := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(_root()))
+	assert_true(scene_ur.undo(), "undo the update")
+	assert_eq(inv.get("max_weight"), 40.0)
+	assert_true(scene_ur.undo(), "undo the nodes")
+	assert_eq(player.get_child_count(), 0)
+	assert_true(_root().get_node_or_null(^"InventoryUI") == null)
+	var global_ur := _undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+	assert_true(global_ur.undo(), "undo the script patch")
+	assert_false(FileAccess.get_file_as_string(WORK_DIR + "/scripts/inv_test_player.gd").contains("add_item"))
+
+
+func test_inventory_scaffold_errors_change_nothing() -> void:
+	_clear_items()
+	assert_has_key(_items.item_db_import(_item_params()), "data")
+	var player := _inventory_player()
+	for bad in [
+		{"starting_items": [{"item_id": "nope"}]},
+		{"encumbered_weight": 50, "max_weight": 40},
+		{"player_path": "Missing"},
+		{"inventory_name": "bad name"},
+	]:
+		var result := _inventory.inventory_ui_scaffold(_inventory_params(bad))
+		assert_has_key(result, "error", "%s -> %s" % [bad, result])
+	var dry := _inventory.inventory_ui_scaffold(_inventory_params({"dry_run": true}))
+	assert_eq(dry.data.would, {"inventory": "create", "ui": "create"})
+	assert_eq(dry.data.player_script, "will patch")
+	assert_eq(player.get_child_count(), 0)
+	assert_false(FileAccess.get_file_as_string(WORK_DIR + "/scripts/inv_test_player.gd").contains("add_item"))
