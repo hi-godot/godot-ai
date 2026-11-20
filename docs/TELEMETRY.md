@@ -94,6 +94,10 @@ Allowlist (mirrored in `plugin/addons/godot_ai/telemetry.gd` and
 
 ## Opting out
 
+> **This fork:** telemetry is **off by default** and nothing is sent until you
+> opt in with the dock checkbox or `GODOT_AI_ENABLE_TELEMETRY=true`. See
+> [FORK.md](../FORK.md). The upstream description below is kept for reference.
+
 Telemetry is **on by default** — a fresh install posts anonymous usage
 events to the maintainers' endpoint. There are two ways to opt out:
 

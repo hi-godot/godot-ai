@@ -823,8 +823,11 @@ func _effect_launch(payload: Dictionary) -> Dictionary:
 		environment["GODOT_AI_OWNER_PID"] = str(OS.get_process_id())
 	if bool(payload.get("keep_alive", false)):
 		environment["GODOT_AI_NO_IDLE_EXIT"] = "1"
-	if bool(payload.get("disable_telemetry", false)):
+	## Fork policy: telemetry is opt-in, so an absent key means disabled.
+	if bool(payload.get("disable_telemetry", true)):
 		environment["GODOT_AI_DISABLE_TELEMETRY"] = "true"
+	else:
+		environment["GODOT_AI_ENABLE_TELEMETRY"] = "true"
 	var worktree_src := str(payload.get("worktree_src", ""))
 	if not worktree_src.is_empty():
 		var old_pythonpath := str(payload.get("ambient_pythonpath", ""))
