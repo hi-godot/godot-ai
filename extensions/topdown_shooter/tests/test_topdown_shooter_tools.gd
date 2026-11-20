@@ -15,6 +15,7 @@ const ItemTools := preload("res://addons/topdown_shooter_tools/handlers/item_too
 const LootTools := preload("res://addons/topdown_shooter_tools/handlers/loot_tools.gd")
 const InventoryTools := preload("res://addons/topdown_shooter_tools/handlers/inventory_tools.gd")
 const RaidTools := preload("res://addons/topdown_shooter_tools/handlers/raid_tools.gd")
+const PlaytestTools := preload("res://addons/topdown_shooter_tools/handlers/playtest_tools.gd")
 const ToolSpecs := preload("res://addons/topdown_shooter_tools/tool_specs.gd")
 
 const WORK_DIR := "res://zz_mcp_test_topdown"
@@ -25,6 +26,7 @@ var _items: ItemTools
 var _loot: LootTools
 var _inventory: InventoryTools
 var _raid: RaidTools
+var _playtest: PlaytestTools
 var _undo_redo: EditorUndoRedoManager
 var _added: Array[Node] = []
 
@@ -40,6 +42,7 @@ func suite_setup(ctx: Dictionary) -> void:
 	_loot = LootTools.new()
 	_inventory = InventoryTools.new()
 	_raid = RaidTools.new()
+	_playtest = PlaytestTools.new()
 	if EditorInterface.get_edited_scene_root() == null:
 		skip_suite("needs an open scene")
 
@@ -63,6 +66,9 @@ func suite_teardown() -> void:
 			changed = true
 		if InputMap.has_action(action):
 			InputMap.erase_action(action)
+	if ProjectSettings.has_setting(PlaytestTools.autoload_key()) and str(ProjectSettings.get_setting(PlaytestTools.autoload_key())).contains(WORK_DIR):
+		ProjectSettings.set_setting(PlaytestTools.autoload_key(), null)
+		changed = true
 	if changed:
 		ProjectSettings.save()
 
@@ -116,14 +122,16 @@ func _weapon_params(id: String, extra: Dictionary = {}) -> Dictionary:
 
 func test_specs_validate() -> void:
 	var specs := ToolSpecs.build()
-	assert_eq(specs.size(), 8)
+	assert_eq(specs.size(), 9)
 	var names := []
 	for spec in specs:
 		assert_eq(spec.validate(), [] as Array[String], "spec %s" % spec.name)
 		assert_true(spec.promoted)
-		assert_true(spec.requires_writable)
+		## The playtest runs while the game plays, so it must not be gated.
+		assert_eq(spec.requires_writable, spec.name != "raid_playtest", "requires_writable of %s" % spec.name)
+		assert_eq(spec.deferred, spec.name == "raid_playtest", "deferred of %s" % spec.name)
 		names.append(spec.name)
-	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold", "raid_map_blockout"])
+	assert_eq(names, ["topdown_camera_setup", "player_controller_scaffold", "weapon_create", "enemy_ai_scaffold", "item_db_import", "loot_table_edit", "inventory_ui_scaffold", "raid_map_blockout", "raid_playtest"])
 
 
 # --- player ------------------------------------------------------------------
@@ -1637,3 +1645,184 @@ func test_raid_extraction_extracts_player() -> void:
 func _install_raid_template(name: String) -> String:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORK_DIR + "/scripts"))
 	return _install_template(name)
+
+
+# --- raid playtest -----------------------------------------------------------------
+
+func _agent() -> GDScript:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORK_DIR + "/scripts"))
+	return _tool_copy(_install_template("raid_playtest_agent"))
+
+
+func test_playtest_run_params_defaults_and_errors() -> void:
+	var p: Dictionary = PlaytestTools.read_run_params({})
+	assert_eq(p.duration, 60.0)
+	assert_eq(p.time_scale, 1.0)
+	assert_true(p.wait)
+	assert_true(p.crates and p.loot and p.fight and p.extract and p.stop_after)
+	assert_false(p.hunt or p.explore or p.invulnerable)
+	assert_eq(p.max_crates, -1)
+	assert_eq(p.script_dir, "res://scripts/topdown")
+	assert_is_error(PlaytestTools.read_run_params({"bogus": 1}), "INVALID_PARAMS")
+	assert_is_error(PlaytestTools.read_run_params({"duration": 1}), "INVALID_PARAMS")
+	assert_is_error(PlaytestTools.read_run_params({"time_scale": 9}), "INVALID_PARAMS")
+	assert_is_error(PlaytestTools.read_run_params({"hunt": "yes"}), "INVALID_PARAMS")
+	assert_is_error(PlaytestTools.read_run_params({"max_crates": 1.5}), "INVALID_PARAMS")
+	assert_is_error(PlaytestTools.read_run_params({"script_dir": "res://addons/x"}), "INVALID_PARAMS")
+
+
+func test_playtest_tool_rejects_bad_calls() -> void:
+	assert_is_error(_playtest.raid_playtest({"op": "dance"}), "INVALID_PARAMS")
+	assert_is_error(_playtest.raid_playtest({"op": "report", "duration": 5}), "INVALID_PARAMS")
+	assert_is_error(_playtest.raid_playtest({"scene": "res://nope/missing.tscn"}), "NODE_NOT_FOUND")
+	assert_is_error(_playtest.raid_playtest({"scene": "scenes/raid.tscn"}), "INVALID_PARAMS")
+	## wait=true must fit the tool's 120 s budget in real seconds.
+	assert_is_error(_playtest.raid_playtest({"duration": 300}), "INVALID_PARAMS")
+	## No deferred context (e.g. a direct call): refuses before touching anything.
+	assert_is_error(_playtest.raid_playtest({"duration": 300, "time_scale": 4}), "INTERNAL_ERROR")
+
+
+func test_playtest_request_matches_agent_defaults() -> void:
+	var agent := _agent()
+	var defaults: Dictionary = agent.get_script_constant_map()["DEFAULTS"]
+	var request := PlaytestTools.build_request(PlaytestTools.read_run_params({"hunt": true, "duration": 30}), "abc")
+	assert_eq(request.token, "abc")
+	assert_true(request.hunt)
+	assert_eq(request.duration, 30.0)
+	assert_gt(float(request.created_unix), 0.0)
+	for key in request:
+		if key != "created_unix":
+			assert_true(defaults.has(key), "agent understands '%s'" % key)
+
+
+func test_playtest_input_inverts_camera_relative_movement() -> void:
+	var agent := _agent()
+	## The player controller's _camera_relative(), for comparison.
+	var forward_of := func(cam: Basis, input: Vector2) -> Vector3:
+		var f := -cam.z
+		f.y = 0.0
+		var r := cam.x
+		r.y = 0.0
+		return (r.normalized() * input.x - f.normalized() * input.y).limit_length(1.0)
+	var cam := Basis.from_euler(Vector3(deg_to_rad(-55.0), deg_to_rad(30.0), 0.0))
+	for dir in [Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(-0.6, 0, 0.8), Vector3(0.3, 0, 0.3)]:
+		var input: Vector2 = agent.input_for_direction(dir, cam)
+		var moved: Vector3 = forward_of.call(cam, input)
+		var want: Vector3 = dir.limit_length(1.0)
+		assert_true(moved.distance_to(want) < 0.001, "input %s moves %s, wanted %s" % [input, moved, want])
+	assert_eq(agent.input_for_direction(Vector3.ZERO, cam), Vector2.ZERO)
+	## A straight-down camera falls back to world axes.
+	var down := Basis.from_euler(Vector3(deg_to_rad(-90.0), 0.0, 0.0))
+	var input2: Vector2 = agent.input_for_direction(Vector3(1, 0, 0), down)
+	assert_true(input2.distance_to(Vector2(1, 0)) < 0.001, "top-down camera: %s" % input2)
+
+
+func test_playtest_agent_inert_without_request() -> void:
+	var agent := _agent()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PlaytestTools.REQUEST_PATH))
+	assert_eq(agent.read_request(), null)
+	## A stale request is consumed and ignored.
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(PlaytestTools.DIR))
+	var f := FileAccess.open(PlaytestTools.REQUEST_PATH, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"token": "old", "created_unix": Time.get_unix_time_from_system() - 3600}))
+	f.close()
+	assert_eq(agent.read_request(), null)
+	assert_false(FileAccess.file_exists(PlaytestTools.REQUEST_PATH), "consumed")
+	f = FileAccess.open(PlaytestTools.REQUEST_PATH, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"token": "new", "created_unix": Time.get_unix_time_from_system(), "hunt": true}))
+	f.close()
+	var request: Dictionary = agent.read_request()
+	assert_eq(request.token, "new")
+	var config: Dictionary = agent.merge_config(request)
+	assert_true(config.hunt)
+	assert_eq(config.duration, 60.0, "defaults fill the rest")
+
+
+func test_playtest_performance_summary() -> void:
+	var agent := _agent()
+	var frames := PackedFloat32Array()
+	for i in 99:
+		frames.append(10.0)
+	frames.append(50.0)
+	var perf: Dictionary = agent.performance_summary(frames, [100, 60, 95])
+	assert_eq(perf.frames, 100)
+	assert_eq(perf.frame_ms_max, 50.0)
+	assert_eq(perf.fps_min, 60.0)
+	assert_eq(perf.fps_1pct_low, 20.0)
+	assert_true(absf(perf.fps_avg - 1000.0 / 10.4) < 0.1, "avg %s" % perf.fps_avg)
+	var empty: Dictionary = agent.performance_summary(PackedFloat32Array(), [])
+	assert_eq(empty.frames, 0)
+
+
+func test_playtest_issues_and_verdict() -> void:
+	var agent := _agent()
+	var clean := {
+		"result": "extracted", "game_time": 40.0,
+		"errors": {"count": 0},
+		"combat": {"weapon": "Smg", "shots": 10, "hits": 5, "enemies_killed": 2, "enemies_total": 2},
+		"navigation": {"nav_ready": true, "stuck": [], "unreachable": []},
+		"loot": {"pickups_refused": 0, "crates_opened": 3, "crates_total": 3},
+		"performance": {"frames": 100, "fps_min": 58.0, "fps_avg": 60.0},
+	}
+	assert_eq(agent.find_issues(clean, {}), [])
+	clean["issues"] = []
+	var ok := PlaytestTools.summarize(clean, {"token": "t"})
+	assert_eq(ok.verdict, "pass")
+	assert_eq(ok.token, "t")
+	assert_contains(ok.summary, "crates 3/3")
+	var bad := clean.duplicate(true)
+	bad.result = "died"
+	bad.errors = {"count": 2}
+	bad.combat.weapon = ""
+	bad.navigation = {"nav_ready": false, "stuck": [{"t": 1}], "unreachable": [{"kind": "crate", "target": "Crate2", "reason": "stuck"}]}
+	bad.loot.pickups_refused = 1
+	bad.performance.fps_min = 12.0
+	var issues: Array = agent.find_issues(bad, {"min_fps": 30.0})
+	assert_eq(issues.size(), 8, str(issues))
+	assert_contains(str(issues), "Crate2")
+	bad["issues"] = issues
+	assert_eq(PlaytestTools.summarize(bad).verdict, "issues")
+	## A timeout only counts when extraction was the goal.
+	var timeout := clean.duplicate(true)
+	timeout.result = "timeout"
+	assert_eq(agent.find_issues(timeout, {"extract": false}), [])
+	assert_eq(agent.find_issues(timeout, {"extract": true}).size(), 1)
+
+
+func test_playtest_report_op_reads_matching_token() -> void:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(PlaytestTools.DIR))
+	var f := FileAccess.open(PlaytestTools.REPORT_PATH, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"token": "r1", "result": "extracted", "issues": []}))
+	f.close()
+	assert_eq(PlaytestTools.read_report("other"), null)
+	assert_eq(PlaytestTools.read_report("r1").result, "extracted")
+	var out: Dictionary = _playtest.raid_playtest({"op": "report"})
+	assert_eq(out.data.verdict, "pass")
+	assert_eq(out.data.result, "extracted")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PlaytestTools.REPORT_PATH))
+	assert_eq(_playtest.raid_playtest({"op": "report"}).data.status, "no_report")
+
+
+func test_playtest_install_registers_autoload_with_undo() -> void:
+	var key := PlaytestTools.autoload_key()
+	var before: Variant = ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null
+	var dir := WORK_DIR + "/agent"
+	var out: Dictionary = _playtest.raid_playtest({"op": "install", "script_dir": dir})
+	assert_eq(out.data.script, dir + "/raid_playtest_agent.gd")
+	assert_eq(out.data.script_status, "created")
+	assert_true(FileAccess.file_exists(dir + "/raid_playtest_agent.gd"))
+	assert_eq(ProjectSettings.get_setting(key), "*" + dir + "/raid_playtest_agent.gd")
+	assert_contains(FileAccess.get_file_as_string("res://project.godot"), dir + "/raid_playtest_agent.gd", "saved to project.godot")
+	var again: Dictionary = _playtest.raid_playtest({"op": "install", "script_dir": dir})
+	assert_eq(again.data.script_status, "kept")
+	assert_eq(again.data.autoload_status, "kept")
+	EditorInterface.get_editor_undo_redo().get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY).undo()
+	assert_eq(ProjectSettings.get_setting(key) if ProjectSettings.has_setting(key) else null, before, "undo restores the autoload")
+	_playtest.raid_playtest({"op": "install", "script_dir": dir})
+	var removed: Dictionary = _playtest.raid_playtest({"op": "uninstall"})
+	assert_true(removed.data.removed)
+	assert_false(ProjectSettings.has_setting(key))
+	assert_true(FileAccess.file_exists(dir + "/raid_playtest_agent.gd"), "script kept")
+	if before != null:
+		ProjectSettings.set_setting(key, before)
+		ProjectSettings.save()
