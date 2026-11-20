@@ -37,6 +37,10 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream "$UPSTREAM"
           git fetch --no-tags upstream main
+          ## Mirror upstream release tags: some tests (self-update smoke)
+          ## archive old tags such as v3.2.5, and "main only" forks have none.
+          git fetch --no-tags upstream "+refs/tags/*:refs/tags/*"
+          git push origin --tags
           base="${{ github.event.repository.default_branch }}"
           if git merge-base --is-ancestor upstream/main "origin/$base"; then
             echo "Already up to date with upstream."

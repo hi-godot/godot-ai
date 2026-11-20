@@ -15,14 +15,17 @@ edits to upstream files.
 | --- | --- | --- |
 | Telemetry | On by default, opt out with `GODOT_AI_DISABLE_TELEMETRY=true` | Off by default. Opt in with the dock checkbox or `GODOT_AI_ENABLE_TELEMETRY=true`. `GODOT_AI_DISABLE_TELEMETRY` still wins. |
 | Attach CLI | `--disable-telemetry` | Also accepts `--enable-telemetry` |
-| Upstream sync | n/a | `.github/workflows/fork-sync-upstream.yml` merges upstream `main` weekly into `sync/upstream` and opens a PR |
+| Upstream sync | n/a | `.github/workflows/fork-sync-upstream.yml` mirrors upstream tags, merges upstream `main` weekly into `sync/upstream` and opens a PR |
 
 ## One-time GitHub setup
 
 1. **Actions** tab: enable workflows for this fork.
 2. **Settings → Actions → General → Workflow permissions**: tick
    "Allow GitHub Actions to create and approve pull requests".
-3. Disable the upstream-only workflows you do not need in the **Actions** tab
+3. Run **Fork sync from upstream** once by hand (Actions tab → Run workflow).
+   It copies upstream release tags into the fork; the Python test
+   `test_self_update_smoke_harness.py` needs tag `v3.2.5` and fails without it.
+4. Disable the upstream-only workflows you do not need in the **Actions** tab
    (for example `Release`, `Discord changelog`, `Star history`,
    `Nightly diagnostics`). They are left untouched in the tree to avoid merge
    conflicts.
