@@ -686,6 +686,35 @@ the Beat Count or use a different timing.
 `fade` accepts `disabled` (the default), `in`, `out` or `cross`. `fade_beats`
 defaults to one beat and accepts a positive number of beats.
 
+To play a one-shot stinger on the way into combat, import a non-looping
+`res://music/combat_stinger.wav` and append
+`{"name": "combat_stinger", "stream_path": "res://music/combat_stinger.wav"}`
+to `clips`. Use this exploration-to-combat rule with a quarter-beat fade.
+
+```json
+{
+  "from": "exploration",
+  "to": "combat",
+  "when": "next_bar",
+  "start_at": "start",
+  "fade": "cross",
+  "fade_beats": 0.25,
+  "filler_clip": "combat_stinger"
+}
+```
+
+The filler must name a clip distinct from `from` and `to`.
+`interactive_get` includes that name on the saved transition.
+
+The filler starts at the rule's transition time. Godot delays the destination
+by the filler's duration while playing the filler without its own transition
+fade. Fillers must be non-looping WAV, Ogg Vorbis, or MP3 streams with a
+finite, positive audio length and scheduled duration. Godot uses the imported
+audio length unless both BPM and Beat Count are positive, in which case it
+uses `beat_count * 60 / bpm` seconds.
+A shorter scheduled duration can let the filler tail overlap the destination.
+A longer duration can leave a gap before the destination begins.
+
 When a new resource has no rule for a pair, Godot starts the destination at
 its beginning and fades out the outgoing clip at the next beat. Without
 outgoing BPM metadata, that fallback begins immediately. Its fade lasts one

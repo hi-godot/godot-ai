@@ -7,6 +7,7 @@ const WAV := "res://tests/fixtures/import_settings.wav"
 var _handler: AudioHandler
 var _directory: String
 var _score: String
+var _audio_fixtures: Array[String] = []
 
 
 func suite_name() -> String:
@@ -27,6 +28,9 @@ func setup() -> void:
 func teardown() -> void:
 	if FileAccess.file_exists(_score):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(_score))
+	for path in _audio_fixtures:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	_audio_fixtures.clear()
 
 
 func suite_teardown() -> void:
@@ -35,6 +39,17 @@ func suite_teardown() -> void:
 
 func _clips() -> Array:
 	return [{"name": "Explore", "stream_path": WAV}, {"name": "Combat", "stream_path": WAV}]
+
+
+func _clips_with_filler(path: String) -> Array:
+	return _clips() + [{"name": "Fill", "stream_path": path}]
+
+
+func _save_audio_fixture(stream: AudioStream) -> String:
+	var path := _directory.path_join("audio_%d.res" % Time.get_ticks_usec())
+	assert_eq(ResourceSaver.save(stream, path), OK)
+	_audio_fixtures.append(path)
+	return path
 
 
 func _reject(params: Dictionary, message_fragment: String = "") -> void:
@@ -77,6 +92,99 @@ func test_reload_native_score_and_inspect_defaults() -> void:
 	assert_eq(rule.when, "immediate")
 	assert_eq(rule.start_at, "start")
 	assert_eq(rule.fade, "disabled")
+
+
+func test_transition_filler_persists_natively_and_preserves_other_rules() -> void:
+	var filler := AudioStreamWAV.new()
+	filler.mix_rate = 8000
+	var silence := PackedByteArray()
+	silence.resize(2000)
+	filler.data = silence
+	var filler_path := _save_audio_fixture(filler)
+	var result := _handler.interactive_create({
+		"path": _score, "clips": _clips_with_filler(filler_path),
+		"transitions": [
+			{"from": "Explore", "to": "Combat", "filler_clip": "Fill"},
+			{"from": "Combat", "to": "Explore"},
+		],
+	})
+	assert_has_key(result, "data")
+	if not result.has("data"):
+		return
+	assert_eq(result.data.transitions[0].filler_clip, "Fill")
+	var score := ResourceLoader.load(_score, "", ResourceLoader.CACHE_MODE_IGNORE_DEEP) as AudioStreamInteractive
+	assert_true(score != null)
+	if score == null:
+		return
+	assert_true(score.is_transition_using_filler_clip(0, 1))
+	assert_eq(score.get_transition_filler_clip(0, 1), 2)
+	assert_eq(score.get_clip_stream(2).resource_path, filler_path)
+	assert_true(score.has_transition(1, 0))
+	assert_false(score.is_transition_using_filler_clip(1, 0))
+	var inspected := _handler.interactive_get({"path": _score})
+	assert_has_key(inspected, "data")
+	if inspected.has("data"):
+		assert_eq(inspected.data.transitions[0].filler_clip, "Fill")
+		assert_eq(inspected.data.transitions[0].when, "immediate")
+		assert_eq(inspected.data.transitions[0].fade, "disabled")
+		assert_false(inspected.data.transitions[1].has("filler_clip"))
+
+
+func test_transition_filler_must_name_a_distinct_existing_clip() -> void:
+	for name in ["Explore", "Combat"]:
+		_reject(
+			{"transitions": [{"from": "Explore", "to": "Combat", "filler_clip": name}]},
+			"distinct from both transition endpoints"
+		)
+	for name in ["", "Unknown", null, 2]:
+		_reject(
+			{"transitions": [{"from": "Explore", "to": "Combat", "filler_clip": name}]},
+			"filler_clip"
+		)
+
+
+func test_transition_filler_requires_supported_non_looping_audio_with_duration() -> void:
+	var rule := {"from": "Explore", "to": "Combat", "filler_clip": "Fill"}
+	var generator_path := _save_audio_fixture(AudioStreamGenerator.new())
+	_reject({"clips": _clips_with_filler(generator_path), "transitions": [rule]}, "WAV, Ogg Vorbis, or MP3")
+	var empty_ogg_path := _save_audio_fixture(AudioStreamOggVorbis.new())
+	_reject({"clips": _clips_with_filler(empty_ogg_path), "transitions": [rule]}, "finite positive duration")
+	var wav := AudioStreamWAV.new()
+	var empty_path := _save_audio_fixture(wav)
+	_reject({"clips": _clips_with_filler(empty_path), "transitions": [rule]}, "finite positive duration")
+	wav.data = PackedByteArray([0, 0, 0, 0])
+	wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	wav.loop_end = 4
+	var looping_path := _save_audio_fixture(wav)
+	_reject({"clips": _clips_with_filler(looping_path), "transitions": [rule]}, "disable looping")
+
+
+func test_transition_filler_uses_positive_native_beat_duration() -> void:
+	# Valid silent MPEG-1 Layer III frames, 128 kbps mono at 44.1 kHz.
+	var frame := PackedByteArray([0xFF, 0xFB, 0x90, 0xC0])
+	frame.resize(417)
+	var frames := PackedByteArray()
+	for i in 30:
+		frames.append_array(frame)
+	var mp3 := AudioStreamMP3.load_from_buffer(frames)
+	assert_true(mp3 != null)
+	if mp3 == null:
+		return
+	assert_gt(mp3.get_length(), 0.5)
+	var rule := {"from": "Explore", "to": "Combat", "filler_clip": "Fill"}
+	mp3.beat_count = 1
+	mp3.bpm = 1.0e-39
+	var invalid_path := _save_audio_fixture(mp3)
+	_reject({"clips": _clips_with_filler(invalid_path), "transitions": [rule]}, "finite positive delay")
+	mp3.bpm = 120.0
+	var valid_path := _save_audio_fixture(mp3)
+	var result := _handler.interactive_create({
+		"path": _score, "clips": _clips_with_filler(valid_path), "transitions": [rule],
+	})
+	assert_has_key(result, "data")
+	if result.has("data"):
+		assert_eq(result.data.transitions[0].filler_clip, "Fill")
+		assert_eq(result.data.clips[2].bpm, 120.0)
 
 
 func test_existing_destination_preserves_initial_clip_and_bytes() -> void:

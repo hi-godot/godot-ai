@@ -28,6 +28,18 @@ RESOURCE = {
     "clips": [{**clip, "bpm": 120.0, "beats_per_bar": 4} for clip in CLIPS],
     "transitions": [TRANSITION],
 }
+FILLER = {"name": "combat_stinger", "stream_path": "res://music/combat_stinger.wav"}
+TRANSITION_WITH_FILLER = {**TRANSITION, "fade_beats": 0.25, "filler_clip": FILLER["name"]}
+CREATION_WITH_FILLER = {
+    **CREATION,
+    "clips": [*CLIPS, FILLER],
+    "transitions": [TRANSITION_WITH_FILLER],
+}
+RESOURCE_WITH_FILLER = {
+    **RESOURCE,
+    "clips": [*RESOURCE["clips"], {**FILLER, "bpm": 0.0, "beats_per_bar": 0}],
+    "transitions": [TRANSITION_WITH_FILLER],
+}
 SWITCH = {"player_path": "/Main/Music", "clip": "exploration"}
 
 
@@ -41,6 +53,16 @@ SWITCH = {"player_path": "/Main/Music", "clip": "exploration"}
             "no_scene",
         ),
         ("interactive_get", {"path": PATH}, RESOURCE, "playing"),
+        pytest.param(
+            "interactive_create",
+            CREATION_WITH_FILLER,
+            {**RESOURCE_WITH_FILLER, "undoable": False, "reason": "resource saved to disk"},
+            "no_scene",
+            id="create-with-filler",
+        ),
+        pytest.param(
+            "interactive_get", {"path": PATH}, RESOURCE_WITH_FILLER, "playing", id="get-with-filler"
+        ),
         (
             "interactive_switch",
             SWITCH,

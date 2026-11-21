@@ -145,7 +145,9 @@ static func _load_audio(path: Variant, location: String, cache_mode: ResourceLoa
 
 
 static func _add_transition(interactive: AudioStreamInteractive, indices: Dictionary, entry: Variant, location: String) -> Variant:
-	var error: Variant = _fields_error(entry, ["from", "to", "when", "start_at", "fade", "fade_beats"], location)
+	var error: Variant = _fields_error(
+		entry, ["from", "to", "when", "start_at", "fade", "fade_beats", "filler_clip"], location
+	)
 	if error != null:
 		return error
 	var pair := Vector2i()
@@ -156,6 +158,19 @@ static func _add_transition(interactive: AudioStreamInteractive, indices: Dictio
 		pair[0 if field == "from" else 1] = indices[name]
 	if pair.x == pair.y or interactive.has_transition(pair.x, pair.y):
 		return _invalid(location, "provide one rule per directed pair of distinct clips: '%s' to '%s'" % [entry["from"], entry.to])
+
+	var filler_index := -1
+	if entry.has("filler_clip"):
+		var filler_location := location + ".filler_clip"
+		var filler_name: Variant = entry.filler_clip
+		if not filler_name is String or not indices.has(filler_name):
+			return _invalid(filler_location, "unknown clip '%s'" % [filler_name])
+		filler_index = indices[filler_name]
+		if filler_index == pair.x or filler_index == pair.y:
+			return _invalid(filler_location, "'%s' must be distinct from both transition endpoints" % filler_name)
+		error = _filler_error(interactive.get_clip_stream(filler_index), filler_location)
+		if error != null:
+			return error
 
 	var when: Variant = entry.get("when", "immediate")
 	var start_at: Variant = entry.get("start_at", "start")
@@ -201,7 +216,42 @@ static func _add_transition(interactive: AudioStreamInteractive, indices: Dictio
 			var fade_seconds := _engine_float(stored_beats * beat_seconds)
 			if fade_seconds <= 0.0 or not is_finite(fade_seconds) or not is_finite(_engine_float(1.0 / fade_seconds)):
 				return _invalid(location + ".fade_beats", "fade duration is outside Godot's supported timing range")
-	interactive.add_transition(pair.x, pair.y, WHEN[when], START_AT[start_at], FADE[fade], stored_beats)
+	interactive.add_transition(
+		pair.x, pair.y, WHEN[when], START_AT[start_at], FADE[fade], stored_beats,
+		filler_index >= 0, filler_index
+	)
+	return null
+
+
+static func _filler_error(stream: AudioStream, location: String) -> Variant:
+	var wav := stream as AudioStreamWAV
+	var vorbis := stream as AudioStreamOggVorbis
+	if wav == null and vorbis == null and not stream is AudioStreamMP3:
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"%s: expected WAV, Ogg Vorbis, or MP3 audio at %s, got %s"
+			% [location, stream.resource_path, stream.get_class()]
+		)
+	var loops: bool = wav.loop_mode != AudioStreamWAV.LOOP_DISABLED if wav != null else stream.call(&"has_loop")
+	if loops:
+		return _invalid(location, "disable looping on the filler audio at %s" % stream.resource_path)
+	# The Vorbis getter reports an engine error if a new resource has no audio.
+	var length := 0.0 if vorbis != null and vorbis.get_packet_sequence() == null else _engine_float(stream.get_length())
+	if not is_finite(length) or length <= 0.0:
+		return _invalid(location, "filler audio at %s must have a finite positive duration" % stream.resource_path)
+	if wav != null:
+		return null
+
+	# Godot uses the declared beat duration when both values are positive.
+	var bpm := float(stream.call(&"get_bpm"))
+	var count := int(stream.call(&"get_beat_count"))
+	if bpm > 0.0 and count > 0:
+		var engine_bpm := _engine_float(bpm)
+		if not is_finite(engine_bpm) or engine_bpm <= 0.0:
+			return _invalid(location, "filler BPM at %s is outside Godot's supported timing range" % stream.resource_path)
+		var beat_end := _engine_float(_engine_float(60.0 / engine_bpm) * count)
+		if not is_finite(beat_end) or beat_end <= 0.0:
+			return _invalid(location, "filler BPM and Beat Count at %s must produce a finite positive delay" % stream.resource_path)
 	return null
 
 

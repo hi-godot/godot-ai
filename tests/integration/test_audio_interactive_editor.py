@@ -8,6 +8,7 @@ import json
 import math
 import shutil
 import struct
+import wave
 from pathlib import Path
 from statistics import median
 
@@ -30,6 +31,8 @@ CLIPS = [
     {"name": "exploration", "stream_path": "res://music/exploration.ogg"},
     {"name": "combat", "stream_path": "res://music/combat.ogg"},
 ]
+FILL_CLIP = {"name": "combat_stinger", "stream_path": "res://music/combat_stinger.wav"}
+FILL_TONES = ((1000, 0.22), (1125, 0.27))
 TRANSITIONS = [
     {
         "from": "exploration",
@@ -50,10 +53,32 @@ TRANSITIONS = [
 ]
 
 
-def _write_project(project: Path, http_port: int, ws_port: int) -> None:
+def _write_fill(path: Path) -> None:
+    with wave.open(str(path), "wb") as output:
+        output.setparams((2, 2, RATE, 0, "NONE", "not compressed"))
+        output.writeframes(
+            b"".join(
+                struct.pack(
+                    "<hh",
+                    *(
+                        round(32767 * gain * math.sin(math.tau * hz * frame / RATE))
+                        for hz, gain in FILL_TONES
+                    ),
+                )
+                for frame in range(RATE // 2)
+            )
+        )
+
+
+def _write_project(project: Path, http_port: int, ws_port: int, *, with_fill: bool) -> None:
     shutil.copytree(PLUGIN_ROOT, project / "addons/godot_ai")
     shutil.copytree(FIXTURES, project / "music")
-    shutil.copyfile(FIXTURES / "exploration.ogg", project / EARLY_BEAT_END.removeprefix("res://"))
+    if with_fill:
+        _write_fill(project / FILL_CLIP["stream_path"].removeprefix("res://"))
+    else:
+        shutil.copyfile(
+            FIXTURES / "exploration.ogg", project / EARLY_BEAT_END.removeprefix("res://")
+        )
     bootstrap = project / "addons/adaptive_probe"
     bootstrap.mkdir()
     for name in ("driver", "capture"):
@@ -87,16 +112,22 @@ async def _receipt(path: Path) -> dict:
                 await asyncio.sleep(0.05)
 
 
-def _assert_native_crossfade(capture: Path, timing: dict) -> dict:
+def _assert_native_crossfade(capture: Path, timing: dict, *, with_fill: bool) -> dict:
     frames = list(struct.iter_unpack("<ff", capture.read_bytes()))
     assert timing["rate"] == timing["requested_at_frame"] == RATE, timing
     assert timing["clip_before_request"] == 0 and timing["clip_after_capture"] == 1, timing
-    assert len(frames) == RATE * 7 // 2
+    assert len(frames) == RATE * 4
 
     # Each source contributes a different spectral line on each channel.
     # The 128-frame window contains an integer number of cycles of every tone.
     window = 128
-    frequencies = (250, 375, 625, 875)
+    frequencies = [250, 375, 625, 875]
+    nominal = [0.34, 0.24, 0.29, 0.31]
+    baseline_windows = [(0.5, 0.9)] * 2 + [(3.7, 3.9)] * 2
+    if with_fill:
+        frequencies.extend(hz for hz, _ in FILL_TONES)
+        nominal.extend(gain for _, gain in FILL_TONES)
+        baseline_windows.extend([(2.1, 2.4)] * 2)
     tones = [
         tuple(cmath.exp(math.tau * 1j * hz * i / RATE) for i in range(window)) for hz in frequencies
     ]
@@ -114,9 +145,9 @@ def _assert_native_crossfade(capture: Path, timing: dict) -> dict:
         )
     baseline = [
         median(row[channel] for time, row in zip(times, amplitudes) if start <= time <= end)
-        for channel, (start, end) in enumerate(((0.5, 0.9), (0.5, 0.9), (3.2, 3.4), (3.2, 3.4)))
+        for channel, (start, end) in enumerate(baseline_windows)
     ]
-    assert baseline == pytest.approx([0.34, 0.24, 0.29, 0.31], abs=0.025)
+    assert baseline == pytest.approx(nominal, abs=0.025)
     gains = [
         tuple(amplitude / full for amplitude, full in zip(row, baseline)) for row in amplitudes
     ]
@@ -130,41 +161,105 @@ def _assert_native_crossfade(capture: Path, timing: dict) -> dict:
             time for time, gain in zip(times, gains) if time >= 1 and gain[channel + 2] > 0.02
         )
         completion = next(
-            time for time, gain in zip(times, gains) if time >= 2.5 and gain[channel] < 0.02
+            time for time, gain in zip(times, gains) if time >= 2.0 and gain[channel] < 0.02
         )
         onsets.append(onset)
         completions.append(completion)
-    assert onsets == pytest.approx([2.0, 2.0], abs=tolerance)
-    assert completions == pytest.approx([3.0, 3.0], abs=tolerance)
-
-    envelope = {}
-    for time, combat in ((0.75, 0), (1.5, 0), (2.25, 0.25), (2.5, 0.5), (2.75, 0.75), (3.25, 1)):
-        closest = min(range(len(times)), key=lambda index: abs(times[index] - time))
-        observed = gains[closest]
-        assert observed == pytest.approx([1 - combat, 1 - combat, combat, combat], abs=0.065)
-        envelope[time] = tuple(round(value, 3) for value in observed)
-    return {
+    combat_start = 2.5 if with_fill else 2.0
+    assert onsets == pytest.approx([combat_start] * 2, abs=tolerance)
+    exploration_end = 2.125 if with_fill else 3.0
+    assert completions == pytest.approx([exploration_end] * 2, abs=tolerance)
+    measurement = {
         "onsets_left_right": onsets,
         "completions_left_right": completions,
         "tolerance_seconds": tolerance,
-        "envelope": envelope,
     }
+    if with_fill:
+        fill_onsets = [
+            next(time for time, gain in zip(times, gains) if time >= 1 and gain[channel] > 0.02)
+            for channel in (4, 5)
+        ]
+        fill_ends = [
+            next(time for time, gain in zip(times, gains) if time >= 2.25 and gain[channel] < 0.02)
+            for channel in (4, 5)
+        ]
+        assert fill_onsets == pytest.approx([2.0, 2.0], abs=tolerance)
+        assert fill_ends == pytest.approx([2.5, 2.5], abs=tolerance)
+        assert (
+            max(max(gain[4:]) for time, gain in zip(times, gains) if time >= 2.5 + tolerance) < 0.02
+        )
+        combat_full = [
+            next(time for time, gain in zip(times, gains) if time >= 2.5 and gain[channel] > 0.98)
+            for channel in (2, 3)
+        ]
+        assert combat_full == pytest.approx([2.625, 2.625], abs=tolerance)
+        measurement.update(
+            fill_onsets_left_right=fill_onsets,
+            fill_ends_left_right=fill_ends,
+            combat_full_left_right=combat_full,
+        )
+        check_points = (
+            (0.75, 1, 0, 0),
+            (1.5, 1, 0, 0),
+            (2.25, 0, 0, 1),
+            (2.75, 0, 1, 0),
+            (3.25, 0, 1, 0),
+            (3.75, 0, 1, 0),
+        )
+    else:
+        check_points = (
+            (0.75, 1, 0),
+            (1.5, 1, 0),
+            (2.25, 0.75, 0.25),
+            (2.5, 0.5, 0.5),
+            (2.75, 0.25, 0.75),
+            (3.25, 0, 1),
+        )
+    envelope = {}
+    for time, *expected_gains in check_points:
+        closest = min(range(len(times)), key=lambda index: abs(times[index] - time))
+        observed = gains[closest]
+        assert observed == pytest.approx(
+            [gain for gain in expected_gains for _ in range(2)], abs=0.065
+        )
+        envelope[time] = tuple(round(value, 3) for value in observed)
+    measurement["envelope"] = envelope
+    return measurement
 
 
+@pytest.mark.parametrize("with_fill", [False, True], ids=["crossfade", "one-shot-fill"])
 async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_bar(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, with_fill
 ):
     godot = godot_bin_or_skip()
     _isolate_editor(monkeypatch, tmp_path / "editor-profile", godot)
     project = tmp_path / "project"
+    clips = CLIPS + [FILL_CLIP] if with_fill else CLIPS
+    transitions = TRANSITIONS
+    expected_clips = [{**clip, "bpm": 120.0, "beats_per_bar": 4} for clip in CLIPS]
+    if with_fill:
+        transitions = [
+            {**TRANSITIONS[0], "filler_clip": FILL_CLIP["name"], "fade_beats": 0.25},
+            TRANSITIONS[1],
+        ]
+        expected_clips.append({**FILL_CLIP, "bpm": 0.0, "beats_per_bar": 0})
     async with _backend() as (client, http_port, ws_port):
-        _write_project(project, http_port, ws_port)
-        source_bytes = {path: path.read_bytes() for path in (project / "music").glob("*.ogg")}
+        _write_project(project, http_port, ws_port, with_fill=with_fill)
+        source_bytes = {path: path.read_bytes() for path in (project / "music").iterdir()}
         async with _editor(client, godot, project, tmp_path / "create.log") as (tool, first):
             assert (await tool("filesystem_manage", op="scan", params={}))["scan_completed"]
-            import_settings = {clip["stream_path"]: (12, True) for clip in CLIPS}
-            import_settings[EARLY_BEAT_END] = (6, False)
-            for path, (beats, loop) in import_settings.items():
+            tempo = {"bpm": 120.0, "bar_beats": 4}
+            import_settings = {
+                clip["stream_path"]: {**tempo, "beat_count": 12, "loop": True} for clip in CLIPS
+            }
+            if with_fill:
+                import_settings[FILL_CLIP["stream_path"]] = {
+                    "compress/mode": 0,
+                    "edit/loop_mode": 1,
+                }
+            else:
+                import_settings[EARLY_BEAT_END] = {**tempo, "beat_count": 6, "loop": False}
+            for path, options in import_settings.items():
                 before = await tool("filesystem_manage", op="import_get", params={"path": path})
                 after = await tool(
                     "filesystem_manage",
@@ -172,12 +267,7 @@ async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_ba
                     params={
                         "path": path,
                         "expected_revision": before["revision"],
-                        "options": {
-                            "bpm": 120.0,
-                            "bar_beats": 4,
-                            "beat_count": beats,
-                            "loop": loop,
-                        },
+                        "options": options,
                     },
                 )
                 assert after["import_succeeded"], after
@@ -185,27 +275,28 @@ async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_ba
                 path: path.read_bytes() for path in (project / "music").glob("*.import")
             }
             assert len(source_bytes) == len(sidecar_bytes) == len(import_settings)
-            with pytest.raises(
-                ToolError, match="Beat Count that ends before its non-looping audio"
-            ):
-                await tool(
-                    "audio_manage",
-                    op="interactive_create",
-                    params={
-                        "path": "res://rejected.tres",
-                        "clips": [{**CLIPS[0], "stream_path": EARLY_BEAT_END}, CLIPS[1]],
-                        "transitions": [{**TRANSITIONS[0], "when": "end"}],
-                    },
-                )
-            assert not (project / "rejected.tres").exists()
+            if not with_fill:
+                with pytest.raises(
+                    ToolError, match="Beat Count that ends before its non-looping audio"
+                ):
+                    await tool(
+                        "audio_manage",
+                        op="interactive_create",
+                        params={
+                            "path": "res://rejected.tres",
+                            "clips": [{**CLIPS[0], "stream_path": EARLY_BEAT_END}, CLIPS[1]],
+                            "transitions": [{**TRANSITIONS[0], "when": "end"}],
+                        },
+                    )
+                assert not (project / "rejected.tres").exists()
             created = await tool(
                 "audio_manage",
                 op="interactive_create",
                 params={
                     "path": SCORE,
-                    "clips": CLIPS,
+                    "clips": clips,
                     "initial_clip": "exploration",
-                    "transitions": TRANSITIONS,
+                    "transitions": transitions,
                 },
             )
             assert created["path"] == SCORE and created["type"] == "AudioStreamInteractive", created
@@ -223,11 +314,13 @@ async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_ba
             assert (
                 saved["type"] == "AudioStreamInteractive" and saved["initial_clip"] == "exploration"
             )
-            assert saved["clips"] == [{**clip, "bpm": 120.0, "beats_per_bar": 4} for clip in CLIPS]
-            assert saved["transitions"] == TRANSITIONS
+            assert saved["clips"] == expected_clips
+            assert saved["transitions"] == transitions
             timing = await _receipt(probe / "timing.json")
             assert timing["pid"] == fresh["editor_pid"]
-            measurement = _assert_native_crossfade(probe / "stereo.f32", timing)
+            measurement = _assert_native_crossfade(
+                probe / "stereo.f32", timing, with_fill=with_fill
+            )
 
             assert (await tool("scene_open", path=SCENE))["switched"]
             assigned = await tool(
@@ -245,9 +338,15 @@ async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_ba
                 "playing"
             ]
             observations = [await _receipt(probe / "preview-0.json")]
-            for index, (current, target) in enumerate(
-                (("exploration", "combat"), ("combat", "exploration")), 1
-            ):
+            assert observations[0]["clip"] == "exploration"
+            if with_fill:
+                switches = (("exploration", "combat", (FILL_CLIP["name"], "combat")),)
+            else:
+                switches = (
+                    ("exploration", "combat", ("combat",)),
+                    ("combat", "exploration", ("exploration",)),
+                )
+            for current, target, expected in switches:
                 switched = await tool(
                     "audio_manage",
                     op="interactive_switch",
@@ -260,12 +359,10 @@ async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_ba
                     switched["previous_clip"] == current and switched["requested_clip"] == target
                 ), switched
                 assert switched["undoable"] is False
-                observations.append(await _receipt(probe / f"preview-{index}.json"))
-            assert [item["clip"] for item in observations] == [
-                "exploration",
-                "combat",
-                "exploration",
-            ]
+                for name in expected:
+                    observed = await _receipt(probe / f"preview-{len(observations)}.json")
+                    assert observed["clip"] == name, observed
+                    observations.append(observed)
             for key in ("player_id", "playback_id"):
                 assert len({item[key] for item in observations}) == 1
             assert all(
@@ -287,3 +384,4 @@ async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_ba
     print(
         f"Requested at frame {timing['requested_at_frame']}, measured stereo envelope {measurement}"
     )
+    print(f"Preview clips on one playback instance: {[item['clip'] for item in observations]}")

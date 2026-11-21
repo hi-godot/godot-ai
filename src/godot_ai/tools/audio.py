@@ -28,10 +28,11 @@ layout. bus_layout_save only exports a snapshot and does not switch that target.
 Ops:
   • interactive_create(path, clips, transitions=[], initial_clip?)
         Save a new native AudioStreamInteractive .tres. Clips use {name, stream_path}.
-        Named transition pairs use {from, to, when?, start_at?, fade?, fade_beats?}.
+        Named pairs use {from, to, when?, start_at?, fade?, fade_beats?, filler_clip?}.
         Beat/bar timing and fades use tempo metadata from the outgoing clip.
+        Use filler_clip for a named one-shot stinger that delays the destination clip.
   • interactive_get(path)
-        Inspect an existing AudioStreamInteractive resource, including clips and transitions.
+        Inspect an AudioStreamInteractive resource's clips, transitions, and filler clip names.
   • interactive_switch(player_path, clip)
         Request a named clip on an active editor music preview. Start it with play first.
   • bus_list()

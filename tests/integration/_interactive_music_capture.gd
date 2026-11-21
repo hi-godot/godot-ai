@@ -14,7 +14,7 @@ static func record(score: AudioStreamInteractive) -> void:
 		return
 	var clip_before_request := playback.get_current_clip_index()
 	playback.switch_to_clip_by_name(&"combat")
-	if not _mix(playback, output, int(rate * 2.5)):
+	if not _mix(playback, output, rate * 3):
 		return
 	output.close()
 	write_receipt("timing.json", {
