@@ -26,6 +26,14 @@ Bus/effect edits use global editor undo. Godot may autosave them to its active
 layout. bus_layout_save only exports a snapshot and does not switch that target.
 
 Ops:
+  • interactive_create(path, clips, transitions=[], initial_clip?)
+        Save a new native AudioStreamInteractive .tres. Clips use {name, stream_path}.
+        Named transition pairs use {from, to, when?, start_at?, fade?, fade_beats?}.
+        Beat/bar timing and fades use tempo metadata from the outgoing clip.
+  • interactive_get(path)
+        Inspect an existing AudioStreamInteractive resource, including clips and transitions.
+  • interactive_switch(player_path, clip)
+        Request a named clip on an active editor music preview. Start it with play first.
   • bus_list()
         List buses, sends, volume, mute, solo, bypass, and effect properties/enabled state.
   • bus_add(name, at_position=-1, send="Master")
@@ -66,6 +74,9 @@ def register_audio_tools(mcp: FastMCP) -> None:
         tool_name="audio_manage",
         description=_DESCRIPTION,
         ops={
+            "interactive_create": audio_handlers.audio_interactive_create,
+            "interactive_get": audio_handlers.audio_interactive_get,
+            "interactive_switch": audio_handlers.audio_interactive_switch,
             "bus_list": audio_handlers.audio_bus_list,
             "bus_add": audio_handlers.audio_bus_add,
             "bus_remove": audio_handlers.audio_bus_remove,
@@ -82,7 +93,9 @@ def register_audio_tools(mcp: FastMCP) -> None:
             "list": audio_handlers.audio_list,
         },
         read_resource_forms={
-            ## Audio reads are stateful and per-player; no aggregate resource.
+            ## Reads and previews target specific audio resources or editor state.
+            "interactive_get": None,
+            "interactive_switch": None,
             "bus_list": None,
             "play": None,
             "stop": None,

@@ -2,6 +2,7 @@
 extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const InteractiveAudio := preload("res://addons/godot_ai/handlers/audio_interactive.gd")
 
 ## Handles AudioStreamPlayer / 2D / 3D authoring — node creation, stream
 ## assignment, playback-property edits, and real editor preview playback.
@@ -31,10 +32,12 @@ const _PLAYBACK_KEYS := {
 
 
 var _undo_redo: EditorUndoRedoManager
+var _connection: McpConnection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 # ============================================================================
@@ -257,6 +260,56 @@ func stop(params: Dictionary) -> Dictionary:
 			"reason": "Runtime playback state — not saved with scene",
 		}
 	}
+
+
+func interactive_create(params: Dictionary) -> Dictionary:
+	return InteractiveAudio.create(params, _connection)
+
+
+func interactive_get(params: Dictionary) -> Dictionary:
+	return InteractiveAudio.inspect(params)
+
+
+## Queues on the player's live playback without changing the resource,
+## playback position, or serialized parameters on the player.
+func interactive_switch(params: Dictionary) -> Dictionary:
+	var player_path: Variant = params.get("player_path", "")
+	var requested: Variant = params.get("clip", "")
+	if not player_path is String or not requested is String:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "player_path and clip must be strings")
+	if player_path.is_empty() or requested.is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "player_path and clip are required")
+	var resolved := _resolve_player(player_path)
+	if resolved.has("error"):
+		return resolved
+	var player: Node = resolved.player
+	var stream := player.stream as AudioStreamInteractive
+	if stream == null:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Assign an AudioStreamInteractive to %s before switching clips" % player_path)
+
+	var target := -1
+	for i in stream.clip_count:
+		if stream.get_clip_name(i) == StringName(requested):
+			if target >= 0:
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Clip name '%s' is ambiguous; give the clips distinct names" % requested)
+			target = i
+	if target < 0 or stream.get_clip_stream(target) == null:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "No playable clip named '%s' on %s" % [requested, player_path])
+	if not player.playing or player.stream_paused or not player.has_stream_playback():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Start or resume editor preview on %s before switching clips" % player_path)
+	var playback := player.get_stream_playback() as AudioStreamPlaybackInteractive
+	if playback == null:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "The active preview on %s does not have interactive playback; restart preview with its AudioStreamInteractive" % player_path)
+
+	var previous: Variant = InteractiveAudio.clip_name(stream, playback.get_current_clip_index())
+	playback.switch_to_clip(target)
+	return {"data": {
+		"player_path": player_path,
+		"previous_clip": previous if previous != "" else null,
+		"requested_clip": requested,
+		"undoable": false,
+		"reason": "Runtime preview switch; Godot schedules the transition",
+	}}
 
 
 # ============================================================================

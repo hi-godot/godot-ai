@@ -371,7 +371,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("particle", HANDLERS_DIR + "particle_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("camera", HANDLERS_DIR + "camera_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("audio_bus", HANDLERS_DIR + "audio_bus_handler.gd", [undo, _connection])
-	_dispatcher.register_lazy_handler("audio", HANDLERS_DIR + "audio_handler.gd", [undo])
+	_dispatcher.register_lazy_handler("audio", HANDLERS_DIR + "audio_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler(
 		"physics_shape", HANDLERS_DIR + "physics_shape_handler.gd", [undo, _connection]
 	)
@@ -549,6 +549,9 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("audio_play", "audio", &"play")
 	_dispatcher.register_lazy("audio_stop", "audio", &"stop")
 	_dispatcher.register_lazy("audio_list", "audio", &"list_streams")
+	_dispatcher.register_lazy("audio_interactive_create", "audio", &"interactive_create")
+	_dispatcher.register_lazy("audio_interactive_get", "audio", &"interactive_get")
+	_dispatcher.register_lazy("audio_interactive_switch", "audio", &"interactive_switch")
 	_dispatcher.register_lazy("audio_bus_list", "audio_bus", &"bus_list")
 	_dispatcher.register_lazy("audio_bus_add", "audio_bus", &"bus_add")
 	_dispatcher.register_lazy("audio_bus_remove", "audio_bus", &"bus_remove")
