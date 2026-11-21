@@ -30,7 +30,7 @@ Ops:
         Save a new native AudioStreamInteractive .tres. Clips use {name, stream_path}.
         Named pairs use {from, to, when?, start_at?, fade?, fade_beats?, filler_clip?}.
         Beat/bar timing and fades use tempo metadata from the outgoing clip.
-        Use filler_clip for a named one-shot stinger that delays the destination clip.
+        A named filler_clip plays a one-shot stinger and requires an explicit fade of in or cross.
   • interactive_get(path)
         Inspect an AudioStreamInteractive resource's clips, transitions, and filler clip names.
   • interactive_switch(player_path, clip)

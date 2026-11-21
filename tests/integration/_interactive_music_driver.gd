@@ -26,6 +26,9 @@ func _start() -> void:
 			push_error("Could not reload the saved adaptive score")
 			return
 		Capture.record(score)
+		if score.is_transition_using_filler_clip(0, 1):
+			Capture.record_native_fill(score, AudioStreamInteractive.FADE_DISABLED, "disabled")
+			Capture.record_native_fill(score, AudioStreamInteractive.FADE_OUT, "out")
 		set_process(true)
 	else:
 		set_process(false)

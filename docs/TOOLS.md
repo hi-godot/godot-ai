@@ -704,7 +704,12 @@ to `clips`. Use this exploration-to-combat rule with a quarter-beat fade.
 ```
 
 The filler must name a clip distinct from `from` and `to`.
-`interactive_get` includes that name on the saved transition.
+When a transition has a filler, explicitly set `fade` to `in` or `cross`.
+In Godot 4.7, a filler paired with `disabled` or `out` gives the destination
+a one-second fade-in, even when you request a different duration.
+`interactive_create` rejects those combinations, including an omitted `fade`,
+which defaults to `disabled`. `interactive_get` reports the native settings
+of existing scores.
 
 The filler starts at the rule's transition time. Godot delays the destination
 by the filler's duration while playing the filler without its own transition

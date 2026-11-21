@@ -112,7 +112,7 @@ async def _receipt(path: Path) -> dict:
                 await asyncio.sleep(0.05)
 
 
-def _assert_native_crossfade(capture: Path, timing: dict, *, with_fill: bool) -> dict:
+def _measure_stereo_envelopes(capture: Path, timing: dict, *, with_fill: bool):
     frames = list(struct.iter_unpack("<ff", capture.read_bytes()))
     assert timing["rate"] == timing["requested_at_frame"] == RATE, timing
     assert timing["clip_before_request"] == 0 and timing["clip_after_capture"] == 1, timing
@@ -155,6 +155,11 @@ def _assert_native_crossfade(capture: Path, timing: dict, *, with_fill: bool) ->
     # One 256-frame capture/mixer block plus one spectral window allows for
     # decoder look-ahead, the envelope threshold, and the analysis window.
     tolerance = (timing["block"] + window) / RATE
+    return times, gains, tolerance
+
+
+def _assert_native_crossfade(capture: Path, timing: dict, *, with_fill: bool) -> dict:
+    times, gains, tolerance = _measure_stereo_envelopes(capture, timing, with_fill=with_fill)
     onsets, completions = [], []
     for channel in range(2):
         onset = next(
@@ -227,6 +232,26 @@ def _assert_native_crossfade(capture: Path, timing: dict, *, with_fill: bool) ->
     return measurement
 
 
+def _assert_implicit_native_fill_fade(capture: Path, timing: dict) -> dict:
+    times, gains, tolerance = _measure_stereo_envelopes(capture, timing, with_fill=True)
+    onset = [
+        next(time for time, gain in zip(times, gains) if time >= 2 and gain[ch] > 0.02)
+        for ch in (2, 3)
+    ]
+    full = [
+        next(time for time, gain in zip(times, gains) if time >= 2.5 and gain[ch] > 0.98)
+        for ch in (2, 3)
+    ]
+    assert onset == pytest.approx([2.5, 2.5], abs=tolerance)
+    assert full == pytest.approx([3.5, 3.5], abs=tolerance)
+    combat_gains = {}
+    for time, expected in ((2.75, 0.25), (3.0, 0.5), (3.25, 0.75)):
+        closest = min(range(len(times)), key=lambda index: abs(times[index] - time))
+        assert gains[closest][2:4] == pytest.approx([expected, expected], abs=0.065)
+        combat_gains[time] = tuple(round(gain, 3) for gain in gains[closest][2:4])
+    return {"onset_left_right": onset, "full_left_right": full, "combat_gains": combat_gains}
+
+
 @pytest.mark.parametrize("with_fill", [False, True], ids=["crossfade", "one-shot-fill"])
 async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_bar(
     tmp_path, monkeypatch, with_fill
@@ -275,7 +300,28 @@ async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_ba
                 path: path.read_bytes() for path in (project / "music").glob("*.import")
             }
             assert len(source_bytes) == len(sidecar_bytes) == len(import_settings)
-            if not with_fill:
+            if with_fill:
+                for mode in (None, "disabled", "out"):
+                    rejected = f"rejected-{mode or 'default'}.tres"
+                    invalid_transition = {**transitions[0]}
+                    if mode is None:
+                        del invalid_transition["fade"]
+                    else:
+                        invalid_transition["fade"] = mode
+                    with pytest.raises(
+                        ToolError, match="Specify fade 'in' or 'cross' with filler_clip"
+                    ):
+                        await tool(
+                            "audio_manage",
+                            op="interactive_create",
+                            params={
+                                "path": f"res://{rejected}",
+                                "clips": clips,
+                                "transitions": [invalid_transition],
+                            },
+                        )
+                    assert not (project / rejected).exists()
+            else:
                 with pytest.raises(
                     ToolError, match="Beat Count that ends before its non-looping audio"
                 ):
@@ -321,6 +367,16 @@ async def test_saved_adaptive_score_switches_the_same_player_and_mixes_on_the_ba
             measurement = _assert_native_crossfade(
                 probe / "stereo.f32", timing, with_fill=with_fill
             )
+            # Characterize known engine versions without requiring the same
+            # native fade after Godot changes it. Public checks run on all versions.
+            if with_fill and fresh["godot_version"].split("-", 1)[0] in {"4.7", "4.7.0", "4.7.2"}:
+                for mode in ("disabled", "out"):
+                    baseline_timing = await _receipt(probe / f"native-{mode}-timing.json")
+                    assert baseline_timing["pid"] == fresh["editor_pid"]
+                    measurement[f"native_{mode}"] = _assert_implicit_native_fill_fade(
+                        probe / f"native-{mode}-stereo.f32",
+                        baseline_timing,
+                    )
 
             assert (await tool("scene_open", path=SCENE))["switched"]
             assigned = await tool(

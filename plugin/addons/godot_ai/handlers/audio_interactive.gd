@@ -168,9 +168,6 @@ static func _add_transition(interactive: AudioStreamInteractive, indices: Dictio
 		filler_index = indices[filler_name]
 		if filler_index == pair.x or filler_index == pair.y:
 			return _invalid(filler_location, "'%s' must be distinct from both transition endpoints" % filler_name)
-		error = _filler_error(interactive.get_clip_stream(filler_index), filler_location)
-		if error != null:
-			return error
 
 	var when: Variant = entry.get("when", "immediate")
 	var start_at: Variant = entry.get("start_at", "start")
@@ -181,6 +178,16 @@ static func _add_transition(interactive: AudioStreamInteractive, indices: Dictio
 		return _invalid(location + ".start_at", "expected start or same_position, got '%s'" % [start_at])
 	if not fade is String or fade not in ["disabled", "in", "out", "cross"]:
 		return _invalid(location + ".fade", "expected disabled, in, out, or cross, got '%s'" % [fade])
+	if filler_index >= 0:
+		if fade not in ["in", "cross"]:
+			return _invalid(
+				location + ".fade",
+				"Specify fade 'in' or 'cross' with filler_clip. "
+				+ "Godot 4.7 applies an unintended one-second destination fade with 'disabled' or 'out'."
+			)
+		error = _filler_error(interactive.get_clip_stream(filler_index), location + ".filler_clip")
+		if error != null:
+			return error
 	if when == "end" and start_at == "same_position":
 		return _invalid(location + ".start_at", "Godot starts the destination at zero for end transitions; use start")
 
