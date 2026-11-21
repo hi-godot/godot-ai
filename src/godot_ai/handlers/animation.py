@@ -80,6 +80,25 @@ async def animation_add_method_track(
     )
 
 
+async def animation_add_bezier_track(
+    runtime: DirectRuntime,
+    player_path: str,
+    animation_name: str,
+    track_path: str,
+    keyframes: list[dict],
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "animation_add_bezier_track",
+        {
+            "player_path": player_path,
+            "animation_name": animation_name,
+            "track_path": track_path,
+            "keyframes": keyframes,
+        },
+    )
+
+
 async def animation_set_autoplay(
     runtime: DirectRuntime,
     player_path: str,

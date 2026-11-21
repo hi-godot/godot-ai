@@ -180,7 +180,8 @@ These are not the next things to do blindly. They are the extensions that matter
         - `animation_preset_sweep` — rotating arc-segment comet on a Control (cooldown-ring accents, radar scan overlays).
         - `animation_preset_drift` — phase-driven position offset on one axis (CRT scanlines, marquee text, conveyor belts).
         - Text counter is covered separately by `ui_animate_counter` above.
-  - [ ] **Bezier and audio tracks** — `animation_add_bezier_track` (for hand-tuned curves where keyframe interpolation isn't enough) and `animation_add_audio_track` (timed AudioStreamPlayer cues; needs the audio resource handler first).
+  - [x] **Bézier tracks** — `animation_manage(op="add_bezier_track")` adds hand-tuned scalar curves.
+  - [ ] **Audio tracks** — `animation_add_audio_track` adds timed AudioStreamPlayer cues.
   - [ ] **`animation_tree.*`** — state-machine and blend-tree authoring for character locomotion (idle ↔ walk ↔ run blends, attack one-shots). Larger surface; depends on the AnimationPlayer being solid first.
   - [ ] **3D material fades / sub-resource paths** — animating a 3D mesh's transparency means tweening `MeshInstance3D:material_override:albedo_color`, which the value coercer needs to walk into. Today it falls through to raw value for nested resource paths. Requires extending `_coerce_value_for_track` to resolve `node:resource:property` chains, plus a worked example in the docstring.
   - [ ] **Coercion gaps for non-UI types** — `_coerce_for_type` currently handles Color / Vector2 / Vector3 / int / float / bool. Missing: `Transform3D` / `Quaternion` / `Basis` (3D rigging), `Vector3i` (TileMap), `NodePath` / `StringName` (prop-redirection animations), `Rect2` / `AABB`. Today these silently store the raw JSON value and play garbage. Fix is local to one function; the test plan is the harder bit (need fixture nodes for each property type).
