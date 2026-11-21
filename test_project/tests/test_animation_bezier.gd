@@ -122,6 +122,60 @@ func test_accepts_nested_and_dynamic_writable_scalar_properties() -> void:
 		assert_eq(_clip.track_get_path(1), NodePath("Door:metadata/amount"))
 
 
+func test_nested_node_property_requires_a_writable_leaf() -> void:
+	var timer := Timer.new()
+	timer.name = "OwnerTimer"
+	_door.get_parent().add_child(timer)
+	timer.owner = _scene_root
+	var child := Node.new()
+	child.name = "Target"
+	timer.add_child(child)
+	child.owner = timer
+	var keys := [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 3.0}]
+	var path_prefix := "OwnerTimer/Target:owner:"
+
+	var read_only := _handler.add_bezier_track(_params(keys, path_prefix + "time_left"))
+	assert_is_error(read_only, ErrorCodes.VALUE_OUT_OF_RANGE)
+	if read_only.has("error"):
+		assert_contains(read_only.error.message, "read-only property 'time_left' on Timer")
+	assert_eq(_clip.get_track_count(), 0)
+
+	var writable := _handler.add_bezier_track(_params(keys, path_prefix + "wait_time"))
+	assert_has_key(writable, "data")
+	if not writable.has("data"):
+		return
+	assert_eq(writable.data.track_path, path_prefix + "wait_time")
+	_player.play("Swing")
+	_player.seek(0.5, true)
+	assert_true(absf(timer.wait_time - 2.0) < 0.01, "the native mixer should update the indirect Timer")
+	assert_eq(child.owner, timer)
+	_player.stop()
+
+
+func test_refuses_read_only_writeback_and_indirect_offscene_nodes() -> void:
+	var timer := Timer.new()
+	_door.add_child(timer)
+	timer.owner = _scene_root
+	var links := {"timer": timer}
+	links.make_read_only()
+	_door.set_meta("links", links)
+	var keys := [{"time": 0.0, "value": 2.0}]
+	var read_only := _handler.add_bezier_track(_params(keys, "Door:metadata/links:timer:wait_time"))
+	assert_is_error(read_only, ErrorCodes.VALUE_OUT_OF_RANGE)
+	if read_only.has("error"):
+		assert_contains(read_only.error.message, "read-only dictionary")
+	assert_eq(timer.wait_time, 1.0)
+
+	var outside := Timer.new()
+	track(outside)
+	_door.set_meta("outside", outside)
+	var offscene := _handler.add_bezier_track(_params(keys, "Door:metadata/outside:wait_time"))
+	assert_is_error(offscene, ErrorCodes.VALUE_OUT_OF_RANGE)
+	if offscene.has("error"):
+		assert_contains(offscene.error.message, "outside the edited scene")
+	assert_eq(_clip.get_track_count(), 0)
+
+
 func test_refuses_non_scalar_unresolved_absolute_and_read_only_targets() -> void:
 	var keyframes := [{"time": 0, "value": 1.0}]
 	for path in [

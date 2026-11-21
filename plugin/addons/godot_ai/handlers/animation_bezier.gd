@@ -43,13 +43,38 @@ static func target_error(player: AnimationPlayer, path: String, scene_root: Node
 		var resolved := root.get_node_and_resource(NodePath(path))
 		target = resolved[1] if resolved[1] != null else node
 		property_path = resolved[2]
-	if property_path.is_empty():
-		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS,
-			"Float property or component at track_path '%s' was not found" % path)
-	if _property_is_read_only(target, property_path.get_subname(0)):
-		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
-			"track_path '%s' targets a read-only property" % path)
-	var value: Variant = target.get_indexed(property_path)
+	return _indexed_target_error(target, property_path, path, scene_root)
+
+
+static func _indexed_target_error(target: Object, property_path: NodePath, path: String, scene_root: Node) -> Dictionary:
+	var value: Variant = target if not property_path.is_empty() else null
+	var aggregate_reader: RefCounted
+	for i in property_path.get_subname_count():
+		var member := property_path.get_subname(i)
+		if value is Object:
+			if not is_instance_valid(value):
+				value = null
+				break
+			if value is Node and value != scene_root and not scene_root.is_ancestor_of(value):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+					"track_path '%s' reaches a node outside the edited scene" % path)
+			# set_indexed writes back through each Object in the remaining path.
+			if _property_is_read_only(value, member):
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+					"track_path '%s' cannot write read-only property '%s' on %s" % [path, member, value.get_class()])
+			value = value.get(member)
+		else:
+			if value is Dictionary and value.is_read_only():
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+					"track_path '%s' cannot write back through a read-only dictionary" % path)
+			# Read aggregate members with native indexed lookup so invalid
+			# components return null and valid Vector/Transform members work.
+			if aggregate_reader == null:
+				aggregate_reader = RefCounted.new()
+			aggregate_reader.set_meta(&"value", value)
+			value = aggregate_reader.get_indexed(NodePath(":metadata/value:" + String(member)))
+		if value == null:
+			break
 	if value == null:
 		return ErrorCodes.make(ErrorCodes.PROPERTY_NOT_ON_CLASS,
 			"Float property or component at track_path '%s' was not found" % path)
