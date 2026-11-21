@@ -29,11 +29,15 @@ Ops:
   • interactive_create(path, clips, transitions=[], initial_clip?)
         Save a new native AudioStreamInteractive .tres. Clips use {name, stream_path, next_clip?}.
         A non-looping clip can set next_clip to play another named clip automatically at its end.
-        Named pairs use {from, to, when?, start_at?, fade?, fade_beats?, filler_clip?}.
+        Transition rules use {from, to, when?, start_at?, fade?, fade_beats?, filler_clip?}.
+        Use * on either endpoint for a wildcard. Godot prefers exact pairs, then a named source,
+        then a named destination, then the all-clips rule.
+        With * -> battle next_bar, stealth -> * next_beat, cave -> battle immediate,
+        and * -> * end, forest to battle uses next_bar and stealth to battle uses next_beat.
         Beat/bar timing and fades use tempo metadata from the outgoing clip.
         A named filler_clip plays a one-shot stinger and requires an explicit fade of in or cross.
   • interactive_get(path)
-        Inspect an AudioStreamInteractive resource's clips, automatic follow-ons, and transitions.
+        Inspect clips, automatic follow-ons, and transitions with from_any/to_any wildcard flags.
   • interactive_switch(player_path, clip)
         Request a named clip on an active editor music preview. Start it with play first.
   • bus_list()

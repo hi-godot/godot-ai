@@ -25,6 +25,20 @@ const FADE := {
 }
 
 
+class TransitionRule:
+	var location: String
+	var when: String
+	var start_at: String
+	var fade: String
+	var fade_beats: float
+	var fades_into_destination: bool
+	var filler_index := AudioStreamInteractive.CLIP_ANY
+	# Validation walks all matches for a concrete source together.
+	var checked_source := -1
+	var fade_seconds := 0.0
+	var filler_checked := false
+
+
 static func create(params: Dictionary, connection: McpConnection) -> Dictionary:
 	var error: Variant = _fields_error(
 		params, ["path", "clips", "initial_clip", "transitions", "_request_id"], "interactive_create"
@@ -91,10 +105,20 @@ static func create(params: Dictionary, connection: McpConnection) -> Dictionary:
 	var transitions: Variant = params.get("transitions", [])
 	if not transitions is Array:
 		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "transitions must be an array")
+	var rules: Dictionary[Vector2i, TransitionRule] = {}
 	for i in transitions.size():
-		error = _add_transition(interactive, indices, transitions[i], "transitions[%d]" % i)
+		error = _read_transition_rule(indices, rules, transitions[i], "transitions[%d]" % i)
 		if error != null:
 			return error
+	error = _validate_transition_rules(interactive, rules)
+	if error != null:
+		return error
+	for pair in rules:
+		var rule := rules[pair]
+		interactive.add_transition(
+			pair.x, pair.y, WHEN[rule.when], START_AT[rule.start_at], FADE[rule.fade], rule.fade_beats,
+			rule.filler_index >= 0, rule.filler_index
+		)
 
 	# Stage through the shared resource saver, which also embeds a fresh UID,
 	# registers the file with the editor and protects against save re-entry.
@@ -172,7 +196,9 @@ static func _set_next_clip(
 	return null
 
 
-static func _add_transition(interactive: AudioStreamInteractive, indices: Dictionary, entry: Variant, location: String) -> Variant:
+static func _read_transition_rule(
+	indices: Dictionary, rules: Dictionary[Vector2i, TransitionRule], entry: Variant, location: String
+) -> Variant:
 	var error: Variant = _fields_error(
 		entry, ["from", "to", "when", "start_at", "fade", "fade_beats", "filler_clip"], location
 	)
@@ -181,26 +207,21 @@ static func _add_transition(interactive: AudioStreamInteractive, indices: Dictio
 	var pair := Vector2i()
 	for field in ["from", "to"]:
 		var name: Variant = entry.get(field)
-		if not name is String or not indices.has(name):
-			return _invalid(location + "." + field, "unknown clip '%s'" % [name])
-		pair[0 if field == "from" else 1] = indices[name]
-	if pair.x == pair.y or interactive.has_transition(pair.x, pair.y):
-		return _invalid(location, "provide one rule per directed pair of distinct clips: '%s' to '%s'" % [entry["from"], entry.to])
+		if not name is String or (name != "*" and not indices.has(name)):
+			return _invalid(location + "." + field, "expected a clip name or '*', got '%s'" % [name])
+		pair[0 if field == "from" else 1] = AudioStreamInteractive.CLIP_ANY if name == "*" else indices[name]
+	if pair.x >= 0 and pair.x == pair.y:
+		return _invalid(location, "provide distinct named endpoints: '%s' to '%s'" % [entry["from"], entry.to])
+	if rules.has(pair):
+		return _invalid(location, "duplicate transition from '%s' to '%s'" % [entry["from"], entry.to])
 
-	var destination_advances := interactive.get_clip_auto_advance(pair.y) == AudioStreamInteractive.AUTO_ADVANCE_ENABLED
-	var filler_index := -1
+	var rule := TransitionRule.new()
+	rule.location = location
 	if entry.has("filler_clip"):
-		var filler_location := location + ".filler_clip"
 		var filler_name: Variant = entry.filler_clip
 		if not filler_name is String or not indices.has(filler_name):
-			return _invalid(filler_location, "unknown clip '%s'" % [filler_name])
-		filler_index = indices[filler_name]
-		if filler_index == pair.x or filler_index == pair.y:
-			return _invalid(filler_location, "'%s' must be distinct from both transition endpoints" % filler_name)
-		if destination_advances:
-			return _invalid(filler_location, "Godot does not schedule next_clip when a transition uses a filler to enter '%s'; remove the filler or the destination's next_clip" % entry.to)
-		if interactive.get_clip_auto_advance(filler_index) == AudioStreamInteractive.AUTO_ADVANCE_ENABLED:
-			return _invalid(filler_location, "'%s' has next_clip; use the same audio under a separate filler-only clip name" % filler_name)
+			return _invalid(location + ".filler_clip", "expected a named clip, got '%s'" % [filler_name])
+		rule.filler_index = indices[filler_name]
 
 	var when: Variant = entry.get("when", "immediate")
 	var start_at: Variant = entry.get("start_at", "start")
@@ -211,21 +232,14 @@ static func _add_transition(interactive: AudioStreamInteractive, indices: Dictio
 		return _invalid(location + ".start_at", "expected start or same_position, got '%s'" % [start_at])
 	if not fade is String or fade not in ["disabled", "in", "out", "cross"]:
 		return _invalid(location + ".fade", "expected disabled, in, out, or cross, got '%s'" % [fade])
-	if filler_index >= 0:
-		if fade not in ["in", "cross"]:
-			return _invalid(
-				location + ".fade",
-				"Specify fade 'in' or 'cross' with filler_clip. "
-				+ "Godot 4.7 applies an unintended one-second destination fade with 'disabled' or 'out'."
-			)
-		error = _filler_error(interactive.get_clip_stream(filler_index), location + ".filler_clip")
-		if error != null:
-			return error
+	if rule.filler_index >= 0 and fade not in ["in", "cross"]:
+		return _invalid(
+			location + ".fade",
+			"Specify fade 'in' or 'cross' with filler_clip. "
+			+ "Godot 4.7 applies an unintended one-second destination fade with 'disabled' or 'out'."
+		)
 	if when == "end" and start_at == "same_position":
 		return _invalid(location + ".start_at", "Godot starts the destination at zero for end transitions; use start")
-	if destination_advances and fade in ["in", "cross"] and start_at == "same_position":
-		return _invalid(location + ".start_at",
-			"use start when fading into '%s' so the fade can finish and Godot can schedule its next_clip" % entry.to)
 
 	var beats: Variant = entry.get("fade_beats", 1.0)
 	if not (beats is int or beats is float) or not is_finite(float(beats)) or float(beats) <= 0.0:
@@ -233,20 +247,122 @@ static func _add_transition(interactive: AudioStreamInteractive, indices: Dictio
 	var stored_beats := _engine_float(float(beats))
 	if not is_finite(stored_beats) or stored_beats <= 0.0:
 		return _invalid(location + ".fade_beats", "duration is outside Godot's supported range")
+	rule.when = when
+	rule.start_at = start_at
+	rule.fade = fade
+	rule.fade_beats = stored_beats
+	rule.fades_into_destination = fade in ["in", "cross"]
+	rules[pair] = rule
+	return null
 
-	var outgoing := interactive.get_clip_stream(pair.x)
-	if when == "end":
-		error = _end_error(outgoing, location)
+
+static func _validate_transition_rules(
+	interactive: AudioStreamInteractive, rules: Dictionary[Vector2i, TransitionRule]
+) -> Variant:
+	if rules.is_empty():
+		return null
+	const ANY := AudioStreamInteractive.CLIP_ANY
+	var advances := PackedByteArray()
+	for target in interactive.clip_count:
+		advances.append(int(interactive.get_clip_auto_advance(target) == AudioStreamInteractive.AUTO_ADVANCE_ENABLED))
+
+	var has_exact := false
+	var has_wildcard := false
+	for pair in rules:
+		if pair.x < 0 or pair.y < 0:
+			has_wildcard = true
+			continue
+		has_exact = true
+		var error: Variant = _validate_effective_pair(interactive, pair, rules[pair], bool(advances[pair.y]))
 		if error != null:
 			return error
-	if when in ["next_beat", "next_bar"] or fade != "disabled":
+	if not has_wildcard:
+		return null
+
+	# Match Godot's lookup using the complete table. Named pairs already won
+	# above. Include same-target switches, which the editor forwards to Godot.
+	var catch_all: TransitionRule = rules.get(Vector2i(ANY, ANY))
+	var destination_rules: Array[TransitionRule] = []
+	for target in interactive.clip_count:
+		destination_rules.append(rules.get(Vector2i(ANY, target), catch_all))
+	for source in interactive.clip_count:
+		var from_rule: TransitionRule = rules.get(Vector2i(source, ANY))
+		for target in interactive.clip_count:
+			if has_exact and rules.has(Vector2i(source, target)):
+				continue
+			var rule := from_rule if from_rule != null else destination_rules[target]
+			if rule == null:
+				continue
+			var destination_advances := bool(advances[target])
+			if (
+				rule.checked_source == source
+				and rule.filler_index < 0
+				and not (destination_advances and rule.fades_into_destination)
+			):
+				continue
+			var error: Variant = _validate_effective_pair(
+				interactive, Vector2i(source, target), rule, destination_advances
+			)
+			if error != null:
+				error.error.message += " (effective transition '%s' to '%s')" % [
+					interactive.get_clip_name(source), interactive.get_clip_name(target),
+				]
+				return error
+	return null
+
+
+static func _validate_effective_pair(
+	interactive: AudioStreamInteractive, pair: Vector2i, rule: TransitionRule,
+	destination_advances: bool
+) -> Variant:
+	var location := rule.location
+	if rule.filler_index >= 0:
+		var filler_location := location + ".filler_clip"
+		if rule.filler_index == pair.x or rule.filler_index == pair.y:
+			return _invalid(filler_location, "'%s' must be distinct from both transition endpoints" % interactive.get_clip_name(rule.filler_index))
+		if destination_advances:
+			return _invalid(filler_location, "Godot does not schedule next_clip when a transition uses a filler to enter '%s'; remove the filler or the destination's next_clip" % interactive.get_clip_name(pair.y))
+		if not rule.filler_checked:
+			if interactive.get_clip_auto_advance(rule.filler_index) == AudioStreamInteractive.AUTO_ADVANCE_ENABLED:
+				return _invalid(filler_location, "'%s' has next_clip; use the same audio under a separate filler-only clip name" % interactive.get_clip_name(rule.filler_index))
+			var error: Variant = _filler_error(interactive.get_clip_stream(rule.filler_index), filler_location)
+			if error != null:
+				return error
+			rule.filler_checked = true
+	var destination_fades := destination_advances and rule.fades_into_destination
+	if destination_fades and rule.start_at == "same_position":
+		return _invalid(location + ".start_at",
+			"use start when fading into '%s' so the fade can finish and Godot can schedule its next_clip" % interactive.get_clip_name(pair.y))
+	if rule.checked_source != pair.x:
+		var timing: Variant = _outgoing_fade_seconds(interactive, pair.x, rule)
+		if timing is Dictionary:
+			return timing
+		rule.fade_seconds = timing
+		rule.checked_source = pair.x
+	if destination_fades and rule.fade_seconds >= _engine_float(interactive.get_clip_stream(pair.y).get_length()):
+		return _invalid(location + ".fade_beats",
+			"the incoming fade must finish before '%s' ends so Godot can schedule its next_clip" % interactive.get_clip_name(pair.y))
+	return null
+
+
+static func _outgoing_fade_seconds(
+	interactive: AudioStreamInteractive, source: int, rule: TransitionRule
+) -> Variant:
+	var location := rule.location
+	var when := rule.when
+	var outgoing := interactive.get_clip_stream(source)
+	if when == "end":
+		var error: Variant = _end_error(outgoing, location)
+		if error != null:
+			return error
+	if when in ["next_beat", "next_bar"] or rule.fade != "disabled":
 		var bpm := _engine_float(_bpm(outgoing))
 		var meter := _beats_per_bar(outgoing)
 		if not is_finite(bpm) or bpm <= 0.0 or (when == "next_bar" and meter <= 0):
 			return _invalid(
 				location,
 				"outgoing clip '%s' (%s) needs positive BPM%s. Use an Ogg Vorbis or MP3 stream. "
-				% [entry["from"], outgoing.resource_path, " and Bar Beats" if when == "next_bar" else ""]
+				% [interactive.get_clip_name(source), outgoing.resource_path, " and Bar Beats" if when == "next_bar" else ""]
 				+ "Configure its metadata through Advanced Import Settings and reimport, or use "
 				+ "filesystem_manage import_get followed by import_set with expected_revision."
 			)
@@ -255,20 +371,12 @@ static func _add_transition(interactive: AudioStreamInteractive, indices: Dictio
 			return _invalid(location, "outgoing BPM is outside Godot's supported timing range")
 		if when == "next_bar" and not is_finite(_engine_float(beat_seconds * meter)):
 			return _invalid(location, "outgoing bar duration is outside Godot's supported timing range")
-		if fade != "disabled":
-			var fade_seconds := _engine_float(stored_beats * beat_seconds)
+		if rule.fade != "disabled":
+			var fade_seconds := _engine_float(rule.fade_beats * beat_seconds)
 			if fade_seconds <= 0.0 or not is_finite(fade_seconds) or not is_finite(_engine_float(1.0 / fade_seconds)):
 				return _invalid(location + ".fade_beats", "fade duration is outside Godot's supported timing range")
-			if destination_advances and fade in ["in", "cross"]:
-				var cue := interactive.get_clip_stream(pair.y)
-				if fade_seconds >= _engine_float(cue.get_length()):
-					return _invalid(location + ".fade_beats",
-						"the incoming fade must finish before '%s' ends so Godot can schedule its next_clip" % entry.to)
-	interactive.add_transition(
-		pair.x, pair.y, WHEN[when], START_AT[start_at], FADE[fade], stored_beats,
-		filler_index >= 0, filler_index
-	)
-	return null
+			return fade_seconds
+	return 0.0
 
 
 static func _one_shot_error(stream: AudioStream, location: String, role: String) -> Variant:

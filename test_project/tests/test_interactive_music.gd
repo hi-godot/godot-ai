@@ -108,6 +108,133 @@ func test_reload_native_score_and_inspect_defaults() -> void:
 	assert_eq(rule.fade, "disabled")
 
 
+func test_wildcard_transitions_round_trip_all_four_native_rules_in_either_order() -> void:
+	var music := _silent_mp3()
+	assert_true(music != null)
+	if music == null:
+		return
+	music.bpm = 120.0
+	var clips := _clips()
+	var timed_path := _save_audio_fixture(music)
+	clips[0]["stream_path"] = timed_path
+	_reject({
+		"clips": clips, "transitions": [{"from": "*", "to": "*", "when": "next_bar"}],
+	}, "effective transition 'Combat' to 'Explore'")
+	clips[0]["stream_path"] = WAV
+	clips[1]["stream_path"] = timed_path
+	var rules := [
+		{"from": "*", "to": "*", "when": "next_beat"},
+		{"from": "*", "to": "Combat", "when": "next_bar"},
+		{"from": "Explore", "to": "*"},
+		{"from": "Explore", "to": "Combat", "when": "end"},
+	]
+	const ANY := AudioStreamInteractive.CLIP_ANY
+	var second := _directory.path_join("score_reversed_%d.tres" % Time.get_ticks_usec())
+	_audio_fixtures.append(second)
+	for path in [_score, second]:
+		var created := _handler.interactive_create({"path": path, "clips": clips, "transitions": rules})
+		assert_has_key(created, "data")
+		if not created.has("data"):
+			return
+		var native := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE_DEEP) as AudioStreamInteractive
+		assert_true(native != null)
+		if native == null:
+			return
+		assert_eq(native.get_transition_list().size(), 8)
+		assert_eq(native.get_transition_from_time(ANY, ANY), AudioStreamInteractive.TRANSITION_FROM_TIME_NEXT_BEAT)
+		assert_eq(native.get_transition_from_time(ANY, 1), AudioStreamInteractive.TRANSITION_FROM_TIME_NEXT_BAR)
+		assert_eq(native.get_transition_from_time(0, ANY), AudioStreamInteractive.TRANSITION_FROM_TIME_IMMEDIATE)
+		assert_eq(native.get_transition_from_time(0, 1), AudioStreamInteractive.TRANSITION_FROM_TIME_END)
+		var inspected := _handler.interactive_get({"path": path})
+		assert_has_key(inspected, "data")
+		if not inspected.has("data"):
+			return
+		var read_rules: Array = []
+		for rule in inspected.data.transitions:
+			read_rules.append([rule.from, rule.to, rule.get("from_any", false), rule.get("to_any", false)])
+		assert_eq(read_rules, [
+			["*", "*", true, true], ["*", "Combat", true, false],
+			["Explore", "*", false, true], ["Explore", "Combat", false, false],
+		])
+		rules.reverse()
+
+
+func test_wildcard_accepts_source_override_and_checks_same_target_fallback() -> void:
+	var music := _silent_mp3()
+	assert_true(music != null)
+	if music == null:
+		return
+	music.bpm = 120.0
+	var clips := _clips()
+	clips[1]["stream_path"] = _save_audio_fixture(music)
+	var target_rule := {"from": "*", "to": "Explore", "when": "next_bar"}
+	_reject({
+		"clips": clips,
+		"transitions": [target_rule, {"from": "Explore", "to": "Combat"}],
+	}, "effective transition 'Explore' to 'Explore'")
+	_reject({"clips": clips, "transitions": [target_rule]}, "needs positive BPM and Bar Beats")
+	var created := _handler.interactive_create({
+		"path": _score, "clips": clips,
+		"transitions": [
+			target_rule,
+			{"from": "*", "to": "Combat", "when": "next_bar"},
+			{"from": "Explore", "to": "*"},
+		],
+	})
+	assert_has_key(created, "data")
+	if created.has("data"):
+		assert_eq(created.data.transitions[2].from, "Explore")
+		assert_eq(created.data.transitions[2].when, "immediate")
+
+
+func test_wildcard_transitions_reject_invalid_or_duplicate_authored_keys() -> void:
+	for rule in [
+		{"from": "*", "to": "*"}, {"from": "Explore", "to": "*"}, {"from": "*", "to": "Combat"},
+	]:
+		_reject({"transitions": [rule, rule]}, "duplicate transition")
+	_reject({"transitions": [{"from": "Explore", "to": "Explore"}]}, "distinct named endpoints")
+	_reject({"transitions": [{"from": "**", "to": "*"}]}, "transitions[0].from")
+	_reject({"transitions": [{"from": "*", "to": "* "}]}, "transitions[0].to")
+	_reject({"transitions": [{"from": "*", "to": "*", "filler_clip": "*", "fade": "in"}]}, "expected a named clip")
+	_reject({"initial_clip": "*"}, "initial_clip")
+	_reject({"clips": [{"name": "*", "stream_path": WAV}]}, "reserved wildcard")
+	_reject({"transitions": [
+		{"from": "*", "to": "Combat", "when": "bad_timing"},
+		{"from": "Explore", "to": "*"},
+		{"from": "Combat", "to": "*"},
+	]}, "transitions[0].when")
+
+
+func test_wildcard_filler_checks_only_effective_concrete_pairs() -> void:
+	var music := _silent_mp3()
+	assert_true(music != null)
+	if music == null:
+		return
+	music.bpm = 120.0
+	var clips := _clips_with_filler(WAV, _save_audio_fixture(music))
+	clips[1]["next_clip"] = "Explore"
+	var wildcard := {"from": "Explore", "to": "*", "filler_clip": "Fill", "fade": "in"}
+	var enter_cue := {"from": "Explore", "to": "Combat"}
+	var enter_fill := {"from": "Explore", "to": "Fill"}
+	_reject({
+		"clips": clips,
+		"transitions": [{"from": "Explore", "to": "*", "fade": "in", "fade_beats": 2.0}],
+	}, "incoming fade must finish before 'Combat' ends")
+	_reject({
+		"clips": clips, "transitions": [wildcard, enter_fill],
+	}, "effective transition 'Explore' to 'Combat'")
+	_reject({
+		"clips": clips, "transitions": [wildcard, enter_cue],
+	}, "effective transition 'Explore' to 'Fill'")
+	var created := _handler.interactive_create({
+		"path": _score, "clips": clips, "transitions": [wildcard, enter_cue, enter_fill],
+	})
+	assert_has_key(created, "data")
+	if created.has("data"):
+		assert_eq(created.data.transitions[0].filler_clip, "Fill")
+		assert_eq(created.data.clips[1].next_clip, "Explore")
+
+
 func test_named_next_clip_resolves_forward_and_backward_and_round_trips() -> void:
 	var looped := AudioStreamWAV.new()
 	looped.data = PackedByteArray([0, 0, 0, 0])

@@ -49,6 +49,22 @@ RESOURCE_WITH_AUTO_CUE = {
         {**AUTO_CUE, "bpm": 0.0, "beats_per_bar": 0, "auto_advance": "enabled"},
     ],
 }
+ANY_PAIR = {**TRANSITION, "from": "*", "to": "*", "when": "immediate", "fade": "disabled"}
+ANY_SOURCE = {**ANY_PAIR, "to": "combat", "when": "next_bar"}
+ANY_DESTINATION = {**ANY_PAIR, "from": "exploration", "when": "next_beat"}
+CREATION_WITH_WILDCARDS = {
+    **CREATION,
+    "transitions": [TRANSITION, ANY_DESTINATION, ANY_SOURCE, ANY_PAIR],
+}
+RESOURCE_WITH_WILDCARDS = {
+    **RESOURCE,
+    "transitions": [
+        {**ANY_PAIR, "from_any": True, "to_any": True},
+        {**ANY_SOURCE, "from_any": True},
+        {**ANY_DESTINATION, "to_any": True},
+        TRANSITION,
+    ],
+}
 SWITCH = {"player_path": "/Main/Music", "clip": "exploration"}
 
 
@@ -85,6 +101,20 @@ SWITCH = {"player_path": "/Main/Music", "clip": "exploration"}
             RESOURCE_WITH_AUTO_CUE,
             "playing",
             id="get-with-next-clip",
+        ),
+        pytest.param(
+            "interactive_create",
+            CREATION_WITH_WILDCARDS,
+            {**RESOURCE_WITH_WILDCARDS, "undoable": False, "reason": "resource saved to disk"},
+            "no_scene",
+            id="create-with-wildcard-rules",
+        ),
+        pytest.param(
+            "interactive_get",
+            {"path": PATH},
+            RESOURCE_WITH_WILDCARDS,
+            "playing",
+            id="get-with-wildcard-rules",
         ),
         (
             "interactive_switch",
@@ -133,7 +163,8 @@ async def test_audio_interactive_routes_to_pinned_editor(
         ] == [active.session_id]
 
 
-async def test_audio_interactive_create_obeys_pinned_readiness(mcp_stack, mcp_ws_port):
+@pytest.mark.parametrize("params", [CREATION, CREATION_WITH_WILDCARDS], ids=["named", "wildcards"])
+async def test_audio_interactive_create_obeys_pinned_readiness(mcp_stack, mcp_ws_port, params):
     client, active = mcp_stack
     async with websockets.connect(f"ws://127.0.0.1:{mcp_ws_port}") as ws:
         selected = MockGodotPlugin(ws=ws, session_id="music-project")
@@ -157,7 +188,7 @@ async def test_audio_interactive_create_obeys_pinned_readiness(mcp_stack, mcp_ws
         result, _ = await asyncio.gather(
             client.call_tool(
                 "audio_manage",
-                {"op": "interactive_create", "params": CREATION, "session_id": selected.session_id},
+                {"op": "interactive_create", "params": params, "session_id": selected.session_id},
                 raise_on_error=False,
             ),
             confirm_playing(),

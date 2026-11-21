@@ -686,6 +686,38 @@ the Beat Count or use a different timing.
 `fade` accepts `disabled` (the default), `in`, `out` or `cross`. `fade_beats`
 defaults to one beat and accepts a positive number of beats.
 
+Use `"*"` in `from`, `to`, or both to set defaults for multiple clips. Godot
+checks the exact pair first, then the named source with any destination, then
+any source with the named destination, then the all-clips rule. The input
+array order has no effect. For a score with `forest`, `stealth`, `cave`, and
+`battle` clips, use these transition rules.
+
+```json
+[
+  {"from": "*", "to": "*", "when": "end"},
+  {"from": "*", "to": "battle", "when": "next_bar"},
+  {"from": "stealth", "to": "*", "when": "next_beat"},
+  {"from": "cave", "to": "battle", "when": "immediate"}
+]
+```
+
+`forest` to `battle` waits for the next bar. `stealth` to `battle` uses
+`stealth` to `"*"` and waits for the next beat because the named source takes
+priority. `cave` to `battle` switches immediately. `cave` to `forest` uses the
+all-clips rule and waits for the end of `cave`.
+
+Use each rule key once. `"*"` is reserved for transition endpoints. Named
+pairs must use distinct clips, and wildcard rules can also apply when
+requesting the clip already playing. `interactive_get` returns `"*"` for
+wildcard endpoints and flags them with `from_any=true` and `to_any=true`
+on the respective sides.
+
+Every rule must use valid names, values, and field combinations. Checks that
+depend on the matched audio, including tempo, duration, fillers, and
+auto-advance compatibility, apply only to pairs where that rule wins. For
+example, the exact `cave` to `battle` rule lets `cave` be a WAV without BPM
+metadata. `forest` still needs tempo and meter for the next-bar rule.
+
 To play a one-shot stinger on the way into combat, import a non-looping
 `res://music/combat_stinger.wav` and append
 `{"name": "combat_stinger", "stream_path": "res://music/combat_stinger.wav"}`

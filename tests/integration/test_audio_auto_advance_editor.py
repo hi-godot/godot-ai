@@ -4,24 +4,28 @@ from __future__ import annotations
 
 import cmath
 import math
-import shutil
 import struct
-import wave
 from itertools import groupby
 from pathlib import Path
 
 import pytest
 
+from tests.integration._interactive_preview_fixture import (
+    PLAYER,
+    PROOF,
+    SCENE,
+    arm_take,
+    audio,
+    write_capture_project,
+    write_stereo_wav,
+)
 from tests.integration._native_mcp_editor import _backend, _editor, _isolate_editor, _receipt
-from tests.integration._self_update_fixture import PLUGIN_ROOT, godot_bin_or_skip
+from tests.integration._self_update_fixture import godot_bin_or_skip
 
 pytestmark = pytest.mark.editor
 
 RATE = 8000
 WINDOW = 128
-PLAYER = "/Music/Player"
-SCENE = "res://music.tscn"
-PROOF = ".auto-advance-test"
 TONES = {
     "fanfare": (250, 375),
     "buildup": (625, 750),
@@ -57,45 +61,13 @@ TRANSITIONS = [
 
 
 def _write_project(project: Path, http_port: int, ws_port: int) -> None:
-    shutil.copytree(PLUGIN_ROOT, project / "addons/godot_ai")
-    bootstrap = project / "addons/auto_advance_probe"
-    bootstrap.mkdir()
-    shutil.copyfile(
-        Path(__file__).with_name("_interactive_auto_advance_driver.gd"), bootstrap / "driver.gd"
-    )
-    (bootstrap / "plugin.cfg").write_text(
-        '[plugin]\nname="Auto-advance test"\nscript="driver.gd"\n', encoding="utf-8"
-    )
-    (project / PROOF).mkdir()
-    (project / "project.godot").write_text(
-        'config_version=5\n[application]\nconfig/name="Adaptive auto-advance regression"\n'
-        '[editor_plugins]\nenabled=PackedStringArray("res://addons/auto_advance_probe/plugin.cfg")\n'
-        f"[auto_advance_test]\nhttp_port={http_port}\nws_port={ws_port}\n"
-        f"[audio]\ndriver/mix_rate={RATE}\n",
-        encoding="utf-8",
-    )
-    (project / "music.tscn").write_text(
-        '[gd_scene format=3]\n\n[node name="Music" type="Node"]\n\n'
-        '[node name="Player" type="AudioStreamPlayer" parent="."]\n',
-        encoding="utf-8",
-    )
-    (project / "music").mkdir()
+    write_capture_project(project, http_port, ws_port, rate=RATE)
     for name, parts in PARTS.items():
-        with wave.open(str(project / "music" / f"{name}.wav"), "wb") as output:
-            output.setparams((2, 2, RATE, 0, "NONE", "not compressed"))
-            for tone, duration in parts:
-                output.writeframes(
-                    b"".join(
-                        struct.pack(
-                            "<hh",
-                            *(
-                                round(8192 * math.sin(math.tau * hz * frame / RATE))
-                                for hz in TONES[tone]
-                            ),
-                        )
-                        for frame in range(duration * WINDOW)
-                    )
-                )
+        write_stereo_wav(
+            project / "music" / f"{name}.wav",
+            RATE,
+            [(duration * WINDOW, TONES[tone]) for tone, duration in parts],
+        )
 
 
 def _audible_runs(path: Path, expected_frames: int) -> list[tuple[str, float]]:
@@ -158,15 +130,6 @@ def _assert_audible_chain(
     return boundaries
 
 
-async def _audio(tool, op, **params):
-    return await tool("audio_manage", op=op, params=params)
-
-
-async def _arm_take(proof: Path, name: str, pid: int) -> None:
-    (proof / "capture.request").write_text(name, encoding="utf-8")
-    assert (await _receipt(proof / f"{name}-ready.json"))["pid"] == pid
-
-
 async def _check_take(proof: Path, name: str, expected: list[str], path: str, pid: int) -> dict:
     take = await _receipt(proof / f"{name}-audio.json")
     assert take["pid"] == pid and take["rate"] == RATE and take["discarded_frames"] == 0, take
@@ -217,7 +180,7 @@ async def test_saved_auto_advance_chain_and_manual_return_mix_on_one_playback(
             assert len(originals) == len(sidecars) == 3
             saved_bytes = {}
             for path, initial in scores.values():
-                created = await _audio(
+                created = await audio(
                     tool,
                     "interactive_create",
                     path=path,
@@ -242,7 +205,7 @@ async def test_saved_auto_advance_chain_and_manual_return_mix_on_one_playback(
             )
             pid = fresh["editor_pid"]
             for path, initial in scores.values():
-                saved = await _audio(tool, "interactive_get", path=path)
+                saved = await audio(tool, "interactive_get", path=path)
                 assert saved["initial_clip"] == initial and saved["transitions"] == TRANSITIONS, (
                     saved
                 )
@@ -261,16 +224,16 @@ async def test_saved_auto_advance_chain_and_manual_return_mix_on_one_playback(
             takes = {}
             for name, (path, initial) in scores.items():
                 assert (
-                    await _audio(tool, "player_set_stream", player_path=PLAYER, stream_path=path)
+                    await audio(tool, "player_set_stream", player_path=PLAYER, stream_path=path)
                 )["stream_path"] == path
                 assert (await tool("scene_save"))["path"] == SCENE
                 scene_bytes = scene_file.read_bytes()
-                await _arm_take(proof, name, pid)
-                assert (await _audio(tool, "play", player_path=PLAYER))["playing"]
+                await arm_take(proof, name, pid)
+                assert (await audio(tool, "play", player_path=PLAYER))["playing"]
                 assert (await _receipt(proof / f"{name}-started.json"))["clip"] == initial
                 if name == "manual":
                     assert (await _receipt(proof / f"{name}-switch-ready.json"))["pid"] == pid
-                    switched = await _audio(
+                    switched = await audio(
                         tool, "interactive_switch", player_path=PLAYER, clip="buildup"
                     )
                     assert (
@@ -281,14 +244,14 @@ async def test_saved_auto_advance_chain_and_manual_return_mix_on_one_playback(
                     proof, name, [initial, "buildup", "battle"], path, pid
                 )
                 if name == "chain":
-                    assert not (await _audio(tool, "stop", player_path=PLAYER))["playing"]
+                    assert not (await audio(tool, "stop", player_path=PLAYER))["playing"]
                 assert scene_file.read_bytes() == scene_bytes
 
             path, _ = scores["manual"]
-            await _arm_take(proof, "reentry", pid)
+            await arm_take(proof, "reentry", pid)
             assert (await _receipt(proof / "reentry-started.json"))["clip"] == "battle"
             assert (await _receipt(proof / "reentry-switch-ready.json"))["pid"] == pid
-            switched = await _audio(tool, "interactive_switch", player_path=PLAYER, clip="buildup")
+            switched = await audio(tool, "interactive_switch", player_path=PLAYER, clip="buildup")
             assert switched["previous_clip"] == "battle", switched
             reentry = await _check_take(
                 proof, "reentry", ["battle", "buildup", "battle"], path, pid
@@ -297,7 +260,7 @@ async def test_saved_auto_advance_chain_and_manual_return_mix_on_one_playback(
             assert (
                 reentry["player_id"] == takes["manual"]["player_id"] == takes["chain"]["player_id"]
             )
-            assert not (await _audio(tool, "stop", player_path=PLAYER))["playing"]
+            assert not (await audio(tool, "stop", player_path=PLAYER))["playing"]
             assert scene_file.read_bytes() == scene_bytes
 
         for path, original in (originals | sidecars | saved_bytes).items():
