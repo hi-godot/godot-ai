@@ -108,6 +108,116 @@ func test_reload_native_score_and_inspect_defaults() -> void:
 	assert_eq(rule.fade, "disabled")
 
 
+func test_named_next_clip_resolves_forward_and_backward_and_round_trips() -> void:
+	var looped := AudioStreamWAV.new()
+	looped.data = PackedByteArray([0, 0, 0, 0])
+	looped.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	looped.loop_end = 4
+	var clips := [
+		{"name": "Intro", "stream_path": WAV, "next_clip": "Explore"},
+		{"name": "Explore", "stream_path": _save_audio_fixture(looped)},
+		{"name": "Return", "stream_path": WAV, "next_clip": "Intro"},
+	]
+	var created := _handler.interactive_create({"path": _score, "clips": clips, "initial_clip": "Return"})
+	assert_has_key(created, "data")
+	if not created.has("data"):
+		return
+	assert_eq(created.data.clips[0].next_clip, "Explore")
+	assert_eq(created.data.clips[2].auto_advance, "enabled")
+
+	var score := ResourceLoader.load(_score, "", ResourceLoader.CACHE_MODE_IGNORE_DEEP) as AudioStreamInteractive
+	assert_true(score != null)
+	if score == null:
+		return
+	assert_eq(score.initial_clip, 2)
+	assert_eq(score.get_clip_auto_advance(0), AudioStreamInteractive.AUTO_ADVANCE_ENABLED)
+	assert_eq(score.get_clip_auto_advance_next_clip(0), 1)
+	assert_eq(score.get_clip_auto_advance(2), AudioStreamInteractive.AUTO_ADVANCE_ENABLED)
+	assert_eq(score.get_clip_auto_advance_next_clip(2), 0)
+	assert_eq(score.get_clip_auto_advance(1), AudioStreamInteractive.AUTO_ADVANCE_DISABLED)
+	assert_eq((score.get_clip_stream(1) as AudioStreamWAV).loop_mode, AudioStreamWAV.LOOP_FORWARD)
+
+	var inspected := _handler.interactive_get({"path": _score})
+	assert_has_key(inspected, "data")
+	if inspected.has("data"):
+		assert_eq(inspected.data.clips[0].auto_advance, "enabled")
+		assert_eq(inspected.data.clips[0].next_clip, "Explore")
+		assert_eq(inspected.data.clips[2].next_clip, "Intro")
+		assert_false(inspected.data.clips[1].has("auto_advance"))
+		assert_false(inspected.data.clips[1].has("next_clip"))
+
+
+func test_named_next_clip_rejects_invalid_references() -> void:
+	for name in [null, 2, "", "Unknown", "*"]:
+		var clips := _clips()
+		clips[0]["next_clip"] = name
+		_reject({"clips": clips}, "clips[0].next_clip")
+	var clips := _clips()
+	clips[0]["next_clip"] = "Explore"
+	_reject({"clips": clips}, "choose a clip other than 'Explore'")
+
+
+func test_named_next_clip_requires_compatible_non_looping_audio_with_a_usable_end() -> void:
+	var clips := _clips()
+	clips[0]["next_clip"] = "Combat"
+	clips[0]["stream_path"] = _save_audio_fixture(AudioStreamGenerator.new())
+	_reject({"clips": clips}, "WAV, Ogg Vorbis, or MP3")
+
+	var wav := AudioStreamWAV.new()
+	clips[0]["stream_path"] = _save_audio_fixture(wav)
+	_reject({"clips": clips}, "auto-advance source audio")
+	wav.data = PackedByteArray([0, 0, 0, 0])
+	wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	wav.loop_end = 4
+	clips[0]["stream_path"] = _save_audio_fixture(wav)
+	_reject({"clips": clips}, "disable looping")
+
+	var music := _silent_mp3()
+	assert_true(music != null)
+	if music == null:
+		return
+	music.bpm = 120.0
+	music.beat_count = 1
+	assert_gt(music.get_length(), 0.5)
+	clips[0]["stream_path"] = _save_audio_fixture(music)
+	_reject({"clips": clips}, "Beat Count that ends before its non-looping audio")
+
+
+func test_filler_rules_cannot_enter_or_use_named_auto_advance_cues() -> void:
+	var clips := _clips_with_filler(WAV)
+	var rules := [{"from": "Explore", "to": "Combat", "filler_clip": "Fill", "fade": "cross"}]
+	clips[1]["next_clip"] = "Explore"
+	_reject({"clips": clips, "transitions": rules}, "does not schedule next_clip")
+	clips[1].erase("next_clip")
+	clips[2]["next_clip"] = "Explore"
+	_reject({"clips": clips, "transitions": rules}, "separate filler-only clip name")
+
+
+func test_fading_into_named_auto_advance_cue_requires_time_to_schedule_next_clip() -> void:
+	var music := _silent_mp3()
+	assert_true(music != null)
+	if music == null:
+		return
+	music.bpm = 120.0
+	var clips := _clips_with_filler(WAV, _save_audio_fixture(music))
+	clips[1]["next_clip"] = "Fill"
+	var rule := {"from": "Explore", "to": "Combat", "fade": "in", "fade_beats": 0.5}
+	_reject({"clips": clips, "transitions": [rule.merged({"start_at": "same_position"})]}, "use start")
+	_reject(
+		{"clips": clips, "transitions": [rule.merged({"fade_beats": 2.0}, true)]},
+		"incoming fade must finish before"
+	)
+	var created := _handler.interactive_create({
+		"path": _score, "clips": clips,
+		"transitions": [rule, {"from": "Fill", "to": "Combat", "start_at": "same_position"}],
+	})
+	assert_has_key(created, "data")
+	if created.has("data"):
+		assert_eq(created.data.clips[1].next_clip, "Fill")
+		assert_eq(created.data.transitions[0].fade, "in")
+		assert_eq(created.data.transitions[1].start_at, "same_position")
+
+
 func test_transition_filler_persists_natively_and_preserves_other_rules() -> void:
 	var music := _silent_mp3()
 	assert_true(music != null)

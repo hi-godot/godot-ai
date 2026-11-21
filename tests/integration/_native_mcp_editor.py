@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 import subprocess
 import sys
@@ -24,6 +25,15 @@ from tests.conftest import isolate_capability_directory
 
 def _loopback_client(**kwargs):
     return httpx2.AsyncClient(trust_env=False, **kwargs)
+
+
+async def _receipt(path: Path) -> dict:
+    async with asyncio.timeout(10):
+        while True:
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError):
+                await asyncio.sleep(0.05)
 
 
 @asynccontextmanager

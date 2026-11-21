@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import cmath
-import json
 import math
 import shutil
 import struct
@@ -15,7 +13,7 @@ from statistics import median
 import pytest
 from fastmcp.exceptions import ToolError
 
-from tests.integration._native_mcp_editor import _backend, _editor, _isolate_editor
+from tests.integration._native_mcp_editor import _backend, _editor, _isolate_editor, _receipt
 from tests.integration._self_update_fixture import PLUGIN_ROOT, godot_bin_or_skip
 
 pytestmark = pytest.mark.editor
@@ -101,15 +99,6 @@ def _write_project(project: Path, http_port: int, ws_port: int, *, with_fill: bo
         '[node name="Player" type="AudioStreamPlayer" parent="."]\n',
         encoding="utf-8",
     )
-
-
-async def _receipt(path: Path) -> dict:
-    async with asyncio.timeout(10):
-        while True:
-            try:
-                return json.loads(path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, json.JSONDecodeError):
-                await asyncio.sleep(0.05)
 
 
 def _measure_stereo_envelopes(capture: Path, timing: dict, *, with_fill: bool):

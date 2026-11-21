@@ -40,6 +40,15 @@ RESOURCE_WITH_FILLER = {
     "clips": [*RESOURCE["clips"], {**FILLER, "bpm": 0.0, "beats_per_bar": 0}],
     "transitions": [TRANSITION_WITH_FILLER],
 }
+AUTO_CUE = {"name": "victory", "stream_path": "res://music/victory.wav", "next_clip": "exploration"}
+CREATION_WITH_AUTO_CUE = {**CREATION, "clips": [*CLIPS, AUTO_CUE]}
+RESOURCE_WITH_AUTO_CUE = {
+    **RESOURCE,
+    "clips": [
+        *RESOURCE["clips"],
+        {**AUTO_CUE, "bpm": 0.0, "beats_per_bar": 0, "auto_advance": "enabled"},
+    ],
+}
 SWITCH = {"player_path": "/Main/Music", "clip": "exploration"}
 
 
@@ -62,6 +71,20 @@ SWITCH = {"player_path": "/Main/Music", "clip": "exploration"}
         ),
         pytest.param(
             "interactive_get", {"path": PATH}, RESOURCE_WITH_FILLER, "playing", id="get-with-filler"
+        ),
+        pytest.param(
+            "interactive_create",
+            CREATION_WITH_AUTO_CUE,
+            {**RESOURCE_WITH_AUTO_CUE, "undoable": False, "reason": "resource saved to disk"},
+            "no_scene",
+            id="create-with-next-clip",
+        ),
+        pytest.param(
+            "interactive_get",
+            {"path": PATH},
+            RESOURCE_WITH_AUTO_CUE,
+            "playing",
+            id="get-with-next-clip",
         ),
         (
             "interactive_switch",

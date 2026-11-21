@@ -720,10 +720,38 @@ uses `beat_count * 60 / bpm` seconds.
 A shorter scheduled duration can let the filler tail overlap the destination.
 A longer duration can leave a gap before the destination begins.
 
-When a new resource has no rule for a pair, Godot starts the destination at
+For a manual switch with no matching rule, Godot starts the destination at
 its beginning and fades out the outgoing clip at the next beat. Without
 outgoing BPM metadata, that fallback begins immediately. Its fade lasts one
 beat with BPM metadata or one second without it.
+
+Give a one-shot cue a `next_clip` to continue automatically. In this example,
+`fanfare` and `buildup` have looping disabled, and `battle` loops.
+
+```json
+[
+  {"name": "fanfare", "stream_path": "res://music/fanfare.wav", "next_clip": "buildup"},
+  {"name": "buildup", "stream_path": "res://music/buildup.wav", "next_clip": "battle"},
+  {"name": "battle", "stream_path": "res://music/battle.wav"}
+]
+```
+
+Use this array for `clips` and set `initial_clip="fanfare"` to play the whole
+sequence. You can also request `buildup` during playback and let it advance
+to `battle`. Godot starts the target from its beginning at the cue's effective
+end, using the same duration rules as an `end` transition. The cue must be a
+finite, non-looping WAV, Ogg Vorbis, or MP3 stream. `next_clip` must name a
+different clip in the same score, and the target may loop. `interactive_get`
+reports `next_clip` and `auto_advance="enabled"` on the saved cue.
+
+The automatic switch works without a transition rule. If the pair has a
+rule, Godot uses its fade and overrides `when` and `start_at` for the
+automatic switch. A manual switch still follows the rule's timing and
+start position. For an `in` or `cross` fade into a cue with `next_clip`,
+use `start_at="start"` and make the fade shorter than the cue so Godot can
+schedule the follow-on. Keep fillers separate from these cues. A transition
+with a filler cannot enter a cue with `next_clip`, and the cue itself cannot
+be a filler. You can name the same audio again for use as a filler.
 
 In the open scene, use an existing `AudioStreamPlayer` or call `player_create`
 to add one. Assign `res://music/adaptive.tres` using `player_set_stream`, then
