@@ -283,7 +283,7 @@ Calls take the form:
 | `test_manage` | `results_get` |
 | `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
-| `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
+| `audio_manage` | `interactive_create`, `interactive_get`, `interactive_switch`, `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
 | `signal_manage` | `list`, `connect`, `disconnect` |
@@ -636,6 +636,111 @@ refers to that library; undo restores both.
 plus `autoplay` for AnimationPlayer. Existing `list` also includes library
 metadata and autoplay alongside its clip details.
 
+
+### Adaptive music
+
+`audio_manage` can save a native `AudioStreamInteractive` resource from named
+clips backed by existing project audio streams. `interactive_create` uses a new
+project-local `.tres` path. The first clip is the default entry point
+unless you supply `initial_clip`. `interactive_get(path)` reports the saved
+clip names, source paths, tempo and meter, initial clip and transition rules.
+Saving the resource creates a file outside editor undo.
+
+For beat-synced music, use dedicated imported copies of your music sources if
+other scenes already depend on their import settings. For each Ogg Vorbis clip
+in this example, call `filesystem_manage` with `op="import_get"` and the asset
+`path`. Pass its `revision` back as `expected_revision` in `op="import_set"`
+with the same `path`, `options={"bpm": 120.0, "bar_beats": 4, "loop": true}` and
+`reimport=true`. Use the actual tempo and meter of your tracks and enable
+looping for clips intended to sustain until a switch. An enabled fade and
+beat/bar timing require a positive BPM on the outgoing stream. Bar timing
+also requires a positive `bar_beats`. WAV imports lack this musical metadata.
+
+This `audio_manage` call creates the resource in the existing music directory
+after both sources are imported.
+
+```json
+{
+  "op": "interactive_create",
+  "params": {
+    "path": "res://music/adaptive.tres",
+    "clips": [
+      {"name": "exploration", "stream_path": "res://music/exploration.ogg"},
+      {"name": "combat", "stream_path": "res://music/combat.ogg"}
+    ],
+    "initial_clip": "exploration",
+    "transitions": [
+      {"from": "exploration", "to": "combat", "when": "next_bar", "fade": "cross", "fade_beats": 2}
+    ]
+  }
+}
+```
+
+Transitions are directional. Add a separate `combat` to `exploration` pair to
+customize the return. `when` accepts `immediate` (the default), `next_beat`,
+`next_bar` or `end`. `start_at` defaults to `start` and also accepts
+`same_position` for `immediate`, `next_beat` and `next_bar`.
+`end` requires a finite, positive outgoing stream length. If a non-looping
+clip's BPM and Beat Count place its declared end before the file ends, adjust
+the Beat Count or use a different timing.
+`fade` accepts `disabled` (the default), `in`, `out` or `cross`. `fade_beats`
+defaults to one beat and accepts a positive number of beats.
+
+To play a one-shot stinger on the way into combat, import a non-looping
+`res://music/combat_stinger.wav` and append
+`{"name": "combat_stinger", "stream_path": "res://music/combat_stinger.wav"}`
+to `clips`. Use this exploration-to-combat rule with a quarter-beat fade.
+
+```json
+{
+  "from": "exploration",
+  "to": "combat",
+  "when": "next_bar",
+  "start_at": "start",
+  "fade": "cross",
+  "fade_beats": 0.25,
+  "filler_clip": "combat_stinger"
+}
+```
+
+The filler must name a clip distinct from `from` and `to`.
+`interactive_get` includes that name on the saved transition.
+
+The filler starts at the rule's transition time. Godot delays the destination
+by the filler's duration while playing the filler without its own transition
+fade. Fillers must be non-looping WAV, Ogg Vorbis, or MP3 streams with a
+finite, positive audio length and scheduled duration. Godot uses the imported
+audio length unless both BPM and Beat Count are positive, in which case it
+uses `beat_count * 60 / bpm` seconds.
+A shorter scheduled duration can let the filler tail overlap the destination.
+A longer duration can leave a gap before the destination begins.
+
+When a new resource has no rule for a pair, Godot starts the destination at
+its beginning and fades out the outgoing clip at the next beat. Without
+outgoing BPM metadata, that fallback begins immediately. Its fade lasts one
+beat with BPM metadata or one second without it.
+
+In the open scene, use an existing `AudioStreamPlayer` or call `player_create`
+to add one. Assign `res://music/adaptive.tres` using `player_set_stream`, then
+call `play` with the player path. Call `interactive_switch` with the same
+`player_path` and `clip="combat"`. This requests a transition on the live
+editor playback, so the audible switch follows the resource's timing rule.
+The response includes `previous_clip` and `requested_clip`. Requesting the
+clip already playing can restart it. Use `stop` to end the preview. Save the
+scene to keep the stream assignment for your game.
+
+In game code, run this after the node has started playing, for example via
+Autoplay.
+
+```gdscript
+@onready var music: AudioStreamPlayer = $Music
+
+func enter_combat() -> void:
+	if music.has_stream_playback():
+		var playback := music.get_stream_playback() as AudioStreamPlaybackInteractive
+		if playback != null:
+			playback.switch_to_clip_by_name(&"combat")
+```
 
 ### Audio bus layouts
 
