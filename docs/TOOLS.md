@@ -42,6 +42,11 @@ editor display. [Lighting comparison example](screenshot-testing.md#compare-a-ma
 A framed 3D screenshot also accepts `orthographic_view` for a standard axis
 view or a custom elevation and azimuth. [Orthographic room views](screenshot-testing.md#inspect-a-room-in-orthographic-projection)
 
+Use `editor_manage(op="viewport_overlays_get")` to read the first 3D viewport's
+grid and node-gizmo settings and the editor-wide grid switch. For a single
+3D viewport screenshot, `show_grid` and `show_gizmos` override those local
+settings for the captured image. [Grid and gizmo examples](screenshot-testing.md#compare-grid-and-gizmo-overlays)
+
 `node_set_property` accepts a `PackedByteArray` value as a JSON list of whole
 numbers from 0 to 255, with at most 65,536 bytes per value. For example,
 `value=[0,128,255]` writes three bytes and `value=[]` clears the array.
@@ -286,7 +291,7 @@ Calls take the form:
 | `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `set_editable_children`, `add_to_group`, `remove_from_group` |
 | `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |
-| `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
+| `editor_manage` | `state`, `selection_get`, `selection_set`, `viewport_overlays_get`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
 | `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |

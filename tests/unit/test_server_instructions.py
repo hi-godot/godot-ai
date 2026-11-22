@@ -49,7 +49,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "  script_manage    read, detach, find_symbols\n"
     "  project_manage   stop, settings_get, settings_set, set_main_scene\n"
     "  editor_manage    state, selection_get/set, monitors_get, quit, logs_clear,\n"
-    "                   game_eval\n"
+    "                   game_eval, viewport_overlays_get\n"
     "  session_manage   list\n"
     "  test_manage      results_get\n"
     "  animation_manage player_create, delete, validate, add_property_track,\n"

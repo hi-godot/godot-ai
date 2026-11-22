@@ -344,7 +344,8 @@ class OrthographicFramingStub extends ViewportReadbackStub:
 	var frame: Dictionary = {}
 
 	func _capture_viewport_image(_viewport: SubViewport, _render_mode: String, _cam: Camera3D = null,
-			cam_xform := Transform3D.IDENTITY, _fov: Variant = null, orthographic: Dictionary = {}) -> Image:
+			cam_xform := Transform3D.IDENTITY, _fov: Variant = null, orthographic: Dictionary = {},
+			_overlays: Dictionary = {}) -> Image:
 		frame = orthographic.merged({"transform": cam_xform})
 		return image
 
@@ -495,6 +496,189 @@ func test_screenshot_orthographic_keeps_editor_state_after_capture_and_empty_rea
 	assert_eq(handler.modes, [Viewport.DEBUG_DRAW_UNSHADED, initial[0], Viewport.DEBUG_DRAW_UNSHADED])
 	assert_eq(handler.update_modes, [SubViewport.UPDATE_ALWAYS, initial[1], SubViewport.UPDATE_ALWAYS])
 	assert_eq(_viewport_screenshot_state(viewport), initial)
+
+
+const VIEWPORT_GRID_LAYER := 1 << 25
+const VIEWPORT_GIZMO_LAYER := 1 << 26
+
+
+class OverlayReadbackStub extends ViewportReadbackStub:
+	var captures: Array[Dictionary] = []
+	var camera_masks: Array[int] = []
+
+	func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Camera3D = null,
+			cam_xform := Transform3D.IDENTITY, fov: Variant = null, orthographic: Dictionary = {},
+			overlays: Dictionary = {}) -> Image:
+		captures.append(overlays.duplicate())
+		return super._capture_viewport_image(viewport, render_mode, cam, cam_xform, fov, orthographic, overlays)
+
+	func _read_viewport_image(viewport: Viewport) -> Image:
+		camera_masks.append(viewport.get_camera_3d().cull_mask)
+		return super._read_viewport_image(viewport)
+
+
+func _viewport_overlay_menu(root: Node, shortcut_name: String) -> Array:
+	var settings := EditorInterface.get_editor_settings()
+	if settings == null:
+		return []
+	var shortcut := settings.get_shortcut(shortcut_name)
+	if shortcut == null:
+		return []
+	for menu: MenuButton in root.find_children("*", "MenuButton", true, false):
+		var popup := menu.get_popup()
+		for index in range(popup.item_count):
+			if popup.get_item_shortcut(index) == shortcut and popup.is_item_checkable(index):
+				return [popup, index]
+	return []
+
+
+func _overlay_menu_checked(item: Array) -> bool:
+	return item[0].is_item_checked(item[1])
+
+
+func _set_overlay_menu_checked(item: Array, checked: bool) -> void:
+	var popup: PopupMenu = item[0]
+	if popup.is_item_checked(item[1]) != checked:
+		popup.id_pressed.emit(popup.get_item_id(item[1]))
+
+
+func test_screenshot_viewport_overlays_refuse_invalid_direct_parameters() -> void:
+	var handler := OverlayReadbackStub.new(McpLogBuffer.new())
+	for field in ["show_grid", "show_gizmos"]:
+		for value in [1, "false", null]:
+			var invalid := handler.take_screenshot({field: value})
+			assert_is_error(invalid, ErrorCodes.WRONG_TYPE)
+			assert_contains(invalid.get("error", {}).get("message", ""), field)
+	for source in ["viewport_2d", "game", "cinematic"]:
+		var invalid := handler.take_screenshot({"source": source, "show_grid": false})
+		assert_is_error(invalid, ErrorCodes.VALUE_OUT_OF_RANGE)
+		assert_contains(invalid.get("error", {}).get("message", ""), "viewport")
+	var coverage := handler.take_screenshot({"coverage": true, "show_gizmos": false})
+	assert_is_error(coverage, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(coverage.get("error", {}).get("message", ""), "coverage")
+	var invalid_coverage := handler.take_screenshot({"coverage": [], "show_grid": false})
+	assert_is_error(invalid_coverage, ErrorCodes.WRONG_TYPE)
+	var invalid_source := handler.take_screenshot({"source": [], "show_gizmos": true})
+	assert_is_error(invalid_source, ErrorCodes.WRONG_TYPE)
+	assert_eq(handler.captures, [])
+	var unavailable := EditorHandler._read_viewport_overlays(null)
+	assert_is_error(unavailable, ErrorCodes.EDITOR_NOT_READY)
+	var readiness: Dictionary = unavailable.get("error", {}).get("data", {})
+	assert_eq(readiness.get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE)
+	assert_eq(readiness.get("retryable"), false)
+
+
+func test_screenshot_viewport_overlays_mask_preserves_unrelated_layers() -> void:
+	# Include scene cull layers and unrelated editor tool layers.
+	var other_layers := (1 << 19) | (1 << 24) | (1 << 27) | 1
+	var mask := other_layers | VIEWPORT_GRID_LAYER
+	for grid: bool in [false, true]:
+		for gizmos: bool in [false, true]:
+			var actual := EditorHandler._viewport_overlay_mask(mask, {"show_grid": grid, "show_gizmos": gizmos})
+			var expected := other_layers | (VIEWPORT_GRID_LAYER if grid else 0) | (VIEWPORT_GIZMO_LAYER if gizmos else 0)
+			assert_eq(actual, expected)
+
+
+func test_screenshot_viewport_overlays_reuse_native_pane_state_and_restore_after_readback() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		skip("No edited scene or 3D viewport camera")
+		return
+	var pane := viewport.get_parent()
+	while pane != null and pane.get_class() != &"Node3DEditorViewport":
+		pane = pane.get_parent()
+	if pane == null:
+		skip("No native 3D viewport menu")
+		return
+	var grid_item := _viewport_overlay_menu(pane, "spatial_editor/view_grid_lines")
+	var gizmos_item := _viewport_overlay_menu(pane, "spatial_editor/view_gizmos")
+	var global_item := _viewport_overlay_menu(EditorInterface.get_base_control(), "spatial_editor/view_grid")
+	if grid_item.is_empty() or gizmos_item.is_empty() or global_item.is_empty():
+		skip("No native grid or gizmo controls")
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var target_path := McpScenePath.from_node(target, root)
+	var cam := viewport.get_camera_3d()
+	var original_mask := cam.cull_mask
+	var original_checks := [_overlay_menu_checked(grid_item), _overlay_menu_checked(gizmos_item)]
+	_set_overlay_menu_checked(grid_item, true)
+	_set_overlay_menu_checked(gizmos_item, false)
+	var native_mask := cam.cull_mask
+	var global_grid := _overlay_menu_checked(global_item)
+	var initial := _viewport_screenshot_state(viewport)
+	var handler := OverlayReadbackStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var native := handler.get_viewport_overlays({})
+	var ordinary := handler.take_screenshot({})
+	var hidden_grid := handler.take_screenshot({"show_grid": false})
+	var shown_gizmos := handler.take_screenshot({"show_gizmos": true, "view_target": target_path,
+		"orthographic_view": "front", "render_mode": "unshaded"})
+	var after_success := _viewport_screenshot_state(viewport)
+	var after_success_mask := cam.cull_mask
+	handler.image = null
+	var empty := handler.take_screenshot({"show_grid": false, "show_gizmos": true, "view_target": target_path, "fov": 40.0})
+	var after_error := _viewport_screenshot_state(viewport)
+	var after_error_mask := cam.cull_mask
+	var after_error_checks := [_overlay_menu_checked(grid_item), _overlay_menu_checked(gizmos_item), _overlay_menu_checked(global_item)]
+	_set_overlay_menu_checked(grid_item, original_checks[0])
+	_set_overlay_menu_checked(gizmos_item, original_checks[1])
+	cam.cull_mask = original_mask
+	RenderingServer.force_draw(false)
+	var expected_grid_hidden := {"show_grid": false, "show_gizmos": false, "global_grid_enabled": global_grid}
+	var expected_gizmos_shown := {"show_grid": true, "show_gizmos": true, "global_grid_enabled": global_grid}
+	assert_eq(native.get("data", {}), {"show_grid": true, "show_gizmos": false, "global_grid_enabled": global_grid})
+	assert_eq(native_mask & (VIEWPORT_GRID_LAYER | VIEWPORT_GIZMO_LAYER), VIEWPORT_GRID_LAYER)
+	assert_false(ordinary.get("data", {}).has("viewport_overlays"))
+	assert_eq(ordinary.get("data", {}).get("width"), 4)
+	assert_eq(hidden_grid.get("data", {}).get("viewport_overlays"), expected_grid_hidden, str(hidden_grid))
+	assert_eq(shown_gizmos.get("data", {}).get("viewport_overlays"), expected_gizmos_shown, str(shown_gizmos))
+	assert_eq(shown_gizmos.get("data", {}).get("orthographic_view"), "front")
+	assert_eq(shown_gizmos.get("data", {}).get("render_mode"), "unshaded")
+	assert_is_error(empty, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(empty.get("error", {}).get("data", {}).get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY)
+	assert_eq(handler.captures, [{}, expected_grid_hidden, expected_gizmos_shown,
+		{"show_grid": false, "show_gizmos": true, "global_grid_enabled": global_grid}])
+	assert_eq(handler.camera_masks, [native_mask, native_mask, native_mask, native_mask], "Capture must leave the camera object untouched")
+	assert_eq(handler.update_modes, [initial[1], SubViewport.UPDATE_ALWAYS, SubViewport.UPDATE_ALWAYS, SubViewport.UPDATE_ALWAYS])
+	assert_eq(after_success, initial)
+	assert_eq(after_error, initial)
+	assert_eq(after_success_mask, native_mask)
+	assert_eq(after_error_mask, native_mask)
+	assert_eq(after_error_checks, [true, false, global_grid])
+
+
+func test_screenshot_viewport_overlays_refuse_to_enable_a_globally_disabled_grid() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	if viewport == null or viewport.get_camera_3d() == null or EditorHandler.viewport_screenshot_precheck(root).has("error"):
+		skip("No edited 3D scene or viewport camera")
+		return
+	var global_item := _viewport_overlay_menu(EditorInterface.get_base_control(), "spatial_editor/view_grid")
+	if global_item.is_empty():
+		skip("No native global grid control")
+		return
+	var original := _overlay_menu_checked(global_item)
+	_set_overlay_menu_checked(global_item, false)
+	var handler := OverlayReadbackStub.new(McpLogBuffer.new())
+	var initial := _viewport_screenshot_state(viewport)
+	var initial_mask := viewport.get_camera_3d().cull_mask
+	var result := handler.take_screenshot({"show_grid": true})
+	var after := _viewport_screenshot_state(viewport)
+	var after_mask := viewport.get_camera_3d().cull_mask
+	var grid_after := _overlay_menu_checked(global_item)
+	_set_overlay_menu_checked(global_item, original)
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	var readiness: Dictionary = result.get("error", {}).get("data", {})
+	assert_eq(readiness.get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE)
+	assert_eq(readiness.get("retryable"), false)
+	assert_contains(readiness.get("hint", ""), "View Grid")
+	assert_eq(handler.captures, [])
+	assert_eq(after, initial)
+	assert_eq(after_mask, initial_mask)
+	assert_false(grid_after)
 
 
 func test_screenshot_game_not_playing() -> void:

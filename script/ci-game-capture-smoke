@@ -8,6 +8,7 @@ streamable-HTTP transport:
 
   1. wait for the plugin's WebSocket session to register
   2. open res://capture_smoke.tscn (color quadrants and a midgray patch)
+     and verify editor viewport pixels, including independent 3D overlays
   3. run the project in that scene
   4. poll editor_state until is_playing=true AND game_capture_ready=true
   5. capture-and-check loop until CAPTURE_BUDGET_SEC elapses:
@@ -51,7 +52,7 @@ import urllib.error
 from pathlib import Path
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageChops
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -750,6 +751,75 @@ def _check_editor_capture(
             raise RuntimeError(f"Editor screenshot lost display gray: {pixel}")
 
     _remaining_timeout(40, deadline)
+    _check_3d_overlay_capture(session_id, history, deadline)
+
+
+def _check_3d_overlay_capture(session_id: str, history: list[str], deadline: float) -> None:
+    project = (ROOT / "test_project").resolve()
+    sessions = _tool_call(session_id, "session_manage", {"op": "list"}, 30, deadline=deadline)
+    matching = [
+        entry for entry in sessions.get("sessions", [])
+        if Path(entry["project_path"]).resolve() == project
+    ]
+    if len(matching) != 1:
+        raise RuntimeError(f"Expected one editor for {project} to check 3D overlays: {sessions}")
+    pin = {"session_id": matching[0]["session_id"]}
+    scene = "res://main.tscn"
+    state_args = {**pin, "op": "viewport_overlays_get"}
+    opened = _tool_call(session_id, "scene_open", {**pin, "path": scene}, 31, deadline=deadline)
+    if opened.get("path") != scene:
+        raise RuntimeError(f"Could not open the 3D overlay fixture: {opened}")
+    try:
+        before = _tool_call(session_id, "editor_manage", state_args, 32, deadline=deadline)
+        if before.get("global_grid_enabled") is not True:
+            raise RuntimeError(f"The smoke editor needs its global 3D grid enabled: {before}")
+
+        frames = []
+        for request, (name, grid, gizmos) in enumerate((
+            ("clean", False, False), ("grid", True, False), ("gizmos", False, True),
+        ), start=33):
+            arguments = {
+                **pin, "source": "viewport", "max_resolution": 640, "orthographic_view": "top",
+                "view_target": "/Main/SnowGroup,/Main/Camera3D", "render_mode": "unshaded",
+                "show_grid": grid, "show_gizmos": gizmos,
+            }
+            response = _post(session_id, {
+                "jsonrpc": "2.0", "id": request, "method": "tools/call",
+                "params": {"name": "editor_screenshot", "arguments": arguments},
+            }, timeout=_remaining_timeout(30, deadline), deadline=deadline)
+            blocks = response.get("result", {}).get("content", [])
+            if len(blocks) != 2 or [block.get("type") for block in blocks] != ["text", "image"]:
+                raise RuntimeError(f"3D overlay capture lacked PNG or metadata: {response}")
+            flags = json.loads(blocks[0]["text"]).get("viewport_overlays")
+            if flags != {"show_grid": grid, "show_gizmos": gizmos, "global_grid_enabled": True}:
+                raise RuntimeError(f"3D overlay capture reported unexpected flags: {flags}")
+            png = base64.b64decode(blocks[1]["data"])
+            os.makedirs(DIAG_DIR, exist_ok=True)
+            (Path(DIAG_DIR) / f"editor-overlays-{name}.png").write_bytes(png)
+            with Image.open(io.BytesIO(png)) as image:
+                frames.append(image.convert("RGB"))
+
+        def changed_pixels(frame):
+            red, green, blue = ImageChops.difference(frames[0], frame).split()
+            maximum = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+            return maximum.point([0] * 8 + [255] * 248)
+
+        grid_mask, gizmo_mask = map(changed_pixels, frames[1:])
+        grid_pixels = ImageChops.subtract(grid_mask, gizmo_mask).histogram()[255]
+        gizmo_pixels = ImageChops.subtract(gizmo_mask, grid_mask).histogram()[255]
+        note = f"Independent 3D viewport pixels changed (grid={grid_pixels}, gizmos={gizmo_pixels})"
+        history.append(note)
+        print(note)
+        if grid_pixels < 100 or gizmo_pixels < 20:
+            raise RuntimeError(f"Expected independent grid and gizmo pixels: {note}")
+        if _tool_call(session_id, "editor_manage", state_args, 36, deadline=deadline) != before:
+            raise RuntimeError("3D screenshot changed the editor's overlay preferences")
+    finally:
+        restored = _tool_call(
+            session_id, "scene_open", {**pin, "path": SCENE_PATH}, 37, deadline=deadline,
+        )
+        if restored.get("path") != SCENE_PATH:
+            raise RuntimeError(f"Could not reopen the game capture fixture: {restored}")
 
 
 def main() -> int:

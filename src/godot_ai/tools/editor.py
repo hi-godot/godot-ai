@@ -27,6 +27,9 @@ Ops:
         Editor version, project name, current scene, readiness, play state.
   • selection_get()
         Currently selected node paths in the editor.
+  • viewport_overlays_get()
+        Read show_grid and show_gizmos for the first 3D editor viewport,
+        plus global_grid_enabled for the editor-wide grid switch.
   • selection_set(paths)
         Replace the selection with the given list of scene paths.
   • monitors_get(monitors=None)
@@ -202,6 +205,8 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         render_mode: Literal["normal", "unshaded"] | None = None,
         orthographic_view: Literal["top", "bottom", "front", "back", "left", "right", "custom"]
         | None = None,
+        show_grid: bool | None = None,
+        show_gizmos: bool | None = None,
     ):
         """Capture a screenshot of the Godot editor viewport or running game.
 
@@ -270,6 +275,12 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
                 "custom" with both elevation (-90 to 90) and azimuth in degrees.
                 Requires coverage=False and no fov. Returns orthographic_size
                 in world units and restores the original editor camera.
+            show_grid: Override View Grid for one 3D viewport image. Showing
+                the grid requires the editor-wide grid to be enabled. Omit to
+                use the viewport's setting.
+            show_gizmos: Override View Gizmos for one 3D viewport image.
+                Transform handles have their own editor setting. Either
+                override adds viewport_overlays to the capture metadata.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -290,6 +301,8 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             overwrite=overwrite,
             render_mode=render_mode,
             orthographic_view=orthographic_view,
+            show_grid=show_grid,
+            show_gizmos=show_gizmos,
         )
 
     @mcp.tool(meta=DEFER_META)
@@ -327,6 +340,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         ops={
             "state": editor_handlers.editor_state,
             "selection_get": editor_handlers.editor_selection_get,
+            "viewport_overlays_get": editor_handlers.viewport_overlays_get,
             "selection_set": editor_handlers.editor_selection_set,
             "monitors_get": editor_handlers.performance_monitors_get,
             "quit": editor_handlers.editor_quit,
@@ -336,6 +350,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         read_resource_forms={
             "state": "godot://editor/state",
             "selection_get": "godot://selection/current",
+            "viewport_overlays_get": None,  # Paired with a screenshot of the same pinned editor.
             "monitors_get": "godot://performance",
             ## quit is destructive but skips require_writable so a stuck
             ## editor can still be quit; logs_clear truncates logs. Neither

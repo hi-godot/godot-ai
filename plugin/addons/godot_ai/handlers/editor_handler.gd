@@ -6,6 +6,10 @@ const Telemetry := preload("res://addons/godot_ai/telemetry.gd")
 const PluginReload := preload("res://addons/godot_ai/utils/plugin_reload.gd")
 const VisionRoutingScript := preload("res://addons/godot_ai/vision_routing.gd")
 const MAX_CINEMATIC_DIMENSION := 4096
+## Node3DEditorViewport::GIZMO_GRID_LAYER and GIZMO_EDIT_LAYER, the same
+## render layers used by the native per-viewport View Grid and View Gizmos controls.
+const _GRID_MASK := 1 << 25
+const _GIZMOS_MASK := 1 << 26
 const _ORTHOGRAPHIC_ANGLES := {
 	"top": Vector2(90.0, 0.0),
 	"bottom": Vector2(-90.0, 0.0),
@@ -439,7 +443,90 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 	return _take_screenshot_impl(params)
 
 
+func get_viewport_overlays(_params: Dictionary) -> Dictionary:
+	var overlays := _read_viewport_overlays(EditorInterface.get_editor_viewport_3d())
+	return overlays if overlays.has("error") else {"data": overlays}
+
+
+static func _read_viewport_overlays(viewport: SubViewport) -> Dictionary:
+	var pane := _find_editor_ancestor(viewport, &"Node3DEditorViewport")
+	var editor := _find_editor_ancestor(pane, &"Node3DEditor")
+	var settings := EditorInterface.get_editor_settings()
+	if pane == null or editor == null or settings == null:
+		return _viewport_overlays_unavailable("3D viewport overlay controls are unavailable")
+	## The native check items share these Shortcut resources even when their
+	## labels are translated or the user has customized the key bindings.
+	var overlays := _find_viewport_overlay_checks(pane, {
+		"show_grid": settings.get_shortcut("spatial_editor/view_grid_lines"),
+		"show_gizmos": settings.get_shortcut("spatial_editor/view_gizmos"),
+	})
+	overlays.merge(_find_viewport_overlay_checks(editor, {
+		"global_grid_enabled": settings.get_shortcut("spatial_editor/view_grid"),
+	}))
+	if overlays.size() != 3:
+		return _viewport_overlays_unavailable("Could not identify the native 3D viewport overlay controls")
+	return overlays
+
+
+static func _find_viewport_overlay_checks(root: Node, shortcuts: Dictionary) -> Dictionary:
+	var checks := {}
+	for node in root.find_children("*", "MenuButton", true, false):
+		var popup := (node as MenuButton).get_popup()
+		for index in popup.item_count:
+			if not popup.is_item_checkable(index):
+				continue
+			var shortcut := popup.get_item_shortcut(index)
+			if shortcut == null:
+				continue
+			for key in shortcuts:
+				if shortcut == shortcuts[key]:
+					if checks.has(key):
+						return {}
+					checks[key] = popup.is_item_checked(index)
+	return checks
+
+
+static func _viewport_overlays_unavailable(message: String, hint := "") -> Dictionary:
+	return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE, message, false, hint)
+
+
+static func _prepare_viewport_overlays(viewport: SubViewport, params: Dictionary) -> Dictionary:
+	var overlays := _read_viewport_overlays(viewport)
+	if overlays.has("error"):
+		return overlays
+	var camera := viewport.get_camera_3d()
+	if camera == null or camera.get_parent() != viewport or not camera.get_camera_rid().is_valid():
+		return _viewport_overlays_unavailable("No editor camera for 3D viewport overlay overrides")
+	if _is_viewport_camera_preview(viewport, camera):
+		return _viewport_overlays_unavailable(
+			"Exit Camera Preview or Cinematic Preview in the 3D viewport before overriding screenshot overlays")
+	if _viewport_overlay_mask(camera.cull_mask, overlays) != camera.cull_mask:
+		return _viewport_overlays_unavailable("3D viewport overlay controls do not match the editor camera layers")
+	if params.get("show_grid", false) and not overlays.global_grid_enabled:
+		return _viewport_overlays_unavailable("The global 3D editor grid is disabled",
+			"Enable View Grid in the main 3D editor toolbar, then retry with show_grid=true.")
+	overlays.show_grid = params.get("show_grid", overlays.show_grid)
+	overlays.show_gizmos = params.get("show_gizmos", overlays.show_gizmos)
+	return overlays
+
+
+static func _viewport_overlay_mask(saved_mask: int, overlays: Dictionary) -> int:
+	return ((saved_mask & ~(_GRID_MASK | _GIZMOS_MASK))
+		| (_GRID_MASK if overlays.show_grid else 0) | (_GIZMOS_MASK if overlays.show_gizmos else 0))
+
+
 func _take_screenshot_impl(params: Dictionary) -> Dictionary:
+	var override_overlays := params.has("show_grid") or params.has("show_gizmos")
+	if override_overlays:
+		for flag in ["show_grid", "show_gizmos", "coverage"]:
+			if params.has(flag) and not params[flag] is bool:
+				return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a boolean" % flag)
+		var requested_source: Variant = params.get("source", "viewport")
+		if not requested_source is String:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "source must be a string")
+		if requested_source != "viewport" or params.get("coverage", false):
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+				"show_grid and show_gizmos require source='viewport' and coverage=false")
 	var output_error := _screenshot_output_error(params)
 	if not output_error.is_empty():
 		return output_error
@@ -464,6 +551,7 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "render_mode requires source='viewport' and coverage=false")
 
 	var viewport: SubViewport
+	var overlays := {}
 	match source:
 		"viewport":
 			viewport = EditorInterface.get_editor_viewport_3d()
@@ -481,6 +569,10 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 			var precheck := viewport_screenshot_precheck(EditorInterface.get_edited_scene_root())
 			if precheck.has("error"):
 				return precheck
+			if override_overlays:
+				overlays = _prepare_viewport_overlays(viewport, params)
+				if overlays.has("error"):
+					return overlays
 		"game":
 			if not EditorInterface.is_playing_scene():
 				## Same editor state as game_eval/game_command's gate below —
@@ -665,7 +757,7 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 				return ortho_frame
 			cam_xform = ortho_frame.transform
 
-		var image := _capture_viewport_image(viewport, render_mode, cam, cam_xform, use_fov if custom_fov != null else null, ortho_frame)
+		var image := _capture_viewport_image(viewport, render_mode, cam, cam_xform, use_fov if custom_fov != null else null, ortho_frame, overlays)
 
 		if image == null or image.is_empty():
 			return _empty_image_error(
@@ -676,6 +768,8 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 		var result := _finalize_image(image, "viewport", max_resolution)
 		if not render_mode.is_empty():
 			result.data["render_mode"] = render_mode
+		if override_overlays:
+			result.data["viewport_overlays"] = overlays
 		result.data["view_target"] = view_target
 		result.data["view_target_count"] = targets.size()
 		var aabb_c := combined_aabb.get_center()
@@ -695,7 +789,7 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 			result.data["view_target_not_found"] = not_found
 		return result
 
-	var image := _capture_viewport_image(viewport, render_mode)
+	var image := _capture_viewport_image(viewport, render_mode, null, Transform3D.IDENTITY, null, {}, overlays)
 
 	if image == null or image.is_empty():
 		return _empty_image_error(
@@ -706,12 +800,15 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 	var result := _finalize_image(image, source, max_resolution)
 	if not render_mode.is_empty():
 		result.data["render_mode"] = render_mode
+	if override_overlays:
+		result.data["viewport_overlays"] = overlays
 	return result
 
 
 func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Camera3D = null,
-		cam_xform := Transform3D.IDENTITY, fov: Variant = null, orthographic: Dictionary = {}) -> Image:
-	if render_mode.is_empty() and cam == null:
+		cam_xform := Transform3D.IDENTITY, fov: Variant = null, orthographic: Dictionary = {},
+		overlays: Dictionary = {}) -> Image:
+	if render_mode.is_empty() and cam == null and overlays.is_empty():
 		return _read_viewport_image(viewport)
 
 	var saved_mode := viewport.debug_draw
@@ -726,6 +823,13 @@ func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Ca
 		RenderingServer.camera_set_transform(cam.get_camera_rid(), cam_xform)
 	if not render_mode.is_empty():
 		viewport.debug_draw = Viewport.DEBUG_DRAW_UNSHADED if render_mode == "unshaded" else Viewport.DEBUG_DRAW_DISABLED
+	var overlay_camera_rid := RID()
+	var saved_cull_mask := 0
+	if not overlays.is_empty():
+		var overlay_camera := viewport.get_camera_3d()
+		overlay_camera_rid = overlay_camera.get_camera_rid()
+		saved_cull_mask = overlay_camera.cull_mask
+		RenderingServer.camera_set_cull_mask(overlay_camera_rid, _viewport_overlay_mask(saved_cull_mask, overlays))
 	# Render even if the user has another editor tab open. Neither draw swaps
 	# buffers, and the second replaces the temporary frame before returning.
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
@@ -737,6 +841,8 @@ func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Ca
 		RenderingServer.camera_set_transform(cam.get_camera_rid(), saved_xform)
 	if not render_mode.is_empty():
 		viewport.debug_draw = saved_mode
+	if overlay_camera_rid.is_valid():
+		RenderingServer.camera_set_cull_mask(overlay_camera_rid, saved_cull_mask)
 	RenderingServer.force_draw(false)
 	viewport.render_target_update_mode = saved_update_mode
 	return image
@@ -747,10 +853,14 @@ func _read_viewport_image(viewport: Viewport) -> Image:
 	return texture.get_image() if texture != null else null
 
 
+static func _find_editor_ancestor(node: Node, native_class: StringName) -> Node:
+	while node != null and node.get_class() != native_class:
+		node = node.get_parent()
+	return node
+
+
 static func _is_viewport_camera_preview(viewport: SubViewport, camera: Camera3D) -> bool:
-	var control := viewport.get_parent()
-	while control != null and control.get_class() != &"Node3DEditorViewport":
-		control = control.get_parent()
+	var control := _find_editor_ancestor(viewport, &"Node3DEditorViewport")
 	if control == null:
 		return false
 	# Both native preview modes attach their scene camera directly to the
