@@ -419,17 +419,26 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 	if (params.get("source") == "viewport_2d" and view_target is String
 			and not view_target.is_empty() and not request_id.is_empty() and _connection != null):
 		var root := EditorInterface.get_edited_scene_root()
-		_capture_targeted_2d_after_redraws(params, request_id, root.get_instance_id() if root != null else 0)
+		var route_deadline_ms := (Time.get_ticks_msec() + VisionRoutingScript.EDITOR_SCREENSHOT_TIMEOUT_MS
+			- VisionRoutingScript.ROUTE_REPLY_RESERVE_MS)
+		_capture_targeted_2d_after_redraws(params, request_id,
+			root.get_instance_id() if root != null else 0, route_deadline_ms)
 		return {"_deferred": true, "_deferred_timeout_ms": VisionRoutingScript.EDITOR_SCREENSHOT_TIMEOUT_MS}
-	return _route_screenshot(params)
+	return _route_screenshot(params, _take_screenshot_impl(params))
 
 
-func _capture_targeted_2d_after_redraws(params: Dictionary, request_id: String, scene_id: int) -> void:
+func _capture_targeted_2d_after_redraws(params: Dictionary, request_id: String, scene_id: int, route_deadline_ms: int) -> void:
 	var tree := Engine.get_main_loop() as SceneTree
+	var work := ScriptWork.begin("take_screenshot")
 	## Idle timers run after the deferred CanvasItem redraws and transform
 	## notifications. Wait before changing the viewport so its temporary
 	## transform is always restored within the same frame.
 	await tree.create_timer(0.0).timeout
+	_finish_targeted_2d_screenshot(params, request_id, scene_id, route_deadline_ms)
+	ScriptWork.finish(work)
+
+
+func _finish_targeted_2d_screenshot(params: Dictionary, request_id: String, scene_id: int, route_deadline_ms: int) -> void:
 	if (not is_instance_valid(_connection) or _connection.dispatcher == null
 			or not _connection.dispatcher.has_pending_deferred_response(request_id)):
 		return
@@ -438,12 +447,16 @@ func _capture_targeted_2d_after_redraws(params: Dictionary, request_id: String, 
 		_connection.send_deferred_response(request_id, ErrorCodes.make(
 			ErrorCodes.EDITED_SCENE_MISMATCH, "Edited scene changed before the 2D screenshot; retry on the intended scene"))
 		return
-	var result := _route_screenshot(params)
-	if not result.get("_deferred", false):
+	var captured := _take_screenshot_impl(params)
+	var result := _route_screenshot(params, captured, route_deadline_ms)
+	if result.get("_deferred", false):
+		_connection.dispatcher.set_deferred_timeout_fallback(request_id,
+			VisionRoutingScript.screenshot_routing_timeout(captured.data))
+	else:
 		_connection.send_deferred_response(request_id, result)
 
 
-func _route_screenshot(params: Dictionary) -> Dictionary:
+func _route_screenshot(params: Dictionary, result: Dictionary, route_deadline_ms: int = 0) -> Dictionary:
 	## Vision Routing hook: when enabled, the capture is described by the
 	## configured vision provider on a worker thread and the text description
 	## is returned instead of the raw image (see vision_routing.gd). Off, no
@@ -451,8 +464,8 @@ func _route_screenshot(params: Dictionary) -> Dictionary:
 	## of truth for the `match source:` dispatch lives in _take_screenshot_impl
 	## (pinned by tests/unit/test_docs_screenshot_sources.py).
 	if _vision_routing != null and _vision_routing.is_routing_enabled():
-		return _vision_routing.route_editor_screenshot(params, Callable(self, "_take_screenshot_impl"), _connection)
-	return _take_screenshot_impl(params)
+		return _vision_routing.route_editor_screenshot(params, result, _connection, route_deadline_ms)
+	return result
 
 
 func _take_viewport_2d_screenshot(view_target: String, max_resolution: int) -> Dictionary:

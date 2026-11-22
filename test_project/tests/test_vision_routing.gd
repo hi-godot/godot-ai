@@ -7,6 +7,7 @@ extends McpTestSuite
 ## worker itself is live-verified in the editor (see docs/vision-routing.md).
 
 const VisionRoutingScript := preload("res://addons/godot_ai/vision_routing.gd")
+const EditorHandler := preload("res://addons/godot_ai/handlers/editor_handler.gd")
 
 
 func suite_name() -> String:
@@ -28,14 +29,134 @@ class StubConnection:
 class SpyRouter:
 	extends VisionRoutingScript
 
-	func _route_worker(_provider: Dictionary, _image_b64: String, prompt: String, _api_key: String, _rid: String) -> Dictionary:
+	func _route_worker(_provider: Dictionary, _image_b64: String, prompt: String, _api_key: String, _rid: String, _deadline_ms: int) -> Dictionary:
 		return {"captured_prompt": prompt}
+
+
+class ScreenshotConnection:
+	extends McpConnection
+	var replies: Array[Dictionary] = []
+
+	func _send_json(data: Dictionary, _allow_pre_auth := false) -> bool:
+		replies.append(data)
+		return true
+
+
+class ScreenshotHandler:
+	extends EditorHandler
+
+	func _take_screenshot_impl(_params: Dictionary) -> Dictionary:
+		var image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+		image.fill(Color.MAGENTA)
+		return {"data": {"image_base64": Marshalls.raw_to_base64(image.save_png_to_buffer()),
+			"format": "png", "view_target": "/Main/HUD", "note": "capture note"}}
+
+
+class DeadlineRouter:
+	extends VisionRoutingScript
+
+	func is_routing_enabled() -> bool:
+		return true
+
+	func _active_provider_id() -> String:
+		return "groq"
+
+	func _resolved_api_key(_provider_id: String) -> String:
+		return "offline-test"
+
+	func _provider_with_model(_provider_id: String) -> Dictionary:
+		return {"model": "test-model"}
+
+	func _route_worker(_provider: Dictionary, _image_b64: String, _prompt: String, _api_key: String, rid: String, deadline_ms: int) -> Dictionary:
+		return {"deadline_ms": deadline_ms, "request_id": rid, "result": {"desc": "test description"}}
 
 
 func _make_router() -> VisionRoutingScript:
 	var router := VisionRoutingScript.new()
 	router.log_buffer = null
 	return router
+
+
+func _prepare_targeted_capture(router: VisionRoutingScript, deadline_ms: int) -> ScreenshotConnection:
+	var connection := ScreenshotConnection.new()
+	track(connection)
+	connection.dispatcher = McpDispatcher.new(McpLogBuffer.new())
+	connection.dispatcher._register_deferred("targeted", "take_screenshot", VisionRoutingScript.EDITOR_SCREENSHOT_TIMEOUT_MS)
+	var handler := ScreenshotHandler.new(McpLogBuffer.new(), connection, null, null, null, null, null, router)
+	var root := EditorInterface.get_edited_scene_root()
+	handler._finish_targeted_2d_screenshot({"source": "viewport_2d", "view_target": "/Main/HUD",
+		"_request_id": "targeted"}, "targeted", root.get_instance_id() if root != null else 0, deadline_ms)
+	return connection
+
+
+func _assert_original_screenshot(response: Dictionary, expected_note: String) -> void:
+	assert_eq(response.get("request_id"), "targeted")
+	assert_eq(response.get("status"), "ok")
+	assert_has_key(response, "readiness")
+	var data: Dictionary = response.get("data", {})
+	assert_eq(data.get("view_target"), "/Main/HUD")
+	assert_eq(data.get("format"), "png")
+	assert_contains(data.get("note", ""), expected_note)
+	assert_false(data.has("vision_description"))
+	var image := Image.new()
+	assert_eq(image.load_png_from_buffer(Marshalls.base64_to_raw(data.get("image_base64", ""))), OK)
+	if not image.is_empty():
+		assert_eq(image.get_pixel(1, 1), Color.MAGENTA)
+
+
+func _collect_targeted_worker(router: DeadlineRouter) -> Dictionary:
+	var worker: Thread = router._threads.get("targeted")
+	assert_true(worker != null, "the vision worker must own the response while it runs")
+	if worker == null:
+		return {}
+	var outcome: Dictionary = worker.wait_to_finish()
+	router._threads.erase("targeted")
+	router._on_route_complete(outcome.request_id, outcome.result)
+	return outcome
+
+
+func test_targeted_capture_with_no_route_time_returns_original_once() -> void:
+	var router := DeadlineRouter.new()
+	var expired := maxi(1, Time.get_ticks_msec() - 1)
+	var routed := _prepare_targeted_capture(router, expired)
+	assert_true(router._threads.is_empty())
+	assert_true(router._pending.is_empty())
+	assert_eq(routed.dispatcher.pending_deferred_count(), 0)
+	assert_eq(routed.replies.size(), 1)
+	_assert_original_screenshot(routed.replies[0], "capture note | Vision routing deadline elapsed")
+	var default_capture := _prepare_targeted_capture(null, expired)
+	assert_eq(default_capture.replies.size(), 1)
+	_assert_original_screenshot(default_capture.replies[0], "capture note")
+	assert_eq(default_capture.replies[0].data.note, "capture note")
+
+
+func test_targeted_route_can_succeed_with_only_remaining_budget() -> void:
+	var router := DeadlineRouter.new()
+	var cutoff := Time.get_ticks_msec() + 5000
+	var connection := _prepare_targeted_capture(router, cutoff)
+	assert_true(connection.replies.is_empty())
+	var outcome := _collect_targeted_worker(router)
+	assert_eq(outcome.get("deadline_ms"), cutoff)
+	assert_eq(connection.replies.size(), 1)
+	assert_eq(connection.replies[0].data.get("vision_description"), "test description")
+	assert_eq(connection.replies[0].data.get("image_base64"), VisionRoutingScript._PLACEHOLDER_PNG)
+	assert_eq(connection.dispatcher.pending_deferred_count(), 0)
+
+
+func test_targeted_route_ledger_sends_original_and_discards_late_provider() -> void:
+	var router := DeadlineRouter.new()
+	var cutoff := Time.get_ticks_msec() + 5000
+	var connection := _prepare_targeted_capture(router, cutoff)
+	var ledger: McpDispatcher = connection.dispatcher
+	assert_true(connection.replies.is_empty())
+	ledger._pending_deferred["targeted"]["started_ms"] -= VisionRoutingScript.EDITOR_SCREENSHOT_TIMEOUT_MS
+	var expired := ledger.tick()
+	assert_eq(expired.size(), 1)
+	_assert_original_screenshot(expired[0], "capture note | Vision routing deadline elapsed")
+	assert_eq(ledger.pending_deferred_count(), 0)
+	_collect_targeted_worker(router)
+	assert_true(connection.replies.is_empty(), "late routing must not send a second response")
+	assert_true(ledger.tick().is_empty())
 
 
 # ----- key storage -----
@@ -457,7 +578,7 @@ func test_game_capture_stashes_and_forwards_user_prompt() -> void:
 	## are stashed by request id for the later game payload.
 	var deferred: Dictionary = router.route_editor_screenshot(
 		{"user_prompt": "Why is the spider red?", "source": "game", "_request_id": rid},
-		func(_params: Dictionary) -> Dictionary: return {"_deferred": true},
+		{"_deferred": true},
 		null)
 	assert_true(deferred.get("_deferred", false))
 	## The deferred frame arrives through route_game_payload, which reads

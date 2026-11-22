@@ -236,6 +236,13 @@ func complete_deferred_response(request_id: String) -> bool:
 	return true
 
 
+## Preserve a successful result while a deferred enhancement is pending.
+## This never extends or recreates the request's existing deadline.
+func set_deferred_timeout_fallback(request_id: String, data: Dictionary) -> void:
+	if _pending_deferred.has(request_id):
+		_pending_deferred[request_id]["fallback_data"] = data
+
+
 ## Handlers whose response flows out-of-band (e.g. debugger-channel capture)
 ## return this marker so tick() skips auto-sending a response. The handler is
 ## responsible for pushing the final response via McpConnection._send_json when
@@ -472,16 +479,20 @@ func _collect_deferred_timeouts() -> Array[Dictionary]:
 			continue
 		_pending_deferred.erase(request_id)
 		var command: String = entry.get("command", "")
-		var response := ErrorCodes.make(
-			ErrorCodes.DEFERRED_TIMEOUT,
-			"Deferred response for '%s' timed out after %dms" % [command, timeout_ms]
-		)
+		var response: Dictionary
+		if entry.has("fallback_data"):
+			response = {"status": "ok", "data": entry["fallback_data"]}
+		else:
+			response = ErrorCodes.make(
+				ErrorCodes.DEFERRED_TIMEOUT,
+				"Deferred response for '%s' timed out after %dms" % [command, timeout_ms]
+			)
+			response["error"]["data"] = {
+				"command": command,
+				"elapsed_ms": elapsed_ms,
+				"timeout_ms": timeout_ms,
+			}
 		response["request_id"] = request_id
-		response["error"]["data"] = {
-			"command": command,
-			"elapsed_ms": elapsed_ms,
-			"timeout_ms": timeout_ms,
-		}
 		## Same envelope-level readiness stamp as `_dispatch` — keep the
 		## self-heal channel symmetric across every reply shape the
 		## dispatcher emits so the server cache can't drift just because
@@ -490,7 +501,8 @@ func _collect_deferred_timeouts() -> Array[Dictionary]:
 		_stamp_error_watermark(response)
 		responses.append(response)
 		if mcp_logging and _log_buffer != null:
-			_log_buffer.log("[defer] %s (request %s) -> timeout" % [command, request_id])
+			var outcome := "fallback" if entry.has("fallback_data") else "timeout"
+			_log_buffer.log("[defer] %s (request %s) -> %s" % [command, request_id, outcome])
 	return responses
 
 

@@ -101,6 +101,8 @@ const REQUEST_TIMEOUT_MS := 8000
 ## pass-through always lands before the server gives up on slow providers.
 const TOTAL_ROUTE_BUDGET_MS := 10000
 const EDITOR_SCREENSHOT_TIMEOUT_MS := 13000
+## Give the editor time to collect the worker result and send the response.
+const ROUTE_REPLY_RESERVE_MS := 500
 ## Response body cap: the deadline bounds time but not bytes, and the socket
 ## talks to third-party hosts - a faulty or hostile provider must not be able
 ## to stream an unbounded body inside the window.
@@ -213,34 +215,44 @@ func poll_completed() -> void:
 
 # --- routing ------------------------------------------------------------------
 
-## Entry point called from editor_handler.take_screenshot when routing is
-## enabled. Runs the real capture (via `original`), then routes the image
-## through the selected provider's vision API on a worker thread. Returns the deferred-response sentinel
-## when the worker owns the reply, otherwise the capture result unchanged.
-func route_editor_screenshot(params: Dictionary, original: Callable, connection: Object) -> Dictionary:
+## Route an editor capture through the selected provider. Returns the deferred
+## sentinel when the worker owns the reply, otherwise the original frame.
+func route_editor_screenshot(params: Dictionary, result: Dictionary, connection: Object, route_deadline_ms: int = 0) -> Dictionary:
 	var rid := str(params.get("_request_id", ""))
 	if rid.is_empty():
 		## No deferred channel (e.g. batch_execute / dispatch_direct) - keep
 		## the original synchronous result untouched.
-		return original.call(params)
-	var result := original.call(params)
-	if not (result is Dictionary) or not result.has("data"):
+		return result
+	if not result.has("data"):
 		## Deferred capture (source="game"): the frame arrives later through
 		## route_game_payload. Stash the caller params (e.g. user_prompt) by
 		## request id so the routed description keeps the agent's context.
-		if result is Dictionary and result.get("_deferred", false):
+		if result.get("_deferred", false):
 			_pending[rid] = {"params": params}
 		return result
 	var data: Variant = result["data"]
 	if not (data is Dictionary) or not data.has("image_base64"):
 		return result
-	if _start_route(rid, str(params.get("source", "viewport")), result, data, connection, params):
+	if route_deadline_ms > 0 and Time.get_ticks_msec() >= route_deadline_ms:
+		return {"data": screenshot_routing_timeout(data)}
+	if _start_route(rid, str(params.get("source", "viewport")), result, data, connection, params, route_deadline_ms):
 		## Keep the deferred ledger inside the server's 15s editor_screenshot
 		## window (the worker itself is capped at TOTAL_ROUTE_BUDGET_MS), so
 		## a hung provider surfaces as a clean plugin timeout, not a
 		## server-side abort.
 		return {"_deferred": true, "_deferred_timeout_ms": EDITOR_SCREENSHOT_TIMEOUT_MS}
 	return result
+
+
+static func screenshot_routing_timeout(data: Dictionary) -> Dictionary:
+	return _with_routing_note(data, "Vision routing deadline elapsed; returned the original screenshot.")
+
+
+static func _with_routing_note(data: Dictionary, note: String) -> Dictionary:
+	var annotated := data.duplicate()
+	var existing := str(data.get("note", ""))
+	annotated["note"] = (existing + " | " if not existing.is_empty() else "") + note
+	return annotated
 
 
 ## Entry point called from McpDebuggerPlugin._on_screenshot_response before
@@ -262,7 +274,7 @@ func route_game_payload(connection: Object, rid: String, payload: Dictionary) ->
 
 ## Returns true when a worker owns the reply; false means the caller should
 ## pass the original payload through unchanged.
-func _start_route(rid: String, source: String, payload: Dictionary, data: Dictionary, connection: Object, params: Dictionary) -> bool:
+func _start_route(rid: String, source: String, payload: Dictionary, data: Dictionary, connection: Object, params: Dictionary, route_deadline_ms: int = 0) -> bool:
 	if not _is_active():
 		return false
 	var provider_id := _active_provider_id()
@@ -284,8 +296,11 @@ func _start_route(rid: String, source: String, payload: Dictionary, data: Dictio
 		return false
 	_pending[rid] = {"payload": payload, "data": data, "connection": connection, "provider_id": provider_id, "provider": provider, "params": params}
 	var prompt := _build_prompt(params)
+	if route_deadline_ms > 0:
+		## Worker-side image decoding and request encoding use this budget too.
+		route_deadline_ms = mini(route_deadline_ms, Time.get_ticks_msec() + TOTAL_ROUTE_BUDGET_MS)
 	var thread := Thread.new()
-	var start_err := thread.start(_route_worker.bind(provider, str(data.get("image_base64", "")), prompt, api_key, rid))
+	var start_err := thread.start(_route_worker.bind(provider, str(data.get("image_base64", "")), prompt, api_key, rid, route_deadline_ms))
 	if start_err != OK:
 		_pending.erase(rid)
 		_log("vision routing: could not start worker for %s: %s - screenshot %s passed through" % [rid, error_string(start_err), source])
@@ -328,11 +343,8 @@ func _on_route_complete(rid: String, result: Variant) -> void:
 		## Append a short templated reason to the note so text-only agents
 		## (who otherwise just receive a useless image block) learn the
 		## feature is down and why.
-		var failed_data: Dictionary = entry.get("data", {}).duplicate()
 		var failure_note := "Vision routing unavailable (%s): %s" % [provider_id, error_str]
-		var existing_note := str(failed_data.get("note", ""))
-		failed_data["note"] = (existing_note + " | " if not existing_note.is_empty() else "") + failure_note
-		_pass_through(connection, rid, {"data": failed_data})
+		_pass_through(connection, rid, {"data": _with_routing_note(entry.get("data", {}), failure_note)})
 		return
 	var data: Dictionary = entry.get("data", {}).duplicate()
 	var routed_via := "%s:%s" % [provider_id, provider.get("model", "")]
@@ -377,8 +389,8 @@ func _build_prompt(params: Dictionary) -> String:
 
 # --- routing worker (thread) ---------------------------------------------------
 
-func _route_worker(provider: Dictionary, image_b64: String, prompt: String, api_key: String, rid: String) -> Dictionary:
-	var result := _describe_blocking(provider, image_b64, prompt, api_key)
+func _route_worker(provider: Dictionary, image_b64: String, prompt: String, api_key: String, rid: String, route_deadline_ms: int) -> Dictionary:
+	var result := _describe_blocking(provider, image_b64, prompt, api_key, route_deadline_ms)
 	return {"kind": "route", "request_id": rid, "result": result}
 
 
@@ -386,12 +398,17 @@ func _route_worker(provider: Dictionary, image_b64: String, prompt: String, api_
 ## "error" carries the reason. Runs on a worker thread, so it never writes
 ## shared state - everything it needs is passed in and returned. `provider`
 ## is the route-start snapshot (includes the entered model id).
-func _describe_blocking(provider: Dictionary, image_b64: String, prompt: String, api_key: String) -> Dictionary:
+func _describe_blocking(provider: Dictionary, image_b64: String, prompt: String, api_key: String, route_deadline_ms: int) -> Dictionary:
+	if route_deadline_ms > 0 and Time.get_ticks_msec() >= route_deadline_ms:
+		return {"desc": "", "error": "screenshot routing deadline elapsed"}
 	var b64 := _downscale_image_if_needed(image_b64)
 	var body := _build_request_body(provider, prompt, b64)
 	var headers := _build_headers(provider, api_key)
-	var response := _http_post_json(str(provider.get("host", "")), int(provider.get("port", 443)), _resolve_path(provider), headers, body)
-	return _parse_description(provider, response)
+	var response := _http_post_json(str(provider.get("host", "")), int(provider.get("port", 443)), _resolve_path(provider), headers, body, route_deadline_ms)
+	var result := _parse_description(provider, response)
+	if route_deadline_ms > 0 and Time.get_ticks_msec() >= route_deadline_ms:
+		return {"desc": "", "error": "screenshot routing deadline elapsed"}
+	return result
 
 
 ## Provider paths may carry a {model} placeholder (Gemini's endpoint embeds
@@ -527,17 +544,22 @@ func _ping_blocking(provider: Dictionary, api_key: String) -> Dictionary:
 	return {"ok": false, "error": "%s HTTP %d: %s" % [provider.get("label", "provider"), code, _body_snippet(str(response.get("text", "")))]}
 
 
-func _http_post_json(host: String, port: int, path: String, headers: PackedStringArray, body: String) -> Dictionary:
+func _http_post_json(host: String, port: int, path: String, headers: PackedStringArray, body: String, route_deadline_ms: int = 0) -> Dictionary:
 	if host.is_empty() or body.is_empty():
 		return {"code": 0, "error": "invalid request (empty host or body)"}
+	## One total deadline for connect, request and body, further limited by the
+	## remaining time on captures that already spent part of the editor budget.
+	var now := Time.get_ticks_msec()
+	var budget_deadline := now + TOTAL_ROUTE_BUDGET_MS
+	if route_deadline_ms > 0:
+		budget_deadline = mini(budget_deadline, route_deadline_ms)
+		if now >= budget_deadline:
+			return {"code": 0, "error": "screenshot routing deadline elapsed"}
 	var http := HTTPClient.new()
 	var connect_err := http.connect_to_host(host, port, TLSOptions.client())
 	if connect_err != OK:
 		http.close()
 		return {"code": 0, "error": "connect_to_host failed: %s" % error_string(connect_err)}
-	## One total deadline for the whole exchange (see TOTAL_ROUTE_BUDGET_MS),
-	## so connect + request + body can never exceed it.
-	var budget_deadline := Time.get_ticks_msec() + TOTAL_ROUTE_BUDGET_MS
 	var deadline := mini(Time.get_ticks_msec() + CONNECT_TIMEOUT_MS, budget_deadline)
 	var first_poll := true
 	var connected := false
@@ -559,6 +581,9 @@ func _http_post_json(host: String, port: int, path: String, headers: PackedStrin
 	if not connected:
 		http.close()
 		return {"code": 0, "error": "could not connect (status %d)" % last_status}
+	if route_deadline_ms > 0 and Time.get_ticks_msec() >= budget_deadline:
+		http.close()
+		return {"code": 0, "error": "screenshot routing deadline elapsed"}
 	if http.request(HTTPClient.METHOD_POST, path, headers, body) != OK:
 		http.close()
 		return {"code": 0, "error": "request() failed"}
