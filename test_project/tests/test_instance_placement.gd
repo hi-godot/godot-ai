@@ -3,6 +3,7 @@ extends McpTestSuite
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const NodeHandler := preload("res://addons/godot_ai/handlers/node_handler.gd")
+const ScenePlacement := preload("res://addons/godot_ai/handlers/scene_instance_placement.gd")
 const INSTANCE_NAME := "Placed"
 
 class PlacementPathErrors extends Logger:
@@ -156,8 +157,9 @@ func _parent_2d(scale: Vector2) -> Node2D:
 	return parent
 
 
-func _parent_3d(scale: Vector3) -> Node3D:
+func _parent_3d(scale: Vector3, isolated: bool = false) -> Node3D:
 	var parent := Node3D.new()
+	parent.top_level = isolated
 	parent.transform = _pose_3d(Vector3(-12, 43, 5), Vector3(12, 37, -16), scale)
 	_attach(_root, parent, "_McpTestPlacement3D")
 	return parent
@@ -277,7 +279,8 @@ func test_local_3d_placement_applies_position_rotation_and_scale() -> void:
 
 
 func test_world_3d_placement_applies_position_rotation_and_scale() -> void:
-	var parent := _parent_3d(Vector3.ONE * 2.0)
+	# Keep this fixture's rotated uniform basis independent of the edited root.
+	var parent := _parent_3d(Vector3.ONE * 2.0, true)
 	var expected := _pose_3d(Vector3(32, -7, 11), Vector3(-14, 49, 22), Vector3(0.9, 1.8, 1.1))
 	var placed := _instantiate(parent, _source_3d, {
 		"space": "world", "position": {"x": 32, "y": -7, "z": 11},
@@ -574,3 +577,73 @@ func test_refuses_cycles_through_resource_dependencies_and_scene_placeholders() 
 		assert_eq(placeholder_state.get_node_instance_placeholder(1), active)
 	var placeholder_cycle := _assert_refused(parent, placeholder, {}, ErrorCodes.VALUE_OUT_OF_RANGE)
 	assert_contains(placeholder_cycle.get("error", {}).get("message", ""), "cycle")
+
+
+func _save_resource_dependency(name: String, text: String) -> String:
+	var resource_path := _write_fixture(name + ".tres", text)
+	if resource_path.is_empty():
+		return ""
+	return _write_fixture(name + ".tscn", (
+		"[gd_scene format=3]\n\n[ext_resource type=\"Resource\" path=%s id=\"1\"]\n\n"
+		+ "[node name=\"Fixture\" type=\"Node\"]\nmetadata/link = ExtResource(\"1\")\n") % var_to_str(resource_path))
+
+
+func _scan_placement_dependencies(scan: ScenePlacement) -> Dictionary:
+	while scan.has_dependencies():
+		var error := scan.scan_dependency()
+		if not error.is_empty():
+			return error
+	return {}
+
+
+func test_dependency_versions_reject_same_length_rewrite_before_loaded_graph_commits() -> void:
+	var original := "[gd_resource type=\"Resource\" format=3]\n\n[resource]\nresource_name = \"first\"\n"
+	var updated := original.replace("first", "later")
+	var source := _save_resource_dependency("Versioned", original)
+	if source.is_empty():
+		return
+	var dependency := source.get_basename() + ".tres"
+	var scan := ScenePlacement.new(source, _root.scene_file_path)
+	assert_eq(_scan_placement_dependencies(scan), {})
+	assert_eq(scan.take_scene_to_load(), source)
+	var packed := ResourceLoader.load(source, "PackedScene") as PackedScene
+	assert_true(packed != null)
+	if packed == null:
+		return
+	scan.inspect_loaded_scene(source, packed)
+	assert_eq(_scan_placement_dependencies(scan), {})
+	assert_eq(scan.validate_scene_links(), {})
+	assert_eq(updated.length(), original.length())
+	_write_fixture("Versioned.tres", updated)
+	assert_eq(FileAccess.get_file_as_string(dependency), updated)
+
+	scan.begin_version_recheck()
+	var refusal := {}
+	while scan.has_version_checks() and refusal.is_empty():
+		refusal = scan.recheck_version()
+	assert_is_error(refusal, ErrorCodes.FILESYSTEM_DISCOVERY_FAILED)
+	assert_contains(refusal.get("error", {}).get("message", ""), dependency)
+	assert_eq(_history.get_version(), _before_version)
+
+
+func test_placement_refuses_loaded_cached_resource_cycle_with_safe_disk_dependencies() -> void:
+	var active := _root.scene_file_path
+	if active.is_empty() or not FileAccess.file_exists(active):
+		skip("Cycle refusal requires a saved edited scene")
+		return
+	var source := _save_resource_dependency("CachedConfig", "[gd_resource type=\"Resource\" format=3]\n\n[resource]\n")
+	if source.is_empty():
+		return
+	var dependency := source.get_basename() + ".tres"
+	var cached := ResourceLoader.load(dependency)
+	var active_scene := ResourceLoader.load(active, "PackedScene") as PackedScene
+	assert_true(cached != null and active_scene != null)
+	if cached == null or active_scene == null:
+		return
+	var entries: Array = []
+	entries.resize(300)
+	entries.push_back({"scene": active_scene})
+	cached.set_meta("dependencies", entries)
+	assert_eq(ResourceLoader.get_dependencies(dependency), PackedStringArray())
+	var refused := _assert_refused(_parent_3d(Vector3.ONE), source, {}, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(refused.get("error", {}).get("message", ""), "cycle")

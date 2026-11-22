@@ -168,6 +168,11 @@ func instantiate_scene(params: Dictionary) -> Dictionary:
 	var link_error := scan.validate_scene_links()
 	if not link_error.is_empty():
 		return link_error
+	scan.begin_version_recheck()
+	while scan.has_version_checks():
+		var error := scan.recheck_version()
+		if not error.is_empty():
+			return error
 	return _place_instance(packed_scene, scene_path, params, placement.fields, resolved)
 
 
@@ -219,6 +224,21 @@ func _prepare_instance(request_id: String, scene_path: String, params: Dictionar
 	var link_error := scan.validate_scene_links()
 	if not link_error.is_empty():
 		return link_error
+	scan.begin_version_recheck()
+	var slice_started := Time.get_ticks_usec()
+	while scan.has_version_checks():
+		if not _instancing_pending(request_id):
+			return {}
+		if Time.get_ticks_msec() >= deadline:
+			return _instance_timeout()
+		var error := scan.recheck_version()
+		if not error.is_empty():
+			return error
+		if Time.get_ticks_usec() - slice_started >= 3000:
+			await tree.process_frame
+			slice_started = Time.get_ticks_usec()
+	if not _instancing_pending(request_id):
+		return {}
 	if Time.get_ticks_msec() >= deadline:
 		return _instance_timeout()
 	return _commit_prepared_instance(packed_scene, scene_path, params, fields, expected, edited_path, parent_path)

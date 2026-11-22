@@ -2,6 +2,9 @@
 extends RefCounted
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const _FINGERPRINT_CHUNK_BYTES := 256 * 1024
+const _COLLECTION_ITEMS_PER_STEP := 128
+const _LINK_VALUE_TYPES := [TYPE_NIL, TYPE_OBJECT, TYPE_ARRAY, TYPE_DICTIONARY]
 
 var _source_path: String
 var _edited_path: String
@@ -16,6 +19,13 @@ var _queued_scenes: Dictionary = {}
 var _scene_edges: Dictionary = {}
 var _current_state: Dictionary = {}
 var _state_index := 0
+var _loaded_values: Array[Dictionary] = []
+var _seen_resources: Dictionary = {}
+var _file_versions: Dictionary = {}
+var _version_checks: Array[String] = []
+var _hash_file: FileAccess
+var _hash_length := 0
+var _hasher: HashingContext
 
 
 func _init(path: String, edited_path: String) -> void:
@@ -39,20 +49,28 @@ func take_scene_to_load() -> String:
 func inspect_loaded_scene(key: String, packed_scene: PackedScene) -> void:
 	if not _queued_scenes.has(key):
 		_queued_scenes[key] = packed_scene
+		_seen_resources[packed_scene] = true
 		_scene_edges[key] = []
 		_states.push_back({"key": key, "state": packed_scene.get_state()})
 
 
 func has_dependencies() -> bool:
-	return not _pending.is_empty() or not _states.is_empty() or not _current_state.is_empty()
+	return not _pending.is_empty() or not _states.is_empty() or not _current_state.is_empty() or not _loaded_values.is_empty()
 
 
 func scan_dependency() -> Dictionary:
 	if not _pending.is_empty():
-		var current: String = _pending.pop_back()
+		var current: String = _pending.back()
 		if _is_edited_scene(current):
 			return _cycle_error()
-		if not FileAccess.file_exists(current):
+		var version := _read_file_version(current)
+		if version.has("error"):
+			return version
+		if not version.has("digest"):
+			return {}
+		_pending.pop_back()
+		_file_versions[current] = version.digest
+		if version.digest.is_empty():
 			return {}
 		for dependency: String in ResourceLoader.get_dependencies(current):
 			# The UID also identifies the target if its registered path was moved.
@@ -62,17 +80,28 @@ func scan_dependency() -> Dictionary:
 			_enqueue(_dependency_path(dependency, current.get_base_dir()))
 		return {}
 
+	if not _loaded_values.is_empty():
+		return _scan_loaded_value()
+
 	# Native dependency metadata omits InstancePlaceholder. Inspect those and
 	# any linked state already loaded, including the inherited root's base.
 	if _current_state.is_empty():
 		_current_state = _states.pop_back()
 	var state: SceneState = _current_state.state
-	if _state_index >= state.get_node_count():
-		_current_state = {}
-		_state_index = 0
+	var node_count := state.get_node_count()
+	if _state_index >= node_count:
+		var conn := _state_index - node_count
+		if conn < state.get_connection_count():
+			_enqueue_loaded_value(state.get_connection_binds(conn))
+			_state_index += 1
+		else:
+			_current_state = {}
+			_state_index = 0
 		return {}
 	var index := _state_index
 	_state_index += 1
+	for property in state.get_node_property_count(index):
+		_enqueue_loaded_value(state.get_node_property_value(index, property))
 	if state.is_node_instance_placeholder(index):
 		var placeholder := state.get_node_instance_placeholder(index)
 		# The native editor passes this literal to ResourceLoader, whose
@@ -94,6 +123,111 @@ func scan_dependency() -> Dictionary:
 			_scene_edges[_current_state.key].append(key)
 			inspect_loaded_scene(key, instance)
 	return {}
+
+
+func _enqueue_loaded_value(value: Variant, ancestors: Array = []) -> void:
+	if value is Array and (value.is_empty() or value.get_typed_builtin() not in _LINK_VALUE_TYPES):
+		return
+	if value is Dictionary and (value.is_empty() or (value.get_typed_key_builtin() not in _LINK_VALUE_TYPES and value.get_typed_value_builtin() not in _LINK_VALUE_TYPES)):
+		return
+	if value is Resource or value is Array or value is Dictionary:
+		_loaded_values.append({"value": value, "ancestors": ancestors})
+
+
+func _scan_loaded_value() -> Dictionary:
+	var entry: Dictionary = _loaded_values.pop_back()
+	var value: Variant = entry.value
+	if value is Resource:
+		if _seen_resources.has(value):
+			return {}
+		var key := ""
+		if not value.is_built_in():
+			key = _dependency_path(value.resource_path, "res://")
+			if _is_edited_scene(key):
+				return _cycle_error()
+			_enqueue(key)
+		if value is PackedScene:
+			inspect_loaded_scene(key if not key.is_empty() else "embedded:%d" % value.get_instance_id(), value)
+		else:
+			_seen_resources[value] = true
+			for property: Dictionary in value.get_property_list():
+				if property.usage & PROPERTY_USAGE_STORAGE and property.type in _LINK_VALUE_TYPES:
+					_enqueue_loaded_value(value.get(property.name))
+		return {}
+
+	if not entry.has("items"):
+		# An unsaved cached resource can contain a self-referential container.
+		for ancestor in entry.ancestors:
+			if is_same(value, ancestor):
+				return {}
+		entry.ancestors = entry.ancestors.duplicate()
+		entry.ancestors.append(value)
+		entry.items = value.keys() if value is Dictionary else value
+	var items: Array = entry.items
+	var offset: int = entry.get("offset", 0)
+	var end := mini(items.size(), offset + _COLLECTION_ITEMS_PER_STEP)
+	if end < items.size():
+		entry.offset = end
+		_loaded_values.append(entry)
+	for index in range(offset, end):
+		var child: Variant = items[index]
+		_enqueue_loaded_value(child, entry.ancestors)
+		if value is Dictionary:
+			_enqueue_loaded_value(value.get(child), entry.ancestors)
+	return {}
+
+
+func begin_version_recheck() -> void:
+	_version_checks.assign(_file_versions.keys())
+
+
+func has_version_checks() -> bool:
+	return not _version_checks.is_empty()
+
+
+func recheck_version() -> Dictionary:
+	var path: String = _version_checks.back()
+	var version := _read_file_version(path)
+	if version.has("error"):
+		return version
+	if not version.has("digest"):
+		return {}
+	_version_checks.pop_back()
+	if version.digest != _file_versions[path]:
+		return _changed_dependency(path)
+	return {}
+
+
+## An empty digest denotes a missing file, so creation/deletion both count
+## as changes. Keep one live file handle and hash a bounded chunk per step.
+func _read_file_version(path: String) -> Dictionary:
+	if _hash_file == null:
+		if not FileAccess.file_exists(path):
+			return {"digest": PackedByteArray()}
+		_hash_file = FileAccess.open(path, FileAccess.READ)
+		if _hash_file == null:
+			return _changed_dependency(path)
+		_hash_length = _hash_file.get_length()
+		_hasher = HashingContext.new()
+		_hasher.start(HashingContext.HASH_SHA256)
+	var remaining := _hash_length - _hash_file.get_position()
+	if remaining > 0:
+		var length := mini(remaining, _FINGERPRINT_CHUNK_BYTES)
+		var chunk := _hash_file.get_buffer(length)
+		if chunk.size() != length:
+			return _changed_dependency(path)
+		_hasher.update(chunk)
+		if remaining > length:
+			return {}
+	if _hash_file.get_length() != _hash_length:
+		return _changed_dependency(path)
+	_hash_file.close()
+	_hash_file = null
+	return {"digest": _hasher.finish()}
+
+
+static func _changed_dependency(path: String) -> Dictionary:
+	return ErrorCodes.make(ErrorCodes.FILESYSTEM_DISCOVERY_FAILED, "The saved dependency '%s' changed or could not be read while preparing the scene instance. Retry once project files are stable." % path)
 
 
 func validate_scene_links() -> Dictionary:
@@ -121,7 +255,7 @@ func validate_scene_links() -> Dictionary:
 
 
 func _enqueue(path: String) -> void:
-	if not _edited_path.is_empty() and path.is_absolute_path() and not _visited.has(path):
+	if path.is_absolute_path() and not _visited.has(path):
 		_visited[path] = true
 		_pending.append(path)
 
