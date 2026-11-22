@@ -248,8 +248,8 @@ class ViewportReadbackStub extends EditorHandler:
 func test_screenshot_render_mode_restores_previous_state_on_success_and_empty_readback() -> void:
 	var viewport := EditorInterface.get_editor_viewport_3d()
 	var root := EditorInterface.get_edited_scene_root()
-	assert_true(viewport != null and viewport.get_camera_3d() != null and root != null)
 	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		skip("No edited scene or 3D viewport camera")
 		return
 	var target := Node3D.new()
 	track(target)
@@ -351,8 +351,9 @@ class OrthographicFramingStub extends ViewportReadbackStub:
 
 func test_screenshot_orthographic_views_match_editor_axes_and_custom_poles() -> void:
 	var root := EditorInterface.get_edited_scene_root()
-	assert_true(root != null)
-	if root == null:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	if root == null or viewport == null or viewport.get_camera_3d() == null:
+		skip("No edited scene or 3D viewport camera")
 		return
 	var target := Node3D.new()
 	track(target)
@@ -431,8 +432,8 @@ func _viewport_screenshot_state(viewport: SubViewport) -> Array:
 func test_screenshot_orthographic_camera_preview_needs_user_action() -> void:
 	var root := EditorInterface.get_edited_scene_root()
 	var viewport := EditorInterface.get_editor_viewport_3d()
-	assert_true(root != null and viewport != null)
-	if root == null or viewport == null:
+	if root == null or viewport == null or viewport.get_camera_3d() == null:
+		skip("No edited scene or 3D viewport camera")
 		return
 	var control := viewport.get_parent()
 	while control != null and control.get_class() != &"Node3DEditorViewport":
@@ -464,8 +465,8 @@ func test_screenshot_orthographic_camera_preview_needs_user_action() -> void:
 func test_screenshot_orthographic_keeps_editor_state_after_capture_and_empty_readback() -> void:
 	var viewport := EditorInterface.get_editor_viewport_3d()
 	var root := EditorInterface.get_edited_scene_root()
-	assert_true(viewport != null and viewport.get_camera_3d() != null and root != null)
 	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		skip("No edited scene or 3D viewport camera")
 		return
 	var target := Node3D.new()
 	track(target)
