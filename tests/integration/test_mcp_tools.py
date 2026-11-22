@@ -4384,6 +4384,47 @@ class TestEditorScreenshotTool:
         assert not result.is_error
         assert result.data["view_target"] == "/Main/MyCube"
 
+    @pytest.mark.parametrize("include_image", [True, False])
+    async def test_screenshot_with_2d_target(self, mcp_stack, include_image):
+        client, plugin = mcp_stack
+        params = {"source": "viewport_2d", "view_target": "HUD/HealthBar", "max_resolution": 320}
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "take_screenshot"
+            assert cmd["params"] == params
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "viewport_2d",
+                    "width": 320,
+                    "height": 180,
+                    "original_width": 1280,
+                    "original_height": 720,
+                    "format": "png",
+                    "image_base64": self._ONE_PX_PNG_B64,
+                    "view_target": "/Main/HUD/HealthBar",
+                    "view_target_count": 1,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_screenshot", {**params, "include_image": include_image}
+        )
+        await task
+
+        assert not result.is_error
+        assert [block.type for block in result.content] == (
+            ["text", "image"] if include_image else ["text"]
+        )
+        metadata = json.loads(result.content[0].text)
+        assert metadata["source"] == "viewport_2d"
+        assert metadata["view_target"] == "/Main/HUD/HealthBar"
+        assert metadata["view_target_count"] == 1
+        assert (metadata["width"], metadata["height"]) == (320, 180)
+        assert (metadata["original_width"], metadata["original_height"]) == (1280, 720)
+
     async def test_screenshot_with_multi_view_target(self, mcp_stack):
         client, plugin = mcp_stack
 

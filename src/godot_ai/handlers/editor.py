@@ -197,7 +197,7 @@ async def editor_screenshot(
         "format": result["format"],
     }
     if view_target:
-        metadata["view_target"] = view_target
+        metadata["view_target"] = result.get("view_target", view_target)
         if "view_target_count" in result:
             metadata["view_target_count"] = result["view_target_count"]
         if "view_target_not_found" in result:
