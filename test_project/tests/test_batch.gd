@@ -28,6 +28,9 @@ func suite_setup(ctx: Dictionary) -> void:
 	_dispatcher.register("create_node", _node_handler.create_node)
 	_dispatcher.register("delete_node", _node_handler.delete_node)
 	_dispatcher.register("set_property", _node_handler.set_property)
+	_dispatcher.register("take_screenshot", func(_p: Dictionary) -> Dictionary:
+		_call_log.append("take_screenshot")
+		return {"data": {}})
 
 	_dispatcher.register("_ok_pure", func(_p: Dictionary) -> Dictionary:
 		_call_log.append("_ok_pure")
@@ -424,6 +427,37 @@ func test_batch_rejects_non_dict_params_without_executing() -> void:
 	assert_contains(result.error.message, "commands[1].params")
 	assert_eq(_call_log.size(), 0,
 		"pre-validation failure must execute nothing (all-or-nothing)")
+
+
+func test_batch_rejects_2d_target_before_creating_it() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var history := _undo_for_scene(root)
+	var version := history.get_version()
+	var result := _handler.batch_execute({"undo": false, "commands": [
+		{"command": "create_node", "params": {
+			"type": "ColorRect", "name": "_BatchColor", "parent_path": "/Main",
+		}},
+		{"command": "take_screenshot", "params": {
+			"source": "viewport_2d", "view_target": "/Main/_BatchColor",
+		}},
+	]})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(result.get("error", {}).get("message", ""), "call editor_screenshot separately")
+	assert_eq(_call_log, [])
+	var created := root.get_node_or_null("_BatchColor")
+	assert_eq(created, null)
+	assert_eq(history.get_version(), version)
+	if created != null:
+		history.undo()
+
+
+func test_batch_allows_untargeted_2d_and_targeted_3d_screenshots() -> void:
+	var result := _handler.batch_execute({"commands": [
+		{"command": "take_screenshot", "params": {"source": "viewport_2d"}},
+		{"command": "take_screenshot", "params": {"view_target": "/Main/Mesh"}},
+	]})
+	assert_eq(result.get("data", {}).get("succeeded", 0), 2)
+	assert_eq(_call_log, ["take_screenshot", "take_screenshot"])
 
 
 func test_batch_rejects_over_cap_without_executing() -> void:

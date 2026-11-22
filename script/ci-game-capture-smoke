@@ -8,6 +8,7 @@ streamable-HTTP transport:
 
   1. wait for the plugin's WebSocket session to register
   2. open res://capture_smoke.tscn (color quadrants and a midgray patch)
+     and verify editor pixels, including a 2D target created in an edit batch
   3. run the project in that scene
   4. poll editor_state until is_playing=true AND game_capture_ready=true
   5. capture-and-check loop until CAPTURE_BUDGET_SEC elapses:
@@ -654,6 +655,77 @@ def _capture_attempt(
     return (failures, png)
 
 
+def _check_2d_target_after_batch(session_id: str, history: list[str], deadline: float) -> None:
+    project = (ROOT / "test_project").resolve()
+    sessions = _tool_call(session_id, "session_manage", {"op": "list"}, 30, deadline=deadline)
+    matching = [
+        s for s in sessions.get("sessions", []) if Path(s["project_path"]).resolve() == project
+    ]
+    if len(matching) != 1:
+        raise RuntimeError(f"Expected one editor for {project}: {sessions}")
+    pin = {"session_id": matching[0]["session_id"]}
+    state = _tool_call(session_id, "editor_state", pin, 31, deadline=deadline)
+    if state.get("current_scene") != SCENE_PATH:
+        raise RuntimeError(f"Open {SCENE_PATH} in the pinned editor before the framing test")
+
+    name = "_FramedBatchMarker"
+    target = f"/Root/{name}"
+    found = _tool_call(session_id, "node_find", {**pin, "name": name}, 32, deadline=deadline)
+    if found.get("total_count") != 0:
+        raise RuntimeError(f"Expected the temporary marker to be absent: {found}")
+    edits = [{"command": "create_node", "params": {
+        "type": "ColorRect", "name": name, "parent_path": "/Root",
+    }}]
+    for prop, value in (("position", {"x": 2048, "y": 1536}), ("size", {"x": 192, "y": 96}),
+                        ("color", "#ff00ff")):
+        edits.append({"command": "set_property", "params": {
+            "path": target, "property": prop, "value": value,
+        }})
+    capture = {"source": "viewport_2d", "view_target": target, "max_resolution": 320}
+    screenshot = {"command": "take_screenshot", "params": capture}
+    created = False
+    try:
+        refused = _tool_call(session_id, "batch_execute", {
+            **pin, "undo": False, "commands": [*edits, screenshot],
+        }, 33, deadline=deadline)
+        if "call editor_screenshot separately" not in str(refused.get("error", "")):
+            raise RuntimeError(f"Expected same-batch framing to be refused: {refused}")
+        found = _tool_call(session_id, "node_find", {**pin, "name": name}, 34, deadline=deadline)
+        if found.get("total_count") != 0:
+            raise RuntimeError(f"The refused batch changed the scene: {found}")
+        result = _tool_call(
+            session_id, "batch_execute", {**pin, "commands": edits}, 35, deadline=deadline,
+        )
+        if result.get("succeeded") != len(edits) or result.get("stopped_at") is not None:
+            raise RuntimeError(f"Could not create the framing marker: {result}")
+        created = True
+        response = _post(session_id, {
+            "jsonrpc": "2.0", "id": 36, "method": "tools/call",
+            "params": {"name": "editor_screenshot", "arguments": {**pin, **capture}},
+        }, timeout=_remaining_timeout(30, deadline), deadline=deadline)
+        blocks = response.get("result", {}).get("content", [])
+        image = next((block for block in blocks if block.get("type") == "image"), None)
+        if image is None:
+            raise RuntimeError(f"Framed screenshot has no image: {response}")
+        png = base64.b64decode(image["data"])
+        with Image.open(io.BytesIO(png)) as opened:
+            pixel = opened.convert("RGB").getpixel((opened.width // 2, opened.height // 2))
+        os.makedirs(DIAG_DIR, exist_ok=True)
+        with open(os.path.join(DIAG_DIR, "framed-batch-marker.png"), "wb") as artifact:
+            artifact.write(png)
+        if not _within_tolerance(pixel, (255, 0, 255), 2):
+            raise RuntimeError(f"The framed screenshot omitted the new ColorRect: {pixel}")
+        note = f"Framed 2D capture after edit batch: center={pixel}"
+        history.append(note)
+        print(note)
+    finally:
+        removed = _tool_call(session_id, "node_manage", {
+            **pin, "op": "delete", "params": {"path": target},
+        }, 37)
+        if created and "error" in removed:
+            raise RuntimeError(f"Could not remove the framing marker: {removed}")
+
+
 def _write_diag_artifacts(attempt_log: list[str], last_png: bytes | None) -> None:
     try:
         os.makedirs(DIAG_DIR, exist_ok=True)
@@ -750,6 +822,7 @@ def _check_editor_capture(
             raise RuntimeError(f"Editor screenshot lost display gray: {pixel}")
 
     _remaining_timeout(40, deadline)
+    _check_2d_target_after_batch(session_id, history, deadline)
 
 
 def main() -> int:

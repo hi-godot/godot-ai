@@ -54,6 +54,7 @@ from godot_ai.sessions.registry import SessionRegistry
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godot_ai"
 DISPATCHER = PLUGIN_ROOT / "dispatcher.gd"
 VISION_ROUTING = PLUGIN_ROOT / "vision_routing.gd"
+EDITOR_HANDLER = PLUGIN_ROOT / "handlers" / "editor_handler.gd"
 
 
 class RecordingClient:
@@ -95,11 +96,8 @@ COMMAND_DRIVERS: dict[str, Callable[[DirectRuntime], Awaitable[object]]] = {
     "game_eval": lambda rt: editor_handlers.game_eval(rt, "return 1"),
     "game_command": lambda rt: game_handlers.game_get_scene_tree(rt),
     "game_debug_control": lambda rt: game_handlers.game_debug_status(rt),
-    ## Only source="game" defers plugin-side (editor_handler.gd's game branch
-    ## hands off to the debugger); viewport/cinematic captures reply inline, so
-    ## the 30 s budget belongs to the game path. The one exception — a
-    ## vision-routed editor capture — carries its own 13 s override and is
-    ## checked separately below.
+    ## The 30 s dispatcher budget belongs to the debugger's game path. Vision
+    ## routing and targeted 2D captures use a shorter override tested below.
     "take_screenshot": lambda rt: editor_handlers.editor_screenshot(rt, source="game"),
 }
 
@@ -141,13 +139,16 @@ def _plugin_default_budget_sec() -> float:
     return int(match.group(1)) / 1000.0
 
 
-def _vision_route_budget_sec() -> float:
-    match = re.search(
-        r'"_deferred_timeout_ms":\s*(\d+)',
-        VISION_ROUTING.read_text(encoding="utf-8"),
+def _editor_screenshot_budget_sec() -> float:
+    source = VISION_ROUTING.read_text(encoding="utf-8")
+    match = re.search(r"^const (EDITOR_SCREENSHOT_TIMEOUT_MS) := (\d+)$", source, re.MULTILINE)
+    assert match, "vision_routing.gd no longer declares the editor screenshot timeout"
+    name, millis = match.groups()
+    assert f'"_deferred_timeout_ms": {name}' in source
+    assert f'"_deferred_timeout_ms": VisionRoutingScript.{name}' in EDITOR_HANDLER.read_text(
+        encoding="utf-8"
     )
-    assert match, "vision_routing.gd no longer declares a _deferred_timeout_ms override"
-    return int(match.group(1)) / 1000.0
+    return int(millis) / 1000.0
 
 
 def _runtime_default_timeout_sec() -> float:
@@ -205,17 +206,22 @@ async def test_default_send_timeout_covers_default_deferred_budget() -> None:
     )
 
 
-async def test_editor_screenshot_timeout_covers_vision_route_budget() -> None:
-    """The vision-routing override is the editor-source screenshot's budget."""
-    budget = _vision_route_budget_sec()
+@pytest.mark.parametrize(
+    ("source", "view_target"), [("viewport", ""), ("viewport_2d", "/Main/HUD")]
+)
+async def test_editor_screenshot_timeout_covers_plugin_budget(
+    source: str, view_target: str
+) -> None:
+    """The editor-source overrides share the same plugin budget."""
+    budget = _editor_screenshot_budget_sec()
     client = RecordingClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)
     with contextlib.suppress(KeyError, TypeError, AttributeError, ValueError):
-        await editor_handlers.editor_screenshot(runtime, source="viewport")
+        await editor_handlers.editor_screenshot(runtime, source=source, view_target=view_target)
     sent = [call for call in client.calls if call["command"] == "take_screenshot"]
     assert sent, "editor_screenshot never issued take_screenshot"
     assert float(sent[-1]["timeout"]) >= budget, (
         f"editor-source screenshot timeout ({sent[-1]['timeout']}s) undercuts "
-        f"vision_routing.gd's deferred override ({budget}s) — a vision-routed "
-        "capture would be aborted client-side before the worker can reply"
+        f"the deferred override ({budget}s) — a capture would be aborted "
+        "client-side before the plugin can reply"
     )

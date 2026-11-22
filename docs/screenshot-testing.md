@@ -63,6 +63,9 @@ appear in the image. The next ordinary capture uses the editor's original
 pan and zoom. The same call works for a textured sprite, including one
 with an offset or a selected sprite-sheet frame.
 
+After creating or editing the target in `batch_execute`, call
+`editor_screenshot` separately so Godot can redraw the target before capture.
+
 ## Recipe: testing a runtime UI option (e.g. main menu)
 
 ```

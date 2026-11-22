@@ -414,6 +414,36 @@ func _compute_coverage_angles(aabb: AABB) -> Array[Dictionary]:
 
 
 func take_screenshot(params: Dictionary) -> Dictionary:
+	var view_target: Variant = params.get("view_target", "")
+	var request_id: String = params.get("_request_id", "")
+	if (params.get("source") == "viewport_2d" and view_target is String
+			and not view_target.is_empty() and not request_id.is_empty() and _connection != null):
+		var root := EditorInterface.get_edited_scene_root()
+		_capture_targeted_2d_after_redraws(params, request_id, root.get_instance_id() if root != null else 0)
+		return {"_deferred": true, "_deferred_timeout_ms": VisionRoutingScript.EDITOR_SCREENSHOT_TIMEOUT_MS}
+	return _route_screenshot(params)
+
+
+func _capture_targeted_2d_after_redraws(params: Dictionary, request_id: String, scene_id: int) -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	## Idle timers run after the deferred CanvasItem redraws and transform
+	## notifications. Wait before changing the viewport so its temporary
+	## transform is always restored within the same frame.
+	await tree.create_timer(0.0).timeout
+	if (not is_instance_valid(_connection) or _connection.dispatcher == null
+			or not _connection.dispatcher.has_pending_deferred_response(request_id)):
+		return
+	var root := EditorInterface.get_edited_scene_root()
+	if (root.get_instance_id() if root != null else 0) != scene_id:
+		_connection.send_deferred_response(request_id, ErrorCodes.make(
+			ErrorCodes.EDITED_SCENE_MISMATCH, "Edited scene changed before the 2D screenshot; retry on the intended scene"))
+		return
+	var result := _route_screenshot(params)
+	if not result.get("_deferred", false):
+		_connection.send_deferred_response(request_id, result)
+
+
+func _route_screenshot(params: Dictionary) -> Dictionary:
 	## Vision Routing hook: when enabled, the capture is described by the
 	## configured vision provider on a worker thread and the text description
 	## is returned instead of the raw image (see vision_routing.gd). Off, no

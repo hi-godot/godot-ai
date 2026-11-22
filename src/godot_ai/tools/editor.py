@@ -214,6 +214,8 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         - "viewport_2d": editor 2D viewport. Captures the current pan and zoom,
             or temporarily frames one visible Control or textured Sprite2D
             using view_target. Coverage and 3D camera angles require "viewport".
+            When framing a target after batch edits, call editor_screenshot
+            separately so the scene can redraw before capture.
         - "cinematic": render edited scene through its active Camera3D (no
           editor gizmos). Prefers a Camera3D marked ``current``; falls back to
           the first Camera3D found in a depth-first walk. NODE_NOT_FOUND only

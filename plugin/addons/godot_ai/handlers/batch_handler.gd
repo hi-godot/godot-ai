@@ -84,8 +84,14 @@ func batch_execute(params: Dictionary) -> Dictionary:
 		## local would hard-error on a non-dict mid-batch, aborting AFTER
 		## earlier mutations committed. Catching it here keeps the
 		## all-or-nothing contract for malformed input.
-		if typeof(item.get("params", {})) != TYPE_DICTIONARY:
+		var sub_params: Variant = item.get("params", {})
+		if not sub_params is Dictionary:
 			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "commands[%d].params must be a dict" % idx)
+		if cmd_name == "take_screenshot" and sub_params.get("source") == "viewport_2d":
+			var view_target: Variant = sub_params.get("view_target", "")
+			if view_target is String and not view_target.is_empty():
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+					"commands[%d]: call editor_screenshot separately after the batch to frame a 2D target once the scene redraws" % idx)
 		if cmd_name.begins_with("custom_tool:"):
 			var _custom_tools := McpToolRegistry.get_instance()
 			if _custom_tools:

@@ -100,6 +100,7 @@ const REQUEST_TIMEOUT_MS := 8000
 ## Kept under the server's 15s editor_screenshot window so the fallback
 ## pass-through always lands before the server gives up on slow providers.
 const TOTAL_ROUTE_BUDGET_MS := 10000
+const EDITOR_SCREENSHOT_TIMEOUT_MS := 13000
 ## Response body cap: the deadline bounds time but not bytes, and the socket
 ## talks to third-party hosts - a faulty or hostile provider must not be able
 ## to stream an unbounded body inside the window.
@@ -238,7 +239,7 @@ func route_editor_screenshot(params: Dictionary, original: Callable, connection:
 		## window (the worker itself is capped at TOTAL_ROUTE_BUDGET_MS), so
 		## a hung provider surfaces as a clean plugin timeout, not a
 		## server-side abort.
-		return {"_deferred": true, "_deferred_timeout_ms": 13000}
+		return {"_deferred": true, "_deferred_timeout_ms": EDITOR_SCREENSHOT_TIMEOUT_MS}
 	return result
 
 
