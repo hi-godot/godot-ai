@@ -292,6 +292,210 @@ func test_screenshot_render_mode_restores_previous_state_on_success_and_empty_re
 	assert_eq(restored_update_mode, SubViewport.UPDATE_WHEN_VISIBLE)
 
 
+func test_screenshot_orthographic_frame_fits_every_corner_across_aspects() -> void:
+	var viewport := SubViewport.new()
+	track(viewport)
+	var camera := Camera3D.new()
+	viewport.add_child(camera)
+	EditorInterface.get_base_control().add_child(viewport)
+	var bounds := AABB(Vector3(130, -90, 700), Vector3(13, 29, 6200))
+	for resolution: Vector2i in [Vector2i(1321, 619), Vector2i(379, 857)]:
+		viewport.size = resolution
+		for axis: Camera3D.KeepAspect in [Camera3D.KEEP_WIDTH, Camera3D.KEEP_HEIGHT]:
+			camera.keep_aspect = axis
+			var frame := EditorHandler._orthographic_frame(bounds, Vector2(resolution), axis, 19.0, 23.0, 0.25)
+			assert_false(frame.has("error"), str(frame))
+			if frame.has("error"):
+				continue
+			camera.set_orthogonal(frame.size, frame.near, frame.far)
+			camera.global_transform = frame.transform
+			assert_gt(camera.far, 4000.0, "The temporary far plane must extend past a deep target")
+			var tightest_axis := 0.0
+			for corner_index in range(8):
+				var corner := bounds.get_endpoint(corner_index)
+				var unit_pixel := camera.unproject_position(corner) / Vector2(resolution)
+				var deviation := (unit_pixel - Vector2(0.5, 0.5)).abs()
+				tightest_axis = maxf(tightest_axis, maxf(deviation.x, deviation.y))
+				assert_true(deviation.x <= 0.4001 and deviation.y <= 0.4001,
+					"Corner %d at %s exceeds the central 80%% for %s / %s" % [corner_index, unit_pixel, resolution, axis])
+				assert_true(camera.is_position_in_frustum(corner), "Corner %d was clipped" % corner_index)
+			assert_true(is_equal_approx(tightest_axis, 0.4), "Use the available framing space on the limiting axis")
+
+
+func test_screenshot_orthographic_frame_uses_the_representable_camera_origin() -> void:
+	var bounds := AABB(Vector3.ONE * 1.0e9, Vector3.ONE * 128.0)
+	var resolution := Vector2(1321, 619)
+	var frame := EditorHandler._orthographic_frame(bounds, resolution, Camera3D.KEEP_HEIGHT, 19.0, 23.0, 0.25)
+	assert_false(frame.has("error"), str(frame))
+	if frame.has("error"):
+		return
+	var camera: Transform3D = frame.transform
+	var half_width: float = frame.size * resolution.aspect() * 0.5
+	var half_height: float = frame.size * 0.5
+	var limit := 0.0
+	for index in range(8):
+		var offset := bounds.get_endpoint(index) - camera.origin
+		limit = maxf(limit, absf(camera.basis.x.dot(offset)) / half_width)
+		limit = maxf(limit, absf(camera.basis.y.dot(offset)) / half_height)
+	assert_true(is_equal_approx(limit, 0.8), "The stored camera origin still fits the central 80%%, got %s" % limit)
+
+
+class OrthographicFramingStub extends ViewportReadbackStub:
+	var frame: Dictionary = {}
+
+	func _capture_viewport_image(_viewport: SubViewport, _render_mode: String, _cam: Camera3D = null,
+			cam_xform := Transform3D.IDENTITY, _fov: Variant = null, orthographic: Dictionary = {}) -> Image:
+		frame = orthographic.merged({"transform": cam_xform})
+		return image
+
+
+func test_screenshot_orthographic_views_match_editor_axes_and_custom_poles() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	assert_true(root != null)
+	if root == null:
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var target_path := McpScenePath.from_node(target, root)
+	var handler := OrthographicFramingStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var views := {
+		"front": [Vector3.BACK, Vector3.UP],
+		"back": [Vector3.FORWARD, Vector3.UP],
+		"left": [Vector3.LEFT, Vector3.UP],
+		"right": [Vector3.RIGHT, Vector3.UP],
+		"top": [Vector3.UP, Vector3.FORWARD],
+		"bottom": [Vector3.DOWN, Vector3.BACK],
+	}
+	for view: String in views:
+		var result := handler.take_screenshot({"view_target": target_path, "orthographic_view": view})
+		assert_has_key(result, "data", str(result))
+		if not result.has("data"):
+			continue
+		var camera_transform: Transform3D = handler.frame.get("transform", Transform3D.IDENTITY)
+		var basis := camera_transform.basis
+		assert_true(basis.z.is_equal_approx(views[view][0]), "%s camera side is %s" % [view, basis.z])
+		assert_true(basis.y.is_equal_approx(views[view][1]), "%s screen up is %s" % [view, basis.y])
+		assert_eq(result.data.get("orthographic_view"), view)
+		assert_gt(result.data.get("orthographic_size", 0.0), 0.0)
+		assert_eq(result.data.get("orthographic_size"), handler.frame.get("size"))
+		assert_false(result.data.has("azimuth"))
+		assert_false(result.data.has("elevation"))
+	for elevation: float in [-90.0, 89.99, 90.0]:
+		var result := handler.take_screenshot({"view_target": target_path, "orthographic_view": "custom",
+			"elevation": elevation, "azimuth": 397.0})
+		assert_has_key(result, "data", str(result))
+		if not result.has("data"):
+			continue
+		var camera_transform: Transform3D = handler.frame.get("transform", Transform3D.IDENTITY)
+		var basis := camera_transform.basis
+		var expected := Basis(Vector3.UP, deg_to_rad(37.0)) * Basis(Vector3.RIGHT, -deg_to_rad(elevation))
+		assert_true(basis.is_equal_approx(expected), "Roll should follow azimuth at elevation %s" % elevation)
+		assert_eq(result.data.get("orthographic_view"), "custom")
+		assert_gt(result.data.get("orthographic_size", 0.0), 0.0)
+		assert_eq(result.data.get("orthographic_size"), handler.frame.get("size"))
+		assert_eq(result.data.get("elevation"), elevation)
+		assert_eq(result.data.get("azimuth"), 37.0)
+
+
+func test_screenshot_orthographic_refuses_conflicting_and_invalid_options() -> void:
+	var valid := {"orthographic_view": "top", "view_target": "/Main/Target"}
+	var invalid := [
+		[{"orthographic_view": 5}, ErrorCodes.WRONG_TYPE, "orthographic_view"],
+		[{"orthographic_view": "iso"}, ErrorCodes.VALUE_OUT_OF_RANGE, "orthographic_view"],
+		[{"view_target": "  "}, ErrorCodes.MISSING_REQUIRED_PARAM, "view_target"],
+		[{"source": "viewport_2d"}, ErrorCodes.VALUE_OUT_OF_RANGE, "viewport"],
+		[{"source": "cinematic"}, ErrorCodes.VALUE_OUT_OF_RANGE, "viewport"],
+		[{"source": "game"}, ErrorCodes.VALUE_OUT_OF_RANGE, "viewport"],
+		[{"coverage": true}, ErrorCodes.VALUE_OUT_OF_RANGE, "coverage"],
+		[{"fov": 45.0}, ErrorCodes.VALUE_OUT_OF_RANGE, "fov"],
+		[{"elevation": 30.0}, ErrorCodes.VALUE_OUT_OF_RANGE, "elevation"],
+		[{"orthographic_view": "custom", "azimuth": 12}, ErrorCodes.MISSING_REQUIRED_PARAM, "elevation"],
+		[{"orthographic_view": "custom", "elevation": 30, "azimuth": "45"}, ErrorCodes.WRONG_TYPE, "azimuth"],
+		[{"orthographic_view": "custom", "elevation": 91, "azimuth": 0}, ErrorCodes.VALUE_OUT_OF_RANGE, "elevation"],
+		[{"orthographic_view": "custom", "elevation": 0, "azimuth": INF}, ErrorCodes.VALUE_OUT_OF_RANGE, "finite"],
+	]
+	for entry: Array in invalid:
+		var result := _handler.take_screenshot(valid.merged(entry[0], true))
+		assert_is_error(result, entry[1], "%s returned %s" % [entry[0], result])
+		assert_contains(result.get("error", {}).get("message", ""), entry[2])
+
+
+func _viewport_screenshot_state(viewport: SubViewport) -> Array:
+	var cam := viewport.get_camera_3d()
+	return [viewport.debug_draw, viewport.render_target_update_mode, cam, cam.get_camera_transform(),
+		cam.projection, cam.keep_aspect, cam.size, cam.frustum_offset, cam.fov, cam.near, cam.far]
+
+
+func test_screenshot_orthographic_camera_preview_needs_user_action() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	assert_true(root != null and viewport != null)
+	if root == null or viewport == null:
+		return
+	var control := viewport.get_parent()
+	while control != null and control.get_class() != &"Node3DEditorViewport":
+		control = control.get_parent()
+	assert_true(control != null, "The viewport must have its native editor control")
+	if control == null:
+		return
+	var preview := Camera3D.new()
+	track(preview)
+	root.add_child(preview, true)
+	# Register the signal both native preview modes use on this viewport.
+	var observer := Callable(control, &"get_class")
+	var connected := preview.property_list_changed.connect(observer)
+	assert_eq(connected, OK)
+	if connected != OK:
+		return
+	var handler := ViewportReadbackStub.new(McpLogBuffer.new())
+	var result := handler.take_screenshot({"orthographic_view": "front",
+		"view_target": McpScenePath.from_node(preview, root)})
+	preview.property_list_changed.disconnect(observer)
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_contains(result.get("error", {}).get("message", ""), "Exit Camera Preview or Cinematic Preview")
+	var readiness: Dictionary = result.get("error", {}).get("data", {})
+	assert_eq(readiness.get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE)
+	assert_eq(readiness.get("retryable"), false)
+	assert_eq(handler.modes, [], "Preview refusal must happen before any capture")
+
+
+func test_screenshot_orthographic_keeps_editor_state_after_capture_and_empty_readback() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	assert_true(viewport != null and viewport.get_camera_3d() != null and root != null)
+	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var params := {"view_target": McpScenePath.from_node(target, root),
+		"orthographic_view": "back", "render_mode": "unshaded"}
+	var initial := _viewport_screenshot_state(viewport)
+	var handler := ViewportReadbackStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var invalid := handler.take_screenshot(params.merged({"fov": 42.0}, true))
+	assert_is_error(invalid, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_eq(handler.modes, [], "Invalid requests must not reach frame readback")
+	assert_eq(_viewport_screenshot_state(viewport), initial)
+	var success := handler.take_screenshot(params)
+	assert_eq(success.get("data", {}).get("orthographic_view"), "back", str(success))
+	assert_eq(success.get("data", {}).get("render_mode"), "unshaded")
+	assert_eq(_viewport_screenshot_state(viewport), initial)
+	var ordinary := handler.take_screenshot({})
+	assert_eq(ordinary.get("data", {}).get("width"), 4)
+	assert_false(ordinary.get("data", {}).has("orthographic_view"))
+	assert_false(ordinary.get("data", {}).has("orthographic_size"))
+	handler.image = null
+	var empty := handler.take_screenshot(params)
+	assert_is_error(empty, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(empty.get("error", {}).get("data", {}).get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY)
+	assert_eq(handler.modes, [Viewport.DEBUG_DRAW_UNSHADED, initial[0], Viewport.DEBUG_DRAW_UNSHADED])
+	assert_eq(handler.update_modes, [SubViewport.UPDATE_ALWAYS, initial[1], SubViewport.UPDATE_ALWAYS])
+	assert_eq(_viewport_screenshot_state(viewport), initial)
+
+
 func test_screenshot_game_not_playing() -> void:
 	var result := _handler.take_screenshot({"source": "game"})
 	## Same shape as game_eval/game_command's gate: EDITOR_NOT_READY with

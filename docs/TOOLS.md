@@ -39,6 +39,9 @@ For a single 3D viewport screenshot, `editor_screenshot` accepts
 to see material colors without lighting. Omit the mode to capture the current
 editor display. [Lighting comparison example](screenshot-testing.md#compare-a-material-with-and-without-scene-lighting)
 
+A framed 3D screenshot also accepts `orthographic_view` for a standard axis
+view or a custom elevation and azimuth. [Orthographic room views](screenshot-testing.md#inspect-a-room-in-orthographic-projection)
+
 `node_set_property` accepts a `PackedByteArray` value as a JSON list of whole
 numbers from 0 to 255, with at most 65,536 bytes per value. For example,
 `value=[0,128,255]` writes three bytes and `value=[]` clears the array.

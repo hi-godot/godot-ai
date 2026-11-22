@@ -200,6 +200,8 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         overwrite: bool = False,
         session_id: str = "",
         render_mode: Literal["normal", "unshaded"] | None = None,
+        orthographic_view: Literal["top", "bottom", "front", "back", "left", "right", "custom"]
+        | None = None,
     ):
         """Capture a screenshot of the Godot editor viewport or running game.
 
@@ -263,6 +265,11 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
                 or "unshaded" to inspect material colors without lighting. Omit to
                 capture the editor's current display mode. Supports view_target
                 and its framing angles. Requires coverage=False.
+            orthographic_view: Frame view_target in one 3D viewport image using
+                a Godot axis view (top, bottom, front, back, left, right) or
+                "custom" with both elevation (-90 to 90) and azimuth in degrees.
+                Requires coverage=False and no fov. Returns orthographic_size
+                in world units and restores the original editor camera.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -282,6 +289,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             save_to=save_to,
             overwrite=overwrite,
             render_mode=render_mode,
+            orthographic_view=orthographic_view,
         )
 
     @mcp.tool(meta=DEFER_META)

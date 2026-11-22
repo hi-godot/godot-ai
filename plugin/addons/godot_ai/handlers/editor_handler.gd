@@ -6,6 +6,20 @@ const Telemetry := preload("res://addons/godot_ai/telemetry.gd")
 const PluginReload := preload("res://addons/godot_ai/utils/plugin_reload.gd")
 const VisionRoutingScript := preload("res://addons/godot_ai/vision_routing.gd")
 const MAX_CINEMATIC_DIMENSION := 4096
+const _ORTHOGRAPHIC_ANGLES := {
+	"top": Vector2(90.0, 0.0),
+	"bottom": Vector2(-90.0, 0.0),
+	"front": Vector2(0.0, 0.0),
+	"back": Vector2(0.0, 180.0),
+	"left": Vector2(0.0, 270.0),
+	"right": Vector2(0.0, 90.0),
+}
+const _ORTHOGRAPHIC_HEADINGS := {
+	0.0: Vector2(0.0, 1.0),
+	90.0: Vector2(1.0, 0.0),
+	180.0: Vector2(0.0, -1.0),
+	270.0: Vector2(-1.0, 0.0),
+}
 
 ## Handles editor state, selection, log, screenshot, and performance commands.
 
@@ -429,6 +443,9 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 	var output_error := _screenshot_output_error(params)
 	if not output_error.is_empty():
 		return output_error
+	var orthographic := _orthographic_request(params)
+	if orthographic.has("error"):
+		return orthographic
 	var source: String = params.get("source", "viewport")
 	var max_resolution: int = params.get("max_resolution", 0)
 	var view_target: String = params.get("view_target", "")
@@ -544,6 +561,8 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 				not_found.append(p)
 			elif not node is Node3D:
 				not_found.append(p)
+			elif not orthographic.is_empty() and node != scene_root and not scene_root.is_ancestor_of(node):
+				not_found.append(p)
 			else:
 				targets.append(node as Node3D)
 
@@ -555,6 +574,10 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 			return ErrorCodes.make_not_ready(
 				ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE,
 				"No camera in 3D viewport", false)
+		if not orthographic.is_empty() and _is_viewport_camera_preview(viewport, cam):
+			return ErrorCodes.make_not_ready(
+				ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE,
+				"Exit Camera Preview or Cinematic Preview in the 3D viewport before taking an orthographic screenshot", false)
 
 		## Merge AABBs from all targets
 		var combined_aabb := _get_visual_aabb(targets[0])
@@ -626,14 +649,23 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 				result_data["view_target_not_found"] = not_found
 			return {"data": result_data}
 
-		## --- Custom angle / FOV path ---
-		var use_elev: float = 25.0 if custom_elevation == null else float(custom_elevation)
-		var use_azim: float = 30.0 if custom_azimuth == null else float(custom_azimuth)
+		var use_elev: float = orthographic.get("elevation", 25.0 if custom_elevation == null else float(custom_elevation))
+		var use_azim: float = orthographic.get("azimuth", 30.0 if custom_azimuth == null else float(custom_azimuth))
 		var use_fov: float = saved_fov if custom_fov == null else float(custom_fov)
 
-		var cam_xform := _frame_transform_for_aabb(combined_aabb, use_fov, use_elev, use_azim)
+		var cam_xform: Transform3D
+		var ortho_frame := {}
+		if orthographic.is_empty():
+			cam_xform = _frame_transform_for_aabb(combined_aabb, use_fov, use_elev, use_azim)
+		else:
+			var texture := viewport.get_texture()
+			var texture_size := texture.get_size() if texture != null else Vector2.ZERO
+			ortho_frame = _orthographic_frame(combined_aabb, texture_size, cam.keep_aspect, use_elev, use_azim, cam.near, cam.far)
+			if ortho_frame.has("error"):
+				return ortho_frame
+			cam_xform = ortho_frame.transform
 
-		var image := _capture_viewport_image(viewport, render_mode, cam, cam_xform, use_fov if custom_fov != null else null)
+		var image := _capture_viewport_image(viewport, render_mode, cam, cam_xform, use_fov if custom_fov != null else null, ortho_frame)
 
 		if image == null or image.is_empty():
 			return _empty_image_error(
@@ -656,6 +688,9 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 			result.data["azimuth"] = use_azim
 		if custom_fov != null:
 			result.data["fov"] = use_fov
+		if not orthographic.is_empty():
+			result.data["orthographic_view"] = orthographic.view
+			result.data["orthographic_size"] = ortho_frame.size
 		if not not_found.is_empty():
 			result.data["view_target_not_found"] = not_found
 		return result
@@ -675,7 +710,7 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 
 
 func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Camera3D = null,
-		cam_xform := Transform3D.IDENTITY, fov: Variant = null) -> Image:
+		cam_xform := Transform3D.IDENTITY, fov: Variant = null, orthographic: Dictionary = {}) -> Image:
 	if render_mode.is_empty() and cam == null:
 		return _read_viewport_image(viewport)
 
@@ -684,7 +719,9 @@ func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Ca
 	var saved_xform := Transform3D.IDENTITY
 	if cam != null:
 		saved_xform = cam.get_camera_transform()
-		if fov != null:
+		if not orthographic.is_empty():
+			RenderingServer.camera_set_orthogonal(cam.get_camera_rid(), orthographic.size, orthographic.near, orthographic.far)
+		elif fov != null:
 			RenderingServer.camera_set_perspective(cam.get_camera_rid(), fov, cam.near, cam.far)
 		RenderingServer.camera_set_transform(cam.get_camera_rid(), cam_xform)
 	if not render_mode.is_empty():
@@ -695,7 +732,7 @@ func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Ca
 	RenderingServer.force_draw(false)
 	var image := _read_viewport_image(viewport)
 	if cam != null:
-		if fov != null:
+		if fov != null or not orthographic.is_empty():
 			_restore_viewport_projection(cam)
 		RenderingServer.camera_set_transform(cam.get_camera_rid(), saved_xform)
 	if not render_mode.is_empty():
@@ -708,6 +745,21 @@ func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Ca
 func _read_viewport_image(viewport: Viewport) -> Image:
 	var texture := viewport.get_texture()
 	return texture.get_image() if texture != null else null
+
+
+static func _is_viewport_camera_preview(viewport: SubViewport, camera: Camera3D) -> bool:
+	var control := viewport.get_parent()
+	while control != null and control.get_class() != &"Node3DEditorViewport":
+		control = control.get_parent()
+	if control == null:
+		return false
+	# Both native preview modes attach their scene camera directly to the
+	# renderer and connect this signal, leaving get_camera_3d() unchanged.
+	for connection in control.get_incoming_connections():
+		var source: Signal = connection.signal
+		if source.get_name() == &"property_list_changed" and source.get_object() is Camera3D and source.get_object() != camera:
+			return true
+	return false
 
 
 static func _restore_viewport_projection(cam: Camera3D) -> void:
@@ -1028,6 +1080,116 @@ func _get_visual_aabb(node: Node3D) -> AABB:
 	if visual_bounds != null:
 		return visual_bounds
 	return AABB(node.global_position - Vector3(0.5, 0.5, 0.5), Vector3.ONE)
+
+
+static func _orthographic_request(params: Dictionary) -> Dictionary:
+	if not params.has("orthographic_view"):
+		return {}
+	var view: Variant = params.orthographic_view
+	if not view is String:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "orthographic_view must be a string")
+	if view != "custom" and not _ORTHOGRAPHIC_ANGLES.has(view):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid orthographic_view '%s'; use top, bottom, front, back, left, right, or custom" % view)
+	var coverage: Variant = params.get("coverage", false)
+	if not coverage is bool:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "coverage must be a boolean")
+	if params.get("source", "viewport") != "viewport" or coverage or params.has("fov"):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "orthographic_view requires source='viewport', coverage=false, and no fov")
+	var target: Variant = params.get("view_target", "")
+	if not target is String:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "view_target must be a node path string")
+	if target.strip_edges().is_empty():
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "orthographic_view requires a non-empty view_target")
+
+	if view != "custom":
+		if params.has("elevation") or params.has("azimuth"):
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Named orthographic_view directions do not accept elevation or azimuth; use custom to supply angles")
+		var angles: Vector2 = _ORTHOGRAPHIC_ANGLES[view]
+		return {"view": view, "elevation": angles.x, "azimuth": angles.y}
+
+	if not params.has("elevation") or not params.has("azimuth"):
+		return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "orthographic_view='custom' requires both elevation and azimuth")
+	for field in ["elevation", "azimuth"]:
+		if not (params[field] is int or params[field] is float):
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a number of degrees" % field)
+	var elevation := float(params.elevation)
+	var azimuth := float(params.azimuth)
+	if not is_finite(elevation) or not is_finite(azimuth) or elevation < -90.0 or elevation > 90.0:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Custom orthographic angles must be finite, with elevation between -90 and 90 degrees")
+	azimuth = fposmod(azimuth, 360.0)
+	return {"view": view, "elevation": elevation, "azimuth": azimuth if azimuth < 360.0 else 0.0}
+
+
+static func _orthographic_frame(aabb: AABB, viewport_size: Vector2, keep_aspect: Camera3D.KeepAspect,
+		elevation: float, azimuth: float, near_clip: float, far_clip: float = 0.0) -> Dictionary:
+	if not viewport_size.is_finite() or viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY, "The 3D viewport has no usable texture size for orthographic framing", true)
+	if not aabb.is_finite() or not aabb.end.is_finite() or aabb.size.x < 0.0 or aabb.size.y < 0.0 or aabb.size.z < 0.0:
+		return _orthographic_bounds_error()
+
+	var elev := deg_to_rad(elevation)
+	var azim := deg_to_rad(azimuth)
+	var heading: Vector2 = _ORTHOGRAPHIC_HEADINGS.get(azimuth, Vector2(sin(azim), cos(azim)))
+	var horizontal := 0.0 if absf(elevation) == 90.0 else cos(elev)
+	var back := Vector3(horizontal * heading.x, sin(elev), horizontal * heading.y)
+	var right := Vector3(heading.y, 0.0, -heading.x)
+	# This basis fixes roll at the poles without a collinear looking_at up vector.
+	var basis := Basis(right, back.cross(right), back).orthonormalized()
+	var inverse := basis.transposed()
+	var center := aabb.get_center()
+	var minimum := Vector3.INF
+	var maximum := -Vector3.INF
+	for index in 8:
+		var corner := inverse * (aabb.get_endpoint(index) - center)
+		if not corner.is_finite():
+			return _orthographic_bounds_error()
+		minimum = minimum.min(corner)
+		maximum = maximum.max(corner)
+
+	var span := maximum - minimum
+	if not span.is_finite() or (span.x <= 0.0 and span.y <= 0.0):
+		return _orthographic_bounds_error()
+
+	# Use extra depth on both ends so all selected corners clear the clip
+	# planes. Keep the previous far distance when it still covers more context.
+	var near_depth := maxf(near_clip, 0.001)
+	var padding := maxf(0.01, maxf(maxf(span.x, span.y) * 0.5, span.z * 0.1))
+	var projected_center := minimum + span * 0.5
+	projected_center.z = maximum.z + near_depth + padding
+	var origin := center + basis * projected_center
+	if not origin.is_finite():
+		return _orthographic_bounds_error()
+	var projected_origin := inverse * (origin - center)
+	var far_depth := maxf(far_clip, projected_origin.z - minimum.z + padding)
+
+	# At large world coordinates, rounding the camera position can move it
+	# away from the projected center. Fit around its actual position.
+	var extent := (minimum - projected_origin).abs().max((maximum - projected_origin).abs()) * 2.0
+	var aspect := viewport_size.x / viewport_size.y
+	var keep_width := keep_aspect == Camera3D.KEEP_WIDTH
+	var size := maxf(extent.x, extent.y * aspect) / 0.8 if keep_width else maxf(extent.x / aspect, extent.y) / 0.8
+
+	# RenderingServer takes float32 projection parameters even in builds with
+	# double-precision transforms. Verify the matrix axes remain representable.
+	var projection := PackedFloat32Array([size, near_depth, far_depth])
+	for value in projection:
+		if not is_finite(value) or value <= 0.0:
+			return _orthographic_bounds_error()
+	if projection[1] >= projected_origin.z - maximum.z or projection[2] <= projected_origin.z - minimum.z:
+		return _orthographic_bounds_error()
+	var projection_width := projection[0] if keep_width else projection[0] * aspect
+	var projection_height := projection[0] / aspect if keep_width else projection[0]
+	var dimensions := PackedFloat32Array([projection_width, projection_height, 2.0 / projection_width,
+		2.0 / projection_height, projection[2] + projection[1]])
+	for value in dimensions:
+		if not is_finite(value) or value <= 0.0:
+			return _orthographic_bounds_error()
+	return {"transform": Transform3D(basis, origin), "size": projection[0], "near": projection[1], "far": projection[2]}
+
+
+static func _orthographic_bounds_error() -> Dictionary:
+	return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "The view_target bounds cannot be represented in this orthographic view")
 
 
 ## Calculate a camera Transform3D that frames the given AABB nicely.
