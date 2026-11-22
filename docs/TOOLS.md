@@ -274,7 +274,7 @@ Calls take the form:
 
 | Tool | Ops |
 |------|-----|
-| `scene_manage` | `create`, `save_as`, `close`, `get_roots` |
+| `scene_manage` | `create`, `instantiate`, `save_as`, `close`, `get_roots` |
 | `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `set_editable_children`, `add_to_group`, `remove_from_group` |
 | `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |
@@ -302,6 +302,38 @@ Calls take the form:
 | `navigation_manage` | `bake`, `path_get` |
 | `csg_manage` | `csg_create`, `csg_set_operation` |
 | `custom_manage` | `list`, `invoke` |
+
+`scene_manage(op="instantiate")` places a saved `.tscn` under a parent in the
+edited scene. It keeps the source scene link and returns the actual node path
+after Godot assigns a sibling name. One undo removes the instance. Call
+`scene_save` to persist the placement.
+
+```python
+# Local 2D placement under a moving platform
+scene_manage(op="instantiate", params={
+    "scene_path": "res://items/Coin.tscn", "parent_path": "/Level/Platform",
+    "position": {"x": 32, "y": -16}
+})
+
+# World placement under a rotated 3D parent
+scene_manage(op="instantiate", params={
+    "scene_path": "res://doors/LockedDoor.tscn", "parent_path": "/Level/Doors",
+    "name": "EastDoor", "space": "world", "position": {"x": 12, "y": 0, "z": 4},
+    "rotation_degrees": {"x": 0, "y": 90, "z": 0}
+})
+```
+
+The default parent is the edited root. `name` defaults to the source root's name.
+`scene_file` optionally identifies the expected edited scene. With placement
+omitted, any instance root keeps its authored layout. For `Node2D` and `Node3D`
+roots, set any combination of `position`, `rotation_degrees`, and `scale`.
+Vectors require all their axes. A 2D rotation is a number in degrees. World
+space in 2D uses global canvas coordinates. Specifying only a position keeps
+the instance's orientation and scale. World placement requires an invertible
+parent transform when the instance inherits it. The operation rejects rotation
+or scale overrides that Godot cannot preserve on the saved instance. Call
+`scene_manage(op="instantiate")` directly so Godot can keep serving the
+editor while it checks and loads the source scene.
 
 `resource_manage(op="physics_shape_generate")` keeps `shape_type="box"` as its default.
 Explicit `shape_type="auto"` chooses box, sphere, capsule or cylinder for the corresponding

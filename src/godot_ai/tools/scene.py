@@ -1,7 +1,7 @@
 """MCP tools for scene authoring.
 
 Top-level: ``scene_get_hierarchy`` (core read), ``scene_open``, ``scene_save``.
-Everything else (create, save_as, close, get_roots) collapses into ``scene_manage``.
+Everything else (create, instantiate, save_as, close, get_roots) collapses into ``scene_manage``.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from godot_ai.tools import DEFER_META
 from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
-Scene authoring (create, save_as, close a scene tab, list open roots).
+Scene authoring (create, instantiate a saved scene, save_as, close a scene tab, list open roots).
 
 Resource form: ``godot://scene/current`` and ``godot://scene/hierarchy``
 — prefer for active-session reads.
@@ -25,6 +25,13 @@ Ops:
         defaults to filename basename when empty. This initial root is written
         immediately, but later node_create/node_set_property mutations remain
         in editor memory until scene_save or save_as is called.
+  • instantiate(scene_path, parent_path="", name="", scene_file="", space="local",
+                position?, rotation_degrees?, scale?)
+        Place a linked .tscn instance under parent_path (default: edited root).
+        scene_file guards the edited level. Omitted placement fields retain
+        their values in the chosen space ("local" or "world"). Node2D uses
+        {x,y} vectors and scalar degrees. Node3D uses {x,y,z} vectors for
+        all three fields. One undo removes the instance. Call scene_save to persist.
   • save_as(path)
         Save the currently edited scene to a new file path.
   • close(path, discard_changes=False)
@@ -125,6 +132,7 @@ def register_scene_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None
         description=_DESCRIPTION,
         ops={
             "create": scene_handlers.scene_create,
+            "instantiate": scene_handlers.scene_instantiate,
             "save_as": scene_handlers.scene_save_as,
             "close": scene_handlers.scene_close,
             "get_roots": scene_handlers.scene_get_roots,

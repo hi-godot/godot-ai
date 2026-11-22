@@ -2583,6 +2583,22 @@ async def test_scene_close_handler_forwards_discard_changes():
     assert client.calls[-1]["params"] == {"path": "res://scratch.tscn", "discard_changes": True}
 
 
+@pytest.mark.parametrize("rotation", [0, None])
+async def test_scene_instantiate_handler_forwards_explicit_values_and_omits_unspecified(rotation):
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await scene_handlers.scene_instantiate(
+        runtime, scene_path="res://Door.tscn", rotation_degrees=rotation
+    )
+    assert client.calls[-1]["command"] == "instantiate_scene"
+    assert client.calls[-1]["timeout"] == 30.0
+    assert client.calls[-1]["params"] == {
+        "scene_path": "res://Door.tscn",
+        "space": "local",
+        "rotation_degrees": rotation,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Node handler tests
 # ---------------------------------------------------------------------------
