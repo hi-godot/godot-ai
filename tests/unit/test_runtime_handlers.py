@@ -4408,12 +4408,16 @@ async def test_editor_screenshot_routed_metadata_forwarded_without_image():
     async def routed_send(command: str, params: dict | None = None, **kwargs):
         result = await original_send(command, params, **kwargs)
         if command == "take_screenshot":
+            result["render_mode"] = params["render_mode"]
             result["routed_via"] = "groq:qwen/qwen3.6-27b"
             result["vision_description"] = "A rusty spider robot on a platform."
         return result
 
     client.send = routed_send  # type: ignore[method-assign]
-    result = await editor_handlers.editor_screenshot(runtime, include_image=False)
+    result = await editor_handlers.editor_screenshot(
+        runtime, render_mode="unshaded", include_image=False
+    )
+    assert result["render_mode"] == "unshaded"
     assert result["routed_via"] == "groq:qwen/qwen3.6-27b"
     assert "spider" in result["vision_description"]
 

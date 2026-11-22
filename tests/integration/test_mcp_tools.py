@@ -4221,12 +4221,17 @@ class TestEditorScreenshotTool:
         "nGP4DwABAQEBYY2JxQAAAABJRU5ErkJggg=="
     )
 
-    async def test_screenshot_with_image(self, mcp_stack):
+    @pytest.mark.parametrize("mode", [None, "normal", "unshaded"])
+    async def test_screenshot_with_image(self, mcp_stack, mode):
         client, plugin = mcp_stack
 
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "take_screenshot"
+            if mode is None:
+                assert "render_mode" not in cmd["params"]
+            else:
+                assert cmd["params"]["render_mode"] == mode
             await plugin.send_response(
                 cmd["request_id"],
                 {
@@ -4237,16 +4242,21 @@ class TestEditorScreenshotTool:
                     "original_height": 1080,
                     "format": "png",
                     "image_base64": self._ONE_PX_PNG_B64,
+                    **({"render_mode": mode} if mode is not None else {}),
                 },
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("editor_screenshot", {})
+        result = await client.call_tool("editor_screenshot", {"render_mode": mode} if mode else {})
         await task
 
         assert not result.is_error
-        # When include_image=True, result contains both text and image content blocks
-        assert len(result.content) >= 2
+        assert [block.type for block in result.content] == ["text", "image"]
+        metadata = json.loads(result.content[0].text)
+        if mode is None:
+            assert "render_mode" not in metadata
+        else:
+            assert metadata["render_mode"] == mode
 
     @pytest.mark.parametrize("coverage", [False, True])
     @pytest.mark.parametrize("oversized", [False, True])

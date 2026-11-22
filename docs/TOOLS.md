@@ -34,6 +34,11 @@ not the MCP tool names.
 | `editor_reload_plugin` | Reload the plugin and wait for reconnect (works with external and plugin-managed servers) |
 | `animation_create` | Create an Animation clip (auto-creates AnimationPlayer + library if missing) |
 
+For a single 3D viewport screenshot, `editor_screenshot` accepts
+`render_mode="normal"` for scene lighting or `render_mode="unshaded"`
+to see material colors without lighting. Omit the mode to capture the current
+editor display. [Lighting comparison example](screenshot-testing.md#compare-a-material-with-and-without-scene-lighting)
+
 `node_set_property` accepts a `PackedByteArray` value as a JSON list of whole
 numbers from 0 to 255, with at most 65,536 bytes per value. For example,
 `value=[0,128,255]` writes three bytes and `value=[]` clears the array.
