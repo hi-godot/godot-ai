@@ -19,6 +19,9 @@ var _undo_redo: EditorUndoRedoManager
 class ReadOnlyTrackMaterial extends StandardMaterial3D:
 	var dynamic_weight: Variant = 0.25
 	var step_count := 0
+	var tile := Vector2i.ZERO
+	var cell := Vector3i.ZERO
+	var region := Vector4i.ZERO
 
 	func _validate_property(property: Dictionary) -> void:
 		if property.name == "albedo_color":
@@ -503,10 +506,9 @@ func test_create_simple_accepts_color_subpath() -> void:
 	sprite.queue_free()
 
 
-func _resource_track_rig(with_player: bool = true) -> Dictionary:
-	var root := EditorInterface.get_edited_scene_root()
+func _resource_track_rig(root: Node, with_player: bool = true) -> Dictionary:
 	var rig := Node3D.new()
-	rig.name = "ResourceTrackRig"
+	rig.name = "_McpTestResourceTrackRig"
 	root.add_child(rig, true)
 	rig.owner = root
 	var targets := Node3D.new()
@@ -536,7 +538,10 @@ func _resource_track_rig(with_player: bool = true) -> Dictionary:
 
 func test_resource_value_tracks_play_after_scene_reload() -> void:
 	var root := EditorInterface.get_edited_scene_root()
-	var fixture := _resource_track_rig()
+	if root == null:
+		skip("Resource tracks require an edited scene")
+		return
+	var fixture := _resource_track_rig(root)
 	var rig: Node3D = fixture.rig
 	var mesh: MeshInstance3D = fixture.mesh
 	var player: AnimationPlayer = fixture.player
@@ -587,6 +592,7 @@ func test_resource_value_tracks_play_after_scene_reload() -> void:
 	assert_true(loaded != null, "Native scene saved and reopened")
 	if loaded != null:
 		var reloaded := loaded.instantiate()
+		reloaded.name = rig.name
 		root.add_child(reloaded, true)
 		var replay := reloaded.get_node("Player") as AnimationPlayer
 		var reloaded_mesh := reloaded.get_node("Targets/Mesh") as MeshInstance3D
@@ -606,7 +612,10 @@ func test_resource_value_tracks_play_after_scene_reload() -> void:
 
 func test_resource_track_invalid_paths_and_values_are_atomic() -> void:
 	var root := EditorInterface.get_edited_scene_root()
-	var fixture := _resource_track_rig()
+	if root == null:
+		skip("Resource tracks require an edited scene")
+		return
+	var fixture := _resource_track_rig(root)
 	var mesh: MeshInstance3D = fixture.mesh
 	var player: AnimationPlayer = fixture.player
 	mesh.material_override = ReadOnlyTrackMaterial.new()
@@ -625,6 +634,10 @@ func test_resource_track_invalid_paths_and_values_are_atomic() -> void:
 		["Mesh:mesh:size", {"x": 1.0}, "Cannot coerce value to Vector3"],
 		["Mesh:material_override:step_count", 1e100, "int64 range"],
 		["Mesh:material_override:step_count", 1.5, "integral value"],
+		["Mesh:material_override:tile:x", 2147483648, "signed 32-bit range"],
+		["Mesh:material_override:cell:x", -2147483649.0, "signed 32-bit range"],
+		["Mesh:material_override:cell:y", 2147483648, "signed 32-bit range"],
+		["Mesh:material_override:region:w", 2147483648.0, "signed 32-bit range"],
 	]
 	for spec in malformed:
 		var result := _handler.add_property_track({
@@ -645,7 +658,13 @@ func test_resource_track_invalid_paths_and_values_are_atomic() -> void:
 	if missing.has("data"):
 		assert_eq(clip.get_track_count(), 1)
 		assert_eq(clip.track_get_key_value(0, 0), [1, 0, 0, 1])
-	for spec in [["dynamic_weight", "0.75", 0.75], ["step_count", 2.0, 2]]:
+	for spec in [
+		["dynamic_weight", "0.75", 0.75],
+		["cell:x", 2147483647.0, 2147483647],
+		["cell:y", -2147483648, -2147483648],
+		["step_count", 2147483648, 2147483648],
+		["step_count", -2147483649.0, -2147483649],
+	]:
 		var accepted := _handler.add_property_track({
 			"player_path": fixture.player_path, "animation_name": "idle",
 			"track_path": "Mesh:material_override:" + spec[0],
@@ -661,7 +680,10 @@ func test_resource_track_invalid_paths_and_values_are_atomic() -> void:
 
 func test_resource_track_undo_preserves_duplicate_path_neighbors() -> void:
 	var root := EditorInterface.get_edited_scene_root()
-	var fixture := _resource_track_rig()
+	if root == null:
+		skip("Resource tracks require an edited scene")
+		return
+	var fixture := _resource_track_rig(root)
 	var player: AnimationPlayer = fixture.player
 	var clip := Animation.new()
 	player.get_animation_library("").add_animation("idle", clip)
@@ -697,7 +719,10 @@ func test_resource_track_undo_preserves_duplicate_path_neighbors() -> void:
 
 func test_create_simple_resource_overwrite_undo_and_failed_overwrite() -> void:
 	var root := EditorInterface.get_edited_scene_root()
-	var fixture := _resource_track_rig()
+	if root == null:
+		skip("Resource tracks require an edited scene")
+		return
+	var fixture := _resource_track_rig(root)
 	var player: AnimationPlayer = fixture.player
 	var original := Animation.new()
 	player.get_animation_library("").add_animation("pulse", original)
@@ -727,7 +752,10 @@ func test_create_simple_resource_overwrite_undo_and_failed_overwrite() -> void:
 
 func test_create_simple_resource_track_on_auto_created_player() -> void:
 	var root := EditorInterface.get_edited_scene_root()
-	var fixture := _resource_track_rig(false)
+	if root == null:
+		skip("Resource tracks require an edited scene")
+		return
+	var fixture := _resource_track_rig(root, false)
 	var result := _handler.create_simple({
 		"player_path": fixture.player_path, "name": "grow",
 		"tweens": [

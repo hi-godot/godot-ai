@@ -264,7 +264,7 @@ static func player_root_node(player: AnimationPlayer) -> Node:
 ## Resolve a track_path's target property type once, so callers coercing many
 ## keyframes avoid walking `get_property_list()` on every one. Returns:
 ##   {pass_through: true}                   — no resolution / authoring-time
-##   {prop_type, prop_name, resource_target} — coerce against this type
+##   {prop_type, prop_name, resource_target, component_base_type} — coercion context
 ##   {error: msg}                           — invalid path on an existing target
 ##
 ## As in the animation mixer, follow consecutive Resource-valued properties,
@@ -311,7 +311,7 @@ static func resolve_track_prop_context(track_path: String, player: AnimationPlay
 		if index == parts.size() - 2:
 			var component_type := subpath_component_type(prop_type, parts[index + 1])
 			if component_type != TYPE_NIL:
-				return _track_property_context(target, property, component_type, track_path)
+				return _track_property_context(target, property, component_type, track_path, prop_type)
 		if not target is Resource:
 			# Retain existing authoring support for uncommon node subpaths.
 			return {"pass_through": true}
@@ -327,7 +327,7 @@ static func _track_property(target: Object, name: StringName) -> Dictionary:
 	return {}
 
 
-static func _track_property_context(target: Object, property: Dictionary, prop_type: int, track_path: String) -> Dictionary:
+static func _track_property_context(target: Object, property: Dictionary, prop_type: int, track_path: String, component_base_type: int = TYPE_NIL) -> Dictionary:
 	var resource_target := target is Resource
 	if resource_target:
 		var name: StringName = property.name
@@ -337,7 +337,7 @@ static func _track_property_context(target: Object, property: Dictionary, prop_t
 			return {"error": "Property '%s' is read-only in track path '%s'" % [name, track_path]}
 		if prop_type == TYPE_NIL:
 			prop_type = typeof(target.get(name))
-	return {"prop_type": prop_type, "prop_name": track_path, "resource_target": resource_target}
+	return {"prop_type": prop_type, "prop_name": track_path, "resource_target": resource_target, "component_base_type": component_base_type}
 
 
 ## Map a `property:sub` subpath to its scalar component type. Returns
@@ -353,6 +353,11 @@ static func subpath_component_type(base_type: int, sub: String) -> int:
 static func coerce_with_context(value: Variant, ctx: Dictionary) -> Dictionary:
 	if ctx.get("pass_through", false):
 		return {"ok": value}
+	# Integer-vector components narrow to signed 32 bits when the mixer writes
+	# them back to the resource, even though the key itself stores an int64.
+	if ctx.resource_target and ctx.prop_type == TYPE_INT and ctx.component_base_type != TYPE_NIL and (value is int or value is float):
+		if value < McpJsonValues.INT32_MIN or value > McpJsonValues.INT32_MAX:
+			return {"error": "Expected a value in the signed 32-bit range for '%s'" % ctx.prop_name}
 	if ctx.resource_target and value is float:
 		if not is_finite(value):
 			return {"error": "Expected a finite %s value for '%s'" % [type_string(ctx.prop_type), ctx.prop_name]}
