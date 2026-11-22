@@ -5743,7 +5743,10 @@ class TestAnimationCreateTool:
 
 
 class TestAnimationAddPropertyTrackTool:
-    async def test_add_property_track(self, mcp_stack):
+    @pytest.mark.parametrize(
+        "track_path", ["Panel:modulate", "Indicator:material_override:albedo_color"]
+    )
+    async def test_add_property_track(self, mcp_stack, track_path):
         client, plugin = mcp_stack
         keyframes = [
             {"time": 0.0, "value": {"r": 1, "g": 1, "b": 1, "a": 0}},
@@ -5753,15 +5756,15 @@ class TestAnimationAddPropertyTrackTool:
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "animation_add_property_track"
-            assert cmd["params"]["track_path"] == "Panel:modulate"
+            assert cmd["params"]["track_path"] == track_path
             assert cmd["params"]["interpolation"] == "linear"
-            assert len(cmd["params"]["keyframes"]) == 2
+            assert cmd["params"]["keyframes"] == keyframes
             await plugin.send_response(
                 cmd["request_id"],
                 {
                     "player_path": "/Main/AP",
                     "animation_name": "fade",
-                    "track_path": "Panel:modulate",
+                    "track_path": track_path,
                     "interpolation": "linear",
                     "keyframe_count": 2,
                     "undoable": True,
@@ -5776,7 +5779,7 @@ class TestAnimationAddPropertyTrackTool:
                 "params": {
                     "player_path": "/Main/AP",
                     "animation_name": "fade",
-                    "track_path": "Panel:modulate",
+                    "track_path": track_path,
                     "keyframes": keyframes,
                 },
             },
@@ -6028,12 +6031,13 @@ class TestAnimationGetTool:
 
 
 class TestAnimationCreateSimpleTool:
-    async def test_create_simple(self, mcp_stack):
+    @pytest.mark.parametrize("property_path", ["modulate", "material_override:albedo_color"])
+    async def test_create_simple(self, mcp_stack, property_path):
         client, plugin = mcp_stack
         tweens = [
             {
                 "target": "Panel",
-                "property": "modulate",
+                "property": property_path,
                 "from": {"r": 1, "g": 1, "b": 1, "a": 0},
                 "to": {"r": 1, "g": 1, "b": 1, "a": 1},
                 "duration": 0.5,
@@ -6044,7 +6048,7 @@ class TestAnimationCreateSimpleTool:
             cmd = await plugin.recv_command()
             assert cmd["command"] == "animation_create_simple"
             assert cmd["params"]["name"] == "fade_in"
-            assert len(cmd["params"]["tweens"]) == 1
+            assert cmd["params"]["tweens"] == tweens
             assert cmd["params"]["loop_mode"] == "none"
             assert "length" not in cmd["params"]
             await plugin.send_response(

@@ -266,12 +266,11 @@ func add_property_track(params: Dictionary) -> Dictionary:
 			"transition": kf.get("transition", "linear"),
 		})
 
+	var authored := Animation.new()
+	_do_add_property_track(authored, track_path, interp_str, coerced_keyframes)
 	_create_scene_pinned_action("MCP: Add property track %s to %s" % [track_path, anim_name])
-	_undo_redo.add_do_method(self, "_do_add_property_track", anim, track_path, interp_str, coerced_keyframes)
-	# Undo locates the track by (path, type) at undo time rather than caching
-	# an index captured at do time. Cached indices go stale if any other track
-	# mutation lands between do and undo (Godot editor, another MCP call, etc.)
-	_undo_redo.add_undo_method(self, "_undo_remove_track_by_path", anim, track_path, Animation.TYPE_VALUE)
+	_undo_redo.add_do_method(authored, "copy_track", 0, anim)
+	_undo_redo.add_undo_method(self, "_undo_remove_authored_value_track", anim, authored)
 	_undo_redo.commit_action()
 
 	return {
@@ -286,10 +285,8 @@ func add_property_track(params: Dictionary) -> Dictionary:
 	}
 
 
-## Insert a pre-coerced track into the animation. Callers must coerce
-## values against the target property before calling this (see
-## AnimationValues.coerce_value_for_track) — this method runs inside the
-## undo do-method path where error propagation isn't possible.
+## Build a native value track from keyframes already validated against the
+## target property. Both authoring operations use this before committing undo.
 func _do_add_property_track(
 	anim: Animation,
 	track_path: String,
@@ -303,6 +300,33 @@ func _do_add_property_track(
 		var t: float = float(kf.get("time", 0.0))
 		var trans: float = AnimationValues.parse_transition(kf.get("transition", "linear"))
 		anim.track_insert_key(idx, t, kf.get("value"), trans)
+
+
+func _undo_remove_authored_value_track(anim: Animation, authored: Animation) -> void:
+	# Track indices can shift, and multiple value tracks may use the same
+	# path. The appended track is the last one matching the authored data.
+	var path := authored.track_get_path(0)
+	var count := authored.track_get_key_count(0)
+	for index in range(anim.get_track_count() - 1, -1, -1):
+		if anim.track_get_type(index) != Animation.TYPE_VALUE \
+				or anim.track_get_path(index) != path \
+				or anim.track_get_key_count(index) != count \
+				or anim.track_get_interpolation_type(index) != authored.track_get_interpolation_type(0) \
+				or anim.value_track_get_update_mode(index) != authored.value_track_get_update_mode(0) \
+				or anim.track_is_imported(index) != authored.track_is_imported(0) \
+				or anim.track_is_enabled(index) != authored.track_is_enabled(0) \
+				or anim.track_get_interpolation_loop_wrap(index) != authored.track_get_interpolation_loop_wrap(0):
+			continue
+		var matches := true
+		for key in count:
+			if anim.track_get_key_time(index, key) != authored.track_get_key_time(0, key) \
+					or anim.track_get_key_transition(index, key) != authored.track_get_key_transition(0, key) \
+					or anim.track_get_key_value(index, key) != authored.track_get_key_value(0, key):
+				matches = false
+				break
+		if matches:
+			anim.remove_track(index)
+			return
 
 
 # ============================================================================
@@ -571,28 +595,27 @@ func create_simple(params: Dictionary) -> Dictionary:
 	var coerce_root: Node = player_parent if created_player else null
 	var per_track_keyframes: Array = []
 	for spec in tweens:
-		var target: String = str(spec.get("target", ""))
-		var property: String = str(spec.get("property", ""))
-		var track_path: String = target + ":" + property
+		var track_path: String = str(spec.target) + ":" + str(spec.property)
 		var duration: float = float(spec.get("duration", 1.0))
 		var delay: float = float(spec.get("delay", 0.0))
 		var trans_str = spec.get("transition", "linear")
-		var from_result := AnimationValues.coerce_value_for_track(spec.get("from"), track_path, player, coerce_root)
-		if from_result.has("error"):
+		var context := AnimationValues.resolve_track_prop_context(track_path, player, coerce_root)
+		if context.has("error"):
 			if created_player:
 				player.queue_free()
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, from_result.error])
-		var to_result := AnimationValues.coerce_value_for_track(spec.get("to"), track_path, player, coerce_root)
-		if to_result.has("error"):
-			if created_player:
-				player.queue_free()
-			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, to_result.error])
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "tween '%s': %s" % [track_path, context.error])
+		var resolved_keys: Array = []
+		for edge in ["from", "to"]:
+			var value := AnimationValues.coerce_with_context(spec[edge], context)
+			if value.has("error"):
+				if created_player:
+					player.queue_free()
+				return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "tween '%s' %s: %s" % [track_path, edge, value.error])
+			var time := delay if edge == "from" else delay + duration
+			resolved_keys.append({"time": time, "value": value.ok, "transition": trans_str})
 		per_track_keyframes.append({
 			"track_path": track_path,
-			"keyframes": [
-				{"time": delay, "value": from_result.ok, "transition": trans_str},
-				{"time": delay + duration, "value": to_result.ok, "transition": trans_str},
-			],
+			"keyframes": resolved_keys,
 		})
 
 	# Build the animation fully in memory before touching the undo stack.

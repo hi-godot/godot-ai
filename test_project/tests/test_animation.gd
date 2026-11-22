@@ -16,6 +16,15 @@ var _handler: AnimationHandler
 var _undo_redo: EditorUndoRedoManager
 
 
+class ReadOnlyTrackMaterial extends StandardMaterial3D:
+	var dynamic_weight: Variant = 0.25
+	var step_count := 0
+
+	func _validate_property(property: Dictionary) -> void:
+		if property.name == "albedo_color":
+			property.usage |= PROPERTY_USAGE_READ_ONLY
+
+
 func suite_name() -> String:
 	return "animation"
 
@@ -492,6 +501,257 @@ func test_create_simple_accepts_color_subpath() -> void:
 	_remove_node(player_path)
 	sprite.get_parent().remove_child(sprite)
 	sprite.queue_free()
+
+
+func _resource_track_rig(with_player: bool = true) -> Dictionary:
+	var root := EditorInterface.get_edited_scene_root()
+	var rig := Node3D.new()
+	rig.name = "ResourceTrackRig"
+	root.add_child(rig, true)
+	rig.owner = root
+	var targets := Node3D.new()
+	targets.name = "Targets"
+	rig.add_child(targets)
+	targets.owner = root
+	var mesh := MeshInstance3D.new()
+	mesh.name = "Mesh"
+	mesh.mesh = BoxMesh.new()
+	mesh.material_override = StandardMaterial3D.new()
+	mesh.material_override.next_pass = StandardMaterial3D.new()
+	targets.add_child(mesh)
+	mesh.owner = root
+	var player: AnimationPlayer
+	if with_player:
+		player = AnimationPlayer.new()
+		player.name = "Player"
+		player.root_node = ^"../Targets"
+		player.add_animation_library("", AnimationLibrary.new())
+		rig.add_child(player)
+		player.owner = root
+	return {
+		"rig": rig, "targets": targets, "mesh": mesh, "player": player,
+		"player_path": "%s/Player" % McpScenePath.from_node(rig, root)
+	}
+
+
+func test_resource_value_tracks_play_after_scene_reload() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var fixture := _resource_track_rig()
+	var rig: Node3D = fixture.rig
+	var mesh: MeshInstance3D = fixture.mesh
+	var player: AnimationPlayer = fixture.player
+	var first := _handler.create_animation({"player_path": fixture.player_path, "name": "pulse", "length": 1.0})
+	assert_true(first.has("data"), str(first))
+	var track_specs := [
+		["Mesh:material_override:albedo_color", {"r": 0.0, "g": 0.2, "b": 0.4}, [1.0, 0.6, 0.0, 1.0]],
+		["Mesh:material_override:next_pass:albedo_color:a", "0.2", 0.8],
+		["Mesh:mesh:size:x", 1, 3.0],
+	]
+	for spec in track_specs:
+		var result := _handler.add_property_track({
+			"player_path": fixture.player_path, "animation_name": "pulse", "track_path": spec[0],
+			"keyframes": [{"time": 0.0, "value": spec[1]}, {"time": 1.0, "value": spec[2]}],
+		})
+		assert_true(result.has("data"), str(result))
+		if result.has("data"):
+			assert_eq(result.data.track_path, spec[0])
+			assert_true(result.data.undoable)
+	if not player.has_animation("pulse") or player.get_animation("pulse").get_track_count() != 3:
+		_remove_node(McpScenePath.from_node(rig, root))
+		return
+	var authored := player.get_animation("pulse")
+	assert_true(authored.track_get_key_value(0, 0) is Color)
+	assert_true(authored.track_get_key_value(1, 0) is float)
+	assert_true(authored.track_get_key_value(2, 0) is float)
+	assert_true(editor_undo(_undo_redo), "One undo removes the resource component track")
+	assert_eq(authored.get_track_count(), 2)
+	assert_true(editor_redo(_undo_redo), "Redo restores the original native path and values")
+	assert_eq(authored.track_get_path(2), ^"Mesh:mesh:size:x")
+	assert_eq(authored.track_get_key_value(2, 1), 3.0)
+	assert_eq(mesh.material_override.albedo_color, Color.WHITE, "Authoring leaves the target resource alone")
+
+	# Package only the disposable rig, then load it from disk ignoring caches.
+	fixture.targets.owner = rig
+	mesh.owner = rig
+	player.owner = rig
+	var packed := PackedScene.new()
+	var packed_ok := packed.pack(rig)
+	assert_eq(packed_ok, OK)
+	var path := "user://mcp-resource-animation-%d.tscn" % Time.get_ticks_usec()
+	var saved := ResourceSaver.save(packed, path)
+	assert_eq(saved, OK)
+	var loaded: PackedScene
+	if saved == OK:
+		loaded = ResourceLoader.load(path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE_DEEP) as PackedScene
+		DirAccess.remove_absolute(path)
+	assert_true(loaded != null, "Native scene saved and reopened")
+	if loaded != null:
+		var reloaded := loaded.instantiate()
+		root.add_child(reloaded, true)
+		var replay := reloaded.get_node("Player") as AnimationPlayer
+		var reloaded_mesh := reloaded.get_node("Targets/Mesh") as MeshInstance3D
+		assert_eq(replay.root_node, ^"../Targets")
+		var clip := replay.get_animation("pulse")
+		assert_eq(clip.track_get_path(0), ^"Mesh:material_override:albedo_color")
+		assert_true(clip.track_get_key_value(0, 0) is Color)
+		replay.play("pulse")
+		replay.seek(0.5, true)
+		assert_true(reloaded_mesh.material_override.albedo_color.is_equal_approx(Color(0.5, 0.4, 0.2)), "Native mixer interpolates the reopened Color track")
+		assert_true(is_equal_approx(reloaded_mesh.material_override.next_pass.albedo_color.a, 0.5), "Native mixer reaches a nested resource component")
+		assert_true(reloaded_mesh.mesh.size.is_equal_approx(Vector3(2, 1, 1)), "Native mixer updates a non-material resource component")
+		replay.stop()
+		reloaded.free()
+	_remove_node(McpScenePath.from_node(rig, root))
+
+
+func test_resource_track_invalid_paths_and_values_are_atomic() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var fixture := _resource_track_rig()
+	var mesh: MeshInstance3D = fixture.mesh
+	var player: AnimationPlayer = fixture.player
+	mesh.material_override = ReadOnlyTrackMaterial.new()
+	var clip := Animation.new()
+	player.get_animation_library("").add_animation("idle", clip)
+	var history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(root))
+	var initial_version := history.get_version()
+	var malformed := [
+		["Mesh:material_override::albedo_color", 1.0, "empty property segment"],
+		["Mesh:material_override:next_pass:albedo_color", "#ffffff", "is null"],
+		["Mesh:material_override:unknown_prop", 1.0, "unknown_prop"],
+		["Mesh:material_override:albedo_color", "#ffffff", "read-only"],
+		["Mesh:mesh:size:k", 1.0, "known scalar component"],
+		["Mesh:mesh:size:x", {"x": 1.0}, "finite float"],
+		["Mesh:mesh:size:x", INF, "finite float"],
+		["Mesh:mesh:size", {"x": 1.0}, "Cannot coerce value to Vector3"],
+		["Mesh:material_override:step_count", 1e100, "int64 range"],
+		["Mesh:material_override:step_count", 1.5, "integral value"],
+	]
+	for spec in malformed:
+		var result := _handler.add_property_track({
+			"player_path": fixture.player_path, "animation_name": "idle", "track_path": spec[0],
+			"keyframes": [{"time": 0.0, "value": spec[1]}],
+		})
+		assert_is_error(result, ErrorCodes.INVALID_PARAMS)
+		if result.has("error"):
+			assert_contains(result.error.message, spec[2])
+		assert_eq(clip.get_track_count(), 0)
+		assert_eq(history.get_version(), initial_version)
+	var missing := _handler.add_property_track({
+		"player_path": fixture.player_path, "animation_name": "idle",
+		"track_path": "LaterMesh:material_override:albedo_color",
+		"keyframes": [{"time": 0.0, "value": [1, 0, 0, 1]}],
+	})
+	assert_true(missing.has("data"), str(missing))
+	if missing.has("data"):
+		assert_eq(clip.get_track_count(), 1)
+		assert_eq(clip.track_get_key_value(0, 0), [1, 0, 0, 1])
+	for spec in [["dynamic_weight", "0.75", 0.75], ["step_count", 2.0, 2]]:
+		var accepted := _handler.add_property_track({
+			"player_path": fixture.player_path, "animation_name": "idle",
+			"track_path": "Mesh:material_override:" + spec[0],
+			"keyframes": [{"time": 0.0, "value": spec[1]}],
+		})
+		assert_true(accepted.has("data"), str(accepted))
+		if accepted.has("data"):
+			var key: Variant = clip.track_get_key_value(clip.get_track_count() - 1, 0)
+			assert_eq(typeof(key), typeof(spec[2]))
+			assert_eq(key, spec[2])
+	_remove_node(McpScenePath.from_node(fixture.rig, root))
+
+
+func test_resource_track_undo_preserves_duplicate_path_neighbors() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var fixture := _resource_track_rig()
+	var player: AnimationPlayer = fixture.player
+	var clip := Animation.new()
+	player.get_animation_library("").add_animation("idle", clip)
+	var path := ^"Mesh:mesh:size:x"
+	var original := clip.add_track(Animation.TYPE_VALUE)
+	clip.track_set_path(original, path)
+	clip.track_insert_key(original, 0.0, 1.0)
+	var request := {
+		"player_path": fixture.player_path, "animation_name": "idle", "track_path": String(path),
+		"keyframes": [{"time": 0.0, "value": 2.0}],
+	}
+	var added := _handler.add_property_track(request)
+	assert_true(added.has("data"), str(added))
+	if added.has("data"):
+		var later := clip.add_track(Animation.TYPE_VALUE)
+		clip.track_set_path(later, path)
+		clip.track_insert_key(later, 0.0, 3.0)
+		assert_true(editor_undo(_undo_redo))
+		assert_eq(clip.get_track_count(), 2)
+		assert_eq(clip.track_get_key_value(0, 0), 1.0)
+		assert_eq(clip.track_get_key_value(1, 0), 3.0)
+		assert_true(editor_redo(_undo_redo))
+		assert_eq(clip.get_track_count(), 3)
+		assert_eq(clip.track_get_key_value(2, 0), 2.0)
+		var repeated := _handler.add_property_track(request)
+		assert_true(repeated.has("data"), str(repeated))
+		assert_eq(clip.get_track_count(), 4)
+		assert_true(editor_undo(_undo_redo))
+		assert_eq(clip.get_track_count(), 3)
+		assert_eq(clip.track_get_key_value(2, 0), 2.0)
+	_remove_node(McpScenePath.from_node(fixture.rig, root))
+
+
+func test_create_simple_resource_overwrite_undo_and_failed_overwrite() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var fixture := _resource_track_rig()
+	var player: AnimationPlayer = fixture.player
+	var original := Animation.new()
+	player.get_animation_library("").add_animation("pulse", original)
+	var tween := {"target": "Mesh", "property": "material_override:albedo_color", "from": "#000000", "to": "#ffffff", "duration": 1.0}
+	var invalid := tween.duplicate()
+	invalid.property = "material_override:next_pass:albedo_color"
+	invalid.to = "not-a-color"
+	var history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(root))
+	var version := history.get_version()
+	var refusal := _handler.create_simple({"player_path": fixture.player_path, "name": "pulse", "overwrite": true, "tweens": [tween, invalid]})
+	assert_is_error(refusal, ErrorCodes.INVALID_PARAMS)
+	assert_eq(player.get_animation("pulse"), original)
+	assert_eq(history.get_version(), version)
+	var replacement := _handler.create_simple({"player_path": fixture.player_path, "name": "pulse", "overwrite": true, "tweens": [tween]})
+	assert_true(replacement.has("data"), str(replacement))
+	if replacement.has("data"):
+		assert_true(replacement.data.overwritten)
+		var composed := player.get_animation("pulse")
+		assert_ne(composed, original)
+		assert_eq(composed.track_get_key_value(0, 1), Color.WHITE)
+		assert_true(editor_undo(_undo_redo))
+		assert_eq(player.get_animation("pulse"), original)
+		assert_true(editor_redo(_undo_redo))
+		assert_eq(player.get_animation("pulse"), composed)
+	_remove_node(McpScenePath.from_node(fixture.rig, root))
+
+
+func test_create_simple_resource_track_on_auto_created_player() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var fixture := _resource_track_rig(false)
+	var result := _handler.create_simple({
+		"player_path": fixture.player_path, "name": "grow",
+		"tweens": [
+			{"target": "Targets/Mesh", "property": "mesh:size", "from": {"x": 1, "y": 1, "z": 1}, "to": [3, 1, 1], "duration": 1.0},
+		],
+	})
+	assert_true(result.has("data"), str(result))
+	if result.has("data"):
+		assert_true(result.data.animation_player_created)
+		var player := McpScenePath.resolve(fixture.player_path, root) as AnimationPlayer
+		assert_true(player != null)
+		var clip := player.get_animation("grow")
+		assert_eq(clip.track_get_path(0), ^"Targets/Mesh:mesh:size")
+		assert_eq(clip.track_get_key_value(0, 1), Vector3(3, 1, 1))
+		assert_true(editor_undo(_undo_redo))
+		assert_eq(McpScenePath.resolve(fixture.player_path, root), null)
+		assert_true(editor_redo(_undo_redo))
+		assert_eq(McpScenePath.resolve(fixture.player_path, root), player)
+		var mesh: MeshInstance3D = fixture.mesh
+		player.play("grow")
+		player.seek(0.5, true)
+		assert_true(mesh.mesh.size.is_equal_approx(Vector3(2, 1, 1)))
+		player.stop()
+	_remove_node(McpScenePath.from_node(fixture.rig, root))
 
 
 func test_create_simple_coerces_vector3() -> void:

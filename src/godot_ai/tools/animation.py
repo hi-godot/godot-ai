@@ -74,6 +74,8 @@ set parameters with node_set_property (e.g. property="parameters/Blend/blend_amo
                         interpolation="linear")
         Add a property track. track_path: "NodeName:property". keyframes:
         [{time, value, transition?}, ...]. interpolation: linear|nearest|cubic.
+        Assigned resources support nested paths such as "Indicator:material_override:albedo_color"
+        for color keys or "Indicator:material_override:albedo_color:a" for opacity.
   • add_method_track(player_path, animation_name, target_node_path, keyframes)
         Add a method track. keyframes: [{time, method, args?}, ...].
   • set_autoplay(player_path, animation_name="")
@@ -90,6 +92,7 @@ set parameters with node_set_property (e.g. property="parameters/Blend/blend_amo
                    overwrite=False)
         High-level: build a multi-track clip from tween specs in one call.
         tweens: [{target, property, from, to, duration, delay?, transition?}].
+        Use property="material_override:albedo_color" on a mesh with an assigned material.
   • preset_fade(player_path, target_path, mode="in", duration=0.5,
                  animation_name="", overwrite=False)
         One-call fade-in/out (modulate.a).
