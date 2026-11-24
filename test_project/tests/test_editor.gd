@@ -220,6 +220,78 @@ func test_screenshot_invalid_source() -> void:
 	assert_contains(result.error.message, "viewport_2d")
 
 
+func test_screenshot_render_mode_requires_a_single_3d_viewport_image() -> void:
+	var invalid_mode := _handler.take_screenshot({"render_mode": "wireframe"})
+	assert_is_error(invalid_mode, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(invalid_mode.error.message, "normal")
+	assert_is_error(_handler.take_screenshot({"render_mode": false}), ErrorCodes.WRONG_TYPE)
+	for source: String in ["viewport_2d", "game", "cinematic"]:
+		var invalid_source := _handler.take_screenshot({"source": source, "render_mode": "normal"})
+		assert_is_error(invalid_source, ErrorCodes.VALUE_OUT_OF_RANGE)
+		assert_contains(invalid_source.error.message, "source='viewport'")
+	var invalid_coverage := _handler.take_screenshot({"render_mode": "unshaded", "coverage": true})
+	assert_is_error(invalid_coverage, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(invalid_coverage.error.message, "coverage=false")
+
+
+class ViewportReadbackStub extends EditorHandler:
+	var image: Image
+	var modes: Array[Viewport.DebugDraw] = []
+	var update_modes: Array[SubViewport.UpdateMode] = []
+
+	func _read_viewport_image(viewport: Viewport) -> Image:
+		modes.append(viewport.debug_draw)
+		update_modes.append((viewport as SubViewport).render_target_update_mode)
+		return image
+
+
+func test_screenshot_render_mode_restores_previous_state_on_success_and_empty_readback() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		skip("No edited scene or 3D viewport camera")
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var target_path := McpScenePath.from_node(target, root)
+	var handler := ViewportReadbackStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var initial_mode := viewport.debug_draw
+	var initial_update_mode := viewport.render_target_update_mode
+	viewport.debug_draw = Viewport.DEBUG_DRAW_WIREFRAME
+	viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+	var omitted := handler.take_screenshot({})
+	var normal := handler.take_screenshot({"render_mode": "normal"})
+	var unshaded := handler.take_screenshot({"render_mode": "unshaded", "view_target": target_path,
+		"elevation": 35.0, "azimuth": 70.0, "fov": 45.0})
+	handler.image = null
+	var empty := handler.take_screenshot({"render_mode": "unshaded", "view_target": target_path, "fov": 45.0})
+	var restored_mode := viewport.debug_draw
+	var restored_update_mode := viewport.render_target_update_mode
+	viewport.debug_draw = initial_mode
+	viewport.render_target_update_mode = initial_update_mode
+	RenderingServer.force_draw(false)
+
+	assert_eq(handler.modes, [Viewport.DEBUG_DRAW_WIREFRAME, Viewport.DEBUG_DRAW_DISABLED,
+		Viewport.DEBUG_DRAW_UNSHADED, Viewport.DEBUG_DRAW_UNSHADED])
+	assert_eq(handler.update_modes, [SubViewport.UPDATE_WHEN_VISIBLE, SubViewport.UPDATE_ALWAYS,
+		SubViewport.UPDATE_ALWAYS, SubViewport.UPDATE_ALWAYS])
+	assert_false(omitted.get("data", {}).has("render_mode"))
+	assert_eq(omitted.get("data", {}).get("width"), 4)
+	assert_eq(normal.get("data", {}).get("render_mode"), "normal")
+	var data: Dictionary = unshaded.get("data", {})
+	assert_eq(data.get("render_mode"), "unshaded")
+	assert_eq(data.get("view_target"), target_path)
+	assert_eq(data.get("elevation"), 35.0)
+	assert_eq(data.get("azimuth"), 70.0)
+	assert_eq(data.get("fov"), 45.0)
+	assert_is_error(empty, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(empty.error.data.sub_code, ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY)
+	assert_eq(restored_mode, Viewport.DEBUG_DRAW_WIREFRAME)
+	assert_eq(restored_update_mode, SubViewport.UPDATE_WHEN_VISIBLE)
+
+
 func test_screenshot_game_not_playing() -> void:
 	var result := _handler.take_screenshot({"source": "game"})
 	## Same shape as game_eval/game_command's gate: EDITOR_NOT_READY with

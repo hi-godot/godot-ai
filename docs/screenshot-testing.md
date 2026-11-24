@@ -22,6 +22,22 @@ views, not the surrounding editor chrome.
 `source="game"` is only the right answer when the thing you want to see
 only exists in the *running* game.
 
+## Compare a material with and without scene lighting
+
+Capture the same static mesh twice to see how much lighting contributes
+to its appearance. Each call produces one 3D viewport image and reports the
+requested `render_mode` in its metadata.
+
+```python
+editor_screenshot(source="viewport", view_target="/Level/WestWall", render_mode="normal")
+editor_screenshot(source="viewport", view_target="/Level/WestWall", render_mode="unshaded")
+```
+
+`normal` uses the scene lighting. `unshaded` shows the material without
+lighting. Each capture restores the editor's prior display mode. Omit
+`render_mode` to capture whatever mode is already displayed. Explicit modes
+work with a single current or framed view, including custom framing angles.
+
 ## Save a cinematic render at an exact size
 
 ```python

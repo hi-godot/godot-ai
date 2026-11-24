@@ -7,6 +7,8 @@ into ``editor_manage``.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastmcp import Context, FastMCP
 
 from godot_ai.handlers import editor as editor_handlers
@@ -197,6 +199,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         save_to: str = "",
         overwrite: bool = False,
         session_id: str = "",
+        render_mode: Literal["normal", "unshaded"] | None = None,
     ):
         """Capture a screenshot of the Godot editor viewport or running game.
 
@@ -256,6 +259,10 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
                 saved_path, saved_width, saved_height and saved_bytes describe
                 the file. File writes require a writable editor and cannot be undone.
             overwrite: Replace an existing save_to PNG. Default False.
+            render_mode: For one 3D viewport image, use "normal" for scene lighting
+                or "unshaded" to inspect material colors without lighting. Omit to
+                capture the editor's current display mode. Supports view_target
+                and its framing angles. Requires coverage=False.
             session_id: Optional Godot session to target. Empty = active session.
         """
         runtime = DirectRuntime.from_context(ctx, session_id=session_id or None)
@@ -274,6 +281,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
             height=height,
             save_to=save_to,
             overwrite=overwrite,
+            render_mode=render_mode,
         )
 
     @mcp.tool(meta=DEFER_META)

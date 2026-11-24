@@ -436,8 +436,17 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 	var custom_elevation = params.get("elevation", null)
 	var custom_azimuth = params.get("azimuth", null)
 	var custom_fov = params.get("fov", null)
+	var render_mode := ""
+	if params.has("render_mode"):
+		if not params.render_mode is String:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "render_mode must be a string")
+		render_mode = params.render_mode
+		if render_mode not in ["normal", "unshaded"]:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid render_mode '%s'; use 'normal' or 'unshaded'" % render_mode)
+		if source != "viewport" or coverage:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "render_mode requires source='viewport' and coverage=false")
 
-	var viewport: Viewport
+	var viewport: SubViewport
 	match source:
 		"viewport":
 			viewport = EditorInterface.get_editor_viewport_3d()
@@ -624,17 +633,7 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 
 		var cam_xform := _frame_transform_for_aabb(combined_aabb, use_fov, use_elev, use_azim)
 
-		if custom_fov != null:
-			RenderingServer.camera_set_perspective(cam_rid, use_fov, saved_near, saved_far)
-		RenderingServer.camera_set_transform(cam_rid, cam_xform)
-		RenderingServer.force_draw(false)
-
-		var image: Image = viewport.get_texture().get_image()
-
-		## Restore camera state
-		if custom_fov != null:
-			RenderingServer.camera_set_perspective(cam_rid, saved_fov, saved_near, saved_far)
-		RenderingServer.camera_set_transform(cam_rid, saved_xform)
+		var image := _capture_viewport_image(viewport, render_mode, cam, cam_xform, use_fov if custom_fov != null else null)
 
 		if image == null or image.is_empty():
 			return _empty_image_error(
@@ -643,6 +642,8 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 			)
 
 		var result := _finalize_image(image, "viewport", max_resolution)
+		if not render_mode.is_empty():
+			result.data["render_mode"] = render_mode
 		result.data["view_target"] = view_target
 		result.data["view_target_count"] = targets.size()
 		var aabb_c := combined_aabb.get_center()
@@ -659,7 +660,7 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 			result.data["view_target_not_found"] = not_found
 		return result
 
-	var image: Image = viewport.get_texture().get_image()
+	var image := _capture_viewport_image(viewport, render_mode)
 
 	if image == null or image.is_empty():
 		return _empty_image_error(
@@ -667,7 +668,57 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 			"Captured an empty image from %s. The 3D viewport produced no output — typically headless mode or the 3D viewport has not drawn a frame yet." % source
 		)
 
-	return _finalize_image(image, source, max_resolution)
+	var result := _finalize_image(image, source, max_resolution)
+	if not render_mode.is_empty():
+		result.data["render_mode"] = render_mode
+	return result
+
+
+func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Camera3D = null,
+		cam_xform := Transform3D.IDENTITY, fov: Variant = null) -> Image:
+	if render_mode.is_empty() and cam == null:
+		return _read_viewport_image(viewport)
+
+	var saved_mode := viewport.debug_draw
+	var saved_update_mode := viewport.render_target_update_mode
+	var saved_xform := Transform3D.IDENTITY
+	if cam != null:
+		saved_xform = cam.get_camera_transform()
+		if fov != null:
+			RenderingServer.camera_set_perspective(cam.get_camera_rid(), fov, cam.near, cam.far)
+		RenderingServer.camera_set_transform(cam.get_camera_rid(), cam_xform)
+	if not render_mode.is_empty():
+		viewport.debug_draw = Viewport.DEBUG_DRAW_UNSHADED if render_mode == "unshaded" else Viewport.DEBUG_DRAW_DISABLED
+	# Render even if the user has another editor tab open. Neither draw swaps
+	# buffers, and the second replaces the temporary frame before returning.
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	RenderingServer.force_draw(false)
+	var image := _read_viewport_image(viewport)
+	if cam != null:
+		if fov != null:
+			_restore_viewport_projection(cam)
+		RenderingServer.camera_set_transform(cam.get_camera_rid(), saved_xform)
+	if not render_mode.is_empty():
+		viewport.debug_draw = saved_mode
+	RenderingServer.force_draw(false)
+	viewport.render_target_update_mode = saved_update_mode
+	return image
+
+
+func _read_viewport_image(viewport: Viewport) -> Image:
+	var texture := viewport.get_texture()
+	return texture.get_image() if texture != null else null
+
+
+static func _restore_viewport_projection(cam: Camera3D) -> void:
+	var rid := cam.get_camera_rid()
+	match cam.projection:
+		Camera3D.PROJECTION_ORTHOGONAL:
+			RenderingServer.camera_set_orthogonal(rid, cam.size, cam.near, cam.far)
+		Camera3D.PROJECTION_FRUSTUM:
+			RenderingServer.camera_set_frustum(rid, cam.size, cam.frustum_offset, cam.near, cam.far)
+		Camera3D.PROJECTION_PERSPECTIVE:
+			RenderingServer.camera_set_perspective(rid, cam.fov, cam.near, cam.far)
 
 
 ## Render the edited scene through its active Camera3D without running the
