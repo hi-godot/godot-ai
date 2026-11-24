@@ -13,6 +13,7 @@ var _undo_redo: EditorUndoRedoManager
 const TEST_MATERIAL_PATH := "res://tests/_mcp_test_material.tres"
 const TEST_NODE_SCRIPT_PATH := "res://tests/_mcp_test_node_script.gd"
 const TEST_NODE_ARRAY_SCENE_PATH := "res://tests/_mcp_test_node_array_scene.tscn"
+const TEST_DELETE_UNDO_SCENE_PATH := "user://_mcp_test_delete_undo_scene.tscn"
 
 
 func suite_name() -> String:
@@ -40,6 +41,8 @@ func suite_teardown() -> void:
 		DirAccess.remove_absolute(TEST_NODE_SCRIPT_PATH + ".uid")
 	if FileAccess.file_exists(TEST_NODE_ARRAY_SCENE_PATH):
 		DirAccess.remove_absolute(TEST_NODE_ARRAY_SCENE_PATH)
+	if FileAccess.file_exists(TEST_DELETE_UNDO_SCENE_PATH):
+		DirAccess.remove_absolute(TEST_DELETE_UNDO_SCENE_PATH)
 
 
 # ----- get_children -----
@@ -331,6 +334,99 @@ func test_delete_node_basic() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	var survivor := scene_root.find_child("_McpTestDelete", true, false)
 	assert_true(survivor == null, "Node should actually be gone from the scene tree")
+
+
+func test_delete_node_restores_subtree_ownership_after_undo_and_reload() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var host := _add_delete_fixture_node(scene_root, "_McpTestDeleteHost", scene_root)
+	track(host)
+	_add_delete_fixture_node(host, "Before", scene_root)
+	var branch := _add_delete_fixture_node(host, "Branch", scene_root)
+	track(branch)
+	_add_delete_fixture_node(host, "After", scene_root)
+	var child := _add_delete_fixture_node(branch, "Child", scene_root)
+	var grandchild := _add_delete_fixture_node(child, "Grandchild", scene_root)
+	var unowned := _add_delete_fixture_node(branch, "RuntimeOnly", null)
+	var internal := Node.new()
+	internal.name = "Internal"
+	branch.add_child(internal, false, Node.INTERNAL_MODE_BACK)
+	internal.owner = scene_root
+	var source := load("res://snowman.tscn") as PackedScene
+	var instance := source.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
+	instance.name = "Instance"
+	branch.add_child(instance)
+	instance.owner = scene_root
+	var instance_child := instance.get_node("Head")
+	assert_eq(instance_child.owner, instance, "fixture preserves the instance's internal owner")
+
+	var result := _handler.delete_node({"path": McpScenePath.from_node(branch, scene_root)})
+	assert_true(result.get("data", {}).get("undoable", false), "delete should succeed and be undoable")
+	assert_eq(host.get_node_or_null("Branch"), null, "delete removes the branch")
+	assert_true(editor_undo(_undo_redo), "undo delete should succeed")
+	assert_eq(host.get_child(1), branch, "undo restores the branch at its original sibling index")
+	assert_eq(branch.owner, scene_root)
+	assert_eq(child.owner, scene_root)
+	assert_eq(grandchild.owner, scene_root)
+	assert_eq(internal.owner, scene_root)
+	assert_eq(instance.owner, scene_root)
+	assert_eq(instance_child.owner, instance)
+	assert_eq(unowned.owner, null)
+
+	assert_true(editor_redo(_undo_redo), "redo delete should succeed")
+	assert_eq(host.get_node_or_null("Branch"), null, "redo removes the branch again")
+	assert_true(editor_undo(_undo_redo), "undo after redo should succeed")
+	assert_eq(host.get_child(1), branch)
+
+	var packed := PackedScene.new()
+	assert_eq(packed.pack(scene_root), OK, "the restored scene should pack")
+	assert_eq(ResourceSaver.save(packed, TEST_DELETE_UNDO_SCENE_PATH), OK)
+	var reloaded := ResourceLoader.load(TEST_DELETE_UNDO_SCENE_PATH, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	assert_ne(reloaded, null, "the restored scene should load from disk")
+	if reloaded == null:
+		return
+	var copy := track(reloaded.instantiate()) as Node
+	assert_ne(copy, null, "the restored scene should instantiate")
+	if copy == null:
+		return
+	var restored := copy.get_node_or_null("_McpTestDeleteHost/Branch")
+	assert_ne(restored, null, "the deleted subtree should survive saving after undo")
+	if restored == null:
+		return
+	var restored_grandchild := restored.get_node_or_null("Child/Grandchild")
+	assert_ne(restored_grandchild, null, "scene-owned descendants should survive saving after undo")
+	if restored_grandchild != null:
+		assert_eq(restored_grandchild.owner, copy)
+	assert_eq(restored.get_node_or_null("RuntimeOnly"), null, "unowned nodes should stay out of the saved scene")
+	var restored_instance := restored.get_node_or_null("Instance")
+	assert_ne(restored_instance, null, "the instance within the branch should survive saving after undo")
+	if restored_instance != null:
+		assert_eq(restored_instance.scene_file_path, "res://snowman.tscn")
+		assert_eq(restored_instance.get_node("Head").owner, restored_instance)
+
+
+func test_delete_node_undo_preserves_unowned_root() -> void:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var node := _add_delete_fixture_node(scene_root, "_McpTestDeleteUnowned", null)
+	track(node)
+	var result := _handler.delete_node({"path": McpScenePath.from_node(node, scene_root)})
+	assert_true(result.get("data", {}).get("undoable", false), "delete should succeed and be undoable")
+	assert_eq(node.get_parent(), null)
+	assert_true(editor_undo(_undo_redo), "undo delete should succeed")
+	assert_eq(node.get_parent(), scene_root)
+	assert_eq(node.owner, null, "undo must not make a previously unowned root scene-owned")
+	assert_true(editor_redo(_undo_redo), "redo delete should succeed")
+	assert_eq(node.get_parent(), null)
+	assert_true(editor_undo(_undo_redo), "undo after redo should succeed")
+	assert_eq(node.get_parent(), scene_root)
+	assert_eq(node.owner, null)
+
+
+func _add_delete_fixture_node(parent: Node, node_name: String, owner: Node) -> Node:
+	var node := Node.new()
+	node.name = node_name
+	parent.add_child(node)
+	node.owner = owner
+	return node
 
 
 func test_delete_node_scene_root() -> void:
