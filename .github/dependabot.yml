@@ -2,17 +2,59 @@ version: 2
 updates:
   # Keep the SHA-pinned GitHub Actions fresh — Dependabot bumps the pin and
   # updates the trailing version comment, so pinning doesn't mean going stale.
+  # One weekly PR for all of them. Some tests (test_signing_workflows.py)
+  # assert exact action SHAs and still need updating in that PR.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     commit-message:
       prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns:
+          - "*"
 
   # Python runtime + dev dependencies (pyproject.toml).
+  #
+  # The runtime set is pinned exactly and repeated in
+  # src/godot_ai/runtime_dependencies.py, which the server checks at startup.
+  # Lockstep pairs (fastmcp/fastmcp-slim, mcp/mcp-types, httpx2/httpcore2)
+  # cannot install when bumped alone. So no single-package PR can pass CI;
+  # one grouped PR is the starting point for the reviewed, coordinated
+  # upgrade, which also updates RUNTIME_DEPENDENCIES. Never auto-merge it.
+  #
+  # Groups apply to version updates only. Security updates, if enabled,
+  # still arrive as their own PRs so a fix is never held behind the group.
+  # A dependency joins the first group it matches.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
     commit-message:
       prefix: "deps"
+    groups:
+      # Keep in sync with RUNTIME_DEPENDENCIES in
+      # src/godot_ai/runtime_dependencies.py.
+      runtime:
+        patterns:
+          - "anyio"
+          - "fastmcp"
+          - "fastmcp-slim"
+          - "h11"
+          - "httpx"
+          - "httpx2"
+          - "httpcore2"
+          - "mcp"
+          - "mcp-types"
+          - "pydantic"
+          - "sniffio"
+          - "starlette"
+          - "uvicorn"
+          - "websockets"
+      # Dev, build and release tooling. build, pyinstaller, psutil and
+      # setuptools are also pinned in ci.yml, the release scripts and their
+      # tests, so this PR needs those updated alongside.
+      tooling:
+        patterns:
+          - "*"

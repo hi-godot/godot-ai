@@ -25,6 +25,17 @@ def test_pyproject_exactly_pins_every_checked_runtime_distribution() -> None:
     }
 
 
+def test_dependabot_groups_the_checked_runtime_set_together() -> None:
+    configuration = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"))
+    pip = next(item for item in configuration["updates"] if item["package-ecosystem"] == "pip")
+    groups = pip["groups"]
+
+    # The runtime group comes first, so no runtime pin falls into the catch-all
+    # and gets bumped apart from its lockstep partner.
+    assert next(iter(groups)) == "runtime"
+    assert set(groups["runtime"]["patterns"]) == set(RUNTIME_DEPENDENCIES)
+
+
 def test_build_and_promotion_tooling_is_exactly_pinned() -> None:
     with (ROOT / "pyproject.toml").open("rb") as file:
         configuration = tomllib.load(file)
