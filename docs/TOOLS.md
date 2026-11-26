@@ -60,6 +60,42 @@ on the instance root and direct local attachments remain safe and do not
 prevent disabling. The operation never enables ancestors or discards edits
 implicitly.
 
+Use `node_manage(op="align_markers_3d")` to move an existing 3D room or prop
+so its source `Marker3D` meets a fixed target `Marker3D`. All three paths
+resolve from the edited scene. This example joins two outward-facing doorways.
+
+```python
+node_manage(op="align_markers_3d", params={
+    "path": "/Level/WestRoom",
+    "source_marker_path": "/Level/WestRoom/Entrance",
+    "target_marker_path": "/Level/EastRoom/Exit",
+    "orientation": "face_to_face",
+    "scene_file": "res://levels/demo.tscn",
+})
+```
+
+The markers meet at the same world position. In `face_to_face` mode their
+forward axes (−Z) point in opposite directions and their up axes (+Y) agree.
+For a prop socket, omit `orientation` to match all axes.
+
+```python
+node_manage(op="align_markers_3d", params={
+    "path": "/Level/Lamp",
+    "source_marker_path": "/Level/Lamp/Plug",
+    "target_marker_path": "/Level/Ceiling/Socket",
+})
+```
+
+The source must inherit the moving node's transform, and the target must
+be outside its subtree in the same 3D world. Markers can be read inside
+instances with Editable Children off. Their world axes must be nonzero,
+orthogonal and right-handed. The move preserves the object's world dimensions.
+If the parent transform cannot represent the aligned pose within 0.0001 world
+units, the operation returns an error before changing the scene.
+The result reports the three resolved paths, `orientation`, `changed`, and
+`undoable`. A move takes one editor undo. An already aligned call adds no
+history. Use `scene_save` to persist the placement.
+
 `logs_read` also accepts `include_details=true` for `source="editor"`,
 `source="game"`, and `source="all"`. Detailed entries include the original
 Godot `_log_error` code/rationale when available, error type, resolved source
@@ -275,7 +311,7 @@ Calls take the form:
 | Tool | Ops |
 |------|-----|
 | `scene_manage` | `create`, `save_as`, `close`, `get_roots` |
-| `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `set_editable_children`, `add_to_group`, `remove_from_group` |
+| `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `align_markers_3d`, `set_editable_children`, `add_to_group`, `remove_from_group` |
 | `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |

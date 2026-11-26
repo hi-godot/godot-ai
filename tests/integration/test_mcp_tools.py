@@ -4747,6 +4747,36 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
+    async def test_align_markers_3d_routes_to_pinned_editor(self, mcp_stack, mcp_ws_port):
+        client, _ = mcp_stack
+        pinned = await self._connect_second_plugin(mcp_ws_port, "level-editor")
+        paths = {
+            "path": "/Level/Room",
+            "source_marker_path": "/Level/Room/Entrance",
+            "target_marker_path": "/Level/Exit",
+        }
+        params = {**paths, "orientation": "face_to_face", "scene_file": "res://level.tscn"}
+        expected = {**paths, "orientation": "face_to_face", "changed": True, "undoable": True}
+
+        async def respond():
+            command = await pinned.recv_command()
+            assert command["command"] == "align_markers_3d"
+            assert command["params"] == params
+            await pinned.send_response(command["request_id"], expected)
+
+        try:
+            result, _ = await asyncio.gather(
+                client.call_tool(
+                    "node_manage",
+                    {"op": "align_markers_3d", "params": params, "session_id": pinned.session_id},
+                ),
+                respond(),
+            )
+            for field, value in expected.items():
+                assert result.data[field] == value
+        finally:
+            await pinned.close()
+
     async def test_concurrent_read_and_write_route_to_target_sessions(self, mcp_stack, mcp_ws_port):
         client, plugin_a = mcp_stack
         plugin_b = await self._connect_second_plugin(mcp_ws_port, "proj-b@0002")

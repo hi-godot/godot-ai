@@ -111,6 +111,27 @@ async def node_set_editable_children(
     )
 
 
+async def node_align_markers_3d(
+    runtime: DirectRuntime,
+    path: str,
+    source_marker_path: str,
+    target_marker_path: str,
+    orientation: str = "match",
+    scene_file: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    return await runtime.send_command(
+        "align_markers_3d",
+        _mutation_params(
+            scene_file,
+            path=path,
+            source_marker_path=source_marker_path,
+            target_marker_path=target_marker_path,
+            orientation=orientation,
+        ),
+    )
+
+
 async def node_rename(
     runtime: DirectRuntime, path: str, new_name: str, scene_file: str = ""
 ) -> dict:

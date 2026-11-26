@@ -225,7 +225,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "node",
         "  node_manage      get_children, get_groups, delete, duplicate, rename,\n"
         "                   move, reparent, add_to_group, remove_from_group,\n"
-        "                   set_editable_children\n",
+        "                   set_editable_children, align_markers_3d\n",
     ),
     ("script", "  script_manage    read, detach, find_symbols\n"),
     (
