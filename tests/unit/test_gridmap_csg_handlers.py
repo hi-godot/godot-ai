@@ -4,10 +4,14 @@ import re
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from godot_ai.godot_client.client import GodotCommandError
 from godot_ai.handlers import csg as csg_handlers
 from godot_ai.handlers import gridmap as gridmap_handlers
+from godot_ai.protocol.errors import ErrorCode
 from godot_ai.runtime.direct import DirectRuntime
-from godot_ai.sessions.registry import SessionRegistry
+from godot_ai.sessions.registry import Session, SessionRegistry
 
 
 class StubClient:
@@ -239,14 +243,29 @@ async def test_csg_create_forwards_command_and_params():
     }
 
 
-async def test_csg_bake_mesh_preserves_native_materials_by_default():
+async def test_csg_bake_mesh_requests_native_materials_by_default(tmp_path):
+    (tmp_path / "project.godot").touch()
+    registry = SessionRegistry()
+    registry.register(Session("pinned", "4.7.2", str(tmp_path), "4.0.0"))
     client = StubClient()
-    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
-    result = await csg_handlers.csg_bake_mesh(runtime, "/Main/Door", "res://door.res")
-    assert result == {"ok": True}
-    assert client.calls[-1]["command"] == "csg_bake_mesh"
-    assert client.calls[-1]["params"] == {"path": "/Main/Door", "resource_path": "res://door.res"}
-    assert client.calls[-1]["timeout"] == csg_handlers.CSG_BAKE_TIMEOUT_SEC
+    runtime = DirectRuntime(registry=registry, client=client, session_id="pinned")
+    with pytest.raises(GodotCommandError) as error:
+        await csg_handlers.csg_bake_mesh(runtime, "/Main/Door", "res://assets/door.res")
+    assert error.value.code == ErrorCode.INTERNAL_ERROR
+    assert error.value.data["disk_committed"] is False
+    assert len(client.calls) == 1
+    request = client.calls[0]
+    assert request["command"] == "csg_bake_mesh"
+    assert request["timeout"] == csg_handlers.CSG_BAKE_TIMEOUT_SEC
+    assert request["session_id"] == "pinned"
+    params = request["params"]
+    assert params["stage_path"].startswith("res://.godot-ai-csg-")
+    assert params["stage_path"].endswith("/mesh.res")
+    assert params["path"] == "/Main/Door"
+    assert params["resource_path"] == "res://assets/door.res"
+    assert "apply_material_override" not in params
+    assert not (tmp_path / "assets").exists()
+    assert list(tmp_path.glob(".godot-ai-csg-*")) == []
 
 
 def test_csg_bake_mesh_timeout_allows_for_editor_and_transport():

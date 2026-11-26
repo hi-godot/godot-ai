@@ -8,11 +8,13 @@ extends "res://addons/godot_ai/handlers/command_handler.gd"
 ## All ops target nodes in the currently edited scene by scene-relative
 ## path. Scene edits use EditorUndoRedoManager. A mesh bake writes a standalone
 ## resource using the root's evaluated CSG geometry in local coordinates.
+## The editor stages the native resource and the backend publishes it.
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 ## Bounds the frame handoff and staging before publishing the resource.
 const _BAKE_DEFERRED_TIMEOUT_MS := 30000
+const _STAGE_PREFIX := ".godot-ai-csg-"
 
 const SHAPES := {
 	"box": "CSGBox3D",
@@ -128,9 +130,9 @@ func set_operation(params: Dictionary) -> Dictionary:
 	return {"data": {"operation": operation, "undoable": true}}
 
 
-## Save the live, evaluated CSG root as a new ArrayMesh resource.
+## Stage the live, evaluated CSG root as an ArrayMesh for atomic publication.
 func bake_mesh(params: Dictionary) -> Dictionary:
-	for key in ["path", "resource_path", "scene_file"]:
+	for key in ["path", "resource_path", "scene_file", "stage_path"]:
 		if not (params.get(key, "") is String):
 			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a string" % key)
 	var apply_override = params.get("apply_material_override", false)
@@ -168,6 +170,10 @@ func bake_mesh(params: Dictionary) -> Dictionary:
 	if request_id.is_empty() or not is_instance_valid(_connection) or not _connection.is_inside_tree() or _connection.dispatcher == null:
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS,
 			"csg_bake_mesh is deferred; call csg_manage(op='bake_mesh') directly")
+	var stage: String = params.get("stage_path", "")
+	var stage_error := _bake_stage_error(stage, destination)
+	if not stage_error.is_empty():
+		return stage_error
 
 	var job := {
 		"request_id": request_id,
@@ -177,6 +183,7 @@ func bake_mesh(params: Dictionary) -> Dictionary:
 		"node_id": node.get_instance_id(),
 		"path": path,
 		"resource_path": destination,
+		"stage_path": stage,
 		"apply_material_override": apply_override,
 	}
 	var resume_signal: Signal = _frame_signal if _frame_signal is Signal else _connection.get_tree().process_frame
@@ -209,6 +216,26 @@ static func _bake_readiness_error() -> Dictionary:
 static func _bake_destination_error(destination: String) -> Dictionary:
 	if FileAccess.file_exists(destination) or DirAccess.dir_exists_absolute(destination):
 		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Choose a new resource_path; %s already exists" % destination)
+	return {}
+
+
+static func _bake_stage_error(stage: String, destination: String) -> Dictionary:
+	var path_error: Variant = McpPathValidator.path_error(stage, "stage_path", true)
+	if path_error != null:
+		return path_error
+	var directory := stage.get_base_dir()
+	# The backend creates this private directory in the nearest existing
+	# ancestor. It can create missing destination directories after validation.
+	var parent := directory.get_base_dir()
+	var destination_parent := destination.get_base_dir()
+	if (
+		stage != stage.simplify_path() or not directory.get_file().begins_with(_STAGE_PREFIX)
+		or stage.get_file() != "mesh." + destination.get_extension()
+		or (parent != "res://" and destination_parent != parent and not destination_parent.begins_with(parent + "/"))
+		or not DirAccess.dir_exists_absolute(directory) or DirAccess.dir_exists_absolute(stage)
+		or FileAccess.file_exists(stage)
+	):
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Invalid private CSG stage for %s" % destination)
 	return {}
 
 
@@ -276,37 +303,68 @@ static func _bake_after_frame(job: Dictionary, connection: McpConnection) -> Dic
 		for surface in output.get_surface_count():
 			output.surface_set_material(surface, override_material)
 
-	var surface_count := output.get_surface_count()
-	var authorize_commit := func() -> Dictionary:
-		return _authorize_bake_commit(job, connection, evaluated, source_override)
 	var writable := _authorize_bake_commit(job, connection, evaluated, source_override)
 	if writable.has("error"):
 		return writable
-	var saved := McpResourceIO.save_to_disk(output, destination, false, "CSG mesh", {
+	var stage: String = job.stage_path
+	var stage_error := _bake_stage_error(stage, destination)
+	if not stage_error.is_empty():
+		return stage_error
+	var save_error := McpResourceIO.guarded_save(output, stage, connection)
+	if save_error != OK:
+		var failure := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
+			"Failed to stage the CSG mesh for %s: %s" % [destination, error_string(save_error)])
+		failure.error["data"] = {"disk_committed": false, "resource_path": destination}
+		return failure
+	var digest := FileAccess.get_sha256(stage)
+	if digest.is_empty():
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Could not verify the staged CSG mesh for %s" % destination)
+	writable = _authorize_bake_commit(job, connection, evaluated, source_override)
+	if writable.has("error"):
+		return writable
+	return {"data": {
 		"path": job.path,
-		"surface_count": surface_count,
+		"resource_path": destination,
+		"stage_path": stage,
+		"stage_sha256": digest,
+		"surface_count": output.get_surface_count(),
 		"material_override_applied": source_override != null,
-	}, connection, false, true, authorize_commit)
-	if saved.has("error"):
-		## A destination can appear under a concurrent external writer, even
-		## between the commit authorization and the saver’s own final check.
-		destination_error = _bake_destination_error(destination)
-		if saved.error.code == ErrorCodes.INVALID_PARAMS and not destination_error.is_empty():
-			if saved.error.has("data"):
-				destination_error.error["data"] = saved.error.data
-			return destination_error
-		return saved
-	var reloaded := ResourceLoader.load(destination, "ArrayMesh", ResourceLoader.CACHE_MODE_IGNORE) as ArrayMesh
-	if reloaded == null or reloaded.get_surface_count() != surface_count:
+	}}
+
+
+## Verify and register the final file after the backend publishes it.
+func finalize_bake(params: Dictionary) -> Dictionary:
+	var destination: String = params.get("resource_path", "")
+	var path_error: Variant = McpPathValidator.path_error(destination, "resource_path", true)
+	if path_error != null:
+		return path_error
+	var digest: String = params.get("stage_sha256", "")
+	var expected_surface_count: int = params.get("surface_count", 0)
+	var reloaded: ArrayMesh
+	if not digest.is_empty() and FileAccess.get_sha256(destination) == digest:
+		reloaded = ResourceLoader.load(destination, "ArrayMesh", ResourceLoader.CACHE_MODE_IGNORE) as ArrayMesh
+	if reloaded == null or expected_surface_count <= 0 or reloaded.get_surface_count() != expected_surface_count:
 		var failure := ErrorCodes.make(ErrorCodes.INTERNAL_ERROR,
 			"Saved %s but could not verify the ArrayMesh on disk" % destination)
 		failure.error["data"] = {
 			"disk_committed": true,
 			"resource_path": destination,
-			"cleanup": saved.data.cleanup,
+			"cleanup": {"rm": [destination]},
 		}
 		return failure
-	return saved
+	var filesystem := EditorInterface.get_resource_filesystem()
+	if filesystem != null:
+		filesystem.update_file(destination)
+	return {"data": {
+		"path": params.get("path", ""),
+		"resource_path": destination,
+		"surface_count": reloaded.get_surface_count(),
+		"material_override_applied": params.get("material_override_applied", false),
+		"overwritten": false,
+		"undoable": false,
+		"reason": "File creation is persistent; delete the file manually to revert",
+		"cleanup": {"rm": [destination]},
+	}}
 
 
 static func _authorize_bake_commit(job: Dictionary, connection, evaluated: ArrayMesh, source_override: Material) -> Dictionary:

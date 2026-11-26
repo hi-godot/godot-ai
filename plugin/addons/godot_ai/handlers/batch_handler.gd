@@ -34,6 +34,7 @@ const FORBIDDEN_SUBCOMMANDS := {
 	"csg_bake_mesh":
 		"csg_bake_mesh waits for a frame and has no completion channel inside a batch — "
 		+ "call csg_manage(op='bake_mesh') directly",
+	"csg_bake_mesh_finalize": "Call csg_manage(op='bake_mesh') directly to publish a baked mesh",
 	"configure_client":
 		"configure_client is deferred and has no completion channel inside a batch — "
 		+ "run it as its own tool call",

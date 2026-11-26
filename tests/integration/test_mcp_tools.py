@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 
 import pytest
@@ -4699,7 +4700,9 @@ class TestBatchExecuteTool:
 
 
 class TestPerCallSessionRouting:
-    async def _connect_second_plugin(self, port: int, session_id: str, readiness: str = "ready"):
+    async def _connect_second_plugin(
+        self, port: int, session_id: str, readiness: str = "ready", project_path: str | None = None
+    ):
         """Connect a second mock plugin to the same MCP stack server."""
         from tests.conftest import MockGodotPlugin, perform_v4_handshake
 
@@ -4707,7 +4710,7 @@ class TestPerCallSessionRouting:
         await perform_v4_handshake(
             ws,
             session_id=session_id,
-            project_path=f"/tmp/{session_id}",
+            project_path=project_path or f"/tmp/{session_id}",
             readiness=readiness,
         )
         return MockGodotPlugin(ws=ws, session_id=session_id)
@@ -4747,41 +4750,95 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
-    async def test_bake_mesh_routes_source_guard_and_override_to_pinned_editor(
-        self, mcp_stack, mcp_ws_port
+    @pytest.mark.parametrize("late_writer", [False, True], ids=["published", "late-writer"])
+    async def test_bake_mesh_publishes_without_overwriting_a_late_writer(
+        self, mcp_stack, mcp_ws_port, tmp_path, monkeypatch, late_writer
     ):
+        from godot_ai.handlers import csg
+
         client, _ = mcp_stack
-        pinned = await self._connect_second_plugin(mcp_ws_port, "door-editor")
+        project = tmp_path / "pinned-project"
+        project.mkdir()
+        (project / "project.godot").touch()
+        pinned = await self._connect_second_plugin(
+            mcp_ws_port, "door-editor", project_path=str(project)
+        )
         params = {
             "path": "/Workshop/Doorway",
-            "resource_path": "res://door.tres",
+            "resource_path": "res://new/assets/door.tres",
             "apply_material_override": True,
             "scene_file": "res://workshop.tscn",
         }
+        destination = project / "new/assets/door.tres"
+        mesh_bytes = b"native mesh bytes from the mocked editor"
+        external_bytes = b"contents created just before the atomic publish"
+        digest = hashlib.sha256(mesh_bytes).hexdigest()
         reply = {
             "path": params["path"],
             "resource_path": params["resource_path"],
             "surface_count": 2,
             "material_override_applied": True,
+            "overwritten": False,
             "undoable": False,
             "reason": "File creation is persistent",
         }
+        actual_publish = csg._publish_no_replace
+
+        def publish_with_late_writer(stage, output):
+            assert output == destination
+            assert stage.read_bytes() == mesh_bytes
+            assert not output.exists()
+            if late_writer:
+                output.write_bytes(external_bytes)
+            actual_publish(stage, output)
+
+        monkeypatch.setattr(csg, "_publish_no_replace", publish_with_late_writer)
 
         async def respond():
             request = await pinned.recv_command()
             assert request["command"] == "csg_bake_mesh"
-            assert request["params"] == params
-            await pinned.send_response(request["request_id"], reply)
+            prepare = request["params"]
+            stage_path = prepare.pop("stage_path")
+            assert prepare == params
+            stage = project / stage_path.removeprefix("res://")
+            assert stage.parent.parent == project and stage.parent.name.startswith(".godot-ai-csg-")
+            assert not destination.parent.exists()
+            stage.write_bytes(mesh_bytes)
+            await pinned.send_response(
+                request["request_id"], {**reply, "stage_path": stage_path, "stage_sha256": digest}
+            )
+            if not late_writer:
+                request = await pinned.recv_command()
+                assert request["command"] == "csg_bake_mesh_finalize"
+                assert request["params"] == {
+                    "path": params["path"],
+                    "resource_path": params["resource_path"],
+                    "stage_sha256": digest,
+                    "surface_count": 2,
+                    "material_override_applied": True,
+                }
+                assert destination.read_bytes() == mesh_bytes
+                await pinned.send_response(request["request_id"], reply)
 
         try:
             result, _ = await asyncio.gather(
                 client.call_tool(
                     "csg_manage",
                     {"op": "bake_mesh", "params": params, "session_id": pinned.session_id},
+                    raise_on_error=False,
                 ),
                 respond(),
             )
-            assert result.data == reply
+            if late_writer:
+                assert result.is_error
+                error = result.structured_content["error"]
+                assert error["code"] == "INVALID_PARAMS"
+                assert error["data"]["disk_committed"] is False
+                assert destination.read_bytes() == external_bytes
+            else:
+                assert result.data == reply
+                assert destination.read_bytes() == mesh_bytes
+            assert list(project.glob(".godot-ai-csg-*")) == []
         finally:
             await pinned.close()
 

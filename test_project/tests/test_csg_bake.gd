@@ -31,6 +31,7 @@ var _dispatcher: McpDispatcher
 var _connection: _CapturingConnection
 var _handler: CsgHandler
 var _directory: String
+var _stage_path: String
 var _outputs: Array[String] = []
 
 
@@ -48,6 +49,7 @@ func suite_setup(ctx: Dictionary) -> void:
 
 func setup() -> void:
 	_directory = "res://_mcp_test_csg_bake_%d" % Time.get_ticks_usec()
+	_stage_path = ""
 	_fixture_parent = track(Node3D.new())
 	_fixture_parent.name = "_McpTestCsgBake"
 	_scene_root.add_child(_fixture_parent, true)
@@ -67,6 +69,10 @@ func teardown() -> void:
 	_dispatcher.release_after_teardown()
 	_connection.dispatcher = null
 	_handler = null
+	if not _stage_path.is_empty():
+		if FileAccess.file_exists(_stage_path):
+			assert_eq(DirAccess.remove_absolute(_stage_path), OK)
+		assert_eq(DirAccess.remove_absolute(_stage_path.get_base_dir()), OK)
 	for path in _outputs:
 		for file in [path, path + ".uid"]:
 			if FileAccess.file_exists(file):
@@ -100,6 +106,10 @@ func _enqueue(params: Dictionary) -> Array[Dictionary]:
 
 
 func _begin(params: Dictionary) -> void:
+	var stage_dir := "res://.godot-ai-csg-test-%d" % Time.get_ticks_usec()
+	assert_eq(DirAccess.make_dir_absolute(stage_dir), OK)
+	_stage_path = stage_dir.path_join("mesh." + str(params.resource_path).get_extension())
+	params["stage_path"] = _stage_path
 	assert_eq(_enqueue(params), [], "Bake should wait for the next editor frame")
 	assert_true(_dispatcher.has_pending_deferred_response(REQUEST_ID))
 	assert_false(FileAccess.file_exists(params.resource_path), "No output before the frame wait")
@@ -133,12 +143,28 @@ func _baked_mesh(
 	var data: Dictionary = response.get("data", {})
 	assert_eq(data.get("path"), _scene_path(node))
 	assert_eq(data.get("resource_path"), output)
+	assert_eq(data.get("stage_path"), _stage_path)
+	assert_false(FileAccess.file_exists(output), "The editor stages without publishing the destination")
+	assert_true(FileAccess.file_exists(_stage_path), "The editor must stage a native resource")
+	if not FileAccess.file_exists(_stage_path):
+		return null
+	assert_eq(data.get("stage_sha256"), FileAccess.get_sha256(_stage_path))
+	assert_eq(DirAccess.make_dir_recursive_absolute(output.get_base_dir()), OK)
+	## Emulate the backend handoff in this isolated fixture. Python tests cover
+	## atomic publication with the platform's no-replace filesystem primitive.
+	assert_eq(DirAccess.rename_absolute(_stage_path, output), OK)
+	var finalized := _handler.finalize_bake(data)
+	assert_has_key(finalized, "data", str(finalized))
+	data = finalized.get("data", {})
+	assert_eq(data.get("resource_path"), output)
+	assert_eq(data.get("overwritten"), false)
 	assert_eq(data.get("undoable"), false)
 	assert_false(str(data.get("reason", "")).is_empty())
 	assert_eq(data.get("material_override_applied"), override_applied)
 	assert_true(FileAccess.file_exists(output))
 	if not FileAccess.file_exists(output):
 		return null
+	assert_true(ResourceLoader.get_resource_uid(output) != ResourceUID.INVALID_ID, "the published mesh retains its staged UID")
 	var mesh := ResourceLoader.load(output, "ArrayMesh", ResourceLoader.CACHE_MODE_IGNORE) as ArrayMesh
 	assert_true(mesh != null, "The saved resource must reload as an ArrayMesh")
 	if mesh != null:
@@ -356,32 +382,15 @@ func test_refuses_output_created_while_waiting_without_changing_bytes() -> void:
 	assert_eq(FileAccess.get_sha256(output), before)
 
 
-func test_staged_commit_authorization_preserves_destination_and_cleans_stage() -> void:
-	var output := _output("taken_during_staging.res")
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, BoxMesh.new().get_mesh_arrays())
-	var content := "Written by another process"
-	var authorize := func() -> Dictionary:
-		var directory := DirAccess.open(_directory)
-		assert_true(directory != null)
-		if directory != null:
-			directory.include_hidden = true
-			assert_eq(directory.get_files().size(), 1, "The mesh must already be staged")
-		var file := FileAccess.open(output, FileAccess.WRITE)
-		assert_true(file != null)
-		if file != null:
-			file.store_string(content)
-			file.close()
-		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Destination claimed before publish")
-	var result := McpResourceIO.save_to_disk(mesh, output, false, "CSG mesh", {}, null, false, true, authorize)
-	assert_is_error(result, ErrorCodes.INVALID_PARAMS)
-	assert_eq(result.get("error", {}).get("data", {}).get("disk_committed"), false)
-	assert_eq(FileAccess.get_file_as_string(output), content)
-	var directory := DirAccess.open(_directory)
-	assert_true(directory != null)
-	if directory != null:
-		directory.include_hidden = true
-		assert_eq(directory.get_files(), PackedStringArray([output.get_file()]))
+func test_staging_rejects_an_arbitrary_path_without_writing() -> void:
+	var shape := _add_source(CSGBox3D.new(), "_McpTestCsgBakeStage")
+	var output := _output("stage_target.res")
+	var unsafe_stage := _output("arbitrary_stage.res")
+	var responses := _enqueue({"path": _scene_path(shape), "resource_path": output, "stage_path": unsafe_stage})
+	assert_eq(responses.size(), 1)
+	if not responses.is_empty():
+		assert_is_error(responses.front(), ErrorCodes.INVALID_PARAMS)
+	assert_false(DirAccess.dir_exists_absolute(_directory))
 
 
 func test_rejects_same_path_replacement_during_deferred_bake() -> void:

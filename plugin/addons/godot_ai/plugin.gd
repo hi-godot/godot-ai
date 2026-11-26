@@ -582,6 +582,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("csg_create", "csg", &"create")
 	_dispatcher.register_lazy("csg_set_operation", "csg", &"set_operation")
 	_dispatcher.register_lazy("csg_bake_mesh", "csg", &"bake_mesh")
+	_dispatcher.register_lazy("csg_bake_mesh_finalize", "csg", &"finalize_bake")
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

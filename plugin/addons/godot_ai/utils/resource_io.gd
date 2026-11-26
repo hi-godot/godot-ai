@@ -69,9 +69,6 @@ static func validate_home(params: Dictionary, require_property: bool = true) -> 
 ## Windows retains a recovery backup during replacement; this is not crash-atomic.
 ## Validation and staging failures leave the destination untouched; a cache-copy
 ## failure after replacement explicitly reports disk_committed=true.
-## `authorize_commit`, when supplied for a staged save, returns an error dict
-## or an empty dict immediately before publish. Use it to recheck a live source
-## or pending request after ResourceSaver has pumped editor frames.
 ##
 ## `pause_target` should be the handler's `McpConnection`. When supplied,
 ## `pause_processing` is flipped on around `ResourceSaver.save()` so the
@@ -95,7 +92,6 @@ static func save_to_disk(
 	pause_target: McpConnection = null,
 	refresh_cached: bool = false,
 	staged_replace: bool = false,
-	authorize_commit: Callable = Callable(),
 ) -> Dictionary:
 	var path_err = McpPathValidator.path_error(resource_path, "resource_path", true)
 	if path_err != null:
@@ -153,16 +149,6 @@ static func save_to_disk(
 		)
 	var replacement_fields := {}
 	if staged_replace:
-		if authorize_commit.is_valid():
-			var commit_error: Dictionary = authorize_commit.call()
-			if not commit_error.is_empty():
-				var cleanup_err := DirAccess.remove_absolute(ProjectSettings.globalize_path(save_path))
-				var details: Dictionary = commit_error.error.get("data", {})
-				details["disk_committed"] = false
-				if cleanup_err != OK:
-					details["staged_resource"] = save_path
-				commit_error.error["data"] = details
-				return commit_error
 		replacement_fields = _replace_staged_file(save_path, resource_path, existed_before and OS.get_name() == "Windows", Callable(), overwrite)
 		if replacement_fields.has("error"):
 			return replacement_fields
