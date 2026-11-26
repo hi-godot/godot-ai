@@ -2742,6 +2742,34 @@ async def test_node_move_handler():
     assert client.calls[-1]["params"] == {"path": "/Main/Camera3D", "index": 2}
 
 
+async def test_node_align_markers_3d_defaults_to_matching_axes():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    paths = {
+        "path": "/Level/Room",
+        "source_marker_path": "/Level/Room/Entrance",
+        "target_marker_path": "/Level/Exit",
+    }
+    await node_handlers.node_align_markers_3d(runtime, **paths)
+    assert client.calls[-1]["command"] == "align_markers_3d"
+    assert client.calls[-1]["params"] == {**paths, "orientation": "match"}
+
+
+@pytest.mark.parametrize("readiness", ["importing", "playing"])
+async def test_node_align_markers_3d_requires_writable(readiness):
+    client = StubClient()
+    client.live_readiness = readiness
+    registry = SessionRegistry()
+    registry.register(_make_session(readiness=readiness))
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError) as error:
+        await node_handlers.node_align_markers_3d(
+            runtime, "/Level/Room", "/Level/Room/Entrance", "/Level/Exit"
+        )
+    assert error.value.code == "EDITOR_NOT_READY"
+    assert not any(call["command"] == "align_markers_3d" for call in client.calls)
+
+
 async def test_node_set_editable_children_forwards_explicit_state_and_scene_guard():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

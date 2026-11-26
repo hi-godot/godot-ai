@@ -2,6 +2,7 @@
 extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const MarkerAlignment3D := preload("res://addons/godot_ai/handlers/_marker_alignment_3d.gd")
 const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializer.gd")
 
 ## Handles node creation and manipulation with undo/redo support.
@@ -281,6 +282,10 @@ func reparent_node(params: Dictionary) -> Dictionary:
 			"undoable": true,
 		}
 	}
+
+
+func align_markers_3d(params: Dictionary) -> Dictionary:
+	return MarkerAlignment3D.align(params, _undo_redo)
 
 
 func set_property(params: Dictionary) -> Dictionary:

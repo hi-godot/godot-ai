@@ -1,0 +1,12 @@
+[gd_scene format=3]
+
+[node name="MarkerAlignment" type="Node3D"]
+
+[node name="Mover" type="Node3D" parent="."]
+position = Vector3(2, 1, -3)
+
+[node name="Source" type="Marker3D" parent="Mover"]
+position = Vector3(-1, 2, 1)
+
+[node name="Target" type="Marker3D" parent="."]
+position = Vector3(5, -2, 3)

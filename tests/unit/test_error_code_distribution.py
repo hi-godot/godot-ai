@@ -58,7 +58,11 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## values; concurrent state prevents committing the edit. These are genuine
 ## state conflicts, not range/type errors. Other import refusals use specific
 ## codes, so these two sites add two to the combined reviewed ceiling.
-INVALID_PARAMS_CEILING = 131
+## Marker alignment adds four scene relationships where valid nodes cannot be
+## aligned: separate worlds, a source outside the mover's transform chain,
+## a target inside the moving subtree, or a mover with no persistent owner.
+## Numeric transform refusals use VALUE_OUT_OF_RANGE.
+INVALID_PARAMS_CEILING = 135
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

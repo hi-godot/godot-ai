@@ -17,7 +17,7 @@ from godot_ai.tools._meta_tool import register_manage_tool
 
 _DESCRIPTION = """\
 Node tree manipulation (delete, duplicate, rename, reorder, reparent,
-groups, hierarchy reads).
+3D marker alignment, groups, hierarchy reads).
 
 Resource forms (prefer for active-session reads):
   godot://node/{path}/properties, godot://node/{path}/children,
@@ -38,6 +38,13 @@ Ops:
         Reorder among siblings. Index 0 = first.
   • reparent(path, new_parent, scene_file="")
         Move under a new parent. Children preserved. Cannot move into descendants.
+  • align_markers_3d(path, source_marker_path, target_marker_path,
+                     orientation="match", scene_file="")
+        Snap an existing Node3D to a socket or doorway. Both Marker3D paths are
+        scene-relative. The source must move with the node and the target must
+        be outside its subtree. "match" aligns their axes. "face_to_face"
+        opposes their forward axes and keeps their up axes aligned. One undo
+        restores the moved node. Markers may be inside locked scene instances.
   • set_editable_children(path, editable, scene_file="")
         Explicitly enable/disable Editable Children on an instanced scene root.
         Undoable when changed. Ancestors are never enabled implicitly.
@@ -255,6 +262,7 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
             "rename": node_handlers.node_rename,
             "move": node_handlers.node_move,
             "reparent": node_handlers.node_reparent,
+            "align_markers_3d": node_handlers.node_align_markers_3d,
             "set_editable_children": node_handlers.node_set_editable_children,
             "add_to_group": node_handlers.node_add_to_group,
             "remove_from_group": node_handlers.node_remove_from_group,
