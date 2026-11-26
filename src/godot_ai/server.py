@@ -254,7 +254,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "                   apply_to_node, apply_preset, shader_create, shader_get,\n"
         "                   shader_validate, shader_patch, visual_shader_create_graph,\n"
         "                   visual_shader_get, visual_shader_node_catalog,\n"
-        "                   visual_shader_edit\n",
+        "                   visual_shader_edit, inspect_surfaces\n",
     ),
     (
         "audio",
@@ -337,7 +337,7 @@ _INSTRUCTIONS_FOOTER = (
     "reads when the client surfaces them):\n"
     "  godot://sessions, godot://editor/state, godot://selection/current,\n"
     "  godot://logs/recent, godot://scene/current, godot://scene/hierarchy,\n"
-    "  godot://node/{path}/properties|children|groups,\n"
+    "  godot://node/{path}/properties|children|groups|material_surfaces,\n"
     "  godot://class/{class_name},\n"
     "  godot://script/{path}, godot://shader/{path}, godot://project/info,\n"
     "  godot://project/settings, godot://materials, godot://input_map,\n"

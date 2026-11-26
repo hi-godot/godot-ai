@@ -65,6 +65,11 @@ Ops:
         Set a shader uniform on a ShaderMaterial.
   • get(path)
         Inspect a material (type, params, uniforms, current values).
+  • inspect_surfaces(node_path, scene_file="")
+        Read a MeshInstance3D in the edited scene. For each surface, see its name,
+        surface_N slot, mesh material, surface override, active material and source.
+        Includes the whole-instance override and overlay. Pass scene_file to guard
+        against a scene switch. Resource form: godot://node/{path}/material_surfaces
   • list(root="res://", type="")
         List materials under root, optional type filter.
   • assign(node_path, resource_path="", slot="override", create_if_missing=False,
@@ -116,6 +121,7 @@ def register_material_tools(mcp: FastMCP) -> None:
             "set_param": material_handlers.material_set_param,
             "set_shader_param": material_handlers.material_set_shader_param,
             "get": material_handlers.material_get,
+            "inspect_surfaces": material_handlers.material_inspect_surfaces,
             "list": material_handlers.material_list,
             "assign": material_handlers.material_assign,
             "apply_to_node": material_handlers.material_apply_to_node,
@@ -127,6 +133,7 @@ def register_material_tools(mcp: FastMCP) -> None:
         },
         read_resource_forms={
             "get": None,  ## Per-material read; no per-resource URI shape.
+            "inspect_surfaces": "godot://node/{path*}/material_surfaces",
             "list": "godot://materials",
             "shader_get": "godot://shader/{path*}",
             "shader_validate": None,  ## Takes source text, not a path.

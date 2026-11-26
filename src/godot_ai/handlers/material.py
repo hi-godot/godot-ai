@@ -52,6 +52,15 @@ async def material_get(runtime: DirectRuntime, path: str) -> dict:
     return await runtime.send_command("material_get", {"path": path})
 
 
+async def material_inspect_surfaces(
+    runtime: DirectRuntime, node_path: str, scene_file: str = ""
+) -> dict:
+    params = {"node_path": node_path}
+    if scene_file:
+        params["scene_file"] = scene_file
+    return await runtime.send_command("material_inspect_surfaces", params)
+
+
 async def material_list(
     runtime: DirectRuntime,
     root: str = "res://",
