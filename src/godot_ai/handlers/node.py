@@ -91,6 +91,23 @@ async def node_reparent(
     )
 
 
+async def node_attach_to_bone_3d(
+    runtime: DirectRuntime,
+    path: str,
+    skeleton_path: str,
+    bone_name: str,
+    grip_offset: dict | None = None,
+    scene_file: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    params = _mutation_params(
+        scene_file, path=path, skeleton_path=skeleton_path, bone_name=bone_name
+    )
+    if grip_offset is not None:
+        params["grip_offset"] = grip_offset
+    return await runtime.send_command("attach_to_bone_3d", params)
+
+
 async def node_set_property(
     runtime: DirectRuntime, path: str, property: str, value, scene_file: str = ""
 ) -> dict:

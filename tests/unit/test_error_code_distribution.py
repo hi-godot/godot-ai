@@ -58,7 +58,10 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## values; concurrent state prevents committing the edit. These are genuine
 ## state conflicts, not range/type errors. Other import refusals use specific
 ## codes, so these two sites add two to the combined reviewed ceiling.
-INVALID_PARAMS_CEILING = 131
+## Bone attachments add six structural conflicts: an incompatible hierarchy,
+## different worlds, a prop that cannot be moved, no writable parent in the
+## target world, a move that would lose ownership, and a base-defined prop.
+INVALID_PARAMS_CEILING = 137
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of
