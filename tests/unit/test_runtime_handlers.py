@@ -3643,6 +3643,47 @@ async def test_physics_shape_autofit_requires_writable():
         await physics_shape_handlers.physics_shape_autofit(runtime, path="/Main/Body/Collision")
 
 
+async def test_multimesh_set_instances_clear_and_saved_mesh():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await resource_handlers.multimesh_set_instances(runtime, "/Fence", [])
+    assert client.calls[-1]["command"] == "multimesh_set_instances"
+    assert client.calls[-1]["params"] == {"path": "/Fence", "instances": []}
+    assert client.calls[-1]["timeout"] == resource_handlers.MULTIMESH_TIMEOUT_SEC
+
+    rows = [{"transform": {"position": [2, 0, 0]}}]
+    await resource_handlers.multimesh_set_instances(
+        runtime, "/Fence", rows, mesh_path="res://post.tres"
+    )
+    assert client.calls[-1]["params"] == {
+        "path": "/Fence",
+        "instances": rows,
+        "mesh_path": "res://post.tres",
+    }
+
+
+def test_multimesh_timeout_covers_native_deferred_budget():
+    source = (
+        Path(__file__).resolve().parents[2] / "plugin/addons/godot_ai/handlers/multimesh_handler.gd"
+    ).read_text(encoding="utf-8")
+    budget = re.search(r"^const _DEFERRED_TIMEOUT_MS := (\d+)$", source, re.M)
+    assert budget and int(budget.group(1)) == resource_handlers.MULTIMESH_PLUGIN_TIMEOUT_MS
+    assert resource_handlers.MULTIMESH_TIMEOUT_SEC == int(budget.group(1)) / 1000 + 2
+
+
+@pytest.mark.parametrize("readiness", ["importing", "playing"])
+async def test_multimesh_set_instances_requires_writable(readiness):
+    client = StubClient()
+    client.live_readiness = readiness
+    registry = SessionRegistry()
+    registry.register(_make_session(readiness=readiness))
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError) as error:
+        await resource_handlers.multimesh_set_instances(runtime, "/Fence", [])
+    assert error.value.code == "EDITOR_NOT_READY"
+    assert all(call["command"] != "multimesh_set_instances" for call in client.calls)
+
+
 async def test_physics_shape_generate_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

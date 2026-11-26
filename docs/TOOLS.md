@@ -293,7 +293,7 @@ Calls take the form:
 | `filesystem_manage` | `read_text`, `write_text`, `import_get`, `import_set`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `set_stylebox_texture`, `set_font`, `set_icon`, `stylebox_override`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `set_richtext`, `build_layout`, `draw_recipe` |
-| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `set_properties`, `sprite_frames_create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
+| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `set_properties`, `sprite_frames_create`, `multimesh_set_instances`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
 | `api_manage` | `get_class` |
 | `client_manage` | `status`, `configure`, `remove` |
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
@@ -598,6 +598,60 @@ construction budget can stop traversal sooner. The complete encoded operation
 result is capped at 64 KiB, including graph and truncation metadata. This is not
 a cap on the surrounding MCP wire frame. A result that cannot fit is refused
 with an explicit size error; reducing depth can make the request fit.
+
+### Place a fence using one mesh
+
+Use `resource_manage(op="multimesh_set_instances")` on an editable
+`MultiMeshInstance3D`. Supply the complete placement list in the target's local space.
+For example, these two posts use the mesh of an imported model:
+
+```python
+resource_manage(
+    op="multimesh_set_instances",
+    params={
+        "path": "/Level/Fence",
+        "mesh_node_path": "/Level/ImportedKit/FencePost",
+        "instances": [
+            {"transform": {"position": [0, 0, 0]}},
+            {
+                "transform": {"position": [2, 0, 0], "rotation_degrees": [0, 15, 0]},
+                "color": [0.8, 0.6, 0.4, 1],
+                "custom_data": [0.25, 0, 0, 1],
+            },
+        ],
+        "scene_file": "res://levels/yard.tscn",
+    },
+    session_id=level_editor_session,
+)
+```
+
+Omit both mesh arguments to reuse the current mesh, or supply exactly one of
+`mesh_node_path` (the mesh on a live `MeshInstance3D`) and `mesh_path` (a saved
+`res://` Mesh). The source node can be inside a locked imported scene. Its transform
+and material overrides stay on the source. When saving the edited scene, Godot
+can embed a mesh borrowed from inside an imported model. For placements that
+should keep following changes to a mesh asset, use a standalone mesh resource
+or a model mesh configured to save to an external file.
+
+For each `transform`, supply
+`position` with optional rotation and scale, or supply the full `basis` and
+`origin` to represent a transform such as a sheared placement.
+Omitting `color` or `custom_data` preserves the previous value at that index.
+New rows default to white tint and four zero shader values. Pass `instances=[]`
+to clear the placements. A populated 2D MultiMesh and a scripted MultiMesh
+both require a different target.
+
+To display tints, enable vertex colors as albedo on the material or use a shader
+that reads `COLOR`. A spatial shader can read the four custom values through
+`INSTANCE_CUSTOM` in its vertex function. Godot's Compatibility renderer stores
+these channels at half precision. [Godot MultiMesh reference](https://docs.godotengine.org/en/stable/classes/class_multimesh.html)
+
+The result reports `path`, `instance_count`, `use_colors`, `use_custom_data`,
+`changed`, and `undoable`. One undo restores the original resource and its
+sharing with other nodes. Repeating an equivalent placement list adds no history.
+Save the edited scene to persist the result. Call this operation directly so
+Godot can prepare large placement lists across editor frames. `batch_execute`
+cannot return its deferred result.
 
 ### Refresh generated physics shapes
 
