@@ -340,14 +340,45 @@ func test_screenshot_orthographic_frame_uses_the_representable_camera_origin() -
 	assert_true(is_equal_approx(limit, 0.8), "The stored camera origin still fits the central 80%%, got %s" % limit)
 
 
-class OrthographicFramingStub extends ViewportReadbackStub:
+class FramingStub extends ViewportReadbackStub:
 	var frame: Dictionary = {}
+	var capture_fov: Variant
 
 	func _capture_viewport_image(_viewport: SubViewport, _render_mode: String, _cam: Camera3D = null,
-			cam_xform := Transform3D.IDENTITY, _fov: Variant = null, orthographic: Dictionary = {},
+			cam_xform := Transform3D.IDENTITY, fov: Variant = null, orthographic: Dictionary = {},
 			_overlays: Dictionary = {}) -> Image:
 		frame = orthographic.merged({"transform": cam_xform})
+		capture_fov = fov
 		return image
+
+
+func test_screenshot_perspective_framing_from_orthographic_viewport() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		skip("No edited scene or 3D viewport camera")
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var params := {"view_target": McpScenePath.from_node(target, root)}
+	var cam := viewport.get_camera_3d()
+	var original_projection := cam.projection
+	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+	var default_fov := cam.fov
+	var handler := FramingStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var from_ortho := handler.take_screenshot(params)
+	var ortho_capture_fov: Variant = handler.capture_fov
+	cam.projection = Camera3D.PROJECTION_PERSPECTIVE
+	var from_perspective := handler.take_screenshot(params)
+	var perspective_capture_fov: Variant = handler.capture_fov
+	cam.projection = original_projection
+	assert_eq(from_ortho.get("data", {}).get("view_target"), params.view_target, str(from_ortho))
+	assert_eq(ortho_capture_fov, default_fov)
+	assert_false(from_ortho.get("data", {}).has("fov"))
+	assert_eq(from_perspective.get("data", {}).get("view_target"), params.view_target, str(from_perspective))
+	assert_eq(perspective_capture_fov, null)
 
 
 func test_screenshot_orthographic_views_match_editor_axes_and_custom_poles() -> void:
@@ -360,7 +391,7 @@ func test_screenshot_orthographic_views_match_editor_axes_and_custom_poles() -> 
 	track(target)
 	root.add_child(target, true)
 	var target_path := McpScenePath.from_node(target, root)
-	var handler := OrthographicFramingStub.new(McpLogBuffer.new())
+	var handler := FramingStub.new(McpLogBuffer.new())
 	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
 	var views := {
 		"front": [Vector3.BACK, Vector3.UP],

@@ -746,9 +746,12 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 		var use_fov: float = saved_fov if custom_fov == null else float(custom_fov)
 
 		var cam_xform: Transform3D
+		var capture_fov: Variant = null
 		var ortho_frame := {}
 		if orthographic.is_empty():
 			cam_xform = _frame_transform_for_aabb(combined_aabb, use_fov, use_elev, use_azim)
+			if custom_fov != null or cam.projection != Camera3D.PROJECTION_PERSPECTIVE:
+				capture_fov = use_fov
 		else:
 			var texture := viewport.get_texture()
 			var texture_size := texture.get_size() if texture != null else Vector2.ZERO
@@ -757,7 +760,7 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 				return ortho_frame
 			cam_xform = ortho_frame.transform
 
-		var image := _capture_viewport_image(viewport, render_mode, cam, cam_xform, use_fov if custom_fov != null else null, ortho_frame, overlays)
+		var image := _capture_viewport_image(viewport, render_mode, cam, cam_xform, capture_fov, ortho_frame, overlays)
 
 		if image == null or image.is_empty():
 			return _empty_image_error(
