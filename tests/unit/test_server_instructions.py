@@ -95,7 +95,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "  gridmap_manage   gridmap_set_item, gridmap_fill, gridmap_clear,\n"
     "                   gridmap_get_used_cells, gridmap_list_library_items\n"
     "  navigation_manage bake, path_get\n"
-    "  csg_manage       csg_create, csg_set_operation\n"
+    "  csg_manage       csg_create, csg_set_operation, bake_mesh\n"
     "  custom_manage    list, invoke\n\n"
     "Resources (read-only URIs, no tool-count cost — prefer for active-session "
     "reads when the client surfaces them):\n"

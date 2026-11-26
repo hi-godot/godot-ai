@@ -326,7 +326,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "navigation",
         "  navigation_manage bake, path_get\n",
     ),
-    ("csg", "  csg_manage       csg_create, csg_set_operation\n"),
+    ("csg", "  csg_manage       csg_create, csg_set_operation, bake_mesh\n"),
     ("custom", "  custom_manage    list, invoke\n"),
 )
 

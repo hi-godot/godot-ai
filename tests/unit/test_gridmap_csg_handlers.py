@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from godot_ai.handlers import csg as csg_handlers
@@ -235,6 +237,25 @@ async def test_csg_create_forwards_command_and_params():
         "shape": "sphere",
         "operation": "subtraction",
     }
+
+
+async def test_csg_bake_mesh_preserves_native_materials_by_default():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    result = await csg_handlers.csg_bake_mesh(runtime, "/Main/Door", "res://door.res")
+    assert result == {"ok": True}
+    assert client.calls[-1]["command"] == "csg_bake_mesh"
+    assert client.calls[-1]["params"] == {"path": "/Main/Door", "resource_path": "res://door.res"}
+    assert client.calls[-1]["timeout"] == csg_handlers.CSG_BAKE_TIMEOUT_SEC
+
+
+def test_csg_bake_mesh_timeout_allows_for_editor_and_transport():
+    native = Path(__file__).resolve().parents[2] / "plugin/addons/godot_ai/handlers/csg_handler.gd"
+    budget = re.search(
+        r"^const _BAKE_DEFERRED_TIMEOUT_MS := (\d+)$", native.read_text(encoding="utf-8"), re.M
+    )
+    assert budget and int(budget.group(1)) == csg_handlers.CSG_BAKE_PLUGIN_TIMEOUT_MS
+    assert csg_handlers.CSG_BAKE_TIMEOUT_SEC == int(budget.group(1)) / 1000 + 2
 
 
 async def test_csg_create_defaults_shape_and_operation():

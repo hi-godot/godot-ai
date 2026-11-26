@@ -4747,6 +4747,80 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
+    async def test_bake_mesh_routes_source_guard_and_override_to_pinned_editor(
+        self, mcp_stack, mcp_ws_port
+    ):
+        client, _ = mcp_stack
+        pinned = await self._connect_second_plugin(mcp_ws_port, "door-editor")
+        params = {
+            "path": "/Workshop/Doorway",
+            "resource_path": "res://door.tres",
+            "apply_material_override": True,
+            "scene_file": "res://workshop.tscn",
+        }
+        reply = {
+            "path": params["path"],
+            "resource_path": params["resource_path"],
+            "surface_count": 2,
+            "material_override_applied": True,
+            "undoable": False,
+            "reason": "File creation is persistent",
+        }
+
+        async def respond():
+            request = await pinned.recv_command()
+            assert request["command"] == "csg_bake_mesh"
+            assert request["params"] == params
+            await pinned.send_response(request["request_id"], reply)
+
+        try:
+            result, _ = await asyncio.gather(
+                client.call_tool(
+                    "csg_manage",
+                    {"op": "bake_mesh", "params": params, "session_id": pinned.session_id},
+                ),
+                respond(),
+            )
+            assert result.data == reply
+        finally:
+            await pinned.close()
+
+    @pytest.mark.parametrize("readiness", ["importing", "playing"])
+    async def test_bake_mesh_refuses_busy_pinned_editor(
+        self, mcp_stack, mcp_ws_port, monkeypatch, readiness
+    ):
+        from godot_ai.handlers import _readiness
+
+        monkeypatch.setattr(_readiness, "_IMPORTING_HOLD_CAP_SECONDS", 0)
+        client, _ = mcp_stack
+        pinned = await self._connect_second_plugin(mcp_ws_port, "door-editor", readiness)
+
+        async def respond_to_probe():
+            request = await pinned.recv_command()
+            assert request["command"] == "get_editor_state"
+            await pinned.send_response(
+                request["request_id"], {"readiness": readiness}, readiness=readiness
+            )
+
+        try:
+            result, _ = await asyncio.gather(
+                client.call_tool(
+                    "csg_manage",
+                    {
+                        "op": "bake_mesh",
+                        "params": {"path": "/Workshop/Doorway", "resource_path": "res://door.res"},
+                        "session_id": pinned.session_id,
+                    },
+                    raise_on_error=False,
+                ),
+                respond_to_probe(),
+            )
+            assert result.is_error
+            assert "EDITOR_NOT_READY" in str(result.content)
+            assert readiness in str(result.content)
+        finally:
+            await pinned.close()
+
     async def test_concurrent_read_and_write_route_to_target_sessions(self, mcp_stack, mcp_ws_port):
         client, plugin_a = mcp_stack
         plugin_b = await self._connect_second_plugin(mcp_ws_port, "proj-b@0002")

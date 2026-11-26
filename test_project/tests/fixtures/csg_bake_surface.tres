@@ -1,0 +1,5 @@
+[gd_resource type="StandardMaterial3D" format=3]
+
+[resource]
+resource_name = "External Surface"
+albedo_color = Color(0.1, 0.3, 0.9, 1)

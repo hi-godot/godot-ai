@@ -31,6 +31,9 @@ const FORBIDDEN_SUBCOMMANDS := {
 	"game_command":
 		"game_command ops are deferred (their reply arrives out-of-band) and "
 		+ "have no completion channel inside a batch — run them as their own tool call",
+	"csg_bake_mesh":
+		"csg_bake_mesh waits for a frame and has no completion channel inside a batch — "
+		+ "call csg_manage(op='bake_mesh') directly",
 	"configure_client":
 		"configure_client is deferred and has no completion channel inside a batch — "
 		+ "run it as its own tool call",
