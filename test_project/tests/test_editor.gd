@@ -220,6 +220,498 @@ func test_screenshot_invalid_source() -> void:
 	assert_contains(result.error.message, "viewport_2d")
 
 
+func test_screenshot_render_mode_requires_a_single_3d_viewport_image() -> void:
+	var invalid_mode := _handler.take_screenshot({"render_mode": "wireframe"})
+	assert_is_error(invalid_mode, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(invalid_mode.error.message, "normal")
+	assert_is_error(_handler.take_screenshot({"render_mode": false}), ErrorCodes.WRONG_TYPE)
+	for source: String in ["viewport_2d", "game", "cinematic"]:
+		var invalid_source := _handler.take_screenshot({"source": source, "render_mode": "normal"})
+		assert_is_error(invalid_source, ErrorCodes.VALUE_OUT_OF_RANGE)
+		assert_contains(invalid_source.error.message, "source='viewport'")
+	var invalid_coverage := _handler.take_screenshot({"render_mode": "unshaded", "coverage": true})
+	assert_is_error(invalid_coverage, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(invalid_coverage.error.message, "coverage=false")
+
+
+class ViewportReadbackStub extends EditorHandler:
+	var image: Image
+	var modes: Array[Viewport.DebugDraw] = []
+	var update_modes: Array[SubViewport.UpdateMode] = []
+
+	func _read_viewport_image(viewport: Viewport) -> Image:
+		modes.append(viewport.debug_draw)
+		update_modes.append((viewport as SubViewport).render_target_update_mode)
+		return image
+
+
+func test_screenshot_render_mode_restores_previous_state_on_success_and_empty_readback() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		skip("No edited scene or 3D viewport camera")
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var target_path := McpScenePath.from_node(target, root)
+	var handler := ViewportReadbackStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var initial_mode := viewport.debug_draw
+	var initial_update_mode := viewport.render_target_update_mode
+	viewport.debug_draw = Viewport.DEBUG_DRAW_WIREFRAME
+	viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+	var omitted := handler.take_screenshot({})
+	var normal := handler.take_screenshot({"render_mode": "normal"})
+	var unshaded := handler.take_screenshot({"render_mode": "unshaded", "view_target": target_path,
+		"elevation": 35.0, "azimuth": 70.0, "fov": 45.0})
+	handler.image = null
+	var empty := handler.take_screenshot({"render_mode": "unshaded", "view_target": target_path, "fov": 45.0})
+	var restored_mode := viewport.debug_draw
+	var restored_update_mode := viewport.render_target_update_mode
+	viewport.debug_draw = initial_mode
+	viewport.render_target_update_mode = initial_update_mode
+	RenderingServer.force_draw(false)
+
+	assert_eq(handler.modes, [Viewport.DEBUG_DRAW_WIREFRAME, Viewport.DEBUG_DRAW_DISABLED,
+		Viewport.DEBUG_DRAW_UNSHADED, Viewport.DEBUG_DRAW_UNSHADED])
+	assert_eq(handler.update_modes, [SubViewport.UPDATE_WHEN_VISIBLE, SubViewport.UPDATE_ALWAYS,
+		SubViewport.UPDATE_ALWAYS, SubViewport.UPDATE_ALWAYS])
+	assert_false(omitted.get("data", {}).has("render_mode"))
+	assert_eq(omitted.get("data", {}).get("width"), 4)
+	assert_eq(normal.get("data", {}).get("render_mode"), "normal")
+	var data: Dictionary = unshaded.get("data", {})
+	assert_eq(data.get("render_mode"), "unshaded")
+	assert_eq(data.get("view_target"), target_path)
+	assert_eq(data.get("elevation"), 35.0)
+	assert_eq(data.get("azimuth"), 70.0)
+	assert_eq(data.get("fov"), 45.0)
+	assert_is_error(empty, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(empty.error.data.sub_code, ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY)
+	assert_eq(restored_mode, Viewport.DEBUG_DRAW_WIREFRAME)
+	assert_eq(restored_update_mode, SubViewport.UPDATE_WHEN_VISIBLE)
+
+
+func test_screenshot_orthographic_frame_fits_every_corner_across_aspects() -> void:
+	var viewport := SubViewport.new()
+	track(viewport)
+	var camera := Camera3D.new()
+	viewport.add_child(camera)
+	EditorInterface.get_base_control().add_child(viewport)
+	var bounds := AABB(Vector3(130, -90, 700), Vector3(13, 29, 6200))
+	for resolution: Vector2i in [Vector2i(1321, 619), Vector2i(379, 857)]:
+		viewport.size = resolution
+		for axis: Camera3D.KeepAspect in [Camera3D.KEEP_WIDTH, Camera3D.KEEP_HEIGHT]:
+			camera.keep_aspect = axis
+			var frame := EditorHandler._orthographic_frame(bounds, Vector2(resolution), axis, 19.0, 23.0, 0.25)
+			assert_false(frame.has("error"), str(frame))
+			if frame.has("error"):
+				continue
+			camera.set_orthogonal(frame.size, frame.near, frame.far)
+			camera.global_transform = frame.transform
+			assert_gt(camera.far, 4000.0, "The temporary far plane must extend past a deep target")
+			var tightest_axis := 0.0
+			for corner_index in range(8):
+				var corner := bounds.get_endpoint(corner_index)
+				var unit_pixel := camera.unproject_position(corner) / Vector2(resolution)
+				var deviation := (unit_pixel - Vector2(0.5, 0.5)).abs()
+				tightest_axis = maxf(tightest_axis, maxf(deviation.x, deviation.y))
+				assert_true(deviation.x <= 0.4001 and deviation.y <= 0.4001,
+					"Corner %d at %s exceeds the central 80%% for %s / %s" % [corner_index, unit_pixel, resolution, axis])
+				assert_true(camera.is_position_in_frustum(corner), "Corner %d was clipped" % corner_index)
+			assert_true(is_equal_approx(tightest_axis, 0.4), "Use the available framing space on the limiting axis")
+
+
+func test_screenshot_orthographic_frame_uses_the_representable_camera_origin() -> void:
+	var bounds := AABB(Vector3.ONE * 1.0e9, Vector3.ONE * 128.0)
+	var resolution := Vector2(1321, 619)
+	var frame := EditorHandler._orthographic_frame(bounds, resolution, Camera3D.KEEP_HEIGHT, 19.0, 23.0, 0.25)
+	assert_false(frame.has("error"), str(frame))
+	if frame.has("error"):
+		return
+	var camera: Transform3D = frame.transform
+	var half_width: float = frame.size * resolution.aspect() * 0.5
+	var half_height: float = frame.size * 0.5
+	var limit := 0.0
+	for index in range(8):
+		var offset := bounds.get_endpoint(index) - camera.origin
+		limit = maxf(limit, absf(camera.basis.x.dot(offset)) / half_width)
+		limit = maxf(limit, absf(camera.basis.y.dot(offset)) / half_height)
+	assert_true(is_equal_approx(limit, 0.8), "The stored camera origin still fits the central 80%%, got %s" % limit)
+
+
+class FramingStub extends ViewportReadbackStub:
+	var frame: Dictionary = {}
+	var capture_fov: Variant
+
+	func _capture_viewport_image(_viewport: SubViewport, _render_mode: String, _cam: Camera3D = null,
+			cam_xform := Transform3D.IDENTITY, fov: Variant = null, orthographic: Dictionary = {},
+			_overlays: Dictionary = {}) -> Image:
+		frame = orthographic.merged({"transform": cam_xform})
+		capture_fov = fov
+		return image
+
+
+func test_screenshot_perspective_framing_from_orthographic_viewport() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		skip("No edited scene or 3D viewport camera")
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var params := {"view_target": McpScenePath.from_node(target, root)}
+	var cam := viewport.get_camera_3d()
+	var original_projection := cam.projection
+	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+	var default_fov := cam.fov
+	var handler := FramingStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var from_ortho := handler.take_screenshot(params)
+	var ortho_capture_fov: Variant = handler.capture_fov
+	cam.projection = Camera3D.PROJECTION_PERSPECTIVE
+	var from_perspective := handler.take_screenshot(params)
+	var perspective_capture_fov: Variant = handler.capture_fov
+	cam.projection = original_projection
+	assert_eq(from_ortho.get("data", {}).get("view_target"), params.view_target, str(from_ortho))
+	assert_eq(ortho_capture_fov, default_fov)
+	assert_false(from_ortho.get("data", {}).has("fov"))
+	assert_eq(from_perspective.get("data", {}).get("view_target"), params.view_target, str(from_perspective))
+	assert_eq(perspective_capture_fov, null)
+
+
+func test_screenshot_orthographic_views_match_editor_axes_and_custom_poles() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	if root == null or viewport == null or viewport.get_camera_3d() == null:
+		skip("No edited scene or 3D viewport camera")
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var target_path := McpScenePath.from_node(target, root)
+	var handler := FramingStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var views := {
+		"front": [Vector3.BACK, Vector3.UP],
+		"back": [Vector3.FORWARD, Vector3.UP],
+		"left": [Vector3.LEFT, Vector3.UP],
+		"right": [Vector3.RIGHT, Vector3.UP],
+		"top": [Vector3.UP, Vector3.FORWARD],
+		"bottom": [Vector3.DOWN, Vector3.BACK],
+	}
+	for view: String in views:
+		var result := handler.take_screenshot({"view_target": target_path, "orthographic_view": view})
+		assert_has_key(result, "data", str(result))
+		if not result.has("data"):
+			continue
+		var camera_transform: Transform3D = handler.frame.get("transform", Transform3D.IDENTITY)
+		var basis := camera_transform.basis
+		assert_true(basis.z.is_equal_approx(views[view][0]), "%s camera side is %s" % [view, basis.z])
+		assert_true(basis.y.is_equal_approx(views[view][1]), "%s screen up is %s" % [view, basis.y])
+		assert_eq(result.data.get("orthographic_view"), view)
+		assert_gt(result.data.get("orthographic_size", 0.0), 0.0)
+		assert_eq(result.data.get("orthographic_size"), handler.frame.get("size"))
+		assert_false(result.data.has("azimuth"))
+		assert_false(result.data.has("elevation"))
+	for elevation: float in [-90.0, 89.99, 90.0]:
+		var result := handler.take_screenshot({"view_target": target_path, "orthographic_view": "custom",
+			"elevation": elevation, "azimuth": 397.0})
+		assert_has_key(result, "data", str(result))
+		if not result.has("data"):
+			continue
+		var camera_transform: Transform3D = handler.frame.get("transform", Transform3D.IDENTITY)
+		var basis := camera_transform.basis
+		var expected := Basis(Vector3.UP, deg_to_rad(37.0)) * Basis(Vector3.RIGHT, -deg_to_rad(elevation))
+		assert_true(basis.is_equal_approx(expected), "Roll should follow azimuth at elevation %s" % elevation)
+		assert_eq(result.data.get("orthographic_view"), "custom")
+		assert_gt(result.data.get("orthographic_size", 0.0), 0.0)
+		assert_eq(result.data.get("orthographic_size"), handler.frame.get("size"))
+		assert_eq(result.data.get("elevation"), elevation)
+		assert_eq(result.data.get("azimuth"), 37.0)
+
+
+func test_screenshot_orthographic_refuses_conflicting_and_invalid_options() -> void:
+	var valid := {"orthographic_view": "top", "view_target": "/Main/Target"}
+	var invalid := [
+		[{"orthographic_view": 5}, ErrorCodes.WRONG_TYPE, "orthographic_view"],
+		[{"orthographic_view": "iso"}, ErrorCodes.VALUE_OUT_OF_RANGE, "orthographic_view"],
+		[{"view_target": "  "}, ErrorCodes.MISSING_REQUIRED_PARAM, "view_target"],
+		[{"source": "viewport_2d"}, ErrorCodes.VALUE_OUT_OF_RANGE, "viewport"],
+		[{"source": "cinematic"}, ErrorCodes.VALUE_OUT_OF_RANGE, "viewport"],
+		[{"source": "game"}, ErrorCodes.VALUE_OUT_OF_RANGE, "viewport"],
+		[{"coverage": true}, ErrorCodes.VALUE_OUT_OF_RANGE, "coverage"],
+		[{"fov": 45.0}, ErrorCodes.VALUE_OUT_OF_RANGE, "fov"],
+		[{"elevation": 30.0}, ErrorCodes.VALUE_OUT_OF_RANGE, "elevation"],
+		[{"orthographic_view": "custom", "azimuth": 12}, ErrorCodes.MISSING_REQUIRED_PARAM, "elevation"],
+		[{"orthographic_view": "custom", "elevation": 30, "azimuth": "45"}, ErrorCodes.WRONG_TYPE, "azimuth"],
+		[{"orthographic_view": "custom", "elevation": 91, "azimuth": 0}, ErrorCodes.VALUE_OUT_OF_RANGE, "elevation"],
+		[{"orthographic_view": "custom", "elevation": 0, "azimuth": INF}, ErrorCodes.VALUE_OUT_OF_RANGE, "finite"],
+	]
+	for entry: Array in invalid:
+		var result := _handler.take_screenshot(valid.merged(entry[0], true))
+		assert_is_error(result, entry[1], "%s returned %s" % [entry[0], result])
+		assert_contains(result.get("error", {}).get("message", ""), entry[2])
+
+
+func _viewport_screenshot_state(viewport: SubViewport) -> Array:
+	var cam := viewport.get_camera_3d()
+	return [viewport.debug_draw, viewport.render_target_update_mode, cam, cam.get_camera_transform(),
+		cam.projection, cam.keep_aspect, cam.size, cam.frustum_offset, cam.fov, cam.near, cam.far]
+
+
+func test_screenshot_orthographic_camera_preview_needs_user_action() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	if root == null or viewport == null or viewport.get_camera_3d() == null:
+		skip("No edited scene or 3D viewport camera")
+		return
+	var control := viewport.get_parent()
+	while control != null and control.get_class() != &"Node3DEditorViewport":
+		control = control.get_parent()
+	assert_true(control != null, "The viewport must have its native editor control")
+	if control == null:
+		return
+	var preview := Camera3D.new()
+	track(preview)
+	root.add_child(preview, true)
+	# Register the signal both native preview modes use on this viewport.
+	var observer := Callable(control, &"get_class")
+	var connected := preview.property_list_changed.connect(observer)
+	assert_eq(connected, OK)
+	if connected != OK:
+		return
+	var handler := ViewportReadbackStub.new(McpLogBuffer.new())
+	var result := handler.take_screenshot({"orthographic_view": "front",
+		"view_target": McpScenePath.from_node(preview, root)})
+	preview.property_list_changed.disconnect(observer)
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	assert_contains(result.get("error", {}).get("message", ""), "Exit Camera Preview or Cinematic Preview")
+	var readiness: Dictionary = result.get("error", {}).get("data", {})
+	assert_eq(readiness.get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE)
+	assert_eq(readiness.get("retryable"), false)
+	assert_eq(handler.modes, [], "Preview refusal must happen before any capture")
+
+
+func test_screenshot_orthographic_keeps_editor_state_after_capture_and_empty_readback() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		skip("No edited scene or 3D viewport camera")
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var params := {"view_target": McpScenePath.from_node(target, root),
+		"orthographic_view": "back", "render_mode": "unshaded"}
+	var initial := _viewport_screenshot_state(viewport)
+	var handler := ViewportReadbackStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var invalid := handler.take_screenshot(params.merged({"fov": 42.0}, true))
+	assert_is_error(invalid, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_eq(handler.modes, [], "Invalid requests must not reach frame readback")
+	assert_eq(_viewport_screenshot_state(viewport), initial)
+	var success := handler.take_screenshot(params)
+	assert_eq(success.get("data", {}).get("orthographic_view"), "back", str(success))
+	assert_eq(success.get("data", {}).get("render_mode"), "unshaded")
+	assert_eq(_viewport_screenshot_state(viewport), initial)
+	var ordinary := handler.take_screenshot({})
+	assert_eq(ordinary.get("data", {}).get("width"), 4)
+	assert_false(ordinary.get("data", {}).has("orthographic_view"))
+	assert_false(ordinary.get("data", {}).has("orthographic_size"))
+	handler.image = null
+	var empty := handler.take_screenshot(params)
+	assert_is_error(empty, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(empty.get("error", {}).get("data", {}).get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY)
+	assert_eq(handler.modes, [Viewport.DEBUG_DRAW_UNSHADED, initial[0], Viewport.DEBUG_DRAW_UNSHADED])
+	assert_eq(handler.update_modes, [SubViewport.UPDATE_ALWAYS, initial[1], SubViewport.UPDATE_ALWAYS])
+	assert_eq(_viewport_screenshot_state(viewport), initial)
+
+
+const VIEWPORT_GRID_LAYER := 1 << 25
+const VIEWPORT_GIZMO_LAYER := 1 << 26
+
+
+class OverlayReadbackStub extends ViewportReadbackStub:
+	var captures: Array[Dictionary] = []
+	var camera_masks: Array[int] = []
+
+	func _capture_viewport_image(viewport: SubViewport, render_mode: String, cam: Camera3D = null,
+			cam_xform := Transform3D.IDENTITY, fov: Variant = null, orthographic: Dictionary = {},
+			overlays: Dictionary = {}) -> Image:
+		captures.append(overlays.duplicate())
+		return super._capture_viewport_image(viewport, render_mode, cam, cam_xform, fov, orthographic, overlays)
+
+	func _read_viewport_image(viewport: Viewport) -> Image:
+		camera_masks.append(viewport.get_camera_3d().cull_mask)
+		return super._read_viewport_image(viewport)
+
+
+func _viewport_overlay_menu(root: Node, shortcut_name: String) -> Array:
+	var settings := EditorInterface.get_editor_settings()
+	if settings == null:
+		return []
+	var shortcut := settings.get_shortcut(shortcut_name)
+	if shortcut == null:
+		return []
+	for menu: MenuButton in root.find_children("*", "MenuButton", true, false):
+		var popup := menu.get_popup()
+		for index in range(popup.item_count):
+			if popup.get_item_shortcut(index) == shortcut and popup.is_item_checkable(index):
+				return [popup, index]
+	return []
+
+
+func _overlay_menu_checked(item: Array) -> bool:
+	return item[0].is_item_checked(item[1])
+
+
+func _set_overlay_menu_checked(item: Array, checked: bool) -> void:
+	var popup: PopupMenu = item[0]
+	if popup.is_item_checked(item[1]) != checked:
+		popup.id_pressed.emit(popup.get_item_id(item[1]))
+
+
+func test_screenshot_viewport_overlays_refuse_invalid_direct_parameters() -> void:
+	var handler := OverlayReadbackStub.new(McpLogBuffer.new())
+	for field in ["show_grid", "show_gizmos"]:
+		for value in [1, "false", null]:
+			var invalid := handler.take_screenshot({field: value})
+			assert_is_error(invalid, ErrorCodes.WRONG_TYPE)
+			assert_contains(invalid.get("error", {}).get("message", ""), field)
+	for source in ["viewport_2d", "game", "cinematic"]:
+		var invalid := handler.take_screenshot({"source": source, "show_grid": false})
+		assert_is_error(invalid, ErrorCodes.VALUE_OUT_OF_RANGE)
+		assert_contains(invalid.get("error", {}).get("message", ""), "viewport")
+	var coverage := handler.take_screenshot({"coverage": true, "show_gizmos": false})
+	assert_is_error(coverage, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(coverage.get("error", {}).get("message", ""), "coverage")
+	var invalid_coverage := handler.take_screenshot({"coverage": [], "show_grid": false})
+	assert_is_error(invalid_coverage, ErrorCodes.WRONG_TYPE)
+	var invalid_source := handler.take_screenshot({"source": [], "show_gizmos": true})
+	assert_is_error(invalid_source, ErrorCodes.WRONG_TYPE)
+	assert_eq(handler.captures, [])
+	var unavailable := EditorHandler._read_viewport_overlays(null)
+	assert_is_error(unavailable, ErrorCodes.EDITOR_NOT_READY)
+	var readiness: Dictionary = unavailable.get("error", {}).get("data", {})
+	assert_eq(readiness.get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE)
+	assert_eq(readiness.get("retryable"), false)
+
+
+func test_screenshot_viewport_overlays_mask_preserves_unrelated_layers() -> void:
+	# Include scene cull layers and unrelated editor tool layers.
+	var other_layers := (1 << 19) | (1 << 24) | (1 << 27) | 1
+	var mask := other_layers | VIEWPORT_GRID_LAYER
+	for grid: bool in [false, true]:
+		for gizmos: bool in [false, true]:
+			var actual := EditorHandler._viewport_overlay_mask(mask, {"show_grid": grid, "show_gizmos": gizmos})
+			var expected := other_layers | (VIEWPORT_GRID_LAYER if grid else 0) | (VIEWPORT_GIZMO_LAYER if gizmos else 0)
+			assert_eq(actual, expected)
+
+
+func test_screenshot_viewport_overlays_reuse_native_pane_state_and_restore_after_readback() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	if viewport == null or viewport.get_camera_3d() == null or root == null:
+		skip("No edited scene or 3D viewport camera")
+		return
+	var pane := viewport.get_parent()
+	while pane != null and pane.get_class() != &"Node3DEditorViewport":
+		pane = pane.get_parent()
+	if pane == null:
+		skip("No native 3D viewport menu")
+		return
+	var grid_item := _viewport_overlay_menu(pane, "spatial_editor/view_grid_lines")
+	var gizmos_item := _viewport_overlay_menu(pane, "spatial_editor/view_gizmos")
+	var global_item := _viewport_overlay_menu(EditorInterface.get_base_control(), "spatial_editor/view_grid")
+	if grid_item.is_empty() or gizmos_item.is_empty() or global_item.is_empty():
+		skip("No native grid or gizmo controls")
+		return
+	var target := Node3D.new()
+	track(target)
+	root.add_child(target, true)
+	var target_path := McpScenePath.from_node(target, root)
+	var cam := viewport.get_camera_3d()
+	var original_mask := cam.cull_mask
+	var original_checks := [_overlay_menu_checked(grid_item), _overlay_menu_checked(gizmos_item)]
+	_set_overlay_menu_checked(grid_item, true)
+	_set_overlay_menu_checked(gizmos_item, false)
+	var native_mask := cam.cull_mask
+	var global_grid := _overlay_menu_checked(global_item)
+	var initial := _viewport_screenshot_state(viewport)
+	var handler := OverlayReadbackStub.new(McpLogBuffer.new())
+	handler.image = Image.create_empty(4, 2, false, Image.FORMAT_RGB8)
+	var native := handler.get_viewport_overlays({})
+	var ordinary := handler.take_screenshot({})
+	var hidden_grid := handler.take_screenshot({"show_grid": false})
+	var shown_gizmos := handler.take_screenshot({"show_gizmos": true, "view_target": target_path,
+		"orthographic_view": "front", "render_mode": "unshaded"})
+	var after_success := _viewport_screenshot_state(viewport)
+	var after_success_mask := cam.cull_mask
+	handler.image = null
+	var empty := handler.take_screenshot({"show_grid": false, "show_gizmos": true, "view_target": target_path, "fov": 40.0})
+	var after_error := _viewport_screenshot_state(viewport)
+	var after_error_mask := cam.cull_mask
+	var after_error_checks := [_overlay_menu_checked(grid_item), _overlay_menu_checked(gizmos_item), _overlay_menu_checked(global_item)]
+	_set_overlay_menu_checked(grid_item, original_checks[0])
+	_set_overlay_menu_checked(gizmos_item, original_checks[1])
+	cam.cull_mask = original_mask
+	RenderingServer.force_draw(false)
+	var expected_grid_hidden := {"show_grid": false, "show_gizmos": false, "global_grid_enabled": global_grid}
+	var expected_gizmos_shown := {"show_grid": true, "show_gizmos": true, "global_grid_enabled": global_grid}
+	assert_eq(native.get("data", {}), {"show_grid": true, "show_gizmos": false, "global_grid_enabled": global_grid})
+	assert_eq(native_mask & (VIEWPORT_GRID_LAYER | VIEWPORT_GIZMO_LAYER), VIEWPORT_GRID_LAYER)
+	assert_false(ordinary.get("data", {}).has("viewport_overlays"))
+	assert_eq(ordinary.get("data", {}).get("width"), 4)
+	assert_eq(hidden_grid.get("data", {}).get("viewport_overlays"), expected_grid_hidden, str(hidden_grid))
+	assert_eq(shown_gizmos.get("data", {}).get("viewport_overlays"), expected_gizmos_shown, str(shown_gizmos))
+	assert_eq(shown_gizmos.get("data", {}).get("orthographic_view"), "front")
+	assert_eq(shown_gizmos.get("data", {}).get("render_mode"), "unshaded")
+	assert_is_error(empty, ErrorCodes.EDITOR_NOT_READY)
+	assert_eq(empty.get("error", {}).get("data", {}).get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY)
+	assert_eq(handler.captures, [{}, expected_grid_hidden, expected_gizmos_shown,
+		{"show_grid": false, "show_gizmos": true, "global_grid_enabled": global_grid}])
+	assert_eq(handler.camera_masks, [native_mask, native_mask, native_mask, native_mask], "Capture must leave the camera object untouched")
+	assert_eq(handler.update_modes, [initial[1], SubViewport.UPDATE_ALWAYS, SubViewport.UPDATE_ALWAYS, SubViewport.UPDATE_ALWAYS])
+	assert_eq(after_success, initial)
+	assert_eq(after_error, initial)
+	assert_eq(after_success_mask, native_mask)
+	assert_eq(after_error_mask, native_mask)
+	assert_eq(after_error_checks, [true, false, global_grid])
+
+
+func test_screenshot_viewport_overlays_refuse_to_enable_a_globally_disabled_grid() -> void:
+	var viewport := EditorInterface.get_editor_viewport_3d()
+	var root := EditorInterface.get_edited_scene_root()
+	if viewport == null or viewport.get_camera_3d() == null or EditorHandler.viewport_screenshot_precheck(root).has("error"):
+		skip("No edited 3D scene or viewport camera")
+		return
+	var global_item := _viewport_overlay_menu(EditorInterface.get_base_control(), "spatial_editor/view_grid")
+	if global_item.is_empty():
+		skip("No native global grid control")
+		return
+	var original := _overlay_menu_checked(global_item)
+	_set_overlay_menu_checked(global_item, false)
+	var handler := OverlayReadbackStub.new(McpLogBuffer.new())
+	var initial := _viewport_screenshot_state(viewport)
+	var initial_mask := viewport.get_camera_3d().cull_mask
+	var result := handler.take_screenshot({"show_grid": true})
+	var after := _viewport_screenshot_state(viewport)
+	var after_mask := viewport.get_camera_3d().cull_mask
+	var grid_after := _overlay_menu_checked(global_item)
+	_set_overlay_menu_checked(global_item, original)
+	assert_is_error(result, ErrorCodes.EDITOR_NOT_READY)
+	var readiness: Dictionary = result.get("error", {}).get("data", {})
+	assert_eq(readiness.get("sub_code"), ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE)
+	assert_eq(readiness.get("retryable"), false)
+	assert_contains(readiness.get("hint", ""), "View Grid")
+	assert_eq(handler.captures, [])
+	assert_eq(after, initial)
+	assert_eq(after_mask, initial_mask)
+	assert_false(grid_after)
+
+
 func test_screenshot_game_not_playing() -> void:
 	var result := _handler.take_screenshot({"source": "game"})
 	## Same shape as game_eval/game_command's gate: EDITOR_NOT_READY with

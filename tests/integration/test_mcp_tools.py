@@ -4221,12 +4221,76 @@ class TestEditorScreenshotTool:
         "nGP4DwABAQEBYY2JxQAAAABJRU5ErkJggg=="
     )
 
-    async def test_screenshot_with_image(self, mcp_stack):
+    async def test_viewport_overlays_get(self, mcp_stack):
+        client, plugin = mcp_stack
+        state = {"show_grid": True, "show_gizmos": False, "global_grid_enabled": False}
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "get_viewport_overlays"
+            assert cmd["params"] == {}
+            await plugin.send_response(cmd["request_id"], state)
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool("editor_manage", {"op": "viewport_overlays_get"})
+        await task
+        assert result.data == state
+
+    @pytest.mark.parametrize(
+        "overrides,include_image",
+        [
+            ({"show_grid": False}, True),
+            ({"show_gizmos": True}, False),
+            ({"show_grid": True, "show_gizmos": False}, True),
+        ],
+    )
+    async def test_viewport_overlay_capture(self, mcp_stack, overrides, include_image):
+        client, plugin = mcp_stack
+        applied = {"show_grid": False, "show_gizmos": False, "global_grid_enabled": True}
+        applied.update(overrides)
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "take_screenshot"
+            assert cmd["params"] == {"source": "viewport", "max_resolution": 640, **overrides}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "viewport",
+                    "width": 1,
+                    "height": 1,
+                    "original_width": 1,
+                    "original_height": 1,
+                    "format": "png",
+                    "image_base64": self._ONE_PX_PNG_B64,
+                    "viewport_overlays": applied,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_screenshot", {"include_image": include_image, **overrides}
+        )
+        await task
+        assert not result.is_error
+        assert [block.type for block in result.content] == (
+            ["text", "image"] if include_image else ["text"]
+        )
+        assert json.loads(result.content[0].text)["viewport_overlays"] == applied
+
+    @pytest.mark.parametrize("mode", [None, "normal", "unshaded"])
+    async def test_screenshot_with_image(self, mcp_stack, mode):
         client, plugin = mcp_stack
 
         async def respond():
             cmd = await plugin.recv_command()
             assert cmd["command"] == "take_screenshot"
+            if mode is None:
+                assert "render_mode" not in cmd["params"]
+            else:
+                assert cmd["params"]["render_mode"] == mode
+            assert "orthographic_view" not in cmd["params"]
+            assert "show_grid" not in cmd["params"] and "show_gizmos" not in cmd["params"]
             await plugin.send_response(
                 cmd["request_id"],
                 {
@@ -4237,16 +4301,74 @@ class TestEditorScreenshotTool:
                     "original_height": 1080,
                     "format": "png",
                     "image_base64": self._ONE_PX_PNG_B64,
+                    **({"render_mode": mode} if mode is not None else {}),
                 },
             )
 
         task = asyncio.create_task(respond())
-        result = await client.call_tool("editor_screenshot", {})
+        result = await client.call_tool("editor_screenshot", {"render_mode": mode} if mode else {})
         await task
 
         assert not result.is_error
-        # When include_image=True, result contains both text and image content blocks
-        assert len(result.content) >= 2
+        assert [block.type for block in result.content] == ["text", "image"]
+        metadata = json.loads(result.content[0].text)
+        if mode is None:
+            assert "render_mode" not in metadata
+        else:
+            assert metadata["render_mode"] == mode
+
+    @pytest.mark.parametrize("view", ["top", "custom"])
+    async def test_orthographic_screenshot(self, mcp_stack, view):
+        client, plugin = mcp_stack
+        params = {
+            "source": "viewport",
+            "view_target": "/Level/A,/Level/B",
+            "orthographic_view": view,
+            "render_mode": "unshaded",
+            "max_resolution": 320,
+        }
+        angles = {"elevation": -12.0, "azimuth": -45.0} if view == "custom" else {}
+        applied_angles = {"elevation": -12.0, "azimuth": 315.0} if view == "custom" else {}
+        include_image = view == "top"
+
+        async def respond():
+            cmd = await plugin.recv_command()
+            assert cmd["command"] == "take_screenshot"
+            assert cmd["params"] == {**params, **angles}
+            await plugin.send_response(
+                cmd["request_id"],
+                {
+                    "source": "viewport",
+                    "width": 320,
+                    "height": 180,
+                    "original_width": 1280,
+                    "original_height": 720,
+                    "format": "png",
+                    "image_base64": self._ONE_PX_PNG_B64,
+                    "view_target_count": 2,
+                    "orthographic_view": view,
+                    "orthographic_size": 12.5,
+                    "render_mode": "unshaded",
+                    **applied_angles,
+                },
+            )
+
+        task = asyncio.create_task(respond())
+        result = await client.call_tool(
+            "editor_screenshot", {**params, **angles, "include_image": include_image}
+        )
+        await task
+        assert not result.is_error
+        assert [block.type for block in result.content] == (
+            ["text", "image"] if include_image else ["text"]
+        )
+        meta = json.loads(result.content[0].text)
+        assert meta["orthographic_view"] == view
+        assert meta["orthographic_size"] == 12.5
+        assert meta["view_target_count"] == 2
+        assert meta["render_mode"] == "unshaded"
+        for key, value in applied_angles.items():
+            assert meta[key] == value
 
     @pytest.mark.parametrize("coverage", [False, True])
     @pytest.mark.parametrize("oversized", [False, True])

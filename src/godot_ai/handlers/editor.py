@@ -95,6 +95,10 @@ async def editor_selection_get(runtime: DirectRuntime) -> dict:
     return await runtime.send_command("get_selection")
 
 
+async def viewport_overlays_get(runtime: DirectRuntime) -> dict:
+    return await runtime.send_command("get_viewport_overlays")
+
+
 async def editor_screenshot(
     runtime: DirectRuntime,
     source: str = "viewport",
@@ -110,10 +114,22 @@ async def editor_screenshot(
     height: int | None = None,
     save_to: str = "",
     overwrite: bool = False,
+    render_mode: str | None = None,
+    orthographic_view: str | None = None,
+    show_grid: bool | None = None,
+    show_gizmos: bool | None = None,
 ) -> dict | list:
     if save_to:
         await require_writable_async(runtime)
     params: dict = {"source": source}
+    if render_mode is not None:
+        params["render_mode"] = render_mode
+    if orthographic_view is not None:
+        params["orthographic_view"] = orthographic_view
+    if show_grid is not None:
+        params["show_grid"] = show_grid
+    if show_gizmos is not None:
+        params["show_gizmos"] = show_gizmos
     if max_resolution > 0:
         params["max_resolution"] = max_resolution
     if view_target:
@@ -204,6 +220,10 @@ async def editor_screenshot(
             metadata["view_target_not_found"] = result["view_target_not_found"]
     for key in (
         "elevation",
+        "render_mode",
+        "orthographic_view",
+        "orthographic_size",
+        "viewport_overlays",
         "azimuth",
         "fov",
         "aabb_center",
