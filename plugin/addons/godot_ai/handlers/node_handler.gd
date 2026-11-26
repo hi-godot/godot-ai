@@ -105,7 +105,10 @@ func attach_to_bone_3d(params: Dictionary) -> Dictionary:
 			_undo_redo.create_action(action % prop.name, UndoRedo.MERGE_DISABLE, root)
 			if needs_follower:
 				_undo_redo.add_do_property(attachment, "script", follower.script)
+				# Resolve the script methods when undo history runs, after the script is attached.
+				_undo_redo.add_do_method(attachment, "call", "_start_following", true)
 				_undo_redo.add_do_method(attachment, "set_process", true)
+				_undo_redo.add_undo_method(attachment, "call", "_stop_following")
 				_undo_redo.add_undo_property(attachment, "script", null)
 				_undo_redo.add_undo_method(attachment, "set_process", attachment.is_processing())
 			if grip_changed:

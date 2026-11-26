@@ -225,6 +225,80 @@ func test_locked_character_external_attachment_follows_two_animation_poses() -> 
 	assert_false(_root.is_editable_instance(_character))
 
 
+func test_locked_character_realigns_when_rig_returns_between_frames() -> void:
+	var skeleton := _add_linked_character()
+	if skeleton == null:
+		return
+	var attachment := _assert_attachment(_attach({"skeleton_path": _path(skeleton)}), skeleton, _character)
+	if attachment == null:
+		return
+	var hand := skeleton.find_bone(HAND)
+	attachment.notification(Node.NOTIFICATION_PROCESS)
+	_assert_at_bone(skeleton, hand, attachment, Vector3.ZERO)
+	var rig := skeleton.get_parent_node_3d()
+	var original := rig.transform
+	rig.position += Vector3(6.0, 1.0, -3.0)
+	skeleton.set_bone_pose_position(hand, Vector3(1.5, 2.0, -1.0))
+	skeleton.notification(Skeleton3D.NOTIFICATION_UPDATE_SKELETON)
+	_assert_at_bone(skeleton, hand, attachment, Vector3.ZERO)
+	var moved_attachment := attachment.global_transform
+
+	rig.transform = original
+	assert_eq(attachment.global_transform, moved_attachment, "the return must happen without a native pose update")
+	attachment.notification(Node.NOTIFICATION_PROCESS)
+	_assert_at_bone(skeleton, hand, attachment, Vector3.ZERO)
+
+
+func test_locked_character_keeps_manually_evaluated_modifier_pose_when_rig_moves() -> void:
+	var skeleton := _add_linked_character()
+	if skeleton == null:
+		return
+	_add_manual_pose_modifier(skeleton)
+	var attachment := _assert_attachment(_attach({"skeleton_path": _path(skeleton)}), skeleton, _character)
+	if attachment == null:
+		return
+	var hand := skeleton.find_bone(HAND)
+	var unmodified := skeleton.get_bone_global_pose(hand)
+	var evaluations: Array[Transform3D] = []
+	var sample := func() -> void: evaluations.append(skeleton.get_bone_global_pose(hand))
+	skeleton.skeleton_updated.connect(sample)
+	skeleton.advance(0.0)
+	skeleton.notification(Skeleton3D.NOTIFICATION_UPDATE_SKELETON)
+	assert_eq(evaluations.size(), 1)
+	if evaluations.is_empty():
+		skeleton.skeleton_updated.disconnect(sample)
+		return
+	var evaluated := evaluations[0]
+	assert_false(evaluated.is_equal_approx(unmodified), "the modifier must change the observed pose")
+	assert_eq(skeleton.get_bone_global_pose(hand), unmodified, "Godot must restore the underlying pose after evaluation")
+	assert_true(attachment.global_transform.is_equal_approx(skeleton.global_transform * evaluated))
+	attachment.notification(Node.NOTIFICATION_PROCESS)
+	assert_true(attachment.global_transform.is_equal_approx(skeleton.global_transform * evaluated), "first frame must retain the evaluated pose")
+	var rig := skeleton.get_parent_node_3d()
+	rig.position += Vector3(-3.0, 4.0, 2.0)
+	rig.rotation.z += 0.7
+	attachment.notification(Node.NOTIFICATION_PROCESS)
+	skeleton.skeleton_updated.disconnect(sample)
+	assert_eq(evaluations.size(), 1, "a transform refresh must not evaluate the modifier again")
+	assert_eq(skeleton.get_bone_global_pose(hand), unmodified)
+	var expected := skeleton.global_transform * evaluated
+	assert_true(attachment.global_transform.is_equal_approx(expected), "rig movement must preserve the evaluated pose")
+	assert_true(_prop.global_position.is_equal_approx(expected.origin))
+
+
+func _add_manual_pose_modifier(skeleton: Skeleton3D) -> void:
+	skeleton.modifier_callback_mode_process = Skeleton3D.MODIFIER_CALLBACK_MODE_PROCESS_MANUAL
+	var modifier := CopyTransformModifier3D.new()
+	skeleton.add_child(modifier)
+	modifier.setting_count = 1
+	modifier.set_reference_bone_name(0, "Torso")
+	modifier.set_apply_bone_name(0, HAND)
+	modifier.set_copy_flags(0, CopyTransformModifier3D.TRANSFORM_FLAG_POSITION)
+	modifier.set_axis_flags(0, CopyTransformModifier3D.AXIS_FLAG_ALL)
+	modifier.set_relative(0, false)
+	modifier.set_additive(0, false)
+
+
 func test_locked_character_follows_rig_transform_with_frozen_bone_after_reopen() -> void:
 	var skeleton := _add_linked_character()
 	if skeleton == null:
@@ -313,18 +387,31 @@ func test_repeat_upgrades_a_scene_owned_native_external_follower_and_undoes_the_
 	native_follower.owner = _root
 	_prop.reparent(native_follower, false)
 	_prop.owner = _root
+	_add_manual_pose_modifier(skeleton)
+	var hand := skeleton.find_bone(HAND)
+	skeleton.advance(0.0)
+	skeleton.notification(Skeleton3D.NOTIFICATION_UPDATE_SKELETON)
+	var evaluated := native_follower.global_transform
+	assert_false(evaluated.is_equal_approx(skeleton.global_transform * skeleton.get_bone_global_pose(hand)))
 	var original := _prop.transform
 	var args := {"path": _path(_prop), "skeleton_path": _path(skeleton)}
 	var result := _attach(args)
 	assert_eq(_assert_attachment(result, skeleton, _character), native_follower)
 	assert_true(native_follower.is_processing())
+	native_follower.notification(Node.NOTIFICATION_PROCESS)
+	assert_true(native_follower.global_transform.is_equal_approx(evaluated), "upgrading must preserve the pose the modifier already applied")
 	assert_eq(_history.get_current_action(), _initial_action + 1)
 	assert_true(_history.undo())
 	assert_eq(native_follower.get_script(), null)
 	assert_false(native_follower.is_processing())
 	assert_eq(_prop.transform, original)
+	skeleton.advance(0.0)
+	skeleton.notification(Skeleton3D.NOTIFICATION_UPDATE_SKELETON)
+	assert_true(native_follower.global_transform.is_equal_approx(evaluated), "undo must leave the native modifier path working")
 	assert_true(_history.redo())
 	assert_true(native_follower.is_processing())
+	native_follower.notification(Node.NOTIFICATION_PROCESS)
+	assert_true(native_follower.global_transform.is_equal_approx(evaluated))
 	var repeat := _attach(args)
 	assert_has_key(repeat, "data")
 	if repeat.has("data"):
