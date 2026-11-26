@@ -1,0 +1,7 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://tests/fixtures/instance_editing.tscn" id="1_base"]
+
+[node name="Inherited" instance=ExtResource("1_base")]
+
+[node name="LocalProp" type="Node3D" parent="Mesh"]

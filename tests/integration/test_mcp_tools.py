@@ -4747,6 +4747,38 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
+    async def test_attach_to_bone_3d_forwards_grip_and_scene_guard_to_pinned_editor(
+        self, mcp_stack, mcp_ws_port
+    ):
+        client, _ = mcp_stack
+        pinned = await self._connect_second_plugin(mcp_ws_port, "character-editor")
+        params = {
+            "path": "/Level/Flashlight",
+            "skeleton_path": "/Level/Character/Skeleton3D",
+            "bone_name": "RightHand",
+            "grip_offset": {"position": [0, 0, -0.1], "rotation_degrees": [0, 90, 0]},
+            "scene_file": "res://levels/demo.tscn",
+        }
+        reply = {"path": "/Level/Character/FlashlightAttachment/Flashlight", "undoable": True}
+
+        async def respond():
+            command = await pinned.recv_command()
+            assert command["command"] == "attach_to_bone_3d"
+            assert command["params"] == params
+            await pinned.send_response(command["request_id"], reply)
+
+        try:
+            result, _ = await asyncio.gather(
+                client.call_tool(
+                    "node_manage",
+                    {"op": "attach_to_bone_3d", "params": params, "session_id": pinned.session_id},
+                ),
+                respond(),
+            )
+            assert result.data == reply
+        finally:
+            await pinned.close()
+
     async def test_concurrent_read_and_write_route_to_target_sessions(self, mcp_stack, mcp_ws_port):
         client, plugin_a = mcp_stack
         plugin_b = await self._connect_second_plugin(mcp_ws_port, "proj-b@0002")

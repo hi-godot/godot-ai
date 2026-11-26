@@ -2742,6 +2742,31 @@ async def test_node_move_handler():
     assert client.calls[-1]["params"] == {"path": "/Main/Camera3D", "index": 2}
 
 
+async def test_node_attach_to_bone_3d_omits_optional_parameters():
+    client = StubClient()
+    runtime = DirectRuntime(registry=SessionRegistry(), client=client)
+    await node_handlers.node_attach_to_bone_3d(runtime, "/Level/Lamp", "/Level/Rig", "Hand")
+    assert client.calls[-1]["command"] == "attach_to_bone_3d"
+    assert client.calls[-1]["params"] == {
+        "path": "/Level/Lamp",
+        "skeleton_path": "/Level/Rig",
+        "bone_name": "Hand",
+    }
+
+
+@pytest.mark.parametrize("readiness", ["importing", "playing"])
+async def test_node_attach_to_bone_3d_requires_writable(readiness):
+    client = StubClient()
+    client.live_readiness = readiness
+    registry = SessionRegistry()
+    registry.register(_make_session(readiness=readiness))
+    runtime = DirectRuntime(registry=registry, client=client)
+    with pytest.raises(GodotCommandError) as exc:
+        await node_handlers.node_attach_to_bone_3d(runtime, "/Level/Lamp", "/Level/Rig", "Hand")
+    assert exc.value.code == "EDITOR_NOT_READY"
+    assert not any(call["command"] == "attach_to_bone_3d" for call in client.calls)
+
+
 async def test_node_set_editable_children_forwards_explicit_state_and_scene_guard():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

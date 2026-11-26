@@ -8,12 +8,266 @@ const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializ
 
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
 const MAX_PACKED_BYTE_ARRAY_SIZE := 65536
+const MAX_BONE_HINTS := 20
+const MAX_BONE_HINT_LENGTH := 120
 
 var _undo_redo: EditorUndoRedoManager
+var _bone_inheritance_root_id := 0
+var _bone_inheritance_current := false
+var _bone_inherited_paths: Dictionary[String, String] = {}
 
 
 func _init(undo_redo: EditorUndoRedoManager) -> void:
 	_undo_redo = undo_redo
+
+
+func attach_to_bone_3d(params: Dictionary) -> Dictionary:
+	for key in ["path", "skeleton_path", "bone_name", "scene_file"]:
+		var value: Variant = params.get(key, "")
+		var type_error: Variant = McpParamValidators.require_string(key, value)
+		if type_error != null:
+			return type_error
+		if key != "scene_file" and String(value).is_empty():
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % key)
+	var offset := _parse_bone_grip(params.get("grip_offset", {}))
+	if offset.has("error"):
+		return offset
+
+	var prop_result := McpNodeValidator.resolve_or_error(params.path, "path", params.get("scene_file", ""))
+	if prop_result.has("error"):
+		return prop_result
+	var skeleton_result := McpNodeValidator.resolve_or_error(params.skeleton_path, "skeleton_path", params.get("scene_file", ""))
+	if skeleton_result.has("error"):
+		return skeleton_result
+	var root: Node = prop_result.scene_root
+	var node: Node = prop_result.node
+	var target: Node = skeleton_result.node
+	var root_error: Variant = _reject_if_scene_root(node, root, "attach")
+	if root_error != null:
+		return root_error
+	if not root.is_ancestor_of(node):
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "path must resolve within the edited scene: %s" % params.path)
+	if target != root and not root.is_ancestor_of(target):
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "skeleton_path must resolve within the edited scene: %s" % params.skeleton_path)
+	if node is not Node3D or target is not Skeleton3D:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "path (%s) must identify a Node3D and skeleton_path (%s) must identify a Skeleton3D" % [params.path, params.skeleton_path])
+	var prop := node as Node3D
+	var skeleton := target as Skeleton3D
+	if prop == skeleton or prop.is_ancestor_of(skeleton) or prop.top_level:
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Cannot attach %s to %s: the prop must not be top_level, the skeleton itself, or an ancestor of the skeleton" % [params.path, params.skeleton_path])
+	var skeleton_world := skeleton.get_world_3d()
+	if prop.get_world_3d() != skeleton_world:
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Prop %s and skeleton %s must share a World3D" % [params.path, params.skeleton_path])
+	if not _has_scene_owners(skeleton, root):
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "skeleton_path must identify a skeleton persisted in the edited scene: %s" % params.skeleton_path)
+	var write_error := McpNodeValidator.writable_error(prop, root)
+	if not write_error.is_empty():
+		return write_error
+	var structure_error := McpNodeValidator.structure_error(prop, root)
+	if not structure_error.is_empty():
+		return structure_error
+	var old_parent := prop.get_parent()
+	var old_index := prop.get_index()
+	if (
+		not _has_scene_owners(prop, root) or old_index < 0
+		or old_index >= old_parent.get_child_count() or old_parent.get_child(old_index) != prop
+	):
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "path must identify a movable scene-owned node: %s" % params.path)
+
+	var bone_name := String(params.bone_name)
+	var bone_idx := skeleton.find_bone(bone_name)
+	if bone_idx < 0:
+		return _missing_bone_error(skeleton, params.skeleton_path, bone_name)
+	var attachment := old_parent as BoneAttachment3D
+	var original := prop.transform
+	var local_scale := prop.scale
+	var position: Vector3 = offset.position
+	var rotation: Vector3 = offset.rotation
+	var target_basis := Basis.from_euler(rotation, prop.rotation_order) * Basis.from_scale(local_scale)
+	if not target_basis.is_finite():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "grip_offset and the local scale of %s must produce a finite transform" % params.path)
+
+	if (
+		attachment != null and not attachment.override_pose and attachment.bone_name == bone_name
+		and attachment.bone_idx == bone_idx and attachment.get_skeleton() == skeleton
+		and (not attachment.top_level or attachment.use_external_skeleton)
+	):
+		var changed := original.origin != position or not original.basis.is_equal_approx(target_basis)
+		if changed:
+			_undo_redo.create_action("MCP: Set Bone Grip for %s" % prop.name, UndoRedo.MERGE_DISABLE, root)
+			_record_bone_grip(prop, position, rotation, local_scale, original)
+			_undo_redo.commit_action()
+		return _bone_attachment_result(prop, attachment, skeleton, root, bone_name, changed)
+
+	# Locked instance internals cannot store a local child. Walk up to the
+	# nearest ancestor whose children the edited scene can save.
+	var parent: Node = skeleton
+	while not McpNodeValidator.writable_error(parent, root).is_empty():
+		if parent.owner == root:
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "The path to skeleton %s crosses a local node beneath a locked instance that would be lost on save" % params.skeleton_path)
+		parent = parent.get_parent()
+	if parent.get_viewport().find_world_3d() != skeleton_world:
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "No writable attachment parent shares the World3D of skeleton %s" % params.skeleton_path)
+
+	# Only owners outside the moved subtree are cleared by remove_child.
+	# Instance sub-scenes and intentionally unowned children keep their owners.
+	var external_owners: Dictionary[Node, Node] = {prop: prop.owner}
+	for child in _collect_descendants(prop, true):
+		var owner := child.owner
+		if owner == null or owner == prop or prop.is_ancestor_of(owner):
+			continue
+		if owner != parent and not owner.is_ancestor_of(parent):
+			return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Moving %s would detach %s from its scene owner" % [params.path, McpScenePath.from_node(child, root)])
+		external_owners[child] = owner
+
+	var inherited_error := _bone_attachment_inherited_error(prop, root)
+	if not inherited_error.is_empty():
+		return inherited_error
+
+	attachment = BoneAttachment3D.new()
+	var preferred := String(prop.name) + "Attachment"
+	var attachment_name := preferred
+	var suffix := 2
+	while parent.has_node(NodePath(attachment_name)):
+		attachment_name = preferred + str(suffix)
+		suffix += 1
+	attachment.name = attachment_name
+	attachment.bone_name = bone_name
+	if parent != skeleton:
+		attachment.external_skeleton = NodePath("../" + str(parent.get_path_to(skeleton)))
+		attachment.use_external_skeleton = true
+
+	# Every history target is a native node, so undo remains valid after the
+	# handler is freed. Only the new attachment needs a do reference.
+	_undo_redo.create_action("MCP: Attach %s to %s" % [prop.name, bone_name], UndoRedo.MERGE_DISABLE, root)
+	_undo_redo.add_do_method(parent, "add_child", attachment)
+	_undo_redo.add_do_method(attachment, "set_owner", root)
+	_undo_redo.add_do_method(old_parent, "remove_child", prop)
+	_undo_redo.add_do_method(attachment, "add_child", prop)
+	for child in external_owners:
+		_undo_redo.add_do_method(child, "set_owner", external_owners[child])
+	_undo_redo.add_do_reference(attachment)
+	_undo_redo.add_undo_method(attachment, "remove_child", prop)
+	_undo_redo.add_undo_method(old_parent, "add_child", prop)
+	_undo_redo.add_undo_method(old_parent, "move_child", prop, old_index)
+	for child in external_owners:
+		_undo_redo.add_undo_method(child, "set_owner", external_owners[child])
+	_record_bone_grip(prop, position, rotation, local_scale, original)
+	_undo_redo.add_undo_method(parent, "remove_child", attachment)
+	_undo_redo.commit_action()
+	return _bone_attachment_result(prop, attachment, skeleton, root, bone_name, true)
+
+
+func _bone_attachment_inherited_error(prop: Node3D, root: Node) -> Dictionary:
+	var root_id := root.get_instance_id()
+	var same_root := root_id == _bone_inheritance_root_id
+	if not same_root or not _bone_inheritance_current:
+		var packed: PackedScene
+		var scene_file := root.scene_file_path
+		# A clean saved scene exposes its SceneState without packing live nodes.
+		# An editor state change on the same root can clear inheritance before save.
+		if not same_root and not scene_file.is_empty() and not EditorInterface.get_unsaved_scenes().has(scene_file):
+			packed = ResourceLoader.load(scene_file, "PackedScene") as PackedScene
+		if packed == null:
+			packed = PackedScene.new()
+			var err := packed.pack(root)
+			if err != OK:
+				return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Cannot check inherited ownership of %s: %s" % [
+					McpScenePath.from_node(prop, root), error_string(err),
+				])
+
+		var previous_root := instance_from_id(_bone_inheritance_root_id) as Node
+		if previous_root != null and previous_root.editor_state_changed.is_connected(_invalidate_bone_inheritance):
+			previous_root.editor_state_changed.disconnect(_invalidate_bone_inheritance)
+		_bone_inherited_paths.clear()
+		var base := packed.get_state().get_base_scene_state()
+		while base != null:
+			var source := base.get_path()
+			for index in range(1, base.get_node_count()):
+				var path := String(base.get_node_path(index)).trim_prefix("./")
+				_bone_inherited_paths[path] = source
+			base = base.get_base_scene_state()
+		_bone_inheritance_root_id = root_id
+		_bone_inheritance_current = true
+		root.editor_state_changed.connect(_invalidate_bone_inheritance, Object.CONNECT_ONE_SHOT)
+
+	var relative := String(root.get_path_to(prop))
+	if _bone_inherited_paths.has(relative):
+		return ErrorCodes.make(ErrorCodes.INVALID_PARAMS, "Cannot move inherited node %s. Edit its base scene %s or add a local prop to the derived scene." % [
+			McpScenePath.from_node(prop, root), _bone_inherited_paths[relative],
+		])
+	return {}
+
+
+func _invalidate_bone_inheritance() -> void:
+	_bone_inheritance_current = false
+	_bone_inherited_paths.clear()
+
+
+# PackedScene skips an unowned ancestor's entire subtree.
+static func _has_scene_owners(node: Node, root: Node) -> bool:
+	var current := node
+	while current != root:
+		if current.owner == null:
+			return false
+		current = current.get_parent()
+	return true
+
+
+static func _parse_bone_grip(value: Variant) -> Dictionary:
+	if value is not Dictionary:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "grip_offset must be an object")
+	for key in value:
+		if key not in ["position", "rotation_degrees"]:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown grip_offset key: %s" % str(key))
+	var offset := {}
+	for key in ["position", "rotation_degrees"]:
+		var raw: Variant = value.get(key, Vector3.ZERO)
+		var vector: Variant = McpJsonValues.parse_vector3(raw)
+		if vector == null or (raw is Dictionary and raw.size() != 3):
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "grip_offset.%s must be three numbers in an array or an x/y/z object" % key)
+		if not vector.is_finite():
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "grip_offset.%s must contain only finite Vector3 values" % key)
+		offset[key] = vector
+	var degrees: Vector3 = offset.rotation_degrees
+	return {"position": offset.position, "rotation": Vector3(deg_to_rad(degrees.x), deg_to_rad(degrees.y), deg_to_rad(degrees.z))}
+
+
+static func _missing_bone_error(skeleton: Skeleton3D, path: String, bone_name: String) -> Dictionary:
+	var count := skeleton.get_bone_count()
+	var names: Array[String] = []
+	for index in mini(count, MAX_BONE_HINTS):
+		var name := skeleton.get_bone_name(index)
+		names.append(name.left(MAX_BONE_HINT_LENGTH) + "…" if name.length() > MAX_BONE_HINT_LENGTH else name)
+	var result := ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Bone %s was not found in skeleton %s" % [bone_name, path])
+	result.error.data = {"available_bones": names, "bone_count": count}
+	return result
+
+
+func _record_bone_grip(prop: Node3D, position: Vector3, rotation: Vector3, local_scale: Vector3, original: Transform3D) -> void:
+	_undo_redo.add_do_property(prop, "position", position)
+	_undo_redo.add_do_property(prop, "rotation", rotation)
+	_undo_redo.add_do_property(prop, "scale", local_scale)
+	# A raw transform assignment can change the decomposition of signed scales.
+	# Restore the saved components when they reproduce the exact original basis.
+	var original_rotation := prop.rotation
+	if Basis.from_euler(original_rotation, prop.rotation_order) * Basis.from_scale(local_scale) == original.basis:
+		_undo_redo.add_undo_property(prop, "position", original.origin)
+		_undo_redo.add_undo_property(prop, "rotation", original_rotation)
+		_undo_redo.add_undo_property(prop, "scale", local_scale)
+	else:
+		_undo_redo.add_undo_property(prop, "transform", original)
+
+
+static func _bone_attachment_result(prop: Node3D, attachment: BoneAttachment3D, skeleton: Skeleton3D, root: Node, bone_name: String, changed: bool) -> Dictionary:
+	return {"data": {
+		"path": McpScenePath.from_node(prop, root),
+		"attachment_path": McpScenePath.from_node(attachment, root),
+		"skeleton_path": McpScenePath.from_node(skeleton, root),
+		"bone_name": bone_name,
+		"changed": changed,
+		"undoable": changed,
+	}}
 
 
 func set_editable_children(params: Dictionary) -> Dictionary:
@@ -772,11 +1026,11 @@ func set_selection(params: Dictionary) -> Dictionary:
 ## All descendants of `node` (not including `node` itself), depth-first.
 ## Used to record per-child set_owner inside an undo action without targeting
 ## the handler as an UndoRedo receiver (upstream PR #927 / issue #904).
-static func _collect_descendants(node: Node) -> Array[Node]:
+static func _collect_descendants(node: Node, include_internal: bool = false) -> Array[Node]:
 	var out: Array[Node] = []
-	for child in node.get_children():
+	for child in node.get_children(include_internal):
 		out.append(child)
-		out.append_array(_collect_descendants(child))
+		out.append_array(_collect_descendants(child, include_internal))
 	return out
 
 

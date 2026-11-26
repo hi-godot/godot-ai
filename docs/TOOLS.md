@@ -275,7 +275,7 @@ Calls take the form:
 | Tool | Ops |
 |------|-----|
 | `scene_manage` | `create`, `save_as`, `close`, `get_roots` |
-| `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `set_editable_children`, `add_to_group`, `remove_from_group` |
+| `node_manage` | `get_children`, `get_groups`, `delete`, `duplicate`, `rename`, `move`, `reparent`, `set_editable_children`, `attach_to_bone_3d`, `add_to_group`, `remove_from_group` |
 | `script_manage` | `read`, `detach`, `find_symbols` (`.gd` and `.cs`) |
 | `project_manage` | `stop`, `settings_get`, `settings_set`, `set_main_scene` |
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
@@ -620,6 +620,30 @@ revalidate against intervening edits, then commit one undo action. Each returned
 The 4 ms budget applies to cooperative preparation. Final validation and the
 atomic undo action cannot yield; a maximum-size batch can exceed that budget.
 
+
+### Attach a prop to an animated bone
+
+```python
+node_manage(op="attach_to_bone_3d", params={
+    "path": "/Level/Flashlight",
+    "skeleton_path": "/Level/Character/Armature/Skeleton3D",
+    "bone_name": "RightHand",
+    "grip_offset": {"position": [0.02, 0, -0.04], "rotation_degrees": [0, 90, 0]},
+    "scene_file": "res://levels/demo.tscn",
+}, session_id=level_editor_session)
+```
+
+Use the bone's exact name. The prop snaps to the bone with its authored local
+scale. Position and rotation are bone-local and each defaults to zero. The
+operation also works with Editable Children off on an imported character.
+In an inherited level, use a prop added to that level. To move a prop
+defined by its base scene, open the base scene and attach it there.
+The optional `scene_file` guards against a tab switch.
+
+Use the returned prop `path` to adjust its grip, or `attachment_path` to inspect
+the native `BoneAttachment3D`. Repeating the same grip leaves undo history
+intact. Undoing the initial attachment restores the original parent and pose.
+Save the edited scene to keep the attachment.
 
 ### Animation libraries
 

@@ -38,6 +38,12 @@ Ops:
         Reorder among siblings. Index 0 = first.
   • reparent(path, new_parent, scene_file="")
         Move under a new parent. Children preserved. Cannot move into descendants.
+  • attach_to_bone_3d(path, skeleton_path, bone_name, grip_offset={}, scene_file="")
+        Attach an existing 3D prop to an animated bone, including in a locked
+        character instance. Snap to the bone and keep the prop's local scale.
+        Optional grip_offset.position and grip_offset.rotation_degrees use bone
+        space. Use the returned path to adjust the grip. One undo restores the prop.
+        For a prop defined by an inherited level's base, move it in the base scene.
   • set_editable_children(path, editable, scene_file="")
         Explicitly enable/disable Editable Children on an instanced scene root.
         Undoable when changed. Ancestors are never enabled implicitly.
@@ -255,6 +261,7 @@ def register_node_tools(mcp: FastMCP, *, include_non_core: bool = True) -> None:
             "rename": node_handlers.node_rename,
             "move": node_handlers.node_move,
             "reparent": node_handlers.node_reparent,
+            "attach_to_bone_3d": node_handlers.node_attach_to_bone_3d,
             "set_editable_children": node_handlers.node_set_editable_children,
             "add_to_group": node_handlers.node_add_to_group,
             "remove_from_group": node_handlers.node_remove_from_group,
