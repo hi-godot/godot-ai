@@ -375,6 +375,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler(
 		"physics_shape", HANDLERS_DIR + "physics_shape_handler.gd", [undo, _connection]
 	)
+	_dispatcher.register_lazy_handler("multimesh", HANDLERS_DIR + "multimesh_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("environment", HANDLERS_DIR + "environment_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("texture", HANDLERS_DIR + "texture_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("curve", HANDLERS_DIR + "curve_handler.gd", [undo, _connection])
@@ -560,6 +561,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 
 	_dispatcher.register_lazy("physics_shape_autofit", "physics_shape", &"autofit")
 	_dispatcher.register_lazy("physics_shape_generate", "physics_shape", &"generate")
+	_dispatcher.register_lazy("multimesh_set_instances", "multimesh", &"set_instances")
 	_dispatcher.register_lazy("environment_create", "environment", &"create_environment")
 	_dispatcher.register_lazy("gradient_texture_create", "texture", &"create_gradient_texture")
 	_dispatcher.register_lazy("noise_texture_create", "texture", &"create_noise_texture")

@@ -7,6 +7,30 @@ from godot_ai.handlers._target import target_params
 from godot_ai.runtime.direct import DirectRuntime
 from godot_ai.tools._pagination import paginate
 
+MULTIMESH_PLUGIN_TIMEOUT_MS = 30000
+MULTIMESH_TIMEOUT_SEC = MULTIMESH_PLUGIN_TIMEOUT_MS / 1000.0 + 2.0
+
+
+async def multimesh_set_instances(
+    runtime: DirectRuntime,
+    path: str,
+    instances: list[dict],
+    mesh_path: str = "",
+    mesh_node_path: str = "",
+    scene_file: str = "",
+) -> dict:
+    await require_writable_async(runtime)
+    params: dict = {"path": path, "instances": instances}
+    if mesh_path != "":
+        params["mesh_path"] = mesh_path
+    if mesh_node_path != "":
+        params["mesh_node_path"] = mesh_node_path
+    if scene_file != "":
+        params["scene_file"] = scene_file
+    return await runtime.send_command(
+        "multimesh_set_instances", params, timeout=MULTIMESH_TIMEOUT_SEC
+    )
+
 
 async def resource_search(
     runtime: DirectRuntime,

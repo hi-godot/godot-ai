@@ -4747,6 +4747,52 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
+    async def test_multimesh_placement_routes_to_pinned_editor(self, mcp_stack, mcp_ws_port):
+        client, _ = mcp_stack
+        pinned = await self._connect_second_plugin(mcp_ws_port, "fence-editor")
+        params = {
+            "path": "/Level/Fence",
+            "mesh_node_path": "/Level/Kit/Post",
+            "scene_file": "res://yard.tscn",
+            "instances": [
+                {
+                    "transform": {"position": [2, 0, 0], "rotation_degrees": [0, 15, 0]},
+                    "color": [0.8, 0.6, 0.4, 1],
+                    "custom_data": [0.25, -1, 2, 1],
+                }
+            ],
+        }
+        reply = {
+            "path": "/Level/Fence",
+            "instance_count": 1,
+            "use_colors": True,
+            "use_custom_data": True,
+            "changed": True,
+            "undoable": True,
+        }
+
+        async def respond():
+            command = await pinned.recv_command()
+            assert command["command"] == "multimesh_set_instances"
+            assert command["params"] == params
+            await pinned.send_response(command["request_id"], reply)
+
+        try:
+            result, _ = await asyncio.gather(
+                client.call_tool(
+                    "resource_manage",
+                    {
+                        "op": "multimesh_set_instances",
+                        "params": params,
+                        "session_id": pinned.session_id,
+                    },
+                ),
+                respond(),
+            )
+            assert result.data == reply
+        finally:
+            await pinned.close()
+
     async def test_concurrent_read_and_write_route_to_target_sessions(self, mcp_stack, mcp_ws_port):
         client, plugin_a = mcp_stack
         plugin_b = await self._connect_second_plugin(mcp_ws_port, "proj-b@0002")

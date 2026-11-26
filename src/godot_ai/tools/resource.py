@@ -65,6 +65,14 @@ Ops:
         replacement retains a backup; it is not crash-atomic. Failed
         restoration reports recovery_backup and staged_resource paths. A rare
         post-save refresh failure reports disk_committed=true explicitly.
+  • multimesh_set_instances(path, instances, mesh_path="", mesh_node_path="", scene_file="")
+        Set all placements on a MultiMeshInstance3D in target-local space.
+        Each row requires transform and may include color and custom_data
+        (four shader floats). Omitted channels retain values by index.
+        Reuse the current mesh, load a Mesh from mesh_path, or take the mesh
+        of a MeshInstance3D at mesh_node_path. [] clears all placements.
+        One scene undo restores the original MultiMesh, including sharing.
+        Call directly for frame-budgeted processing outside batch_execute.
   • curve_set_points(points, path="", property="", resource_path="")
         Replace all points on a Curve / Curve2D / Curve3D. Auto-creates
         the curve resource if the slot is empty (curve_created flag).
@@ -142,6 +150,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
             "create": resource_handlers.resource_create,
             "set_properties": resource_handlers.resource_set_properties,
             "sprite_frames_create": resource_handlers.sprite_frames_create,
+            "multimesh_set_instances": resource_handlers.multimesh_set_instances,
             "curve_set_points": curve_handlers.curve_set_points,
             "environment_create": environment_handlers.environment_create,
             "physics_shape_autofit": physics_shape_handlers.physics_shape_autofit,

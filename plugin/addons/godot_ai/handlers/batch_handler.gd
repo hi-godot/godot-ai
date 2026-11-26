@@ -22,6 +22,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 ##   McpDispatcher.dispatch_direct), so a game op nested in a batch would have
 ##   no completion channel and hang or lose its reply. input_sequence made this
 ##   concrete (#814); the whole game_command surface shares the deferred path.
+## - multimesh_set_instances: preparation of the bulk buffer spans editor frames.
 const FORBIDDEN_SUBCOMMANDS := {
 	"reload_plugin": "reload_plugin must be called directly so no batch continues during reload",
 	"batch_execute": "batch_execute cannot be nested inside another batch",
@@ -31,6 +32,9 @@ const FORBIDDEN_SUBCOMMANDS := {
 	"game_command":
 		"game_command ops are deferred (their reply arrives out-of-band) and "
 		+ "have no completion channel inside a batch — run them as their own tool call",
+	"multimesh_set_instances":
+		"multimesh_set_instances prepares a bulk instance buffer across editor frames. "
+		+ "Call resource_manage(op='multimesh_set_instances') directly.",
 	"configure_client":
 		"configure_client is deferred and has no completion channel inside a batch — "
 		+ "run it as its own tool call",

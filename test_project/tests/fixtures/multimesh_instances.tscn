@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_source"]
+
+[node name="MultiMeshFixture" type="Node3D"]
+
+[node name="Source" type="MeshInstance3D" parent="."]
+mesh = SubResource("CapsuleMesh_source")
+
+[node name="Target" type="MultiMeshInstance3D" parent="."]
