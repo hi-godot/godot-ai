@@ -636,6 +636,8 @@ node_manage(op="attach_to_bone_3d", params={
 Use the bone's exact name. The prop snaps to the bone with its authored local
 scale. Position and rotation are bone-local and each defaults to zero. The
 operation also works with Editable Children off on an imported character.
+For a locked rig, the saved attachment includes a built-in script that follows
+rig motion even while the bone pose is static.
 In an inherited level, use a prop added to that level. To move a prop
 defined by its base scene, open the base scene and attach it there.
 The optional `scene_file` guards against a tab switch.

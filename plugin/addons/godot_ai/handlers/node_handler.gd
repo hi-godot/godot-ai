@@ -7,6 +7,7 @@ const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializ
 ## Handles node creation and manipulation with undo/redo support.
 
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
+const ExternalBoneFollower := preload("res://addons/godot_ai/runtime/external_bone_follower.gd")
 const MAX_PACKED_BYTE_ARRAY_SIZE := 65536
 const MAX_BONE_HINTS := 20
 const MAX_BONE_HINT_LENGTH := 120
@@ -92,12 +93,25 @@ func attach_to_bone_3d(params: Dictionary) -> Dictionary:
 		and attachment.bone_idx == bone_idx and attachment.get_skeleton() == skeleton
 		and (not attachment.top_level or attachment.use_external_skeleton)
 	):
-		var changed := original.origin != position or not original.basis.is_equal_approx(target_basis)
-		if changed:
-			_undo_redo.create_action("MCP: Set Bone Grip for %s" % prop.name, UndoRedo.MERGE_DISABLE, root)
-			_record_bone_grip(prop, position, rotation, local_scale, original)
+		var grip_changed := original.origin != position or not original.basis.is_equal_approx(target_basis)
+		var needs_follower := attachment.use_external_skeleton and attachment.owner == root and attachment.get_script() == null
+		if needs_follower or grip_changed:
+			var follower: Dictionary
+			if needs_follower:
+				follower = _new_external_bone_follower()
+				if follower.has("error"):
+					return follower
+			var action := "MCP: Update Bone Attachment for %s" if needs_follower else "MCP: Set Bone Grip for %s"
+			_undo_redo.create_action(action % prop.name, UndoRedo.MERGE_DISABLE, root)
+			if needs_follower:
+				_undo_redo.add_do_property(attachment, "script", follower.script)
+				_undo_redo.add_do_method(attachment, "set_process", true)
+				_undo_redo.add_undo_property(attachment, "script", null)
+				_undo_redo.add_undo_method(attachment, "set_process", attachment.is_processing())
+			if grip_changed:
+				_record_bone_grip(prop, position, rotation, local_scale, original)
 			_undo_redo.commit_action()
-		return _bone_attachment_result(prop, attachment, skeleton, root, bone_name, changed)
+		return _bone_attachment_result(prop, attachment, skeleton, root, bone_name, needs_follower or grip_changed)
 
 	# Locked instance internals cannot store a local child. Walk up to the
 	# nearest ancestor whose children the edited scene can save.
@@ -134,8 +148,13 @@ func attach_to_bone_3d(params: Dictionary) -> Dictionary:
 	attachment.name = attachment_name
 	attachment.bone_name = bone_name
 	if parent != skeleton:
+		var follower := _new_external_bone_follower()
+		if follower.has("error"):
+			attachment.free()
+			return follower
 		attachment.external_skeleton = NodePath("../" + str(parent.get_path_to(skeleton)))
 		attachment.use_external_skeleton = true
+		attachment.set_script(follower.script)
 
 	# Every history target is a native node, so undo remains valid after the
 	# handler is freed. Only the new attachment needs a do reference.
@@ -156,6 +175,17 @@ func attach_to_bone_3d(params: Dictionary) -> Dictionary:
 	_undo_redo.add_undo_method(parent, "remove_child", attachment)
 	_undo_redo.commit_action()
 	return _bone_attachment_result(prop, attachment, skeleton, root, bone_name, true)
+
+
+static func _new_external_bone_follower() -> Dictionary:
+	# An embedded script keeps the saved scene independent of the editor addon.
+	var source: GDScript = ExternalBoneFollower
+	var script := GDScript.new()
+	script.source_code = source.source_code
+	var err := script.reload()
+	if err != OK:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Cannot initialize external bone follower: %s" % error_string(err))
+	return {"script": script}
 
 
 func _bone_attachment_inherited_error(prop: Node3D, root: Node) -> Dictionary:

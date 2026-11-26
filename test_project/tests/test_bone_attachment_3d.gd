@@ -18,6 +18,7 @@ var _prop: Node3D
 var _skeleton: Skeleton3D
 var _character: Node3D
 var _character_path: String
+var _reopened_path: String
 
 
 func suite_name() -> String:
@@ -74,6 +75,9 @@ func teardown() -> void:
 	if not _character_path.is_empty():
 		DirAccess.remove_absolute(_character_path)
 		_character_path = ""
+	if not _reopened_path.is_empty():
+		DirAccess.remove_absolute(_reopened_path)
+		_reopened_path = ""
 
 
 func test_snap_and_one_undo_redo_preserve_linked_prop_ownership() -> void:
@@ -106,6 +110,7 @@ func test_snap_and_one_undo_redo_preserve_linked_prop_ownership() -> void:
 	if attachment == null:
 		return
 	assert_false(attachment.use_external_skeleton)
+	assert_eq(attachment.get_script(), null)
 	assert_eq(_history.get_current_action(), _initial_action + 1)
 	assert_eq(_prop.name, old_name)
 	assert_true(_prop.transform.is_equal_approx(snapped))
@@ -218,6 +223,113 @@ func test_locked_character_external_attachment_follows_two_animation_poses() -> 
 	skeleton.notification(Skeleton3D.NOTIFICATION_UPDATE_SKELETON)
 	_assert_at_bone(skeleton, hand, attachment, grip)
 	assert_false(_root.is_editable_instance(_character))
+
+
+func test_locked_character_follows_rig_transform_with_frozen_bone_after_reopen() -> void:
+	var skeleton := _add_linked_character()
+	if skeleton == null:
+		return
+	var grip := Vector3(0.5, 0.0, -0.25)
+	var result := _attach({"skeleton_path": _path(skeleton), "grip_offset": {"position": [grip.x, grip.y, grip.z]}})
+	var attachment := _assert_attachment(result, skeleton, _character)
+	if attachment == null:
+		return
+	assert_true(attachment.is_processing(), "external follower should process in the editor")
+	_assert_frozen_rig_follow(skeleton, attachment, _prop, grip)
+
+	var packed := PackedScene.new()
+	var pack_err := packed.pack(_root)
+	assert_eq(pack_err, OK)
+	if pack_err != OK:
+		return
+	_reopened_path = "user://_mcp_bone_attachment_level_%s.tscn" % _fixture.get_instance_id()
+	var save_err := ResourceSaver.save(packed, _reopened_path)
+	assert_eq(save_err, OK)
+	if save_err != OK:
+		return
+	var saved := ResourceLoader.load(_reopened_path, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+	assert_ne(saved, null)
+	if saved == null:
+		return
+	var reopened: Node = track(saved.instantiate(PackedScene.GEN_EDIT_STATE_MAIN))
+	var reopened_character: Node3D = reopened.get_node(_root.get_path_to(_character))
+	var reopened_skeleton: Skeleton3D = reopened.get_node(_root.get_path_to(skeleton))
+	var reopened_attachment := reopened.get_node_or_null(_root.get_path_to(attachment)) as BoneAttachment3D
+	assert_ne(reopened_attachment, null, "the external attachment must survive a disk round trip")
+	if reopened_attachment == null:
+		return
+	var reopened_prop: Node3D = reopened.get_node(_root.get_path_to(_prop))
+	_root.get_tree().root.add_child(reopened)
+	assert_false(reopened.is_editable_instance(reopened_character))
+	assert_eq(reopened_attachment.get_skeleton(), reopened_skeleton)
+	assert_true(reopened_attachment.is_processing())
+	var reopened_script := reopened_attachment.get_script() as Script
+	assert_ne(reopened_script, null)
+	if reopened_script != null:
+		assert_true(reopened_script.is_built_in(), "the follower must survive without the editor addon")
+	_assert_frozen_rig_follow(reopened_skeleton, reopened_attachment, reopened_prop, grip)
+
+
+func _assert_frozen_rig_follow(skeleton: Skeleton3D, attachment: BoneAttachment3D, prop: Node3D, grip: Vector3) -> void:
+	var rig := skeleton.get_parent_node_3d()
+	var player: AnimationPlayer = rig.get_parent().get_node("AnimationPlayer")
+	var hand := skeleton.find_bone(HAND)
+	player.play("Swing")
+	player.advance(0.5)
+	player.stop(true)
+	# Flush the initial pose once. The rig movement below sends no pose update.
+	skeleton.notification(Skeleton3D.NOTIFICATION_UPDATE_SKELETON)
+	assert_false(player.is_playing())
+	var frozen_pose := skeleton.get_bone_global_pose(hand)
+	var before := attachment.global_transform
+	assert_true(before.is_equal_approx(skeleton.global_transform * frozen_pose))
+	var updates: Array[bool] = []
+	var on_update := func() -> void: updates.append(true)
+	skeleton.skeleton_updated.connect(on_update)
+	rig.position += Vector3(3.0, -2.0, 1.5)
+	rig.rotation.y += 0.4
+	rig.scale *= Vector3(1.2, 0.8, 1.1)
+	# The runner is synchronous, so deliver the same notification as a frame.
+	attachment.notification(Node.NOTIFICATION_PROCESS)
+	skeleton.skeleton_updated.disconnect(on_update)
+	assert_eq(updates.size(), 0, "ordinary transforms should not rely on skeleton_updated")
+	assert_eq(skeleton.get_bone_global_pose(hand), frozen_pose)
+	var bone_world := skeleton.global_transform * frozen_pose
+	assert_false(bone_world.is_equal_approx(before), "moving the rig must move the bone in world space")
+	assert_true(attachment.global_transform.is_equal_approx(bone_world), "the attachment must follow rig changes with a frozen pose")
+	assert_true(prop.global_position.is_equal_approx(bone_world * grip), "the grip must follow the moved rig")
+
+
+func test_repeat_upgrades_a_scene_owned_native_external_follower_and_undoes_the_upgrade() -> void:
+	var skeleton := _add_linked_character()
+	if skeleton == null:
+		return
+	var native_follower := BoneAttachment3D.new()
+	native_follower.name = "NativeFollower"
+	native_follower.bone_name = HAND
+	native_follower.external_skeleton = NodePath("../Rig/Skeleton")
+	native_follower.use_external_skeleton = true
+	_character.add_child(native_follower)
+	native_follower.owner = _root
+	_prop.reparent(native_follower, false)
+	_prop.owner = _root
+	var original := _prop.transform
+	var args := {"path": _path(_prop), "skeleton_path": _path(skeleton)}
+	var result := _attach(args)
+	assert_eq(_assert_attachment(result, skeleton, _character), native_follower)
+	assert_true(native_follower.is_processing())
+	assert_eq(_history.get_current_action(), _initial_action + 1)
+	assert_true(_history.undo())
+	assert_eq(native_follower.get_script(), null)
+	assert_false(native_follower.is_processing())
+	assert_eq(_prop.transform, original)
+	assert_true(_history.redo())
+	assert_true(native_follower.is_processing())
+	var repeat := _attach(args)
+	assert_has_key(repeat, "data")
+	if repeat.has("data"):
+		assert_eq(repeat.data.changed, false)
+	assert_eq(_history.get_current_action(), _initial_action + 1)
 
 
 func test_editable_character_uses_direct_attachment_and_keeps_editable_state() -> void:
