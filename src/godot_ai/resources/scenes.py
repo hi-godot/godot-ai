@@ -6,6 +6,7 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.handlers import resource as resource_handlers
 from godot_ai.handlers import scene as scene_handlers
 from godot_ai.resources import safe_payload
 from godot_ai.runtime.direct import DirectRuntime
@@ -28,3 +29,9 @@ def register_scene_resources(mcp: FastMCP) -> None:
         """
         runtime = DirectRuntime.from_context(ctx)
         return await safe_payload(scene_handlers.scene_hierarchy_resource_data(runtime))
+
+    @mcp.resource("godot://scene/lightmap_uv2", mime_type="application/json")
+    async def get_lightmap_uv2(ctx: Context) -> dict[str, Any]:
+        """First 100 lightmap channel findings for the active editor's scene."""
+        runtime = DirectRuntime.from_context(ctx)
+        return await safe_payload(resource_handlers.check_lightmap_uv2(runtime))

@@ -4712,6 +4712,66 @@ class TestPerCallSessionRouting:
         )
         return MockGodotPlugin(ws=ws, session_id=session_id)
 
+    async def test_lightmap_uv2_tool_and_resource_share_active_defaults(self, mcp_stack):
+        client, plugin = mcp_stack
+        report = {"path": "/Hall", "status": "clear", "triangle_surfaces_checked": 2}
+
+        async def respond_twice():
+            for _ in range(2):
+                cmd = await plugin.recv_command()
+                assert cmd["command"] == "check_lightmap_uv2"
+                assert cmd["params"] == {
+                    "path": "",
+                    "scene_file": "",
+                    "scope": "bake_candidates",
+                    "offset": 0,
+                    "limit": 100,
+                }
+                await plugin.send_response(cmd["request_id"], report)
+
+        responder = asyncio.create_task(respond_twice())
+        result = await client.call_tool("resource_manage", {"op": "check_lightmap_uv2"})
+        resource = await client.read_resource("godot://scene/lightmap_uv2")
+        await responder
+        assert result.data == json.loads(resource[0].text) == report
+
+    async def test_lightmap_uv2_reads_pinned_playing_editor(self, mcp_stack, mcp_ws_port):
+        client, _ = mcp_stack
+        plugin = await self._connect_second_plugin(mcp_ws_port, "hall@0002", readiness="playing")
+        params = {
+            "path": "/Hall/Architecture",
+            "scene_file": "res://hall.tscn",
+            "scope": "all",
+            "offset": 2,
+            "limit": 1,
+        }
+        report = {
+            "status": "missing_channels",
+            "offset": 2,
+            "total_count": 3,
+            "has_more": False,
+            "findings": [
+                {"path": "/Hall/Architecture/Wall", "surface_index": 1, "issues": ["missing_uv2"]}
+            ],
+        }
+        try:
+
+            async def respond():
+                cmd = await plugin.recv_command()
+                assert cmd["command"] == "check_lightmap_uv2"
+                assert cmd["params"] == params
+                await plugin.send_response(cmd["request_id"], report)
+
+            responder = asyncio.create_task(respond())
+            result = await client.call_tool(
+                "resource_manage",
+                {"op": "check_lightmap_uv2", "session_id": "hall@0002", "params": params},
+            )
+            await responder
+            assert result.data == report
+        finally:
+            await plugin.close()
+
     async def test_session_id_routes_to_specific_session(self, mcp_stack, mcp_ws_port):
         client, plugin_a = mcp_stack
         ## Rename the implicit session "mcp-test" for clarity: active=proj-a@0001.

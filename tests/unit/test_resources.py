@@ -49,6 +49,9 @@ class TestResourceRegistration:
     async def test_scene_hierarchy_resource_registered(self, mcp):
         assert "godot://scene/hierarchy" in await self._resource_uris(mcp)
 
+    async def test_lightmap_uv2_resource_registered(self, mcp):
+        assert "godot://scene/lightmap_uv2" in await self._resource_uris(mcp)
+
     async def test_selection_current_resource_registered(self, mcp):
         assert "godot://selection/current" in await self._resource_uris(mcp)
 
@@ -66,9 +69,9 @@ class TestResourceRegistration:
 
     async def test_total_resource_count(self, mcp):
         ## 7 originals + 5 list resources (editor/state, materials, input_map,
-        ## performance, test/results) + custom-tools. Node + script templates
+        ## performance, test/results) + custom-tools and lightmap_uv2. Node + script templates
         ## are exposed as resource templates rather than concrete resource URIs.
-        assert len(await self._resource_uris(mcp)) == 13
+        assert len(await self._resource_uris(mcp)) == 14
 
     async def test_custom_tools_resource_registered(self, mcp):
         assert "godot://custom-tools" in await self._resource_uris(mcp)

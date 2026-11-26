@@ -89,6 +89,19 @@ func test_reload_is_rejected_before_any_batch_command_runs() -> void:
 	assert_eq(_call_log, [], "reload cannot leave an executing batch behind")
 
 
+func test_rejects_lightmap_uv2_scan_before_any_batch_command_runs() -> void:
+	_dispatcher.register("check_lightmap_uv2", func(_p: Dictionary) -> Dictionary:
+		_call_log.append("check_lightmap_uv2")
+		return McpDispatcher.DEFERRED_RESPONSE)
+	var result := _handler.batch_execute({"commands": [
+		{"command": "_ok_pure"},
+		{"command": "check_lightmap_uv2"},
+	]})
+	assert_is_error(result, ErrorCodes.VALUE_OUT_OF_RANGE)
+	assert_contains(str(result.get("error", {}).get("message", "")), "check_lightmap_uv2 scans across editor frames")
+	assert_eq(_call_log, [], "a refused scan must leave the entire batch unexecuted")
+
+
 func _undo_for_scene(scene_root: Node) -> UndoRedo:
 	return _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(scene_root))
 

@@ -37,6 +37,8 @@ const FORBIDDEN_SUBCOMMANDS := {
 	"remove_client":
 		"remove_client is deferred and has no completion channel inside a batch — "
 		+ "run it as its own tool call",
+	"check_lightmap_uv2":
+		"check_lightmap_uv2 scans across editor frames. Call it directly.",
 }
 
 ## The whole batch executes synchronously inside one dispatcher tick,

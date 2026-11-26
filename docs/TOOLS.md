@@ -293,7 +293,7 @@ Calls take the form:
 | `filesystem_manage` | `read_text`, `write_text`, `import_get`, `import_set`, `reimport`, `scan`, `search`, `move`, `rename`, `remove` |
 | `theme_manage` | `create`, `set_color`, `set_constant`, `set_font_size`, `set_stylebox_flat`, `set_stylebox_texture`, `set_font`, `set_icon`, `stylebox_override`, `apply` |
 | `ui_manage` | `set_anchor_preset`, `set_text`, `set_richtext`, `build_layout`, `draw_recipe` |
-| `resource_manage` | `search`, `load`, `inspect`, `assign`, `get_info`, `create`, `set_properties`, `sprite_frames_create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
+| `resource_manage` | `search`, `load`, `inspect`, `check_lightmap_uv2`, `assign`, `get_info`, `create`, `set_properties`, `sprite_frames_create`, `curve_set_points`, `environment_create`, `physics_shape_autofit`, `physics_shape_generate`, `gradient_texture_create`, `noise_texture_create` |
 | `api_manage` | `get_class` |
 | `client_manage` | `status`, `configure`, `remove` |
 | `tilemap_manage` | `tilemap_set_cell`, `tilemap_set_cells_rect`, `tilemap_clear`, `tilemap_get_cells` |
@@ -492,6 +492,7 @@ don't, and the only path that supports `session_id` pinning.
 | `godot://logs/recent` | Last 100 plugin log lines |
 | `godot://scene/current` | Active scene path + project + play state |
 | `godot://scene/hierarchy` | Scene hierarchy from the active editor (first 100 nodes; sets `resource_truncated` + hint when larger — use the `scene_get_hierarchy` tool to page) |
+| `godot://scene/lightmap_uv2` | First 100 lightmap channel findings for visible, static mesh instances in the active editor |
 | `godot://node/{path}/properties` | All properties of a node by scene path |
 | `godot://node/{path}/children` | Direct children (name, type, path each) |
 | `godot://node/{path}/groups` | Group memberships for a node |
@@ -598,6 +599,59 @@ construction budget can stop traversal sooner. The complete encoded operation
 result is capped at 64 KiB, including graph and truncation metadata. This is not
 a cap on the surrounding MCP wire frame. A result that cannot fit is refused
 with an explicit size error; reducing depth can make the request fit.
+
+### Find mesh surfaces excluded from a lightmap bake
+
+A single triangle surface missing UV2 or normals excludes its entire
+`MeshInstance3D` from Godot's LightmapGI bake. [Godot's mesh selection for baking](https://github.com/godotengine/godot/blob/4.7-stable/scene/3d/lightmap_gi.cpp#L365-L407)
+
+To find the surface in the current editor, inspect the whole scene or pass
+the path of a subtree.
+
+```python
+resource_manage(
+    op="check_lightmap_uv2",
+    params={"path": "/Level/Architecture", "scene_file": "res://levels/hall.tscn"},
+    session_id=session_id,
+)
+```
+
+For example, a finding with `path="/Level/Architecture/Wall"`,
+`surface_index=1`, `surface_name="Trim"` and `issues=["missing_uv2"]`
+identifies the wall's second surface. Surface indices start at zero.
+`issues` can also contain `missing_normals`. A shared mesh produces
+findings at each placement. `mesh_path` identifies the resource when it has a path.
+
+The default `scope="bake_candidates"` checks visible, static-GI mesh
+instances. Use `scope="all"` to include hidden instances and other GI modes.
+Each finding in this scope includes `visible_in_tree` and `gi_mode`.
+Both scopes traverse owned children, including meshes inside locked instances.
+`scene_file` guards the edited scene. The URI uses the active editor and
+default arguments. Use the tool to pin a session, change scope or page through
+`findings` with `offset` and `limit` (default 100, maximum 200). Each request
+reads live editor state, so edits between pages can change the results.
+
+`mesh_instances_checked` counts placements of inspected meshes, including
+ArrayMesh resources with only lines or points. Empty mesh slots and native
+PointMesh resources are skipped. `triangle_surfaces_checked` counts triangle
+surfaces across those placements. Both counts cover the whole scan on every
+page. `missing_surface_count` counts surfaces with a confirmed issue.
+Unsupported meshes produce a separate `kind="unsupported_mesh"` finding with
+their path and type. They increment `unsupported_mesh_instances` and set
+`complete=false`. `total_count` includes both kinds of findings.
+
+| `status` | Meaning |
+| --- | --- |
+| `missing_channels` | At least one surface lacks UV2 or normals. Check `complete` for additional unsupported meshes. |
+| `incomplete` | Unsupported meshes remain and no checked surface has a confirmed issue. |
+| `no_eligible_geometry` | The chosen scope contains no supported triangle surfaces or unsupported meshes. |
+| `clear` | All checked triangle surfaces declare both channels. |
+
+The scan reads native ArrayMesh surface formats. For supported built-in
+primitives, it reads the declared channels and the live `add_uv2` setting
+without generating geometry. UV overlap, padding and bake
+quality require separate checks. CSG, MultiMesh and custom bake-mesh providers
+are outside the MeshInstance3D scan.
 
 ### Refresh generated physics shapes
 
