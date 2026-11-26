@@ -3,9 +3,7 @@
 Resources don't count against tool-count caps and are preferred for
 active-session reads when the client surfaces them. Each resource module
 calls into the same shared handlers as its matching tool form, with one
-common ``safe_payload`` wrapper that converts unhandled exceptions into a
-``{"error": ..., "connected": False}`` JSON envelope so a disconnected
-plugin or transient editor error doesn't surface as a 500.
+common ``safe_payload`` wrapper for resource errors.
 """
 
 from __future__ import annotations
@@ -13,21 +11,34 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from godot_ai.godot_client.client import GodotCommandError
+from godot_ai.protocol.errors import EditorTransportSubCode, ErrorCode
+
 __all__ = ["safe_payload", "safe_payload_sync"]
+
+
+def _resource_error(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, GodotCommandError):
+        result = {"error": str(exc), "code": exc.code, "data": exc.data}
+        if (
+            exc.data.get("connected") is False
+            or exc.code in {ErrorCode.PLUGIN_DISCONNECTED, ErrorCode.SESSION_NOT_FOUND}
+            or exc.data.get("sub_code") == EditorTransportSubCode.EDITOR_DISCONNECTED
+        ):
+            result["connected"] = False
+        return result
+    return {"error": str(exc), "connected": False}
 
 
 def safe_payload_sync(fn: Callable[[], Any]) -> dict[str, Any]:
     """Sync sibling of :func:`safe_payload` for non-async resource handlers.
 
-    Calls ``fn()`` and returns its dict payload, or the same graceful
-    ``{"error": ..., "connected": False}`` envelope on any exception, so
-    every ``godot://...`` resource — sync or async — shares one
-    error-envelope contract instead of letting some surface a raw 500.
+    Sync and async resources use the same command and disconnection envelopes.
     """
     try:
         return fn()
     except Exception as exc:
-        return {"error": str(exc), "connected": False}
+        return _resource_error(exc)
 
 
 async def safe_payload(coro: Awaitable[Any]) -> dict[str, Any]:
@@ -41,11 +52,10 @@ async def safe_payload(coro: Awaitable[Any]) -> dict[str, Any]:
     ``dict`` sidesteps that path entirely and keeps the MIME consistent
     across static resources and templates.
 
-    The error envelope shape (``{"error": str, "connected": False}``) is
-    what existing clients (the dock, integration tests) already pattern-
-    match on for "editor not connected" handling.
+    Disconnection errors retain the connected flag. Editor errors carry
+    the command's code and data, including any retry guidance.
     """
     try:
         return await coro
     except Exception as exc:
-        return {"error": str(exc), "connected": False}
+        return _resource_error(exc)

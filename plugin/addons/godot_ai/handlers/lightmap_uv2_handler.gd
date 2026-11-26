@@ -31,8 +31,12 @@ class MeshChannels extends RefCounted:
 	var mesh_path: String
 	var triangles := 0
 	var deficient: Array[Dictionary] = []
+	var resource: Mesh
+	var surface_count := 0
+	var add_uv2 := false
 
 	func _init(mesh: Mesh) -> void:
+		resource = mesh
 		mesh_path = mesh.resource_path
 		mesh_type = mesh.get_class()
 		var script := mesh.get_script() as Script
@@ -44,6 +48,7 @@ class MeshChannels extends RefCounted:
 		match mesh_type:
 			"ArrayMesh":
 				kind = Kind.ARRAY
+				surface_count = mesh.get_surface_count()
 			"PointMesh":
 				kind = Kind.POINT
 			_:
@@ -53,8 +58,18 @@ class MeshChannels extends RefCounted:
 					## Even a surface count can force PrimitiveMesh to generate
 					## geometry. These native types declare a triangle surface
 					## with normals and use add_uv2 for the second UV channel.
-					if not (mesh as PrimitiveMesh).add_uv2:
+					add_uv2 = (mesh as PrimitiveMesh).add_uv2
+					if not add_uv2:
 						deficient.append(_surface(0, "", ["missing_uv2"]))
+
+	func is_current() -> bool:
+		## clear_surfaces() and a still-lazy primitive can change without
+		## emitting Resource.changed in Godot 4.7.
+		if kind == Kind.ARRAY:
+			return resource.get_surface_count() == surface_count
+		if kind == Kind.PRIMITIVE:
+			return (resource as PrimitiveMesh).add_uv2 == add_uv2
+		return true
 
 	func read_array_surface(mesh: ArrayMesh, index: int) -> void:
 		if mesh.surface_get_primitive_type(index) != Mesh.PRIMITIVE_TRIANGLES:
@@ -75,10 +90,12 @@ class MeshChannels extends RefCounted:
 
 class Cursor extends RefCounted:
 	var node_id: int
+	var owner_id: int
 	var next_child := -1
 
 	func _init(node: Node) -> void:
 		node_id = node.get_instance_id()
+		owner_id = node.owner.get_instance_id() if node.owner != null else 0
 
 
 class ScanJob extends RefCounted:
@@ -95,6 +112,8 @@ class ScanJob extends RefCounted:
 	var limit: int
 	var stack: Array[Cursor] = []
 	var mesh_cache: Dictionary[int, MeshChannels] = {}
+	var scanned_meshes: Array[MeshChannels] = []
+	var invalidated := false
 	var mesh_instances := 0
 	var triangle_surfaces := 0
 	var unsupported := 0
@@ -111,21 +130,23 @@ class ScanJob extends RefCounted:
 	var placement_visible: bool
 	var placement_gi_mode: int
 
+	func invalidate() -> void:
+		invalidated = true
+
 	func advance(scene_root: Node) -> void:
 		## One step per surface (or per cached finding), child, or node. A
 		## large ArrayMesh or many siblings yield just like a deep scene does.
 		var cursor := stack.back() as Cursor
 		var node := instance_from_id(cursor.node_id) as Node
 		if node == null or node.is_queued_for_deletion():
-			stack.pop_back()
-			array_mesh = null
-			channels = null
+			invalidate()
 			return
 		if channels != null:
 			_advance_mesh()
 			return
 		if cursor.next_child == -1:
 			cursor.next_child = 0
+			node.child_order_changed.connect(invalidate)
 			var instance := node as MeshInstance3D
 			if instance != null:
 				_begin_mesh(instance, scene_root)
@@ -153,12 +174,18 @@ class ScanJob extends RefCounted:
 		channels = mesh_cache.get(mesh_id)
 		if channels == null:
 			channels = MeshChannels.new(mesh)
+			if channels.kind in [MeshChannels.Kind.ARRAY, MeshChannels.Kind.PRIMITIVE]:
+				scanned_meshes.append(channels)
+			mesh.changed.connect(invalidate)
 			if channels.kind == MeshChannels.Kind.ARRAY:
 				array_mesh = mesh as ArrayMesh
 				array_mesh_id = mesh_id
 				surface_index = 0
 			else:
 				mesh_cache[mesh_id] = channels
+		elif not channels.is_current():
+			invalidate()
+			return
 		if channels.kind == MeshChannels.Kind.POINT:
 			channels = null
 			return
@@ -178,7 +205,10 @@ class ScanJob extends RefCounted:
 
 	func _advance_mesh() -> void:
 		if array_mesh != null:
-			if surface_index < array_mesh.get_surface_count():
+			if not channels.is_current():
+				invalidate()
+				return
+			if surface_index < channels.surface_count:
 				channels.read_array_surface(array_mesh, surface_index)
 				surface_index += 1
 				return
@@ -207,7 +237,19 @@ class ScanJob extends RefCounted:
 			findings.append(row)
 		total += 1
 
-	func response() -> Dictionary:
+	func changed_error() -> Dictionary:
+		var error := ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "The subtree or mesh changed during the lightmap UV2 check. Retry the scan.")
+		error.error["data"] = {"retryable": true}
+		return error
+
+	func response(deadline_usec: int) -> Dictionary:
+		## These values can change silently. Yielding here would allow an
+		## already-checked mesh to change before the report is published.
+		for mesh in scanned_meshes:
+			if Time.get_ticks_usec() >= deadline_usec:
+				return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Too many distinct meshes to verify in one editor frame. Check a smaller subtree with path.")
+			if not mesh.is_current():
+				return changed_error()
 		var complete := unsupported == 0
 		var status := "clear"
 		if missing > 0:
@@ -334,6 +376,11 @@ func _context_error(job: ScanJob, root: Node) -> Dictionary:
 		or ScenePath.from_node(target, root) != job.target_path
 	):
 		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "The lightmap UV2 check target '%s' changed during the check." % job.target_path)
+	if not job.stack.is_empty():
+		var cursor := job.stack.back() as Cursor
+		var active_node := instance_from_id(cursor.node_id) as Node
+		if not _in_bake_tree(active_node, target) or (active_node.owner.get_instance_id() if active_node.owner != null else 0) != cursor.owner_id:
+			job.invalidate()
 	return {}
 
 
@@ -372,14 +419,20 @@ func _step_jobs() -> void:
 		var response := _context_error(job, root)
 		if response.is_empty() and Time.get_ticks_msec() - job.started_msec >= TIMEOUT_MSEC:
 			response = ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT, "The lightmap UV2 check exceeded 30 seconds.")
-		if response.is_empty():
+		if response.is_empty() and job.invalidated:
+			response = job.changed_error()
+		elif response.is_empty() and job.stack.is_empty():
+			if i > 0:
+				break  # Give final verification a fresh frame.
+			response = job.response(Time.get_ticks_usec() + FRAME_BUDGET_USEC)
+		elif response.is_empty():
 			var slice_end := mini(frame_end, Time.get_ticks_usec() + quantum)
-			while not job.stack.is_empty():
+			while not job.invalidated and not job.stack.is_empty():
 				job.advance(root)
 				if Time.get_ticks_usec() >= slice_end:
 					break
-			if job.stack.is_empty():
-				response = job.response()
+			if job.invalidated:
+				response = job.changed_error()
 		if not response.is_empty():
 			_jobs.remove_at(_next_job)
 			_connection.send_deferred_response(job.request_id, response)

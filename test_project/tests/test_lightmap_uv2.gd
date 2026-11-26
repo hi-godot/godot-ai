@@ -437,6 +437,91 @@ func test_lost_request_releases_the_scan_without_sending_a_reply() -> void:
 	assert_eq(retry.get("missing_surface_count"), 2)
 
 
+func _step_frames(count: int) -> void:
+	for i in count:
+		_editor.frame.emit()
+	assert_eq(_connection.replies, [], "mutation must happen during the scan")
+
+
+func _assert_retry() -> void:
+	var response := _finish_scan()
+	assert_is_error(response, ErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_true(response.get("error", {}).get("data", {}).get("retryable", false))
+	assert_false(response.has("data"), "no partial report")
+
+
+func test_reparenting_a_queued_mesh_out_of_scope_refuses_partial_report() -> void:
+	var wall := _add_mesh("Wall", BoxMesh.new())
+	var other := Node3D.new()
+	_scene_root.add_child(other)
+	track(other)
+	_start_scan()
+	_step_frames(2)
+	wall.reparent(other)
+	_assert_retry()
+
+
+func test_deleting_placement_after_first_finding_refuses_partial_counts() -> void:
+	var wall := _add_mesh("Wall", BoxMesh.new())
+	_start_scan()
+	_step_frames(4)
+	wall.free()
+	_assert_retry()
+
+
+func test_reordering_siblings_during_scan_rejects_shifted_child_index() -> void:
+	_add_mesh("First", PointMesh.new())
+	var wall := _add_mesh("Wall", BoxMesh.new())
+	_start_scan()
+	_step_frames(4)
+	_fixture.move_child(wall, 0)
+	_assert_retry()
+	assert_eq(_scan().get("missing_surface_count"), 1)
+
+
+func test_changing_a_shared_primitive_rejects_cached_channels() -> void:
+	var mesh := BoxMesh.new()
+	mesh.add_uv2 = true
+	_add_mesh("First", mesh)
+	_add_mesh("Second", mesh)
+	_start_scan()
+	_step_frames(5)
+	mesh.add_uv2 = false
+	_assert_retry()
+	assert_eq(_scan().get("missing_surface_count"), 2)
+
+
+func test_removing_an_array_surface_mid_read_rejects_mixed_formats() -> void:
+	var mesh := ArrayMesh.new()
+	_add_triangle(mesh, "Complete", true, true)
+	_add_triangle(mesh, "Trim", true, false)
+	_add_mesh("Wall", mesh)
+	_start_scan()
+	_step_frames(4)
+	mesh.surface_remove(0)
+	_assert_retry()
+	var fresh := _scan()
+	assert_eq(_finding(fresh, 0).get("surface_name"), "Trim")
+	assert_eq(_finding(fresh, 0).get("surface_index"), 0)
+
+
+func test_silent_mesh_clear_before_publication_refuses_stale_report() -> void:
+	var first := ArrayMesh.new()
+	_add_triangle(first, "First", true, false)
+	_add_mesh("First", first)
+	_add_mesh("Other", BoxMesh.new())
+	_start_scan()
+	var job = _dispatcher._lazy_handler_cache[COMMAND]._jobs.front()
+	for frame in 40:
+		if job.stack.is_empty():
+			break
+		_editor.frame.emit()
+	assert_true(job.stack.is_empty())
+	assert_eq(_connection.replies, [])
+	first.clear_surfaces()
+	_assert_retry()
+
+
 func test_teardown_releases_a_partially_scanned_array_mesh_without_reply() -> void:
 	var mesh := ArrayMesh.new()
 	for index in range(24):
