@@ -207,7 +207,7 @@ static func _step(job: Dictionary, budget_usec: int) -> bool:
 		return true
 	if _abandoned(job):
 		return _finish(job, {})
-	var error := _execution_error(job)
+	var error := _execution_error(job, Time.get_ticks_msec())
 	if not error.is_empty():
 		return _finish(job, error)
 	var start := Time.get_ticks_usec()
@@ -261,7 +261,7 @@ static func _step(job: Dictionary, budget_usec: int) -> bool:
 		work += 1
 	if _frame_spent(start, budget_usec, work):
 		return false
-	return _finish(job, _commit(job))
+	return _finish(job, _commit(job, Time.get_ticks_msec))
 
 
 static func _frame_spent(start: int, budget_usec: int, work: int) -> bool:
@@ -412,7 +412,11 @@ static func _stage_candidate(job: Dictionary) -> Dictionary:
 	if previous != null:
 		candidate.custom_aabb = settings.custom_aabb
 		candidate.physics_interpolation_quality = settings.quality
-		candidate.visible_instance_count = -1 if int(settings.visible_count) < 0 else mini(int(settings.visible_count), count)
+		var visible_count: int = settings.visible_count
+		# Clearing a positive limit must allow new instances to draw later.
+		if count == 0 and visible_count > 0:
+			visible_count = -1
+		candidate.visible_instance_count = mini(visible_count, count)
 		candidate.resource_name = settings.name
 		candidate.resource_local_to_scene = settings.local_to_scene
 		var metadata: Dictionary = settings.metadata
@@ -439,9 +443,16 @@ static func _abandoned(job: Dictionary) -> bool:
 	return dispatcher != null and not dispatcher.has_pending_deferred_response(job.request_id)
 
 
-static func _execution_error(job: Dictionary) -> Dictionary:
-	if not str(job.request_id).is_empty() and Time.get_ticks_msec() - int(job.started_ms) >= _DEFERRED_TIMEOUT_MS:
+static func _deadline_error(job: Dictionary, now_ms: int) -> Dictionary:
+	if not str(job.request_id).is_empty() and now_ms - int(job.started_ms) >= _DEFERRED_TIMEOUT_MS:
 		return ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT, "multimesh_set_instances exceeded its %d ms budget" % _DEFERRED_TIMEOUT_MS)
+	return {}
+
+
+static func _execution_error(job: Dictionary, now_ms: int) -> Dictionary:
+	var error := _deadline_error(job, now_ms)
+	if not error.is_empty():
+		return error
 	var root = job.scene_root
 	if not is_instance_valid(root) or EditorInterface.get_edited_scene_root() != root or root.is_queued_for_deletion() or root.scene_file_path != job.scene_file:
 		return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "The edited scene changed while MultiMesh instances were prepared")
@@ -452,10 +463,10 @@ static func _same_buffer(before: PackedFloat32Array, after: PackedFloat32Array) 
 	return before.size() == after.size() and before.to_byte_array() == after.to_byte_array()
 
 
-static func _commit(job: Dictionary) -> Dictionary:
+static func _commit(job: Dictionary, clock: Callable) -> Dictionary:
 	if _abandoned(job):
 		return {}
-	var error := _execution_error(job)
+	var error := _execution_error(job, clock.call())
 	if not error.is_empty():
 		return error
 	var root: Node = job.scene_root
@@ -483,6 +494,10 @@ static func _commit(job: Dictionary) -> Dictionary:
 	if target.multimesh != previous or _settings(previous) != job.previous_settings or not _same_buffer(job.previous_buffer, _read_buffer(previous)):
 		return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "%s MultiMesh changed while instances were prepared" % job.target_path)
 	if job.changed:
+		# The buffer readback above can wait for the renderer.
+		error = _deadline_error(job, clock.call())
+		if not error.is_empty():
+			return error
 		var undo_redo: EditorUndoRedoManager = job.undo_redo
 		undo_redo.create_action("MCP: Set MultiMesh Instances on %s" % target.name, UndoRedo.MERGE_DISABLE, root)
 		undo_redo.add_do_property(target, "multimesh", job.candidate)

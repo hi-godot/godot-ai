@@ -130,8 +130,22 @@ func test_grow_shrink_and_clear_preserve_settings_and_omitted_channels() -> void
 	_success(_set_instances([]), 0)
 	var cleared := _target.multimesh
 	_assert_preserved_settings(cleared, original)
-	assert_eq(cleared.visible_instance_count, 0)
+	assert_eq(cleared.visible_instance_count, -1)
 	_assert_buffer(cleared, [])
+	_success(_set_instances(rows), 3)
+	var repopulated := _target.multimesh
+	_assert_preserved_settings(repopulated, original)
+	assert_eq(repopulated.visible_instance_count, -1, "all repopulated instances should draw")
+
+
+func test_clear_and_repopulate_preserves_explicit_hide_all() -> void:
+	var original := _seed([[0, 1, 0, 1, 7, 8, 9, 10]])
+	original.visible_instance_count = 0
+	_target.multimesh = original
+	_success(_set_instances([]), 0)
+	assert_eq(_target.multimesh.visible_instance_count, 0)
+	_success(_set_instances([ORIGIN_ROW]), 1)
+	assert_eq(_target.multimesh.visible_instance_count, 0, "explicit hide-all should persist")
 
 
 func test_empty_unassigned_slot_creates_no_resource_or_undo_action() -> void:
@@ -315,6 +329,34 @@ func test_staged_job_refuses_in_place_buffer_edit() -> void:
 	assert_is_error(_finish_job(job), McpErrorCodes.EDITED_SCENE_MISMATCH)
 	assert_true(_target.multimesh == original)
 	_assert_buffer(original, changed_row)
+	assert_eq(_editor_state(), before)
+
+
+func test_commit_rechecks_deadline_after_stale_state_validation() -> void:
+	var original := _seed([[0, 1, 0, 1, 7, 8, 9, 10]])
+	_target.multimesh = original
+	var connection := track(DeferredConnection.new()) as DeferredConnection
+	_root.add_child(connection)
+	var request_id := "multimesh-deadline-test"
+	connection.dispatcher._register_deferred(request_id, "multimesh_set_instances")
+	var job := _begin_job({}, connection, request_id)
+	if not _advance_to_commit(job):
+		return
+	var before := _editor_state()
+	var started_ms: int = job.started_ms
+	var cutoff := started_ms + Handler._DEFERRED_TIMEOUT_MS
+	var ticks: Array[int] = [cutoff - 1, cutoff]
+	var clock := func() -> int: return ticks.pop_front()
+	var original_buffer := original.buffer
+	original.buffer = PackedFloat32Array(IDENTITY_ROW + [1, 0, 0, 1, 7, 8, 9, 10])
+	assert_is_error(Handler._commit(job, clock), McpErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_eq(ticks, [cutoff], "stale buffer validation should precede the final deadline check")
+	original.buffer = original_buffer
+	ticks.assign([cutoff - 1, cutoff])
+	assert_is_error(Handler._commit(job, clock), McpErrorCodes.DEFERRED_TIMEOUT)
+	assert_eq(ticks, [])
+	assert_true(_target.multimesh == original)
+	_assert_buffer(original, IDENTITY_ROW + [0, 1, 0, 1, 7, 8, 9, 10])
 	assert_eq(_editor_state(), before)
 
 
