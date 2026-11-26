@@ -300,7 +300,7 @@ Calls take the form:
 | `tileset_manage` | `tileset_create_atlas`, `tileset_get_atlas_tiles`, `tileset_get_atlas_image` |
 | `gridmap_manage` | `gridmap_set_item`, `gridmap_fill`, `gridmap_clear`, `gridmap_get_used_cells`, `gridmap_list_library_items` |
 | `navigation_manage` | `bake`, `path_get` |
-| `csg_manage` | `csg_create`, `csg_set_operation` |
+| `csg_manage` | `csg_create`, `csg_set_operation`, `bake_mesh` |
 | `custom_manage` | `list`, `invoke` |
 
 `resource_manage(op="physics_shape_generate")` keeps `shape_type="box"` as its default.
@@ -598,6 +598,38 @@ construction budget can stop traversal sooner. The complete encoded operation
 result is capped at 64 KiB, including graph and truncation metadata. This is not
 a cap on the surrounding MCP wire frame. A result that cannot fit is refused
 with an explicit size error; reducing depth can make the request fit.
+
+### Bake a CSG doorway into a reusable mesh
+
+```python
+csg_manage(
+    op="bake_mesh",
+    params={
+        "path": "/Workshop/Doorway",
+        "resource_path": "res://meshes/doorway.res",
+        "scene_file": "res://levels/workshop.tscn",
+    },
+    session_id=workshop_editor,
+)
+```
+
+Choose the CSG root that owns the combined geometry. The bake uses the live
+editor geometry, including unsaved changes, and saves vertices in that root's
+local coordinates. Assign the resulting `ArrayMesh` to a `MeshInstance3D` in
+another scene. Moving the new instance places the entire doorway.
+
+By default the mesh keeps its surface materials. External material assets stay
+linked, and scene-local materials are embedded in the new file. Set `apply_material_override`
+to `True` to put the root's whole-node material override on every surface. When
+the root has no override, the original surfaces keep their materials. Collision
+and overlays belong to the source node. The source blockout stays editable,
+and subsequent geometry edits require another bake to a fresh path.
+
+The destination must be a fresh `res://` file ending in `.res` or `.tres`.
+Call the operation directly so Godot can finish updating the CSG geometry.
+The response includes `resource_path`, `surface_count`, and
+`material_override_applied`. File creation returns `undoable: false`
+with a reason and a cleanup hint.
 
 ### Refresh generated physics shapes
 

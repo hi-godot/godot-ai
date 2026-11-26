@@ -383,7 +383,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("tileset", HANDLERS_DIR + "tileset_handler.gd", [_connection])
 	_dispatcher.register_lazy_handler("gridmap", HANDLERS_DIR + "gridmap_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("navigation", HANDLERS_DIR + "navigation_handler.gd", [undo, _connection])
-	_dispatcher.register_lazy_handler("csg", HANDLERS_DIR + "csg_handler.gd", [undo])
+	_dispatcher.register_lazy_handler("csg", HANDLERS_DIR + "csg_handler.gd", [undo, _connection])
 
 	_dispatcher.register_lazy("get_editor_state", "editor", &"get_editor_state")
 	_dispatcher.register_lazy("get_scene_tree", "scene", &"get_scene_tree")
@@ -581,6 +581,8 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("navigation_path_get", "navigation", &"path_get")
 	_dispatcher.register_lazy("csg_create", "csg", &"create")
 	_dispatcher.register_lazy("csg_set_operation", "csg", &"set_operation")
+	_dispatcher.register_lazy("csg_bake_mesh", "csg", &"bake_mesh")
+	_dispatcher.register_lazy("csg_bake_mesh_finalize", "csg", &"finalize_bake")
 
 	_connection.dispatcher = _dispatcher
 	add_child(_connection)

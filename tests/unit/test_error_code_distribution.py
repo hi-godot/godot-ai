@@ -58,7 +58,11 @@ HANDLERS_DIR = Path(__file__).resolve().parents[2] / "plugin" / "addons" / "godo
 ## values; concurrent state prevents committing the edit. These are genuine
 ## state conflicts, not range/type errors. Other import refusals use specific
 ## codes, so these two sites add two to the combined reviewed ceiling.
-INVALID_PARAMS_CEILING = 131
+## CSG baking adds three semantic conflicts: an occupied destination, a valid
+## operand that belongs to a different CSG root, and a synchronous invocation
+## that cannot receive the deferred file result. A fourth reference translates
+## the shared saver's late destination conflict into fresh-path guidance.
+INVALID_PARAMS_CEILING = 135
 
 ## Each new code should be used at least somewhere; a regression where a
 ## refactor accidentally drops every use of a code is exactly the kind of

@@ -1,0 +1,27 @@
+[gd_scene format=3]
+
+[ext_resource type="Material" path="res://tests/fixtures/csg_bake_surface.tres" id="1_surface"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_inline"]
+resource_name = "Inline Surface"
+albedo_color = Color(0.9, 0.1, 0.3, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_override"]
+resource_name = "Inline Override"
+albedo_color = Color(0.2, 0.8, 0.1, 1)
+
+[node name="Solid" type="CSGCombiner3D"]
+material_override = SubResource("StandardMaterial3D_override")
+
+[node name="Base" type="CSGBox3D" parent="."]
+size = Vector3(4, 4, 4)
+material = SubResource("StandardMaterial3D_inline")
+
+[node name="Extension" type="CSGBox3D" parent="."]
+position = Vector3(2, 0, 0)
+size = Vector3(2, 2, 2)
+material = ExtResource("1_surface")
+
+[node name="Bore" type="CSGBox3D" parent="."]
+operation = 2
+size = Vector3(1, 6, 1)
