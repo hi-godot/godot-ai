@@ -4,6 +4,7 @@ extends McpTestSuite
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const MaterialHandler := preload("res://addons/godot_ai/handlers/material_handler.gd")
+const INSTANCE_FIXTURE := preload("res://tests/fixtures/instance_editing.tscn")
 
 ## Tests for MaterialHandler — StandardMaterial3D, ORM, CanvasItemMaterial,
 ## ShaderMaterial authoring.
@@ -504,6 +505,261 @@ func test_assign_node_not_found() -> void:
 		"resource_path": TEST_MATERIAL_PATH,
 	})
 	assert_is_error(result, ErrorCodes.NODE_NOT_FOUND)
+
+
+# ============================================================================
+# material_inspect_surfaces
+# ============================================================================
+
+func _test_resource_descriptor(resource: Resource) -> Variant:
+	if resource == null:
+		return null
+	return {
+		"class": resource.get_class(),
+		"resource_name": resource.resource_name,
+		"resource_path": resource.resource_path,
+		"instance_id": str(resource.get_instance_id()),
+	}
+
+
+func _test_surface(index: int, surface_name: Variant, base: Material, local: Material,
+		active: Material, source: String) -> Dictionary:
+	return {
+		"index": index,
+		"name": surface_name,
+		"slot": "surface_%d" % index,
+		"mesh_material": _test_resource_descriptor(base),
+		"surface_override": _test_resource_descriptor(local),
+		"active_material": _test_resource_descriptor(active),
+		"active_source": source,
+	}
+
+
+func _make_door_mesh(wood: Material, glass: Material) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([Vector3.ZERO, Vector3.RIGHT, Vector3.UP])
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([Vector3.RIGHT, Vector3(2, 0, 0), Vector3(1, 1, 0)])
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mesh.surface_set_name(0, "Wood")
+	mesh.surface_set_name(1, "Glass")
+	mesh.surface_set_material(0, wood)
+	mesh.surface_set_material(1, glass)
+	mesh.resource_name = "DoorMesh"
+	return mesh
+
+
+func test_inspect_surfaces_reports_door_layers_and_assignable_slots() -> void:
+	var door := track(_add_mesh_node("_McpSurfaceDoor")) as MeshInstance3D
+	if door == null:
+		skip("No scene open")
+		return
+	var wood := StandardMaterial3D.new()
+	wood.resource_name = "Wood material"
+	var glass := ORMMaterial3D.new()
+	glass.resource_name = "Glass material"
+	var overlay := StandardMaterial3D.new()
+	var whole := StandardMaterial3D.new()
+	var mesh := _make_door_mesh(wood, glass)
+	door.mesh = mesh
+	door.material_overlay = overlay
+	var root := EditorInterface.get_edited_scene_root()
+	var path := McpScenePath.from_node(door, root)
+	var params := {"node_path": String(door.name), "scene_file": root.scene_file_path}
+	var base := _handler.inspect_surfaces(params)
+	assert_eq(base, {"data": {
+		"node_path": path,
+		"mesh": _test_resource_descriptor(mesh),
+		"material_override": null,
+		"material_overlay": _test_resource_descriptor(overlay),
+		"surface_count": 2,
+		"surfaces": [
+			_test_surface(0, "Wood", wood, null, wood, "mesh"),
+			_test_surface(1, "Glass", glass, null, glass, "mesh"),
+		],
+	}})
+	var rows: Array = base.get("data", {}).get("surfaces", [])
+	if rows.size() != 2:
+		assert_eq(rows.size(), 2, "Both door surfaces must be present before assigning")
+		return
+
+	_make_material()
+	var assigned := _handler.assign_material({
+		"node_path": path,
+		"resource_path": TEST_MATERIAL_PATH,
+		"slot": rows[1].get("slot", ""),
+	})
+	assert_eq(assigned.get("data", {}).get("slot"), "surface_1")
+	var surface_material := door.get_surface_override_material(1)
+	if surface_material == null:
+		assert_ne(surface_material, null, "The reported slot must accept a material assignment")
+		return
+	assert_eq(surface_material.resource_path, TEST_MATERIAL_PATH)
+	assert_eq(door.get_surface_override_material(0), null)
+
+	door.material_override = whole
+	var covered: Dictionary = _handler.inspect_surfaces(params).get("data", {})
+	assert_eq(covered.get("material_override"), _test_resource_descriptor(whole))
+	assert_eq(covered.get("material_overlay"), _test_resource_descriptor(overlay))
+	assert_eq(covered.get("surfaces"), [
+		_test_surface(0, "Wood", wood, null, whole, "material_override"),
+		_test_surface(1, "Glass", glass, surface_material, whole, "material_override"),
+	])
+
+	door.material_override = null
+	var uncovered: Dictionary = _handler.inspect_surfaces(params).get("data", {})
+	assert_has_key(uncovered, "material_override")
+	assert_eq(uncovered.get("material_override"), null)
+	assert_eq(uncovered.get("surfaces"), [
+		_test_surface(0, "Wood", wood, null, wood, "mesh"),
+		_test_surface(1, "Glass", glass, surface_material, surface_material, "surface_override"),
+	])
+	assert_true(editor_undo(_undo_redo), "Undoing the fixture assignment should succeed")
+	assert_eq(door.get_surface_override_material(1), null)
+	assert_eq(_handler.inspect_surfaces(params), base)
+
+
+func test_inspect_surfaces_reports_anonymous_identity_without_editing() -> void:
+	var door := track(_add_mesh_node("_McpAnonymousMaterials")) as MeshInstance3D
+	if door == null:
+		skip("No scene open")
+		return
+	var shared := StandardMaterial3D.new()
+	var distinct := StandardMaterial3D.new()
+	var mesh := _make_door_mesh(shared, distinct)
+	mesh.surface_set_name(1, "")
+	door.mesh = mesh
+	door.set_surface_override_material(0, shared)
+	door.material_override = shared
+	var root := EditorInterface.get_edited_scene_root()
+	var params := {"node_path": McpScenePath.from_node(door, root)}
+	var scene_history := _undo_redo.get_history_undo_redo(_undo_redo.get_object_history_id(root))
+	var global_history := _undo_redo.get_history_undo_redo(EditorUndoRedoManager.GLOBAL_HISTORY)
+	var scene_version := scene_history.get_version()
+	var global_version := global_history.get_version()
+	# mark_scene_as_unsaved() emits history_changed even when the undo version stays fixed.
+	var history_changes := [0]
+	var on_history_change := func() -> void: history_changes[0] += 1
+	_undo_redo.history_changed.connect(on_history_change)
+	var first := _handler.inspect_surfaces(params)
+	var second := _handler.inspect_surfaces(params)
+	_undo_redo.history_changed.disconnect(on_history_change)
+
+	assert_eq(second, first, "Repeated reads retain the same live resource IDs")
+	var rows: Variant = first.get("data", {}).get("surfaces")
+	assert_eq(rows, [
+		_test_surface(0, "Wood", shared, shared, shared, "material_override"),
+		_test_surface(1, null, distinct, null, shared, "material_override"),
+	], "Precedence is independent of resource identity, and anonymous resources get distinct IDs")
+	assert_eq(scene_history.get_version(), scene_version)
+	assert_eq(global_history.get_version(), global_version)
+	assert_eq(history_changes[0], 0, "Inspection must not mark the scene as unsaved")
+	assert_eq(door.mesh, mesh)
+	assert_eq(mesh.surface_get_material(0), shared)
+	assert_eq(mesh.surface_get_material(1), distinct)
+	assert_eq(door.get_surface_override_material(0), shared)
+	assert_eq(door.material_override, shared)
+	assert_eq(shared.resource_name, "")
+	assert_eq(shared.resource_path, "")
+	assert_eq(distinct.resource_name, "")
+	assert_eq(distinct.resource_path, "")
+
+	door.material_override = null
+	var without_whole := _handler.inspect_surfaces(params)
+	assert_eq(without_whole.get("data", {}).get("surfaces"), [
+		_test_surface(0, "Wood", shared, shared, shared, "surface_override"),
+		_test_surface(1, null, distinct, null, distinct, "mesh"),
+	])
+
+
+func test_inspect_surfaces_distinguishes_meshless_empty_and_primitive() -> void:
+	var node := track(_add_mesh_node("_McpSurfaceMeshKinds")) as MeshInstance3D
+	if node == null:
+		skip("No scene open")
+		return
+	var box := node.mesh
+	var path := McpScenePath.from_node(node, EditorInterface.get_edited_scene_root())
+	var params := {"node_path": path}
+	var overlay := StandardMaterial3D.new()
+	node.material_overlay = overlay
+	var primitive: Dictionary = _handler.inspect_surfaces(params).get("data", {})
+	assert_eq(primitive.get("mesh"), _test_resource_descriptor(box))
+	assert_eq(primitive.get("material_overlay"), _test_resource_descriptor(overlay))
+	assert_eq(primitive.get("surface_count"), 1)
+	assert_eq(primitive.get("surfaces"), [_test_surface(0, null, null, null, null, "none")])
+
+	var empty_mesh := ArrayMesh.new()
+	node.mesh = empty_mesh
+	var empty: Dictionary = _handler.inspect_surfaces(params).get("data", {})
+	assert_eq(empty.get("mesh"), _test_resource_descriptor(empty_mesh))
+	assert_eq(empty.get("surface_count"), 0)
+	assert_eq(empty.get("surfaces"), [])
+
+	node.mesh = null
+	var meshless := _handler.inspect_surfaces(params)
+	assert_eq(meshless, {"data": {
+		"node_path": path,
+		"mesh": null,
+		"material_override": null,
+		"material_overlay": _test_resource_descriptor(overlay),
+		"surface_count": 0,
+		"surfaces": [],
+	}})
+
+
+func test_inspect_surfaces_reads_a_locked_instance_child() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		skip("No scene open")
+		return
+	var instance := track(INSTANCE_FIXTURE.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)) as Node3D
+	instance.name = "_McpLockedSurfaceInstance"
+	root.add_child(instance)
+	instance.owner = root
+	var child := instance.get_node("Mesh") as MeshInstance3D
+	var path := McpScenePath.from_node(child, root)
+	assert_eq(child.owner, instance)
+	assert_false(root.is_editable_instance(instance))
+	var result := _handler.inspect_surfaces({"node_path": path})
+	assert_eq(result, {"data": {
+		"node_path": path,
+		"mesh": _test_resource_descriptor(child.mesh),
+		"material_override": null,
+		"material_overlay": null,
+		"surface_count": 1,
+		"surfaces": [_test_surface(0, null, null, null, null, "none")],
+	}})
+	assert_false(root.is_editable_instance(instance))
+
+
+func test_inspect_surfaces_rejects_wrong_paths_and_scene_mismatch() -> void:
+	var mesh := track(_add_mesh_node("_McpSurfacePath")) as MeshInstance3D
+	if mesh == null:
+		skip("No scene open")
+		return
+	var root := EditorInterface.get_edited_scene_root()
+	var non_mesh := track(Node3D.new()) as Node3D
+	non_mesh.name = "_McpSurfaceNotMesh"
+	root.add_child(non_mesh)
+	var outside := track(MeshInstance3D.new()) as MeshInstance3D
+	outside.name = "_McpSurfaceOutside"
+	root.get_tree().root.add_child(outside)
+	var outside_path := String(outside.get_path())
+	for path in [outside_path, String(root.get_path_to(outside))]:
+		assert_eq(root.get_node_or_null(path), outside, "Outside path resolves in the live tree: %s" % path)
+		assert_is_error(_handler.inspect_surfaces({"node_path": path}), ErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(_handler.inspect_surfaces({"node_path": "/_MissingSurfaceNode"}), ErrorCodes.NODE_NOT_FOUND)
+	assert_is_error(_handler.inspect_surfaces({"node_path": String(non_mesh.name)}), ErrorCodes.WRONG_TYPE)
+	assert_is_error(_handler.inspect_surfaces({}), ErrorCodes.MISSING_REQUIRED_PARAM)
+	assert_is_error(_handler.inspect_surfaces({"node_path": 12}), ErrorCodes.WRONG_TYPE)
+	assert_is_error(_handler.inspect_surfaces({"node_path": String(mesh.name), "scene_file": false}), ErrorCodes.WRONG_TYPE)
+	assert_is_error(_handler.inspect_surfaces({
+		"node_path": String(mesh.name),
+		"scene_file": "res://_mcp_wrong_material_scene.tscn",
+	}), ErrorCodes.EDITED_SCENE_MISMATCH)
+	assert_eq(EditorInterface.get_edited_scene_root(), root)
 
 
 # ============================================================================

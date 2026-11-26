@@ -18,6 +18,7 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
+from godot_ai.handlers import material as material_handlers
 from godot_ai.handlers import node as node_handlers
 from godot_ai.resources import safe_payload
 from godot_ai.runtime.direct import DirectRuntime
@@ -46,3 +47,11 @@ def register_node_resources(mcp: FastMCP) -> None:
         """Group names the node at scene path ``path`` belongs to."""
         runtime = DirectRuntime.from_context(ctx)
         return await safe_payload(node_handlers.node_get_groups(runtime, path=_normalize(path)))
+
+    @mcp.resource("godot://node/{path*}/material_surfaces", mime_type="application/json")
+    async def get_material_surfaces(ctx: Context, path: str) -> dict[str, Any]:
+        """Materials and overrides for each surface of a MeshInstance3D in the active editor."""
+        runtime = DirectRuntime.from_context(ctx)
+        return await safe_payload(
+            material_handlers.material_inspect_surfaces(runtime, node_path=_normalize(path))
+        )

@@ -5598,6 +5598,21 @@ async def test_material_get_handler_is_readonly():
     assert client.calls[-1]["command"] == "material_get"
 
 
+@pytest.mark.parametrize("scene_file", ["", "res://levels/door.tscn"])
+async def test_material_inspect_surfaces_reads_edited_scene_while_playing(scene_file):
+    client = StubClient()
+    client.live_readiness = "playing"
+    registry = SessionRegistry()
+    registry.register(_make_session(readiness="playing"))
+    runtime = DirectRuntime(registry=registry, client=client)
+    await material_handlers.material_inspect_surfaces(runtime, "/Door/Mesh", scene_file)
+    assert [call["command"] for call in client.calls] == ["material_inspect_surfaces"]
+    expected_params = {"node_path": "/Door/Mesh"}
+    if scene_file:
+        expected_params["scene_file"] = scene_file
+    assert client.calls[0]["params"] == expected_params
+
+
 async def test_material_list_handler():
     client = StubClient()
     runtime = DirectRuntime(registry=SessionRegistry(), client=client)

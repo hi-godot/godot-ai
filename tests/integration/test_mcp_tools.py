@@ -4747,6 +4747,39 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
+    async def test_material_surfaces_tool_and_resource_target_their_editors(
+        self, mcp_stack, mcp_ws_port
+    ):
+        client, active = mcp_stack
+        pinned = await self._connect_second_plugin(mcp_ws_port, "door-editor", readiness="playing")
+        path = "/Level/Front Door/Mesh"
+        params = {"node_path": path, "scene_file": "res://level.tscn"}
+
+        async def respond(plugin, expected_params, name):
+            command = await plugin.recv_command()
+            assert command["command"] == "material_inspect_surfaces"
+            assert command["params"] == expected_params
+            await plugin.send_response(
+                command["request_id"],
+                {"node_path": path, "surfaces": [{"index": 0, "name": name}]},
+            )
+
+        try:
+            tool, resource, _, _ = await asyncio.gather(
+                client.call_tool(
+                    "material_manage",
+                    {"op": "inspect_surfaces", "params": params, "session_id": pinned.session_id},
+                ),
+                client.read_resource("godot://node/Level/Front%20Door/Mesh/material_surfaces"),
+                respond(pinned, params, "Glass"),
+                respond(active, {"node_path": path}, "Wood"),
+            )
+            assert tool.data["surfaces"] == [{"index": 0, "name": "Glass"}]
+            assert resource[0].mime_type == "application/json"
+            assert json.loads(resource[0].text)["surfaces"] == [{"index": 0, "name": "Wood"}]
+        finally:
+            await pinned.close()
+
     async def test_concurrent_read_and_write_route_to_target_sessions(self, mcp_stack, mcp_ws_port):
         client, plugin_a = mcp_stack
         plugin_b = await self._connect_second_plugin(mcp_ws_port, "proj-b@0002")

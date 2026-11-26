@@ -282,7 +282,7 @@ Calls take the form:
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
 | `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
-| `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
+| `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `inspect_surfaces`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
 | `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
 | `camera_manage` | `create`, `configure`, `set_limits_2d`, `set_damping_2d`, `follow_2d`, `get`, `list`, `apply_preset` |
@@ -495,6 +495,7 @@ don't, and the only path that supports `session_id` pinning.
 | `godot://node/{path}/properties` | All properties of a node by scene path |
 | `godot://node/{path}/children` | Direct children (name, type, path each) |
 | `godot://node/{path}/groups` | Group memberships for a node |
+| `godot://node/{path}/material_surfaces` | Mesh surface materials, active sources, and instance overrides in the active editor |
 | `godot://class/{class_name}` | ClassDB metadata: properties, methods, signals, enums, constants, inheritance, and defaults |
 | `godot://script/{path}` | GDScript source by res:// path (drop the `res://` prefix) |
 | `godot://project/info` | Active project metadata |
@@ -598,6 +599,35 @@ construction budget can stop traversal sooner. The complete encoded operation
 result is capped at 64 KiB, including graph and truncation metadata. This is not
 a cap on the surrounding MCP wire frame. A result that cannot fit is refused
 with an explicit size error; reducing depth can make the request fit.
+
+### Find which material a mesh surface uses
+
+```python
+material_manage(op="inspect_surfaces", params={
+    "node_path": "/Level/Door/Mesh",
+    "scene_file": "res://levels/demo.tscn",
+}, session_id=level_editor_session)
+```
+
+The read includes unsaved changes in the edited scene, including assignments
+inside linked scene instances. `scene_file` optionally guards against a tab
+switch. The equivalent active-session resource for this mesh is
+`godot://node/Level/Door/Mesh/material_surfaces`.
+
+Each surface has an index, an authored name when available, and a slot such
+as `surface_1` that you can pass to `material_manage(op="assign")`. Read
+`active_material` and `active_source` to see what Godot uses. For example,
+if the glass row lists frosted glass under `surface_override` and wood under
+`active_material`, then `active_source: "material_override"` identifies a
+whole-door override. The original `mesh_material` and the surface override
+are both visible while that override is in effect. `material_overlay` draws
+over the active material on all surfaces.
+
+Unassigned materials are `null`. A meshless node has `mesh: null` and zero
+surfaces. Resource descriptors contain `class`, `resource_name`,
+`resource_path`, and a string `instance_id`. Names and paths may be empty.
+Compare IDs within one editor session to distinguish anonymous materials or
+recognize a shared resource. Use paths for comparisons across editor restarts.
 
 ### Refresh generated physics shapes
 

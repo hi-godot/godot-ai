@@ -520,6 +520,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("material_set_param", "material", &"set_param")
 	_dispatcher.register_lazy("material_set_shader_param", "material", &"set_shader_param")
 	_dispatcher.register_lazy("material_get", "material", &"get_material")
+	_dispatcher.register_lazy("material_inspect_surfaces", "material", &"inspect_surfaces")
 	_dispatcher.register_lazy("material_list", "material", &"list_materials")
 	_dispatcher.register_lazy("material_assign", "material", &"assign_material")
 	_dispatcher.register_lazy("material_apply_to_node", "material", &"apply_to_node")

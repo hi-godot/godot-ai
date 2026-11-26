@@ -295,6 +295,74 @@ func get_material(params: Dictionary) -> Dictionary:
 
 
 # ============================================================================
+# material_inspect_surfaces
+# ============================================================================
+
+func inspect_surfaces(params: Dictionary) -> Dictionary:
+	var node_path_value: Variant = params.get("node_path", "")
+	var path_error = McpParamValidators.require_string("node_path", node_path_value)
+	if path_error != null:
+		return path_error
+	var scene_file_value: Variant = params.get("scene_file", "")
+	var scene_file_error = McpParamValidators.require_string("scene_file", scene_file_value)
+	if scene_file_error != null:
+		return scene_file_error
+
+	var node_path := String(node_path_value)
+	var resolved := McpNodeValidator.resolve_or_error(node_path, "node_path", String(scene_file_value))
+	if resolved.has("error"):
+		return resolved
+	var node: Node = resolved.node
+	var scene_root: Node = resolved.scene_root
+	var canonical_path := McpScenePath.from_node(node, scene_root)
+	if canonical_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_node_error(node_path, scene_root))
+	if not (node is MeshInstance3D):
+		return ErrorCodes.make(
+			ErrorCodes.WRONG_TYPE,
+			"Node at %s must be a MeshInstance3D (got %s)" % [canonical_path, node.get_class()],
+		)
+
+	var mesh_instance := node as MeshInstance3D
+	var mesh := mesh_instance.mesh
+	var array_mesh := mesh as ArrayMesh
+	var material_override := mesh_instance.material_override
+	var surface_count := mesh.get_surface_count() if mesh != null else 0
+	var surfaces: Array[Dictionary] = []
+	for index in surface_count:
+		var surface_name := array_mesh.surface_get_name(index) if array_mesh != null else ""
+		var mesh_material := mesh.surface_get_material(index)
+		var surface_override := mesh_instance.get_surface_override_material(index)
+		# The same resource can occupy several slots. Use slot precedence to identify its source.
+		var active_source := "none"
+		if material_override != null:
+			active_source = "material_override"
+		elif surface_override != null:
+			active_source = "surface_override"
+		elif mesh_material != null:
+			active_source = "mesh"
+		surfaces.append({
+			"index": index,
+			"name": surface_name if not surface_name.is_empty() else null,
+			"slot": "surface_%d" % index,
+			"mesh_material": _describe_resource(mesh_material),
+			"surface_override": _describe_resource(surface_override),
+			"active_material": _describe_resource(mesh_instance.get_active_material(index)),
+			"active_source": active_source,
+		})
+	return {
+		"data": {
+			"node_path": canonical_path,
+			"mesh": _describe_resource(mesh),
+			"material_override": _describe_resource(material_override),
+			"material_overlay": _describe_resource(mesh_instance.material_overlay),
+			"surface_count": surface_count,
+			"surfaces": surfaces,
+		},
+	}
+
+
+# ============================================================================
 # material_list
 # ============================================================================
 
@@ -675,6 +743,17 @@ func _apply_shader_param(mat_path: String, param_name: String, value: Variant) -
 # ============================================================================
 # Helpers
 # ============================================================================
+
+static func _describe_resource(resource: Resource) -> Variant:
+	if resource == null:
+		return null
+	return {
+		"class": String(resource.get_class()),
+		"resource_name": String(resource.resource_name),
+		"resource_path": String(resource.resource_path),
+		"instance_id": str(resource.get_instance_id()),
+	}
+
 
 static func _instantiate_material(type_str: String) -> Material:
 	match type_str:
