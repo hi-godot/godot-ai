@@ -68,6 +68,21 @@ async def resource_inspect(
     )
 
 
+async def check_lightmap_uv2(
+    runtime: DirectRuntime,
+    path: str = "",
+    scene_file: str = "",
+    scope: str = "bake_candidates",
+    offset: int = 0,
+    limit: int = 100,
+) -> dict:
+    return await runtime.send_command(
+        "check_lightmap_uv2",
+        {"path": path, "scene_file": scene_file, "scope": scope, "offset": offset, "limit": limit},
+        timeout=32.0,  # Allow the editor's 30-second scan to return its own timeout.
+    )
+
+
 async def resource_set_properties(runtime: DirectRuntime, path: str, properties: dict) -> dict:
     """Persist a native resource patch and refresh its held instance without scene undo."""
     await require_writable_async(runtime)

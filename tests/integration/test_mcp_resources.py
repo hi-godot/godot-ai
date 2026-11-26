@@ -17,6 +17,25 @@ def _parse_resource(result) -> dict:
     return json.loads(result[0].text)
 
 
+async def test_lightmap_resource_preserves_retryable_editor_error(mcp_stack):
+    client, plugin = mcp_stack
+
+    async def change_scene():
+        request = await plugin.recv_command()
+        assert request["command"] == "check_lightmap_uv2"
+        await plugin.send_error(
+            request["request_id"], "EDITED_SCENE_MISMATCH", "Retry the scan.", {"retryable": True}
+        )
+
+    resource, _ = await asyncio.gather(
+        client.read_resource("godot://scene/lightmap_uv2"), change_scene()
+    )
+    error = _parse_resource(resource)
+    assert error["code"] == "EDITED_SCENE_MISMATCH"
+    assert error["data"]["retryable"] is True
+    assert "connected" not in error
+
+
 class TestNoActiveSessionResource:
     async def test_project_info_resource_explains_missing_editor_session(
         self,
@@ -499,7 +518,7 @@ class TestLibraryResources:
 
 
 # ---------------------------------------------------------------------------
-# Resource error handling — handler raises, resource returns connected:false
+# Resource error handling
 # ---------------------------------------------------------------------------
 
 
@@ -517,5 +536,6 @@ class TestResourceErrorPath:
         await task
 
         data = _parse_resource(result)
-        assert data["connected"] is False
+        assert "connected" not in data
+        assert data["code"] == "INVALID_PARAMS"
         assert "no such node" in data["error"]

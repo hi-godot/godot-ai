@@ -301,7 +301,7 @@ _ROLLUP_BLOCKS: tuple[tuple[str | None, str], ...] = (
         "  resource_manage  search, load, inspect, assign, get_info, create, set_properties,\n"
         "                   sprite_frames_create, curve_set_points, environment_create,\n"
         "                   physics_shape_autofit, physics_shape_generate,\n"
-        "                   gradient_texture_create,\n"
+        "                   check_lightmap_uv2, gradient_texture_create,\n"
         "                   noise_texture_create\n",
     ),
     ("api", "  api_manage       get_class\n"),
@@ -337,7 +337,7 @@ _INSTRUCTIONS_FOOTER = (
     "reads when the client surfaces them):\n"
     "  godot://sessions, godot://editor/state, godot://selection/current,\n"
     "  godot://logs/recent, godot://scene/current, godot://scene/hierarchy,\n"
-    "  godot://node/{path}/properties|children|groups,\n"
+    "  godot://scene/lightmap_uv2, godot://node/{path}/properties|children|groups,\n"
     "  godot://class/{class_name},\n"
     "  godot://script/{path}, godot://shader/{path}, godot://project/info,\n"
     "  godot://project/settings, godot://materials, godot://input_map,\n"

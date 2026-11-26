@@ -31,6 +31,13 @@ Ops:
         Read a live native resource graph without loading or modifying files.
         Depth 0..3; shared references, omission reasons, fixed traversal and
         64 KiB encoded-result limits. Scripted/dynamic properties excluded.
+  • check_lightmap_uv2(path="", scene_file="", scope="bake_candidates", offset=0, limit=100)
+        Find triangle surfaces missing UV2 or normals on visible static-GI
+        MeshInstance3D nodes. One such surface excludes the whole instance
+        from a LightmapGI bake. Use scope="all" to include hidden, dynamic
+        and disabled instances. Findings give the scene path and surface index.
+        Read-only channel check; unsupported mesh types are reported. Limit 1..200.
+        Resource form: godot://scene/lightmap_uv2 (active editor, default arguments).
   • assign(path, property, resource_path)
         Load and assign a resource to a node property. Undoable.
   • get_info(type)
@@ -137,6 +144,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
             "search": resource_handlers.resource_search,
             "load": resource_handlers.resource_load,
             "inspect": resource_handlers.resource_inspect,
+            "check_lightmap_uv2": resource_handlers.check_lightmap_uv2,
             "assign": resource_handlers.resource_assign,
             "get_info": resource_handlers.resource_get_info,
             "create": resource_handlers.resource_create,
@@ -155,6 +163,7 @@ def register_resource_tools(mcp: FastMCP) -> None:
             "search": None,
             "load": None,
             "inspect": None,
+            "check_lightmap_uv2": "godot://scene/lightmap_uv2",
             "get_info": None,
         },
     )
