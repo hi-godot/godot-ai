@@ -147,6 +147,7 @@ class ScanJob extends RefCounted:
 		if cursor.next_child == -1:
 			cursor.next_child = 0
 			node.child_order_changed.connect(invalidate)
+			node.renamed.connect(invalidate)
 			var instance := node as MeshInstance3D
 			if instance != null:
 				_begin_mesh(instance, scene_root)
@@ -168,9 +169,12 @@ class ScanJob extends RefCounted:
 		if scope == "bake_candidates" and (not placement_visible or placement_gi_mode != GeometryInstance3D.GI_MODE_STATIC):
 			return
 		var mesh := instance.mesh
+		var mesh_id := mesh.get_instance_id() if mesh != null else 0
+		## set_mesh() emits this signal even when the new mesh is null. Keep
+		## watching after traversal so replacements invalidate the report.
+		instance.property_list_changed.connect(_on_placement_changed.bind(instance.get_instance_id(), mesh_id))
 		if mesh == null:
 			return
-		var mesh_id := mesh.get_instance_id()
 		channels = mesh_cache.get(mesh_id)
 		if channels == null:
 			channels = MeshChannels.new(mesh)
@@ -202,6 +206,15 @@ class ScanJob extends RefCounted:
 		finding_index = 0
 		if findings.size() < limit and (array_mesh != null or total + channels.deficient.size() > offset):
 			placement_path = ScenePath.from_node(instance, scene_root)
+
+	func _on_placement_changed(instance_id: int, expected_mesh_id: int) -> void:
+		var instance := instance_from_id(instance_id) as MeshInstance3D
+		if instance == null or instance.is_queued_for_deletion():
+			invalidate()
+			return
+		var mesh := instance.mesh
+		if (mesh.get_instance_id() if mesh != null else 0) != expected_mesh_id:
+			invalidate()
 
 	func _advance_mesh() -> void:
 		if array_mesh != null:

@@ -443,6 +443,16 @@ func _step_frames(count: int) -> void:
 	assert_eq(_connection.replies, [], "mutation must happen during the scan")
 
 
+func _step_to_publication() -> void:
+	var job = _dispatcher._lazy_handler_cache[COMMAND]._jobs.front()
+	for frame in 40:
+		if job.stack.is_empty():
+			break
+		_editor.frame.emit()
+	assert_true(job.stack.is_empty())
+	assert_eq(_connection.replies, [], "mutation must happen before publication")
+
+
 func _assert_retry() -> void:
 	var response := _finish_scan()
 	assert_is_error(response, ErrorCodes.EDITED_SCENE_MISMATCH)
@@ -469,6 +479,14 @@ func test_deleting_placement_after_first_finding_refuses_partial_counts() -> voi
 	_assert_retry()
 
 
+func test_deleting_placement_before_publication_refuses_stale_report() -> void:
+	var wall := _add_mesh("Wall", BoxMesh.new())
+	_start_scan()
+	_step_to_publication()
+	wall.free()
+	_assert_retry()
+
+
 func test_reordering_siblings_during_scan_rejects_shifted_child_index() -> void:
 	_add_mesh("First", PointMesh.new())
 	var wall := _add_mesh("Wall", BoxMesh.new())
@@ -477,6 +495,72 @@ func test_reordering_siblings_during_scan_rejects_shifted_child_index() -> void:
 	_fixture.move_child(wall, 0)
 	_assert_retry()
 	assert_eq(_scan().get("missing_surface_count"), 1)
+
+
+func test_renaming_visited_ancestor_refuses_stale_finding_path() -> void:
+	var group := Node3D.new()
+	group.name = "Room"
+	_fixture.add_child(group)
+	group.owner = _scene_root
+	var wall := _add_mesh("Wall", BoxMesh.new(), group)
+	_start_scan()
+	_step_frames(6)
+	group.name = "Hall"
+	_assert_retry()
+	assert_eq(_finding(_scan(), 0).get("path"), _path(wall))
+
+
+func test_replacing_placement_mesh_before_publication_refuses_stale_channels() -> void:
+	var clean := BoxMesh.new()
+	clean.add_uv2 = true
+	var wall := _add_mesh("Wall", clean)
+	_start_scan()
+	_step_to_publication()
+	wall.mesh = BoxMesh.new()
+	_assert_retry()
+	assert_eq(_scan().get("missing_surface_count"), 1)
+
+
+func test_clearing_placement_mesh_mid_read_refuses_partial_report() -> void:
+	var old := ArrayMesh.new()
+	_add_triangle(old, "Complete", true, true)
+	_add_triangle(old, "Trim", true, false)
+	var wall := _add_mesh("Wall", old)
+	_start_scan()
+	_step_frames(4)
+	wall.mesh = null
+	_assert_retry()
+	assert_eq(_scan().get("mesh_instances_checked"), 0)
+
+
+func test_filling_empty_mesh_slot_before_publication_refuses_stale_counts() -> void:
+	var wall := _add_mesh("Wall", null)
+	_start_scan()
+	_step_to_publication()
+	wall.mesh = BoxMesh.new()
+	_assert_retry()
+	assert_eq(_scan().get("triangle_surfaces_checked"), 1)
+
+
+func test_unchanged_placement_mesh_ignores_property_list_notification() -> void:
+	var wall := _add_mesh("Wall", BoxMesh.new())
+	var connections_before := wall.property_list_changed.get_connections().size()
+	_start_scan()
+	_step_to_publication()
+	wall.notify_property_list_changed()
+	var response := _finish_scan()
+	assert_eq(response.get("data", {}).get("missing_surface_count"), 1)
+	assert_eq(wall.property_list_changed.get_connections().size(), connections_before)
+
+
+func test_bake_scan_ignores_mesh_replacement_on_an_excluded_placement() -> void:
+	var wall := _add_mesh("Wall", BoxMesh.new())
+	wall.hide()
+	_start_scan()
+	_step_to_publication()
+	wall.mesh = BoxMesh.new()
+	var response := _finish_scan()
+	assert_eq(response.get("data", {}).get("status"), "no_eligible_geometry")
 
 
 func test_changing_a_shared_primitive_rejects_cached_channels() -> void:
@@ -511,13 +595,7 @@ func test_silent_mesh_clear_before_publication_refuses_stale_report() -> void:
 	_add_mesh("First", first)
 	_add_mesh("Other", BoxMesh.new())
 	_start_scan()
-	var job = _dispatcher._lazy_handler_cache[COMMAND]._jobs.front()
-	for frame in 40:
-		if job.stack.is_empty():
-			break
-		_editor.frame.emit()
-	assert_true(job.stack.is_empty())
-	assert_eq(_connection.replies, [])
+	_step_to_publication()
 	first.clear_surfaces()
 	_assert_retry()
 

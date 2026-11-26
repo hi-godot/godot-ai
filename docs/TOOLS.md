@@ -630,9 +630,9 @@ Both scopes traverse owned children, including meshes inside locked instances.
 default arguments. Use the tool to pin a session, change scope or page through
 `findings` with `offset` and `limit` (default 100, maximum 200). Each request
 reads live editor state, so edits between pages can change the results.
-If a traversed child list or an inspected mesh changes during the scan, retry
-the request. The editor returns `EDITED_SCENE_MISMATCH` instead of partial
-counts. The resource URI preserves the error `code` and `data` fields.
+The scan can return a retryable `EDITED_SCENE_MISMATCH` if a visited node is
+renamed, a traversed child list changes, or a mesh is edited or replaced.
+The resource URI preserves the error `code` and `data` fields.
 Godot can clear a mesh's surfaces without emitting a change signal. Before
 returning, the scan rechecks the surface counts and primitive UV2 settings
 in one frame. If this exceeds the frame budget, use `path` to check smaller
