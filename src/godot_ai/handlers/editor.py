@@ -110,10 +110,16 @@ async def editor_screenshot(
     height: int | None = None,
     save_to: str = "",
     overwrite: bool = False,
+    render_mode: str | None = None,
+    orthographic_view: str | None = None,
 ) -> dict | list:
     if save_to:
         await require_writable_async(runtime)
     params: dict = {"source": source}
+    if render_mode is not None:
+        params["render_mode"] = render_mode
+    if orthographic_view is not None:
+        params["orthographic_view"] = orthographic_view
     if max_resolution > 0:
         params["max_resolution"] = max_resolution
     if view_target:
@@ -204,6 +210,9 @@ async def editor_screenshot(
             metadata["view_target_not_found"] = result["view_target_not_found"]
     for key in (
         "elevation",
+        "render_mode",
+        "orthographic_view",
+        "orthographic_size",
         "azimuth",
         "fov",
         "aabb_center",

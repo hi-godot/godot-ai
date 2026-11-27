@@ -22,6 +22,47 @@ views, not the surrounding editor chrome.
 `source="game"` is only the right answer when the thing you want to see
 only exists in the *running* game.
 
+## Compare a material with and without scene lighting
+
+Capture the same static mesh twice to see how much lighting contributes
+to its appearance. Each call produces one 3D viewport image and reports the
+requested `render_mode` in its metadata.
+
+```python
+editor_screenshot(source="viewport", view_target="/Level/WestWall", render_mode="normal")
+editor_screenshot(source="viewport", view_target="/Level/WestWall", render_mode="unshaded")
+```
+
+`normal` uses the scene lighting. `unshaded` shows the material without
+lighting. Each capture restores the editor's prior display mode. Omit
+`render_mode` to capture whatever mode is already displayed. Explicit modes
+work with a single current or framed view, including custom framing angles.
+
+## Inspect a room in orthographic projection
+
+Use a top view to check doorway alignment, or a side view to compare platform
+heights. Equal-sized objects appear the same size at different depths.
+
+```python
+editor_screenshot(source="viewport", view_target="/Level/Room", orthographic_view="top")
+editor_screenshot(source="viewport", view_target="/Level/Room", orthographic_view="right")
+editor_screenshot(source="viewport", view_target="/Level/Room", orthographic_view="custom",
+                  elevation=35.264, azimuth=45, render_mode="unshaded")
+```
+
+Each call returns one shot. Choose `top`, `bottom`, `front`, `back`, `left`,
+or `right` for a Godot editor axis view. For `custom`, supply both angles
+in degrees. Elevation ranges from −90 to +90 and azimuth wraps around the
+vertical axis. Supply angles only for `custom`. Omit `fov` and leave
+`coverage=False` for these captures.
+
+The selected targets' combined bounds fit into 80% of the limiting viewport
+dimension. The shot metadata includes the view and `orthographic_size` in
+world units along the camera's locked aspect axis. The next ordinary shot
+uses the editor's original camera. If the 3D viewport is previewing a scene
+camera, exit Camera Preview or Cinematic Preview before requesting an
+orthographic view.
+
 ## Save a cinematic render at an exact size
 
 ```python
