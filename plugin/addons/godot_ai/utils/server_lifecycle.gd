@@ -54,10 +54,15 @@ const REPLACEMENT_TTL_MS := 15_000
 const IDENTITY_CAPTURE_STAGES := ["launch", "first_server", "final_server"]
 ## An authenticated endpoint that drops (a late keepalive, a server restart)
 ## is re-probed automatically with this backoff, each attempt re-proving the
-## server exactly as a start does; after the last one the block stays until
-## the dock's Restart (#962). A server that stays ready this long earns a
-## fresh budget, so a flapping one cannot loop forever.
+## server exactly as a start does. After the exponential segment the re-probe
+## keeps going at the ceiling interval until the endpoint answers or the editor
+## closes: the supervisor or a later attach can relaunch the server minutes
+## later, and a plugin that gave up strands the session until the dock's
+## Restart. A server that stays ready this long earns a fresh budget, so a
+## flapping one cannot loop forever.
 const ENDPOINT_RECOVERY_DELAYS_SECONDS: Array[float] = [1.0, 2.0, 4.0, 8.0, 16.0]
+## Steady re-probe interval once the exponential segment is exhausted.
+const ENDPOINT_RECOVERY_CEILING_SECONDS := 60.0
 const ENDPOINT_RECOVERY_STABLE_MS := 60_000
 
 var _endpoint_recovery_attempts := 0
@@ -322,31 +327,26 @@ func transport_lost(reason := "Authenticated server endpoint was lost.") -> void
 	_block_and_reprobe("endpoint_lost", reason)
 
 
-## Block, then re-probe on the shared backoff budget; after the last attempt
-## the block stays until the dock's Restart.
+## Block, then re-probe on the shared backoff budget; past the exponential
+## segment the re-probe continues at the ceiling interval indefinitely.
 func _block_and_reprobe(reason: String, message: String, target: Dictionary = {}) -> void:
-	var limit := ENDPOINT_RECOVERY_DELAYS_SECONDS.size()
-	if _endpoint_recovery_attempts >= limit:
-		_endpoint_recovery_pending_episode = 0
-		_block(
-			reason,
-			"%s Automatic re-probing gave up after %d attempts; click Restart." % [message, limit],
-			target,
-		)
-		return
 	_endpoint_recovery_attempts += 1
-	var delay := float(ENDPOINT_RECOVERY_DELAYS_SECONDS[_endpoint_recovery_attempts - 1])
+	var limit := ENDPOINT_RECOVERY_DELAYS_SECONDS.size()
+	var ceiling := float(ENDPOINT_RECOVERY_CEILING_SECONDS)
+	var delay := float(ENDPOINT_RECOVERY_DELAYS_SECONDS[_endpoint_recovery_attempts - 1]) \
+			if _endpoint_recovery_attempts <= limit else ceiling
+	var tail := "" if _endpoint_recovery_attempts <= limit else "; keeps retrying"
 	_endpoint_recovery_pending_episode = int(_episode.get("id", 0))
 	_block(
 		reason,
-		"%s Re-probing in %ds (attempt %d of %d)." % [
-			message, int(delay), _endpoint_recovery_attempts, limit,
+		"%s Re-probing in %ds (attempt %d%s)." % [
+			message, int(delay), _endpoint_recovery_attempts, tail,
 		],
 		target,
 	)
 	print(
-		"MCP | %s (%s); re-probing in %ds (attempt %d of %d)"
-		% [reason, message, int(delay), _endpoint_recovery_attempts, limit]
+		"MCP | %s (%s); re-probing in %ds (attempt %d%s)"
+		% [reason, message, int(delay), _endpoint_recovery_attempts, tail]
 	)
 	if bool(_plan.get("automatic_effects", true)):
 		_recover_lost_endpoint_after(delay, _endpoint_recovery_pending_episode)
@@ -1941,7 +1941,8 @@ func get_status_dict() -> Dictionary:
 		"blocked_hint": str(_episode.get("blocked_target", {}).get("hint", "")),
 		"keep_alive": bool(_plan.get("keep_alive", false)),
 		"recovery_attempt": _endpoint_recovery_attempts,
-		"recovery_limit": ENDPOINT_RECOVERY_DELAYS_SECONDS.size(),
+		"recovery_exponential_limit": ENDPOINT_RECOVERY_DELAYS_SECONDS.size(),
+		"recovery_ceiling_seconds": int(ENDPOINT_RECOVERY_CEILING_SECONDS),
 	}
 
 
