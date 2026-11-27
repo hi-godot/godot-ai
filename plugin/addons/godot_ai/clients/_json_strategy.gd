@@ -427,7 +427,7 @@ static func verify_entry(
 			if entry.has("args"):
 				return false
 		else:
-			if entry.get("command") != launch.get("command"):
+			if _command_differs(entry.get("command"), launch.get("command")):
 				return false
 			if not _arrays_equal(entry.get("args", null), launch.get("args", null)):
 				return false
@@ -502,6 +502,17 @@ static func _arrays_equal(left: Variant, right: Variant) -> bool:
 		if left_array[i] != right_array[i]:
 			return false
 	return true
+
+
+## Windows path separators are interchangeable to the OS, and every client
+## tooling in the wild normalizes them differently: official configurators may
+## write mixed separators (`Scripts/pythonw.exe`) while other tooling rewrites
+## the same entry with fully-normalized backslashes. Compare commands with
+## separators unified so equivalent Windows paths are not flagged as drift.
+static func _command_differs(stored: Variant, expected: Variant) -> bool:
+	if typeof(stored) != TYPE_STRING or typeof(expected) != TYPE_STRING:
+		return stored != expected
+	return stored.replace("\\", "/") != expected.replace("\\", "/")
 
 
 ## Read a config file once and parse the captured text. Returns
