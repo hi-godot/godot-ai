@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 import socket
 import time
 from collections.abc import AsyncIterator, Iterable, Sequence
@@ -429,6 +430,34 @@ def _startup_record_data(
     }
 
 
+ACCEPT_FAILED_MESSAGE = "Accept failed on a socket"
+
+
+def exit_on_dead_listener(loop: asyncio.AbstractEventLoop) -> None:
+    """Shut down once the event loop has closed one of our listeners.
+
+    On Windows the proactor's accept loop closes the listening socket for good
+    when AcceptEx fails (WinError 64 after a client resets mid-handshake) and
+    only reports it through the loop exception handler. The process would keep
+    the WebSocket port while serving nothing on HTTP, so no bridge could adopt
+    it and no new server could start. Raising SIGINT takes uvicorn's normal
+    shutdown path, which releases both ports and the capability record so the
+    plugin can relaunch.
+    """
+    previous = loop.get_exception_handler()
+
+    def handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        if previous is not None:
+            previous(loop, context)
+        else:
+            loop.default_exception_handler(context)
+        if context.get("message") == ACCEPT_FAILED_MESSAGE:
+            logger.error("A listener closed after an accept failure; shutting down.")
+            signal.raise_signal(signal.SIGINT)
+
+    loop.set_exception_handler(handler)
+
+
 def create_server(
     ws_port: int = 9500,
     *,
@@ -510,6 +539,7 @@ def create_server(
             ## Published: from here on a failure is a runtime fault the
             ## plugin sees through the authenticated status route.
             disarm_startup_report()
+            exit_on_dead_listener(loop)
         except BaseException as exc:
             ## Uvicorn swallows a lifespan startup failure into a log line and
             ## an exit code; the report is how the editor learns the cause.

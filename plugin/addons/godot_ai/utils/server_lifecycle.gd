@@ -319,26 +319,34 @@ func transport_lost(reason := "Authenticated server endpoint was lost.") -> void
 	if _ready_since_msec != 0 and Time.get_ticks_msec() - _ready_since_msec >= ENDPOINT_RECOVERY_STABLE_MS:
 		_endpoint_recovery_attempts = 0
 	_ready_since_msec = 0
+	_block_and_reprobe("endpoint_lost", reason)
+
+
+## Block, then re-probe on the shared backoff budget; after the last attempt
+## the block stays until the dock's Restart.
+func _block_and_reprobe(reason: String, message: String, target: Dictionary = {}) -> void:
 	var limit := ENDPOINT_RECOVERY_DELAYS_SECONDS.size()
 	if _endpoint_recovery_attempts >= limit:
 		_endpoint_recovery_pending_episode = 0
 		_block(
-			"endpoint_lost",
-			"%s Automatic re-probing gave up after %d attempts; click Restart." % [reason, limit],
+			reason,
+			"%s Automatic re-probing gave up after %d attempts; click Restart." % [message, limit],
+			target,
 		)
 		return
 	_endpoint_recovery_attempts += 1
 	var delay := float(ENDPOINT_RECOVERY_DELAYS_SECONDS[_endpoint_recovery_attempts - 1])
 	_endpoint_recovery_pending_episode = int(_episode.get("id", 0))
 	_block(
-		"endpoint_lost",
+		reason,
 		"%s Re-probing in %ds (attempt %d of %d)." % [
-			reason, int(delay), _endpoint_recovery_attempts, limit,
+			message, int(delay), _endpoint_recovery_attempts, limit,
 		],
+		target,
 	)
 	print(
-		"MCP | server endpoint lost (%s); re-probing in %ds (attempt %d of %d)"
-		% [reason, int(delay), _endpoint_recovery_attempts, limit]
+		"MCP | %s (%s); re-probing in %ds (attempt %d of %d)"
+		% [reason, message, int(delay), _endpoint_recovery_attempts, limit]
 	)
 	if bool(_plan.get("automatic_effects", true)):
 		_recover_lost_endpoint_after(delay, _endpoint_recovery_pending_episode)
@@ -353,7 +361,7 @@ func recover_lost_endpoint(episode_id: int) -> bool:
 	if episode_id != int(_episode.get("id", -1)):
 		_endpoint_recovery_pending_episode = 0
 		return false
-	if str(_episode.get("state")) != BLOCKED or str(_episode.get("reason")) != "endpoint_lost":
+	if str(_episode.get("state")) != BLOCKED:
 		_endpoint_recovery_pending_episode = 0
 		return false
 	_endpoint_recovery_pending_episode = 0
@@ -422,6 +430,15 @@ func _complete_probe(result: Dictionary) -> void:
 			launch_plan["baseline_instance_id"] = str(result.get("baseline_instance_id", ""))
 			_request_effect(LAUNCH, launch_plan)
 		_:
+			## Another editor's server that is slow to answer under load, or a
+			## listener table that could not be read, says nothing final.
+			if bool(result.get("transient", false)) and _process_grant == null:
+				_block_and_reprobe(
+					str(result.get("reason", "occupied")),
+					str(result.get("message", "The configured endpoint is unavailable.")),
+					result.get("target", {}),
+				)
+				return
 			_block(
 				str(result.get("reason", "occupied")),
 				str(result.get("message", "The configured endpoint is unavailable.")),
@@ -740,7 +757,9 @@ func _effect_probe(payload: Dictionary) -> Dictionary:
 	if OS.get_name() == "Windows":
 		var occupancy := PortResolver.windows_port_occupancy(port, listeners)
 		if occupancy == PortResolver.PortOccupancy.UNKNOWN:
-			return _blocked_probe_result("port_occupancy_unknown", port, live)
+			var unknown := _blocked_probe_result("port_occupancy_unknown", port, live)
+			unknown["transient"] = true
+			return unknown
 		occupied = occupancy == PortResolver.PortOccupancy.OCCUPIED
 	else:
 		occupied = PortResolver.is_port_in_use(port)
@@ -751,6 +770,9 @@ func _effect_probe(payload: Dictionary) -> Dictionary:
 		if not pre_v4.is_empty():
 			blocked["message"] = stale_pre_v4_message(port, pre_v4)
 			blocked["target"]["hint"] = STALE_PRE_V4_HINT
+		## A godot-ai record names this port, so the occupant is most likely a
+		## live peer server that did not answer in time.
+		blocked["transient"] = not detail.is_empty() and pre_v4.is_empty()
 		return blocked
 	## The server binds both ports before it publishes anything. A held
 	## WebSocket port (a server moved off the HTTP port, or another editor)
@@ -1899,7 +1921,7 @@ func get_status_dict() -> Dictionary:
 		"episode_state": state,
 		"reason": reason,
 		"recovery_pending": (
-			state == BLOCKED and reason == "endpoint_lost"
+			state == BLOCKED
 			and _endpoint_recovery_pending_episode > 0
 			and _endpoint_recovery_pending_episode == int(_episode.get("id", 0))
 		),

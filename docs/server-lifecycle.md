@@ -128,6 +128,18 @@ server that holds `READY` for 60 seconds earns a fresh budget on its next loss.
 A failed recovery probe can leave the lifecycle blocked immediately; the five
 delays limit repeated disconnects, not retries of a single failed probe.
 
+A start probe that says nothing final takes the same budget instead of
+blocking at once: a port held by a listener that a godot-ai capability record
+names but that did not authenticate in time (another editor's server under
+load), or a Windows listener table that could not be read. Only an editor
+without process authority re-probes this way. A foreign occupant, a pre-v4
+server, and an incompatible version still block until the user acts.
+
+A backend whose HTTP listener is closed by the event loop after an accept
+failure (Windows reports `WinError 64` and the proactor stops accepting)
+shuts itself down, releasing both ports and its capability record so the
+next editor or bridge can start a fresh one.
+
 Startup effects are `PROBE`, `LAUNCH`, and `PROVE`; control effects are
 `REPLACE` and `STOP`. Every effect carries the active episode ID. Completion
 for an older or cancelled episode is discarded, so a late worker cannot revive

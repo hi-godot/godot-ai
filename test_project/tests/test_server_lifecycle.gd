@@ -449,6 +449,24 @@ func test_foreign_occupant_never_mints_replacement_authority() -> void:
 	assert_false(manager.can_recover_incompatible_server())
 
 
+func test_slow_peer_server_reprobes_while_a_foreign_occupant_stays_blocked() -> void:
+	var manager := _manager()
+	manager.start_server()
+	assert_true(manager.complete_effect(manager.episode_snapshot().id, Lifecycle.PROBE, {
+		"outcome": "blocked", "reason": "occupied", "message": "peer slow", "transient": true,
+	}))
+	var snapshot := manager.get_status_dict()
+	assert_eq(snapshot.episode_state, Lifecycle.BLOCKED)
+	assert_true(snapshot.recovery_pending, "a peer that did not answer in time is re-probed")
+	assert_eq(int(snapshot.recovery_attempt), 1)
+	assert_true(manager.recover_lost_endpoint(int(manager.episode_snapshot().id)))
+	assert_eq(manager.episode_snapshot().phase, Lifecycle.PROBE)
+	assert_true(manager.complete_effect(manager.episode_snapshot().id, Lifecycle.PROBE, {
+		"outcome": "blocked", "reason": "occupied", "message": "foreign process",
+	}))
+	assert_false(manager.get_status_dict().recovery_pending, "a foreign occupant waits for Restart")
+
+
 func test_unbound_status_identity_never_mints_replacement_authority() -> void:
 	var result := Lifecycle._blocked_probe_result("occupied", 8000, {
 		"name": "godot-ai", "instance_id": INSTANCE, "version": "4.0.1",
