@@ -119,6 +119,7 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	observe_scan(EditorInterface.get_resource_filesystem())
 	if pause_processing:
 		return
 	_peer.poll()
@@ -1102,9 +1103,32 @@ var _last_play_state_for_run := false
 var _last_readiness := ""
 
 
+## Godot clears is_scanning() before a full scan registers script classes, and
+## its progress dialog pumps nested frames inside that window (Godot #119505).
+## A scan seen in flight therefore stays "importing" until its deferred
+## sources_changed, which native emits only after class registration. Scans
+## from any source (this plugin, external file edits, focus-in) span frames
+## with is_scanning() true, so the per-frame observe_scan() sees each of them.
+static var _scan_settle_pending := false
+
+
+static func observe_scan(efs: EditorFileSystem) -> void:
+	if not efs.is_scanning():
+		return
+	_scan_settle_pending = true
+	if not efs.sources_changed.is_connected(_on_scan_settled):
+		efs.sources_changed.connect(_on_scan_settled, CONNECT_DEFERRED)
+
+
+static func _on_scan_settled(_changed: bool) -> void:
+	_scan_settle_pending = EditorInterface.get_resource_filesystem().is_scanning()
+
+
 ## Compute current editor readiness from live Godot state.
 static func get_readiness() -> String:
-	if EditorInterface.get_resource_filesystem().is_scanning():
+	var efs := EditorInterface.get_resource_filesystem()
+	observe_scan(efs)
+	if _scan_settle_pending:
 		return "importing"
 	if EditorInterface.is_playing_scene():
 		return "playing"

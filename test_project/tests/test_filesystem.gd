@@ -358,6 +358,18 @@ func test_reimport_rejects_traversal_path() -> void:
 
 # ----- scan_filesystem -----
 
+func test_readiness_holds_importing_until_scan_sources_settle() -> void:
+	## is_scanning() drops before class registration (Godot #119505); a scan
+	## seen in flight keeps readiness "importing" until sources_changed.
+	var previous := McpConnection._scan_settle_pending
+	McpConnection._scan_settle_pending = true
+	assert_eq(McpConnection.get_readiness(), "importing", "scan seen in flight, sources not settled")
+	McpConnection._on_scan_settled(false)
+	var after := McpConnection.get_readiness()
+	McpConnection._scan_settle_pending = previous
+	assert_true(after != "importing", "sources_changed with no scan running releases readiness")
+
+
 func test_scan_filesystem_sync_shape_and_coalesces_when_latch_set() -> void:
 	## The test handler has no _connection, so scan_filesystem takes the
 	## synchronous fallback. Pre-set the single-flight latch so the fallback
