@@ -54,10 +54,15 @@ const REPLACEMENT_TTL_MS := 15_000
 const IDENTITY_CAPTURE_STAGES := ["launch", "first_server", "final_server"]
 ## An authenticated endpoint that drops (a late keepalive, a server restart)
 ## is re-probed automatically with this backoff, each attempt re-proving the
-## server exactly as a start does; after the last one the block stays until
-## the dock's Restart (#962). A server that stays ready this long earns a
-## fresh budget, so a flapping one cannot loop forever.
+## server exactly as a start does. After the exponential segment the re-probe
+## keeps going at the ceiling interval until the endpoint answers or the editor
+## closes: the supervisor or a later attach can relaunch the server minutes
+## later, and a plugin that gave up strands the session until the dock's
+## Restart. A server that stays ready this long earns a fresh budget, so a
+## flapping one cannot loop forever.
 const ENDPOINT_RECOVERY_DELAYS_SECONDS: Array[float] = [1.0, 2.0, 4.0, 8.0, 16.0]
+## Steady re-probe interval once the exponential segment is exhausted.
+const ENDPOINT_RECOVERY_CEILING_SECONDS := 60.0
 const ENDPOINT_RECOVERY_STABLE_MS := 60_000
 
 var _endpoint_recovery_attempts := 0
@@ -319,26 +324,29 @@ func transport_lost(reason := "Authenticated server endpoint was lost.") -> void
 	if _ready_since_msec != 0 and Time.get_ticks_msec() - _ready_since_msec >= ENDPOINT_RECOVERY_STABLE_MS:
 		_endpoint_recovery_attempts = 0
 	_ready_since_msec = 0
-	var limit := ENDPOINT_RECOVERY_DELAYS_SECONDS.size()
-	if _endpoint_recovery_attempts >= limit:
-		_endpoint_recovery_pending_episode = 0
-		_block(
-			"endpoint_lost",
-			"%s Automatic re-probing gave up after %d attempts; click Restart." % [reason, limit],
-		)
-		return
+	_block_and_reprobe("endpoint_lost", reason)
+
+
+## Block, then re-probe on the shared backoff budget; past the exponential
+## segment the re-probe continues at the ceiling interval indefinitely.
+func _block_and_reprobe(reason: String, message: String, target: Dictionary = {}) -> void:
 	_endpoint_recovery_attempts += 1
-	var delay := float(ENDPOINT_RECOVERY_DELAYS_SECONDS[_endpoint_recovery_attempts - 1])
+	var limit := ENDPOINT_RECOVERY_DELAYS_SECONDS.size()
+	var ceiling := float(ENDPOINT_RECOVERY_CEILING_SECONDS)
+	var delay := float(ENDPOINT_RECOVERY_DELAYS_SECONDS[_endpoint_recovery_attempts - 1]) \
+			if _endpoint_recovery_attempts <= limit else ceiling
+	var tail := "" if _endpoint_recovery_attempts <= limit else "; keeps retrying"
 	_endpoint_recovery_pending_episode = int(_episode.get("id", 0))
 	_block(
-		"endpoint_lost",
-		"%s Re-probing in %ds (attempt %d of %d)." % [
-			reason, int(delay), _endpoint_recovery_attempts, limit,
+		reason,
+		"%s Re-probing in %ds (attempt %d%s)." % [
+			message, int(delay), _endpoint_recovery_attempts, tail,
 		],
+		target,
 	)
 	print(
-		"MCP | server endpoint lost (%s); re-probing in %ds (attempt %d of %d)"
-		% [reason, int(delay), _endpoint_recovery_attempts, limit]
+		"MCP | %s (%s); re-probing in %ds (attempt %d%s)"
+		% [reason, message, int(delay), _endpoint_recovery_attempts, tail]
 	)
 	if bool(_plan.get("automatic_effects", true)):
 		_recover_lost_endpoint_after(delay, _endpoint_recovery_pending_episode)
@@ -353,7 +361,7 @@ func recover_lost_endpoint(episode_id: int) -> bool:
 	if episode_id != int(_episode.get("id", -1)):
 		_endpoint_recovery_pending_episode = 0
 		return false
-	if str(_episode.get("state")) != BLOCKED or str(_episode.get("reason")) != "endpoint_lost":
+	if str(_episode.get("state")) != BLOCKED:
 		_endpoint_recovery_pending_episode = 0
 		return false
 	_endpoint_recovery_pending_episode = 0
@@ -422,6 +430,15 @@ func _complete_probe(result: Dictionary) -> void:
 			launch_plan["baseline_instance_id"] = str(result.get("baseline_instance_id", ""))
 			_request_effect(LAUNCH, launch_plan)
 		_:
+			## Another editor's server that is slow to answer under load, or a
+			## listener table that could not be read, says nothing final.
+			if bool(result.get("transient", false)) and _process_grant == null:
+				_block_and_reprobe(
+					str(result.get("reason", "occupied")),
+					str(result.get("message", "The configured endpoint is unavailable.")),
+					result.get("target", {}),
+				)
+				return
 			_block(
 				str(result.get("reason", "occupied")),
 				str(result.get("message", "The configured endpoint is unavailable.")),
@@ -740,7 +757,9 @@ func _effect_probe(payload: Dictionary) -> Dictionary:
 	if OS.get_name() == "Windows":
 		var occupancy := PortResolver.windows_port_occupancy(port, listeners)
 		if occupancy == PortResolver.PortOccupancy.UNKNOWN:
-			return _blocked_probe_result("port_occupancy_unknown", port, live)
+			var unknown := _blocked_probe_result("port_occupancy_unknown", port, live)
+			unknown["transient"] = true
+			return unknown
 		occupied = occupancy == PortResolver.PortOccupancy.OCCUPIED
 	else:
 		occupied = PortResolver.is_port_in_use(port)
@@ -751,6 +770,9 @@ func _effect_probe(payload: Dictionary) -> Dictionary:
 		if not pre_v4.is_empty():
 			blocked["message"] = stale_pre_v4_message(port, pre_v4)
 			blocked["target"]["hint"] = STALE_PRE_V4_HINT
+		## A godot-ai record names this port, so the occupant is most likely a
+		## live peer server that did not answer in time.
+		blocked["transient"] = not detail.is_empty() and pre_v4.is_empty()
 		return blocked
 	## The server binds both ports before it publishes anything. A held
 	## WebSocket port (a server moved off the HTTP port, or another editor)
@@ -1894,19 +1916,20 @@ static func _server_status_compatibility(actual_version: String, expected_versio
 func get_status_dict() -> Dictionary:
 	var state := str(_episode.get("state", DORMANT))
 	var reason := str(_episode.get("reason", ""))
+	var recovery_pending := (
+		state == BLOCKED
+		and _endpoint_recovery_pending_episode > 0
+		and _endpoint_recovery_pending_episode == int(_episode.get("id", 0))
+	)
 	return {
 		"episode_id": int(_episode.get("id", 0)),
 		"episode_state": state,
 		"reason": reason,
-		"recovery_pending": (
-			state == BLOCKED and reason == "endpoint_lost"
-			and _endpoint_recovery_pending_episode > 0
-			and _endpoint_recovery_pending_episode == int(_episode.get("id", 0))
-		),
+		"recovery_pending": recovery_pending,
 		"episode_reason": reason,
 		"phase": str(_episode.get("phase", "")),
 		"ready_kind": str(_episode.get("ready_kind", "")),
-		"state": _dock_state(state, reason),
+		"state": _dock_state(state, reason, recovery_pending),
 		"expected_version": str(_episode.get("expected_version", _plan.get("expected_version", ""))),
 		"actual_version": str(_episode.get("actual_version", "")),
 		"actual_name": "godot-ai" if state == READY else "",
@@ -1919,7 +1942,8 @@ func get_status_dict() -> Dictionary:
 		"blocked_hint": str(_episode.get("blocked_target", {}).get("hint", "")),
 		"keep_alive": bool(_plan.get("keep_alive", false)),
 		"recovery_attempt": _endpoint_recovery_attempts,
-		"recovery_limit": ENDPOINT_RECOVERY_DELAYS_SECONDS.size(),
+		"recovery_exponential_limit": ENDPOINT_RECOVERY_DELAYS_SECONDS.size(),
+		"recovery_ceiling_seconds": int(ENDPOINT_RECOVERY_CEILING_SECONDS),
 	}
 
 
@@ -1979,7 +2003,7 @@ static func _stopping_episode(episode_id: int, launch: Dictionary, after_stop: S
 	}
 
 
-static func _dock_state(state: String, reason: String) -> int:
+static func _dock_state(state: String, reason: String, recovery_pending: bool = false) -> int:
 	match state:
 		DORMANT:
 			return ServerState.STOPPED
@@ -1990,6 +2014,10 @@ static func _dock_state(state: String, reason: String) -> int:
 		RECOVERING, STOPPING:
 			return ServerState.STOPPING
 		BLOCKED:
+			## An endpoint loss that is still re-probing is not a dead end;
+			## show the reconnecting state instead of a port-conflict one.
+			if recovery_pending:
+				return ServerState.STOPPING
 			match reason:
 				"unsupported_remote_access": return ServerState.UNSUPPORTED_CONFIG
 				"incompatible": return ServerState.INCOMPATIBLE
