@@ -414,6 +414,49 @@ func _compute_coverage_angles(aabb: AABB) -> Array[Dictionary]:
 
 
 func take_screenshot(params: Dictionary) -> Dictionary:
+	var view_target: Variant = params.get("view_target", "")
+	var request_id: String = params.get("_request_id", "")
+	if (params.get("source") == "viewport_2d" and view_target is String
+			and not view_target.is_empty() and not request_id.is_empty() and _connection != null):
+		var root := EditorInterface.get_edited_scene_root()
+		var route_deadline_ms := (Time.get_ticks_msec() + VisionRoutingScript.EDITOR_SCREENSHOT_TIMEOUT_MS
+			- VisionRoutingScript.ROUTE_REPLY_RESERVE_MS)
+		_capture_targeted_2d_after_redraws(params, request_id,
+			root.get_instance_id() if root != null else 0, route_deadline_ms)
+		return {"_deferred": true, "_deferred_timeout_ms": VisionRoutingScript.EDITOR_SCREENSHOT_TIMEOUT_MS}
+	return _route_screenshot(params, _take_screenshot_impl(params))
+
+
+func _capture_targeted_2d_after_redraws(params: Dictionary, request_id: String, scene_id: int, route_deadline_ms: int) -> void:
+	var tree := Engine.get_main_loop() as SceneTree
+	var work := ScriptWork.begin("take_screenshot")
+	## Idle timers run after the deferred CanvasItem redraws and transform
+	## notifications. Wait before changing the viewport so its temporary
+	## transform is always restored within the same frame.
+	await tree.create_timer(0.0).timeout
+	_finish_targeted_2d_screenshot(params, request_id, scene_id, route_deadline_ms)
+	ScriptWork.finish(work)
+
+
+func _finish_targeted_2d_screenshot(params: Dictionary, request_id: String, scene_id: int, route_deadline_ms: int) -> void:
+	if (not is_instance_valid(_connection) or _connection.dispatcher == null
+			or not _connection.dispatcher.has_pending_deferred_response(request_id)):
+		return
+	var root := EditorInterface.get_edited_scene_root()
+	if (root.get_instance_id() if root != null else 0) != scene_id:
+		_connection.send_deferred_response(request_id, ErrorCodes.make(
+			ErrorCodes.EDITED_SCENE_MISMATCH, "Edited scene changed before the 2D screenshot; retry on the intended scene"))
+		return
+	var captured := _take_screenshot_impl(params)
+	var result := _route_screenshot(params, captured, route_deadline_ms)
+	if result.get("_deferred", false):
+		_connection.dispatcher.set_deferred_timeout_fallback(request_id,
+			VisionRoutingScript.screenshot_routing_timeout(captured.data))
+	else:
+		_connection.send_deferred_response(request_id, result)
+
+
+func _route_screenshot(params: Dictionary, result: Dictionary, route_deadline_ms: int = 0) -> Dictionary:
 	## Vision Routing hook: when enabled, the capture is described by the
 	## configured vision provider on a worker thread and the text description
 	## is returned instead of the raw image (see vision_routing.gd). Off, no
@@ -421,8 +464,162 @@ func take_screenshot(params: Dictionary) -> Dictionary:
 	## of truth for the `match source:` dispatch lives in _take_screenshot_impl
 	## (pinned by tests/unit/test_docs_screenshot_sources.py).
 	if _vision_routing != null and _vision_routing.is_routing_enabled():
-		return _vision_routing.route_editor_screenshot(params, Callable(self, "_take_screenshot_impl"), _connection)
-	return _take_screenshot_impl(params)
+		return _vision_routing.route_editor_screenshot(params, result, _connection, route_deadline_ms)
+	return result
+
+
+func _take_viewport_2d_screenshot(view_target: String, max_resolution: int) -> Dictionary:
+	var viewport := EditorInterface.get_editor_viewport_2d()
+	if viewport == null:
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE, "No 2D viewport available", false)
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null:
+		return ErrorCodes.make_not_ready(
+			ErrorCodes.SUB_EDITOR_NO_SCENE, "No scene open — open a scene first", false,
+			"Call scene_open with a scene path (e.g. \"res://main.tscn\") first.")
+
+	var target_path := ""
+	var image: Image
+	if view_target.is_empty():
+		RenderingServer.force_draw(false)
+		image = _read_viewport_2d_image(viewport)
+	else:
+		var framed := _frame_viewport_2d_target(viewport, root, view_target)
+		if framed.has("error"):
+			return framed
+		target_path = framed.path
+		image = _capture_framed_2d_image(viewport, framed.transform)
+	if image == null or image.is_empty():
+		return _empty_image_error(
+			"viewport_2d",
+			"Captured an empty image from the 2D viewport. The 2D viewport produced no output — typically headless mode or the 2D viewport has not drawn a frame yet."
+		)
+	var result := _finalize_image(image, "viewport_2d", max_resolution, viewport.use_hdr_2d)
+	if not target_path.is_empty():
+		result.data["view_target"] = target_path
+		result.data["view_target_count"] = 1
+	return result
+
+
+static func _frame_viewport_2d_target(viewport: SubViewport, root: Node, view_target: String) -> Dictionary:
+	var path := view_target.strip_edges()
+	if path.is_empty() or "," in path or ":" in path:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "view_target requires exactly one 2D node path")
+	var node := McpScenePath.resolve(path, root)
+	var resolved_path := McpScenePath.from_node(node, root)
+	if resolved_path.is_empty():
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "view_target '%s' was not found in the edited scene" % path)
+	var item := node as CanvasItem
+	var rect: Rect2
+	if node is Control:
+		rect = Rect2(Vector2.ZERO, node.size)
+	elif node is Sprite2D and node.texture != null:
+		rect = node.get_rect()
+	else:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "view_target '%s' must be a Control or a Sprite2D with a texture" % resolved_path)
+
+	var canvas_viewport := item.get_viewport()
+	var layer := item.get_canvas_layer_node()
+	if layer != null and layer.custom_viewport is Viewport:
+		canvas_viewport = layer.custom_viewport
+	if canvas_viewport != viewport:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "view_target '%s' belongs to a different render viewport; choose a target rendered in the 2D editor viewport" % resolved_path)
+	if not _is_visible_2d_target(item, viewport):
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "view_target '%s' is hidden in the 2D editor viewport" % resolved_path)
+	var to_canvas := item.get_global_transform_with_canvas()
+	var follow_scale := 1.0
+	if layer != null and layer.follow_viewport_enabled and layer.follow_viewport_scale != 1.0:
+		var preview: Variant = _editor_previews_2d_canvas_scale()
+		if preview == null:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Cannot determine whether the editor previews the CanvasLayer follow scale for view_target '%s'; choose a target on a layer with follow_viewport_scale=1" % resolved_path)
+		# Native viewport rendering applies follow scale about the physical
+		# viewport center, or ignores it when Preview Canvas Scale is off.
+		to_canvas = viewport.canvas_transform * layer.transform * item.get_global_transform()
+		if preview:
+			follow_scale = absf(layer.follow_viewport_scale)
+	var texture := viewport.get_texture()
+	var texture_size := texture.get_size() if texture != null else Vector2.ZERO
+	var transform: Variant = _fit_viewport_2d_rect(rect, to_canvas, viewport.get_stretch_transform(), texture_size, follow_scale)
+	if transform == null:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "view_target '%s' needs finite nondegenerate 2D bounds and a usable viewport texture size" % resolved_path)
+	return {"path": resolved_path, "transform": transform}
+
+
+static func _is_visible_2d_target(item: CanvasItem, viewport: SubViewport) -> bool:
+	if not item.is_visible_in_tree():
+		return false
+	while item != null:
+		if (item.visibility_layer & viewport.canvas_cull_mask) == 0:
+			return false
+		if item.top_level:
+			break
+		item = item.get_parent() as CanvasItem
+	return true
+
+
+static func _editor_previews_2d_canvas_scale() -> Variant:
+	var shortcut := EditorInterface.get_editor_settings().get_shortcut("canvas_item_editor/preview_canvas_scale")
+	if shortcut == null:
+		return null
+	# The renderer has a setter, but no getter for this editor-wide toggle.
+	# Read the menu item by shortcut identity, independent of translated text.
+	for button: MenuButton in EditorInterface.get_editor_main_screen().find_children("*", "MenuButton", true, false):
+		var menu := button.get_popup()
+		for index in menu.item_count:
+			if menu.get_item_shortcut(index) == shortcut:
+				return menu.is_item_checked(index)
+	return null
+
+
+## The renderer applies stretch * global_canvas_transform * canvas * item.
+## Fit the rendered corners at unit editor zoom, then put the translation
+## back into the global canvas transform's coordinates.
+static func _fit_viewport_2d_rect(rect: Rect2, to_canvas: Transform2D, stretch: Transform2D, texture_size: Vector2, follow_scale: float = 1.0) -> Variant:
+	if not rect.is_finite() or not rect.has_area() or not texture_size.is_finite() or texture_size.x <= 0.0 or texture_size.y <= 0.0 or not is_finite(follow_scale) or follow_scale <= 0.0:
+		return null
+	var projected := stretch * to_canvas
+	var determinant := projected.determinant()
+	var stretch_determinant := stretch.determinant()
+	if not projected.is_finite() or not is_finite(determinant) or determinant == 0.0 or not is_finite(stretch_determinant) or stretch_determinant == 0.0:
+		return null
+	var first := projected * rect.position
+	var bounds := Rect2(first, Vector2.ZERO)
+	if not first.is_finite():
+		return null
+	for corner: Vector2 in [Vector2(rect.end.x, rect.position.y), Vector2(rect.position.x, rect.end.y), rect.end]:
+		var point := projected * corner
+		if not point.is_finite():
+			return null
+		bounds = bounds.expand(point)
+	if not bounds.is_finite() or not bounds.has_area():
+		return null
+	var zoom := 0.8 * minf(texture_size.x / bounds.size.x, texture_size.y / bounds.size.y) / follow_scale
+	var un_stretch := stretch.affine_inverse()
+	var center := un_stretch * bounds.get_center()
+	var viewport_center := un_stretch * (texture_size * 0.5)
+	var framed := Transform2D(Vector2(zoom, 0.0), Vector2(0.0, zoom), viewport_center - center * zoom)
+	if not framed.is_finite() or framed.x.x <= 0.0:
+		return null
+	return framed
+
+
+func _capture_framed_2d_image(viewport: SubViewport, transform: Transform2D) -> Image:
+	var saved_transform := viewport.global_canvas_transform
+	var saved_update := viewport.render_target_update_mode
+	viewport.global_canvas_transform = transform
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	RenderingServer.force_draw(false)
+	var image := _read_viewport_2d_image(viewport)
+	viewport.global_canvas_transform = saved_transform
+	RenderingServer.force_draw(false)
+	viewport.render_target_update_mode = saved_update
+	return image
+
+
+func _read_viewport_2d_image(viewport: SubViewport) -> Image:
+	var texture := viewport.get_texture()
+	return texture.get_image() if texture != null else null
 
 
 func _take_screenshot_impl(params: Dictionary) -> Dictionary:
@@ -431,6 +628,8 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 		return output_error
 	var source: String = params.get("source", "viewport")
 	var max_resolution: int = params.get("max_resolution", 0)
+	if not params.get("view_target", "") is String:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "view_target must be a node path string")
 	var view_target: String = params.get("view_target", "")
 	var coverage: bool = params.get("coverage", false)
 	var custom_elevation = params.get("elevation", null)
@@ -480,31 +679,12 @@ func _take_screenshot_impl(params: Dictionary) -> Dictionary:
 		"cinematic":
 			return _take_cinematic_screenshot(max_resolution, params)
 		"viewport_2d":
-			viewport = EditorInterface.get_editor_viewport_2d()
-			if viewport == null:
-				return ErrorCodes.make_not_ready(
-					ErrorCodes.SUB_EDITOR_VIEWPORT_UNAVAILABLE,
-					"No 2D viewport available", false)
-			var scene_root_2d := EditorInterface.get_edited_scene_root()
-			if scene_root_2d == null:
-				return ErrorCodes.make_not_ready(
-					ErrorCodes.SUB_EDITOR_NO_SCENE,
-					"No scene open — open a scene first", false,
-					"Call scene_open with a scene path (e.g. \"res://main.tscn\") first.")
-			if not view_target.is_empty() or coverage or custom_elevation != null or custom_azimuth != null or custom_fov != null:
+			if coverage or custom_elevation != null or custom_azimuth != null or custom_fov != null:
 				return ErrorCodes.make(
 					ErrorCodes.INVALID_PARAMS,
-					"view_target, coverage, elevation, azimuth, and fov are not supported with source='viewport_2d'"
+					"coverage, elevation, azimuth, and fov are not supported with source='viewport_2d'"
 				)
-			## Capture the 2D editor viewport directly; no view_target/coverage for 2D.
-			RenderingServer.force_draw(false)
-			var image_2d: Image = viewport.get_texture().get_image()
-			if image_2d == null or image_2d.is_empty():
-				return _empty_image_error(
-					"viewport_2d",
-					"Captured an empty image from the 2D viewport. The 2D viewport produced no output — typically headless mode or the 2D viewport has not drawn a frame yet."
-				)
-			return _finalize_image(image_2d, "viewport_2d", max_resolution, viewport.use_hdr_2d)
+			return _take_viewport_2d_screenshot(view_target, max_resolution)
 		_:
 			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Invalid source '%s' — use 'viewport', 'viewport_2d', 'cinematic', or 'game'" % source)
 

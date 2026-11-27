@@ -211,8 +211,11 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
         - "viewport" (default): editor 3D viewport. Requires Node3D content in
             the edited scene (root or any descendant); see above for the
             no-3D-content / no-scene error shape.
-        - "viewport_2d": editor 2D viewport. Use for 2D scenes.
-            Not compatible with view_target/coverage/elevation/azimuth/fov.
+        - "viewport_2d": editor 2D viewport. Captures the current pan and zoom,
+            or temporarily frames one visible Control or textured Sprite2D
+            using view_target. Coverage and 3D camera angles require "viewport".
+            When framing a target after batch edits, call editor_screenshot
+            separately so the scene can redraw before capture.
         - "cinematic": render edited scene through its active Camera3D (no
           editor gizmos). Prefers a Camera3D marked ``current``; falls back to
           the first Camera3D found in a depth-first walk. NODE_NOT_FOUND only
@@ -227,8 +230,7 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
           or use game_command to confirm liveness.
 
         ``include_image=True`` (default) returns an MCP ImageContent block.
-        ``view_target`` (comma-separated Node3D paths) reframes editor camera;
-        AABB metadata always returned. ``coverage=True`` with view_target
+        A framed 3D shot includes AABB metadata. ``coverage=True`` with a 3D target
         captures perspective + orthographic top-down references.
 
         Args:
@@ -237,7 +239,8 @@ def register_editor_tools(mcp: FastMCP, *, include_non_core: bool = True) -> Non
                 cap. Large PNGs are downscaled further to fit the MCP transport;
                 metadata reports the actual and original dimensions.
             include_image: Return image data. Default True.
-            view_target: Node3D scene path(s) to frame, comma-separated.
+            view_target: For "viewport_2d", one Control or Sprite2D scene path,
+                e.g. "/Main/HUD/HealthBar". For "viewport", comma-separated Node3D paths.
             coverage: With view_target, capture two reference shots + AABB.
             elevation: Camera elevation in degrees (0=level, 90=overhead).
             azimuth: Camera azimuth in degrees (0=front, 90=right).

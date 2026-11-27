@@ -3614,3 +3614,174 @@ func test_game_eval_silently_drops_unknown_eval_error() -> void:
 	var plugin := McpDebuggerPlugin.new()
 	plugin._on_eval_error(["unknown-id", "some error"])
 	assert_true(true, "No crash when replying to unknown eval request_id")
+
+
+class Viewport2DReadbackStub extends EditorHandler:
+	var next_image: Image
+	var transforms: Array[Transform2D] = []
+	var update_modes: Array[SubViewport.UpdateMode] = []
+
+	func _read_viewport_2d_image(viewport: SubViewport) -> Image:
+		transforms.append(viewport.global_canvas_transform)
+		update_modes.append(viewport.render_target_update_mode)
+		return next_image
+
+
+func test_screenshot_viewport_2d_fits_all_four_corners_in_physical_pixels() -> void:
+	var rect := Rect2(-19, 7, 45, 120)
+	var to_canvas := Transform2D(0.7, Vector2(-1.8, 0.65), -0.2, Vector2(2400, -650))
+	var stretch := Transform2D(Vector2(1.85, 0), Vector2(0, 0.75), Vector2(14, -27))
+	var texture_size := Vector2(1072, 630)
+	for follow_scale: float in [1.0, 1.75]:
+		var fitted: Variant = EditorHandler._fit_viewport_2d_rect(rect, to_canvas, stretch, texture_size, follow_scale)
+		assert_true(fitted is Transform2D, "Finite rotated/skewed/reflected bounds can be framed")
+		if not fitted is Transform2D:
+			continue
+		var canvas_to_pixels: Transform2D = stretch * fitted * to_canvas
+		var viewport_center := texture_size / 2.0
+		var corners := PackedVector2Array([
+			rect.position, Vector2(rect.end.x, rect.position.y),
+			Vector2(rect.position.x, rect.end.y), rect.end,
+		])
+		var minimum := Vector2.INF
+		var maximum := -Vector2.INF
+		for corner in corners:
+			var physical := viewport_center + (canvas_to_pixels * corner - viewport_center) * follow_scale
+			minimum = minimum.min(physical)
+			maximum = maximum.max(physical)
+		assert_true(((minimum + maximum) / 2.0).is_equal_approx(viewport_center), "Physical bounds center in both axes")
+		var fraction := (maximum - minimum) / texture_size
+		assert_true(is_equal_approx(maxf(fraction.x, fraction.y), 0.8), "The limiting physical axis fills 80%")
+		assert_true(is_equal_approx(fitted.x.x, fitted.y.y), "Framing keeps uniform canvas zoom")
+	var singular := Transform2D(Vector2(1, 1), Vector2(2, 2), Vector2.ZERO)
+	assert_eq(EditorHandler._fit_viewport_2d_rect(rect, singular, stretch, texture_size), null)
+	assert_eq(EditorHandler._fit_viewport_2d_rect(Rect2(), to_canvas, stretch, texture_size), null)
+	assert_eq(EditorHandler._fit_viewport_2d_rect(rect, to_canvas, stretch, Vector2.ZERO), null)
+	assert_eq(EditorHandler._fit_viewport_2d_rect(rect, Transform2D(0.0, Vector2.INF), stretch, texture_size), null)
+
+
+func test_screenshot_viewport_2d_restores_canvas_and_redraws_on_empty_image() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var viewport := EditorInterface.get_editor_viewport_2d()
+	assert_true(root != null and viewport != null and root.get_viewport() == viewport)
+	if root == null or viewport == null or root.get_viewport() != viewport:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "Screenshot2DLayer"
+	layer.transform = Transform2D(0.4, Vector2(1.2, 1.7), 0.0, Vector2(4000, -3600))
+	root.add_child(layer, true)
+	track(layer)
+	var rect := ColorRect.new()
+	rect.name = "Target"
+	rect.size = Vector2(128, 76)
+	rect.position = Vector2(42, 18)
+	rect.rotation = -0.6
+	layer.add_child(rect)
+	var expected_path := McpScenePath.from_node(rect, root)
+	var shorthand_path := String(root.get_path_to(rect))
+	var handler := Viewport2DReadbackStub.new(McpLogBuffer.new())
+	handler.next_image = Image.create_empty(8, 4, false, Image.FORMAT_RGBA8)
+
+	var original_transform := viewport.global_canvas_transform
+	var original_update := viewport.render_target_update_mode
+	var before := Transform2D(0.25, Vector2(0.23, 0.56), 0.1, Vector2(24, 61))
+	viewport.global_canvas_transform = before
+	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	var draws: Array[Transform2D] = []
+	var observe_draw := func() -> void: draws.append(viewport.global_canvas_transform)
+	RenderingServer.frame_pre_draw.connect(observe_draw)
+
+	var current := handler.take_screenshot({"source": "viewport_2d"})
+	var framed := handler.take_screenshot({"source": "viewport_2d", "view_target": shorthand_path})
+	var after_success := viewport.global_canvas_transform
+	var success_update := viewport.render_target_update_mode
+	handler.next_image = null
+	var missing := handler.take_screenshot({"source": "viewport_2d", "view_target": expected_path})
+	var after_null := viewport.global_canvas_transform
+	var null_update := viewport.render_target_update_mode
+	handler.next_image = Image.new()
+	var empty := handler.take_screenshot({"source": "viewport_2d", "view_target": expected_path})
+	var after_empty := viewport.global_canvas_transform
+	var empty_update := viewport.render_target_update_mode
+
+	RenderingServer.frame_pre_draw.disconnect(observe_draw)
+	viewport.global_canvas_transform = original_transform
+	viewport.render_target_update_mode = original_update
+	RenderingServer.force_draw(false)
+
+	assert_eq(current.get("data", {}).get("width"), 8)
+	assert_false(current.get("data", {}).has("view_target"))
+	assert_eq(framed.get("data", {}).get("view_target"), expected_path)
+	assert_eq(framed.get("data", {}).get("view_target_count"), 1)
+	assert_is_error(missing, ErrorCodes.EDITOR_NOT_READY)
+	assert_is_error(empty, ErrorCodes.EDITOR_NOT_READY)
+	if missing.has("error") and empty.has("error"):
+		assert_eq(missing.error.data.sub_code, ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY)
+		assert_eq(empty.error.data.sub_code, ErrorCodes.SUB_EDITOR_VIEWPORT_EMPTY)
+	assert_eq(after_success, before)
+	assert_eq(after_null, before)
+	assert_eq(after_empty, before)
+	assert_eq(success_update, SubViewport.UPDATE_DISABLED)
+	assert_eq(null_update, SubViewport.UPDATE_DISABLED)
+	assert_eq(empty_update, SubViewport.UPDATE_DISABLED)
+	assert_eq(handler.update_modes, [SubViewport.UPDATE_DISABLED, SubViewport.UPDATE_ALWAYS,
+		SubViewport.UPDATE_ALWAYS, SubViewport.UPDATE_ALWAYS])
+	assert_eq(handler.transforms.size(), 4)
+	if handler.transforms.size() == 4:
+		assert_ne(handler.transforms[1], before)
+		assert_eq(draws, [before, handler.transforms[1], before, handler.transforms[2], before, handler.transforms[3], before],
+			"Every framed draw restores the prior view with a second draw")
+
+
+func test_screenshot_viewport_2d_refuses_invalid_targets_without_drawing() -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	assert_true(root != null)
+	if root == null:
+		return
+	var fixture := Node.new()
+	fixture.name = "Screenshot2DRefusals"
+	root.add_child(fixture, true)
+	track(fixture)
+	var nested := SubViewport.new()
+	nested.name = "Nested"
+	fixture.add_child(nested)
+	var nested_rect := ColorRect.new()
+	nested_rect.size = Vector2(32, 32)
+	nested.add_child(nested_rect, true)
+	var layer := CanvasLayer.new()
+	layer.name = "Redirected"
+	layer.custom_viewport = nested
+	fixture.add_child(layer)
+	var redirected_rect := ColorRect.new()
+	redirected_rect.size = Vector2(32, 32)
+	layer.add_child(redirected_rect, true)
+	var hidden := ColorRect.new()
+	hidden.hide()
+	hidden.size = Vector2(32, 32)
+	fixture.add_child(hidden, true)
+	var empty := ColorRect.new()
+	fixture.add_child(empty, true)
+	var sprite := Sprite2D.new()
+	fixture.add_child(sprite, true)
+
+	var handler := Viewport2DReadbackStub.new(McpLogBuffer.new())
+	var cases := [
+		["bad,other", ErrorCodes.VALUE_OUT_OF_RANGE, "exactly one"],
+		["..", ErrorCodes.NODE_NOT_FOUND, "edited scene"],
+		["/Invalid/Target", ErrorCodes.NODE_NOT_FOUND, "not found"],
+		[McpScenePath.from_node(fixture, root), ErrorCodes.WRONG_TYPE, "must be a Control"],
+		[McpScenePath.from_node(sprite, root), ErrorCodes.WRONG_TYPE, "with a texture"],
+		[McpScenePath.from_node(hidden, root), ErrorCodes.VALUE_OUT_OF_RANGE, "hidden"],
+		[McpScenePath.from_node(empty, root), ErrorCodes.VALUE_OUT_OF_RANGE, "finite nondegenerate"],
+		[McpScenePath.from_node(nested_rect, root), ErrorCodes.VALUE_OUT_OF_RANGE, "different render viewport"],
+		[McpScenePath.from_node(redirected_rect, root), ErrorCodes.VALUE_OUT_OF_RANGE, "different render viewport"],
+	]
+	for spec in cases:
+		var result := handler.take_screenshot({"source": "viewport_2d", "view_target": spec[0]})
+		assert_is_error(result, spec[1])
+		if result.has("error"):
+			assert_contains(result.error.message, spec[2])
+	for field in ["coverage", "elevation", "azimuth", "fov"]:
+		var invalid := handler.take_screenshot({"source": "viewport_2d", field: true if field == "coverage" else 20.0})
+		assert_is_error(invalid, ErrorCodes.INVALID_PARAMS)
+	assert_eq(handler.transforms.size(), 0)

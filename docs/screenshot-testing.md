@@ -9,7 +9,7 @@ capture within 20s" timeouts.
 | Goal | `source` | Notes |
 |------|----------|-------|
 | Verify a 3D scene framing as the editor camera sees it | `viewport` (the default) | Captures the editor's **3D** viewport — no debugger bridge, no game subprocess. Requires Node3D content in the edited scene; a 2D-only scene (or no scene open) returns `EDITOR_NOT_READY` with a hint. Supports `view_target` reframing; `coverage` / `elevation` / `azimuth` / `fov` only take effect together with `view_target` (without it they are silently ignored). |
-| Verify a 2D scene as the editor shows it | `viewport_2d` | Captures the editor's **2D** viewport at its *current pan/zoom* — whatever is on screen in the 2D view. It has no framing parameters: `view_target`, `coverage`, `elevation`, `azimuth`, and `fov` are rejected with `INVALID_PARAMS`. |
+| Inspect a 2D scene or frame one HUD control or sprite | `viewport_2d` | Captures the editor's **2D** viewport. Omit `view_target` for the current pan and zoom, or supply one visible `Control` or textured `Sprite2D` in the same viewport. Coverage, elevation, azimuth, and FOV are 3D options. |
 | Verify a running game's framebuffer (menus that exist at runtime, gameplay state, particle effects, runtime UI animations) | `game` | Requires the game subprocess + `_mcp_game_helper` autoload + a `project_run`-driven play cycle. |
 | Verify a specific `Camera3D` view without playing | `cinematic` | Renders the edited scene through its active `Camera3D` (no editor gizmos). Prefers a camera marked `current`, else the first `Camera3D` found; `NODE_NOT_FOUND` if the scene has none. |
 
@@ -50,6 +50,21 @@ metadata and adds `preview_error` instead of an image. Failed file publication
 reports recovery paths in the error data; retain those files until recovery is
 complete. `backup_cleanup_failed` with `backup_path` means the new PNG was saved
 but the previous file's backup could not be removed.
+
+## Inspect an offscreen HUD control
+
+```python
+editor_screenshot(source="viewport_2d", view_target="/Main/HUD/HealthBar")
+```
+
+The shot centers the control and fits its bounds into 80% of the viewport,
+preserving aspect ratio. Nearby artwork and anything covering the control
+appear in the image. The next ordinary capture uses the editor's original
+pan and zoom. The same call works for a textured sprite, including one
+with an offset or a selected sprite-sheet frame.
+
+After creating or editing the target in `batch_execute`, call
+`editor_screenshot` separately so Godot can redraw the target before capture.
 
 ## Recipe: testing a runtime UI option (e.g. main menu)
 
