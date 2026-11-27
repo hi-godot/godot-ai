@@ -132,6 +132,8 @@ var _break_reason := ""
 var _break_pre_live := false
 var _break_run_token := -1
 var _break_record_synthesized := false
+## ScriptEditorDebugger -> latest custom monitor names (profiler_manage).
+var _custom_monitor_names := {}
 
 ## #645: how long after the break signal to scrape the Stack Trace panel for
 ## frames. The editor requests the stack dump from the game separately, so the
@@ -464,6 +466,23 @@ func _connect_script_debugger_breaked() -> void:
 		var cb := Callable(self, "_on_script_debugger_breaked")
 		if not dbg.is_connected("breaked", cb):
 			dbg.connect("breaked", cb)
+		var names_cb := Callable(self, "_on_script_debugger_debug_data").bind(dbg)
+		if dbg.has_signal("debug_data") and not dbg.is_connected("debug_data", names_cb):
+			dbg.connect("debug_data", names_cb)
+
+
+## Godot sends "performance:profile_names" only when the game's custom monitor
+## set changes, typically once at boot, so the profiler handler (created on
+## first use) would miss it. Kept per ScriptEditorDebugger for the editor's
+## lifetime; a stale entry is harmless because a new game with custom monitors
+## re-announces them, and one without sends no custom values to label.
+func _on_script_debugger_debug_data(msg: String, data: Array, dbg: Node) -> void:
+	if msg == "performance:profile_names" and data.size() == 2 and data[0] is Array:
+		_custom_monitor_names[dbg] = (data[0] as Array).map(func(n): return str(n))
+
+
+func custom_monitor_names_for(dbg: Object) -> Array:
+	return _custom_monitor_names.get(dbg, [])
 
 
 static func _collect_nodes_of_class(node: Node, klass: String, out: Array[Node]) -> void:

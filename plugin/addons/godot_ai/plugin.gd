@@ -384,6 +384,7 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy_handler("gridmap", HANDLERS_DIR + "gridmap_handler.gd", [undo])
 	_dispatcher.register_lazy_handler("navigation", HANDLERS_DIR + "navigation_handler.gd", [undo, _connection])
 	_dispatcher.register_lazy_handler("csg", HANDLERS_DIR + "csg_handler.gd", [undo])
+	_dispatcher.register_lazy_handler("profiler", HANDLERS_DIR + "profiler_handler.gd", [_debugger_plugin])
 
 	_dispatcher.register_lazy("get_editor_state", "editor", &"get_editor_state")
 	_dispatcher.register_lazy("get_scene_tree", "scene", &"get_scene_tree")
@@ -418,6 +419,10 @@ func _continue_enter_tree_after_update_barrier() -> void:
 	_dispatcher.register_lazy("game_eval", "editor", &"game_eval")
 	_dispatcher.register_lazy("game_command", "editor", &"game_command")
 	_dispatcher.register_lazy("game_debug_control", "editor", &"game_debug_control")
+	_dispatcher.register_lazy("profiler_start", "profiler", &"profiler_start")
+	_dispatcher.register_lazy("profiler_stop", "profiler", &"profiler_stop")
+	_dispatcher.register_lazy("profiler_status", "profiler", &"profiler_status")
+	_dispatcher.register_lazy("profiler_get", "profiler", &"profiler_get")
 	_dispatcher.register_lazy("get_project_setting", "project", &"get_project_setting")
 	_dispatcher.register_lazy("set_project_setting", "project", &"set_project_setting")
 	_dispatcher.register_lazy("set_main_scene", "project", &"set_main_scene")

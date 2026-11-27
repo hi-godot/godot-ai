@@ -76,6 +76,7 @@ _FROZEN_NO_EXCLUSION_TEXT = (
     "  game_manage      get_scene_tree, get_node_info, get_ui_elements,\n"
     "                   input_key, input_mouse, input_gamepad, input_action,\n"
     "                   input_state\n"
+    "  profiler_manage  start, stop, status, get\n"
     "  autoload_manage  list, add, remove\n"
     "  filesystem_manage read_text, write_text, import_get, import_set,\n"
     "                    reimport, scan, search, move, rename, remove\n"
