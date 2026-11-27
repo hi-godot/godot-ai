@@ -25,6 +25,10 @@ INPUT_SEQUENCE_TIMEOUT_SEC = 30.0
 MAX_SEQUENCE_STEPS = 256
 MAX_SEQUENCE_FRAMES = 600
 
+## Bounds on a single type_text payload, mirrored by the plugin
+## (GameHelper.MAX_TYPE_TEXT_LENGTH) so one call cannot stall the main thread.
+MAX_TYPE_TEXT_LENGTH = 4096  # mirrored cap; plugin side at plugin/addons/godot_ai/runtime/game_helper.gd
+
 
 async def _game_command(runtime: DirectRuntime, op: str, params: dict[str, Any]) -> dict:
     return await runtime.send_command(
@@ -96,17 +100,73 @@ async def game_get_ui_elements(
     return await _game_command(runtime, "get_ui_elements", params)
 
 
+# Unicode scalar space and surrogate bounds, source https://www.unicode.org/glossary/
+MAX_CODEPOINT = 0x10FFFF
+SURROGATE_MIN = 0xD800
+SURROGATE_MAX = 0xDFFF
+# ASCII C0 control block and DEL, chart U0000
+ASCII_CONTROL_MAX = 32  # https://www.unicode.org/charts/PDF/U0000.pdf
+DEL_CODEPOINT = 127  # https://www.unicode.org/charts/PDF/U0000.pdf
+
+
+def _normalize_unicode(unicode: int | str) -> int:
+    """Validate and convert an input_key ``unicode`` value to an integer codepoint."""
+    if isinstance(unicode, str):
+        if len(unicode) != 1:
+            raise _invalid_params(
+                f"unicode string must be a single character (got length {len(unicode)}); "
+                "use op='type_text' to type multi-character strings"
+            )
+        codepoint = ord(unicode)
+    elif isinstance(unicode, int) and not isinstance(unicode, bool):
+        codepoint = unicode
+    else:
+        raise _invalid_params(
+            f"unicode must be an integer codepoint or single-character string (got {type(unicode).__name__})"
+        )
+    if codepoint < 0 or codepoint > MAX_CODEPOINT or (SURROGATE_MIN <= codepoint <= SURROGATE_MAX):
+        raise _invalid_params(f"unicode codepoint out of range: {codepoint}")
+    return codepoint
+
+
 async def game_input_key(
     runtime: DirectRuntime,
-    key: str,
+    key: str = "",
     pressed: bool = True,
     echo: bool = False,
+    unicode: int | str | None = None,
 ) -> dict:
-    return await _game_command(
-        runtime,
-        "input_key",
-        {"key": key, "pressed": pressed, "echo": echo},
-    )
+    params: dict[str, Any] = {"key": key, "pressed": pressed, "echo": echo}
+    if unicode is None:
+        if not key:
+            raise _invalid_params("key is required when unicode is not provided")
+    else:
+        codepoint = _normalize_unicode(unicode)
+        if not key and codepoint == 0:
+            raise _invalid_params("key or a non-zero unicode codepoint is required")
+        params["unicode"] = codepoint
+    return await _game_command(runtime, "input_key", params)
+
+
+async def game_type_text(
+    runtime: DirectRuntime,
+    text: str,
+    submit: bool = False,
+) -> dict:
+    """Type a string into the running game's currently focused text control."""
+    if not isinstance(text, str) or not text:
+        raise _invalid_params("text must be a non-empty string")
+    if len(text) > MAX_TYPE_TEXT_LENGTH:
+        raise _invalid_params(
+            f"text exceeds the {MAX_TYPE_TEXT_LENGTH}-character cap (got {len(text)})"
+        )
+    if not isinstance(submit, bool):
+        raise _invalid_params("submit must be a boolean")
+    for ch in text:
+        cp = ord(ch)
+        if (cp < ASCII_CONTROL_MAX and ch not in ("\n", "\r", "\t")) or cp == DEL_CODEPOINT or (SURROGATE_MIN <= cp <= SURROGATE_MAX):
+            raise _invalid_params(f"Unsupported control character U+{cp:04X} in text")
+    return await _game_command(runtime, "type_text", {"text": text, "submit": submit})
 
 
 async def game_input_mouse(

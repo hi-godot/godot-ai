@@ -437,6 +437,8 @@ func _handle_game_command(data: Array) -> void:
 			result = _game_get_ui_elements(json.data)
 		"input_key":
 			result = _game_input_key(json.data)
+		"type_text":
+			result = _game_type_text(json.data)
 		"input_mouse":
 			result = _game_input_mouse(json.data)
 		"input_gamepad":
@@ -674,18 +676,180 @@ func _current_scene_root() -> Node:
 	return scene_root
 
 
+## Cap on a single type_text payload, mirrored by the server-side handler
+## (handlers/game.py::MAX_TYPE_TEXT_LENGTH) so one call cannot stall the main
+## thread with unbounded synchronous Input.parse_input_event calls.
+const MAX_TYPE_TEXT_LENGTH := 4096
+
+
 func _game_input_key(params: Dictionary) -> Dictionary:
+	var built := _build_key_event(params)
+	if built.has("input"):
+		_parse_mcp_input(built.input)
+		Input.flush_buffered_events()
+	return built.reply
+
+
+## Build the InputEventKey for input_key without injecting it, so editor-side
+## tests can inspect event fields directly (mirrors _build_mouse_event).
+func _build_key_event(params: Dictionary) -> Dictionary:
 	var key_name := str(params.get("key", ""))
-	var keycode := OS.find_keycode_from_string(key_name)
-	if keycode == KEY_NONE:
-		return {"sent": false, "error": "Unknown key: %s" % key_name}
+	var unicode_result := _resolve_unicode_param(params.get("unicode", null))
+	if unicode_result.has("error"):
+		return {"reply": {"sent": false, "error": unicode_result.error}}
+	var has_unicode: bool = bool(unicode_result.present)
+	var codepoint: int = int(unicode_result.codepoint)
+
+	var keycode: Key = KEY_NONE
+	if not key_name.is_empty():
+		keycode = OS.find_keycode_from_string(key_name)
+		if keycode == KEY_NONE:
+			return {"reply": {"sent": false, "error": "Unknown key: %s" % key_name}}
+	elif not has_unicode or codepoint <= 0:
+		return {"reply": {"sent": false, "error": "Unknown key: %s" % key_name}}
+
 	var ev := InputEventKey.new()
 	ev.keycode = keycode
 	ev.physical_keycode = keycode
+	ev.key_label = keycode
+	ev.unicode = codepoint
 	ev.pressed = bool(params.get("pressed", true))
 	ev.echo = bool(params.get("echo", false))
-	_parse_mcp_input(ev)
-	return {"sent": true, "key": key_name, "pressed": ev.pressed}
+	var reply := {"sent": true, "key": key_name, "pressed": ev.pressed}
+	if has_unicode:
+		reply["unicode"] = codepoint
+	return {"input": ev, "reply": reply}
+
+
+func _resolve_unicode_param(value: Variant) -> Dictionary:
+	if value == null:
+		return {"present": false, "codepoint": 0}
+	if value is String:
+		var text: String = value
+		if text.length() != 1:
+			return {"error": "unicode string must be a single character (got length %d)" % text.length()}
+		var cp := text.unicode_at(0)
+		if cp >= 0xD800 and cp <= 0xDFFF:
+			return {"error": "unicode codepoint must not be a UTF-16 surrogate"}
+		return {"present": true, "codepoint": cp}
+	if _is_number(value):
+		var num := float(value)
+		if not is_finite(num) or num != floor(num):
+			return {"error": "unicode must be an integer codepoint (got %s)" % str(value)}
+		var cp := int(num)
+		if cp < 0 or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF):
+			return {"error": "unicode codepoint out of range: %d" % cp}
+		return {"present": true, "codepoint": cp}
+	return {"error": "unicode must be an integer codepoint or single-character string (got %s)" % type_string(typeof(value))}
+
+
+func _game_type_text(params: Dictionary) -> Dictionary:
+	var built := _build_type_text_events(params)
+	if built.has("events"):
+		var events: Array[InputEventKey] = built.events
+		for ev in events:
+			_parse_mcp_input(ev)
+		Input.flush_buffered_events()
+	return built.reply
+
+
+## Build the ordered press/release InputEventKey sequence for type_text without
+## injecting it, so tests can verify codepoints, keycodes, shift state, and
+## submit behavior without mutating live input state.
+func _build_type_text_events(params: Dictionary) -> Dictionary:
+	var raw_text: Variant = params.get("text", null)
+	if not (raw_text is String):
+		return {"reply": {"sent": false, "error": "text must be a string"}}
+	var text: String = raw_text
+	if text.is_empty():
+		return {"reply": {"sent": false, "error": "text must not be empty"}}
+	if text.length() > MAX_TYPE_TEXT_LENGTH:
+		return {"reply": {"sent": false, "error": "text exceeds cap of %d characters (got %d)" % [MAX_TYPE_TEXT_LENGTH, text.length()]}}
+
+	var submit_raw: Variant = params.get("submit", false)
+	if not (submit_raw is bool):
+		return {"reply": {"sent": false, "error": "submit must be a boolean"}}
+	var submit: bool = submit_raw
+
+	var events: Array[InputEventKey] = []
+	var typed_count := 0
+	var i := 0
+	while i < text.length():
+		var cp := text.unicode_at(i)
+		if cp == 13:  # '\r' (collapse '\r\n' into a single Enter)
+			if i + 1 < text.length() and text.unicode_at(i + 1) == 10:
+				i += 1
+			_append_key_tap(events, KEY_ENTER, 0, false)
+			typed_count += 1
+		elif cp == 10:  # '\n'
+			_append_key_tap(events, KEY_ENTER, 0, false)
+			typed_count += 1
+		elif cp == 9:  # '\t'
+			_append_key_tap(events, KEY_TAB, 0, false)
+			typed_count += 1
+		elif cp < 32 or cp == 127 or (cp >= 0xD800 and cp <= 0xDFFF):
+			return {"reply": {"sent": false, "error": "Unsupported control character U+%04X in text" % cp}}
+		else:
+			var kc := _keycode_for_codepoint(cp)
+			var shifted := cp >= 65 and cp <= 90
+			_append_key_tap(events, kc, cp, shifted)
+			typed_count += 1
+		i += 1
+
+	if submit:
+		_append_key_tap(events, KEY_ENTER, 0, false)
+
+	var viewport := get_viewport()
+	var focus_owner := viewport.gui_get_focus_owner() if viewport != null else null
+	var focus_path := _runtime_path(focus_owner) if focus_owner != null else ""
+
+	return {
+		"events": events,
+		"reply": {
+			"sent": true,
+			"text": text,
+			"characters_typed": typed_count,
+			"events_sent": events.size(),
+			"submitted": submit,
+			"focus_owner": focus_path,
+		},
+	}
+
+
+static func _append_key_tap(
+	events: Array[InputEventKey], keycode: Key, unicode_cp: int, shifted: bool
+) -> void:
+	var press := InputEventKey.new()
+	press.keycode = keycode
+	press.physical_keycode = keycode
+	press.key_label = keycode
+	press.unicode = unicode_cp
+	press.shift_pressed = shifted
+	press.pressed = true
+	press.echo = false
+	events.append(press)
+
+	var release := InputEventKey.new()
+	release.keycode = keycode
+	release.physical_keycode = keycode
+	release.key_label = keycode
+	release.unicode = 0
+	release.shift_pressed = false
+	release.pressed = false
+	release.echo = false
+	events.append(release)
+
+
+## Map printable ASCII codepoints to their Godot Key constant so both
+## unicode-driven controls (LineEdit/TextEdit) and keycode-driven scripts see
+## realistic events. Non-ASCII characters (CJK, emoji, etc.) use KEY_NONE with
+## ev.unicode carrying the codepoint, matching OS IME input in Godot 4.
+static func _keycode_for_codepoint(cp: int) -> Key:
+	if cp >= 97 and cp <= 122:
+		return (cp - 32) as Key
+	if (cp >= 32 and cp <= 96) or (cp >= 123 and cp <= 126):
+		return cp as Key
+	return KEY_NONE
 
 
 const MOUSE_BUTTONS := {

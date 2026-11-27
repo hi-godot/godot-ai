@@ -37,8 +37,18 @@ Ops:
   - debug_status()
         Probe suspend state and the game-helper process tick counter through
         the debugger capture, including while SceneTree processing is suspended.
-  - input_key(key, pressed=True, echo=False)
-        Send a key press/release to the running game.
+  - input_key(key="", pressed=True, echo=False, unicode=None)
+        Send a key press/release to the running game. Pass unicode as an
+        integer codepoint or single-character string to populate
+        InputEventKey.unicode (required by LineEdit/TextEdit text input); key
+        may be omitted when a non-zero unicode value is given.
+  - type_text(text, submit=False)
+        Type a string (ASCII, CJK/Unicode, newlines, tabs) into the running
+        game by injecting paired press/release InputEventKey events with
+        unicode codepoints populated for the currently focused Control
+        (LineEdit, TextEdit, chat input, etc.). Set submit=True to press Enter
+        after typing. The reply reports focus_owner so callers can confirm a
+        control held GUI focus.
   - input_mouse(event, position=None, button="left", pressed=True,
                 buttons=None)
         Send a mouse motion or button event. event: "motion" | "button".
@@ -85,6 +95,7 @@ def register_game_tools(mcp: FastMCP) -> None:
             "next_frame": game_handlers.game_next_frame,
             "debug_status": game_handlers.game_debug_status,
             "input_key": game_handlers.game_input_key,
+            "type_text": game_handlers.game_type_text,
             "input_mouse": game_handlers.game_input_mouse,
             "input_gamepad": game_handlers.game_input_gamepad,
             "input_action": game_handlers.game_input_action,
@@ -100,6 +111,7 @@ def register_game_tools(mcp: FastMCP) -> None:
             "next_frame": None,
             "debug_status": None,
             "input_key": None,
+            "type_text": None,
             "input_mouse": None,
             "input_gamepad": None,
             "input_action": None,
