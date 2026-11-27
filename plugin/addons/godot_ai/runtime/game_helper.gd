@@ -834,7 +834,9 @@ static func _append_key_tap(
 	release.physical_keycode = keycode
 	release.key_label = keycode
 	release.unicode = 0
-	release.shift_pressed = false
+	## Keep the press's modifier state on the release so uppercase taps pair
+	## correctly across both halves of the key event.
+	release.shift_pressed = shifted
 	release.pressed = false
 	release.echo = false
 	events.append(release)
