@@ -92,6 +92,10 @@ func profiler_start(params: Dictionary) -> Dictionary:
 	_reset()
 	_session = target.session
 	_debugger = target.debugger
+	## Godot announces custom monitor names only when they change, usually
+	## before any capture; the debugger plugin listens for the whole session.
+	if _debugger_plugin != null and _debugger_plugin.has_method("custom_monitor_names_for"):
+		_custom_monitor_names = _debugger_plugin.call("custom_monitor_names_for", _debugger)
 	_debugger.connect("debug_data", _on_debug_data)
 	_session.stopped.connect(_on_session_stopped)
 	_profilers = profilers
@@ -139,7 +143,7 @@ func profiler_get(params: Dictionary) -> Dictionary:
 	data["functions"] = summarize_functions(scripts, _signatures, top_n, sort_by)
 	data["servers"] = summarize_servers(scripts)
 	data["visual"] = summarize_visual(visual)
-	data["monitors"] = summarize_monitors(_monitor_frames, _monitor_names())
+	data["monitors"] = summarize_monitors(_monitor_frames)
 	data["hardware"] = _hardware
 	if per_frame:
 		data["per_frame"] = per_frame_rows(scripts, visual)
@@ -172,7 +176,9 @@ func _on_debug_data(msg: String, data: Array) -> void:
 				_custom_monitor_names = (data[0] as Array).map(func(n): return str(n))
 		"performance:profile_frame":
 			if "monitors" in _profilers:
-				_push(_monitor_frames, data)
+				## Names travel with the frame: the custom set can change mid-capture.
+				## The array is replaced on each announcement, never mutated.
+				_push(_monitor_frames, [_custom_monitor_names, data])
 
 
 func _push(buffer: Array, data: Array) -> void:
@@ -292,12 +298,6 @@ static func _collect_debuggers(node: Node, out: Array[Node]) -> void:
 		_collect_debuggers(child, out)
 
 
-func _monitor_names() -> Array:
-	var names := monitor_names()
-	names.append_array(_custom_monitor_names)
-	return names
-
-
 static func _tail(frames: Array, count: int) -> Array:
 	if count <= 0 or count >= frames.size():
 		return frames
@@ -318,11 +318,14 @@ static func monitor_names() -> Array:
 	return names
 
 
-## Script time is part of the frame, so a frame that reports more script time
-## than frame time is bogus. Seen on a real project: one frame claiming 33 s of
-## script time inside a ~50 ms frame, which skewed every average.
-static func is_impossible_servers_frame(raw: Array) -> bool:
-	return raw.size() >= 7 and float(raw[5]) > float(raw[1])
+## Script time sums GDScript self time across every thread, so worker threads
+## can legitimately push it past the frame time; it cannot pass frame time
+## times the threads able to run at once. Seen on a real project: one frame
+## claiming 33 s of script time inside a ~50 ms frame, which skewed every
+## average. The core count is the editor's: a remote game on a bigger machine
+## gets a slightly tighter bound.
+static func is_impossible_servers_frame(raw: Array, threads: int = OS.get_processor_count()) -> bool:
+	return raw.size() >= 7 and float(raw[5]) > float(raw[1]) * maxi(threads, 1)
 
 
 ## ServersDebugger::ServersProfilerFrame::serialize layout: six scalars,
@@ -348,8 +351,9 @@ static func decode_servers_frame(raw: Array) -> Dictionary:
 		var size := int(raw[idx + 1])
 		idx += 2
 		var funcs := {}
+		## The engine appends repeats (one "step" per physics tick) unmerged.
 		for j in int(size / 2.0):
-			funcs[str(raw[idx])] = float(raw[idx + 1])
+			funcs[str(raw[idx])] = funcs.get(str(raw[idx]), 0.0) + float(raw[idx + 1])
 			idx += 2
 		frame.servers[server] = funcs
 	if idx >= raw.size():
@@ -556,9 +560,14 @@ static func summarize_visual(raw_frames: Array) -> Dictionary:
 	return {"cpu_ms": stats(cpu), "gpu_ms": stats(gpu), "areas": areas}
 
 
-static func summarize_monitors(raw_frames: Array, names: Array) -> Dictionary:
+## Each frame is [custom_names, raw]: the built-in monitors, then the custom
+## ones in the order the game announced them.
+static func summarize_monitors(frames: Array) -> Dictionary:
+	var builtin := monitor_names()
 	var series := {}
-	for raw in raw_frames:
+	for frame in frames:
+		var names: Array = builtin + frame[0]
+		var raw: Array = frame[1]
 		for i in mini(raw.size(), names.size()):
 			if names[i] == null or not (raw[i] is int or raw[i] is float):
 				continue

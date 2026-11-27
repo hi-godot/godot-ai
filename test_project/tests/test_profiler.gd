@@ -40,6 +40,13 @@ func test_decode_servers_frame_reads_engine_layout() -> void:
 	assert_eq(f.functions[0], [0, 2, 0.002, 0.003])
 
 
+func test_repeated_server_functions_in_a_frame_add_up() -> void:
+	var two_steps := SERVERS_FRAME.slice(0, 7)
+	two_steps.append_array(["physics_3d", 4, "step", 0.001, "step", 0.002])
+	var f: Dictionary = ProfilerHandler.decode_servers_frame(two_steps)
+	assert_eq(snappedf(f.servers["physics_3d"]["step"], 0.000001), 0.003)
+
+
 func test_decode_visual_frame_turns_timestamps_into_durations() -> void:
 	var v: Dictionary = ProfilerHandler.decode_visual_frame(VISUAL_FRAME)
 	assert_eq(v.cpu_ms, 3.5)
@@ -198,6 +205,54 @@ func test_impossible_frames_are_dropped_and_counted() -> void:
 	assert_eq(data.dropped_frames, 1)
 	assert_eq(data.frames.scripts, 1)
 	assert_eq(data.frame_times.script_ms.max, 3.0)
+
+
+func test_worker_thread_script_time_past_frame_time_is_kept() -> void:
+	var threaded := SERVERS_FRAME.duplicate()
+	threaded[1] = 0.030
+	threaded[5] = 0.040  # two 20 ms worker-thread calls inside a 30 ms frame
+	assert_false(ProfilerHandler.is_impossible_servers_frame(threaded, 4))
+	assert_true(ProfilerHandler.is_impossible_servers_frame(threaded, 1))
+	threaded[5] = 33.0
+	assert_true(ProfilerHandler.is_impossible_servers_frame(threaded, 64))
+
+
+func _monitor_frame(custom: Array) -> Array:
+	var values := []
+	values.resize(Performance.MONITOR_MAX)
+	values.fill(0)
+	values.append_array(custom)
+	return values
+
+
+func test_custom_monitor_names_announced_before_start_label_the_capture() -> void:
+	var plugin := McpDebuggerPlugin.new()
+	var debugger := Node.new()
+	debugger.add_user_signal("debug_data")
+	track(debugger)
+	plugin._on_script_debugger_debug_data("performance:profile_names", [["ai/agents"], [0]], debugger)
+	var handler = ProfilerHandler.new(plugin)
+	handler._target_finder = func(): return {"session": _fake_session(), "debugger": debugger}
+	handler.profiler_start({"profilers": ["monitors"]})
+	debugger.emit_signal("debug_data", "performance:profile_frame", _monitor_frame([7]))
+	handler.profiler_stop({})
+	assert_eq(handler.profiler_get({}).data.monitors["ai/agents"].last, 7.0)
+
+
+func test_monitor_names_stay_bound_to_their_frames() -> void:
+	_handler._capturing = true
+	_handler._profilers.assign(["monitors"])
+	_handler._on_debug_data("performance:profile_names", [["ai/agents"], [0]])
+	_handler._on_debug_data("performance:profile_frame", _monitor_frame([10]))
+	_handler._on_debug_data("performance:profile_names", [["ai/jobs"], [0]])
+	_handler._on_debug_data("performance:profile_frame", _monitor_frame([20]))
+	_handler._capturing = false
+	var monitors: Dictionary = _handler.profiler_get({}).data.monitors
+	assert_has_key(monitors, "ai/agents")
+	assert_eq(monitors["ai/agents"].count, 1)
+	assert_eq(monitors["ai/agents"].last, 10.0)
+	assert_eq(monitors["ai/jobs"].count, 1)
+	assert_eq(monitors["ai/jobs"].last, 20.0)
 
 
 func test_per_frame_rows_are_one_per_frame_number_in_order() -> void:
