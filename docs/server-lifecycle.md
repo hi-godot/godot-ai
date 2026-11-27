@@ -138,7 +138,12 @@ server, and an incompatible version still block until the user acts.
 A backend whose HTTP listener is closed by the event loop after an accept
 failure (Windows reports `WinError 64` and the proactor stops accepting)
 shuts itself down, releasing both ports and its capability record so the
-next editor or bridge can start a fresh one.
+next editor or bridge can start a fresh one. Two independent triggers feed
+the same exit: the loop's exception handler for the accept-failure report,
+and a listener probe that connects to the HTTP port every poll interval —
+after one successful probe it arms, and `PROBE_FAILURE_THRESHOLD`
+consecutive failed polls request the shutdown, so a single slow poll under
+load cannot kill a healthy server.
 
 Startup effects are `PROBE`, `LAUNCH`, and `PROVE`; control effects are
 `REPLACE` and `STOP`. Every effect carries the active episode ID. Completion

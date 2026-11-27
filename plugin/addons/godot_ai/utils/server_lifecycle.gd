@@ -1916,19 +1916,20 @@ static func _server_status_compatibility(actual_version: String, expected_versio
 func get_status_dict() -> Dictionary:
 	var state := str(_episode.get("state", DORMANT))
 	var reason := str(_episode.get("reason", ""))
+	var recovery_pending := (
+		state == BLOCKED
+		and _endpoint_recovery_pending_episode > 0
+		and _endpoint_recovery_pending_episode == int(_episode.get("id", 0))
+	)
 	return {
 		"episode_id": int(_episode.get("id", 0)),
 		"episode_state": state,
 		"reason": reason,
-		"recovery_pending": (
-			state == BLOCKED
-			and _endpoint_recovery_pending_episode > 0
-			and _endpoint_recovery_pending_episode == int(_episode.get("id", 0))
-		),
+		"recovery_pending": recovery_pending,
 		"episode_reason": reason,
 		"phase": str(_episode.get("phase", "")),
 		"ready_kind": str(_episode.get("ready_kind", "")),
-		"state": _dock_state(state, reason),
+		"state": _dock_state(state, reason, recovery_pending),
 		"expected_version": str(_episode.get("expected_version", _plan.get("expected_version", ""))),
 		"actual_version": str(_episode.get("actual_version", "")),
 		"actual_name": "godot-ai" if state == READY else "",
@@ -2002,7 +2003,7 @@ static func _stopping_episode(episode_id: int, launch: Dictionary, after_stop: S
 	}
 
 
-static func _dock_state(state: String, reason: String) -> int:
+static func _dock_state(state: String, reason: String, recovery_pending: bool = false) -> int:
 	match state:
 		DORMANT:
 			return ServerState.STOPPED
@@ -2013,6 +2014,10 @@ static func _dock_state(state: String, reason: String) -> int:
 		RECOVERING, STOPPING:
 			return ServerState.STOPPING
 		BLOCKED:
+			## An endpoint loss that is still re-probing is not a dead end;
+			## show the reconnecting state instead of a port-conflict one.
+			if recovery_pending:
+				return ServerState.STOPPING
 			match reason:
 				"unsupported_remote_access": return ServerState.UNSUPPORTED_CONFIG
 				"incompatible": return ServerState.INCOMPATIBLE

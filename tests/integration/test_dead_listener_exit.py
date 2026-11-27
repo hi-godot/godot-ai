@@ -16,7 +16,9 @@ import pytest
 from godot_ai.server import watch_http_listener
 from godot_ai.transport.capability import read_capabilities
 
-pytestmark = pytest.mark.skipif(os.name != "nt", reason="proactor accept failure is Windows-only")
+needs_proactor = pytest.mark.skipif(
+    os.name != "nt", reason="proactor accept failure is Windows-only"
+)
 ROOT = Path(__file__).resolve().parents[2]
 ## The exit is bounded by the shutdown path (SIGINT into uvicorn's graceful
 ## close); a longer hang means a bug this test must surface, not a slow boot.
@@ -58,6 +60,7 @@ main(sys.argv[2:])
 """
 
 
+@needs_proactor
 def test_dead_http_listener_exits_and_releases_websocket_port(tmp_path):
     with socket.socket() as http_socket, socket.socket() as ws_socket:
         http_socket.bind(("127.0.0.1", 0))
@@ -114,6 +117,7 @@ def test_dead_http_listener_exits_and_releases_websocket_port(tmp_path):
 async def test_http_listener_probe_exits_only_after_first_success():
     calls: list[bool] = []
     server_sock = socket.socket()
+    task: asyncio.Task | None = None
     try:
         ## Bound but not listening: probes fail as on a slow boot, and a
         ## failure before the first success must not trigger the exit.
@@ -122,24 +126,27 @@ async def test_http_listener_probe_exits_only_after_first_success():
         task = asyncio.create_task(
             watch_http_listener(
                 port,
-                poll_seconds=0.001,
+                poll_seconds=0.02,
                 probe_timeout=0.05,
                 shutdown=lambda: calls.append(True),
             )
         )
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.1)
         assert calls == [], "a failure before the first success must not exit"
 
         server_sock.listen(5)
-        await asyncio.sleep(0.2)  ## first success arms the guard
+        await asyncio.sleep(0.1)  ## first success arms the guard
 
         server_sock.close()
+        await asyncio.sleep(0.025)
+        assert calls == [], "one failure below the threshold must not exit"
         await asyncio.wait_for(task, timeout=2.0)
-        assert calls == [True], "a failure after the first success must exit"
+        assert calls == [True], "consecutive failures past the threshold must exit"
     finally:
         server_sock.close()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

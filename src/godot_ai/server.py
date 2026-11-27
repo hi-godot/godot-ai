@@ -437,7 +437,9 @@ ACCEPT_FAILED_MESSAGE = "Accept failed on a socket"
 ## longer wait already means the listener is gone, so waiting longer would
 ## only delay the exit. Keep it well below the reaper poll cadence so the
 ## probe finishes inside one poll period.
-LISTENER_PROBE_TIMEOUT_S = 5.0  # poll cadence: src/godot_ai/orphan_reaper.py DEFAULT_POLL_SECONDS
+## Consecutive failed polls required before the listener probe requests a
+## shutdown; one slow poll under load must not kill a healthy server.
+PROBE_FAILURE_THRESHOLD = 3  # threshold rationale: docs/server-lifecycle.md listener probe
 
 
 def exit_on_dead_listener(loop: asyncio.AbstractEventLoop) -> None:
@@ -457,13 +459,18 @@ def exit_on_dead_listener(loop: asyncio.AbstractEventLoop) -> None:
     never produced the handler's own log line).
     """
     previous = loop.get_exception_handler()
+    signaled = False
 
     def handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        nonlocal signaled
         if previous is not None:
             previous(loop, context)
         else:
             loop.default_exception_handler(context)
-        if context.get("message") == ACCEPT_FAILED_MESSAGE:
+        ## One SIGINT is enough: a repeat while the first shutdown is still
+        ## unwinding would just interrupt uvicorn's graceful close again.
+        if context.get("message") == ACCEPT_FAILED_MESSAGE and not signaled:
+            signaled = True
             logger.error("A listener closed after an accept failure; shutting down.")
             signal.raise_signal(signal.SIGINT)
 
@@ -475,7 +482,7 @@ async def watch_http_listener(
     *,
     poll_seconds: float,
     shutdown: Callable[[], None] = _request_self_shutdown,
-    probe_timeout: float = LISTENER_PROBE_TIMEOUT_S,
+    probe_timeout: float | None = None,
 ) -> None:
     """Exit once a local connect to the HTTP port stops succeeding.
 
@@ -484,28 +491,44 @@ async def watch_http_listener(
     listener gone), because it exercises the same accept queue real clients
     use. The probe only guards after it has seen one success, so a slow boot
     that has not opened the listener yet cannot trip the exit.
+
+    ``probe_timeout`` defaults to half a poll period: a connect that outlives
+    the next poll tick is as good as failed, and deriving it keeps the probe
+    strictly contained inside one poll interval at any poll cadence. The exit
+    needs :data:`PROBE_FAILURE_THRESHOLD` consecutive failed polls so one slow
+    poll under load cannot shut a healthy server down.
     """
     guarded = False
+    failures = 0
+    effective_timeout = poll_seconds / 2 if probe_timeout is None else probe_timeout
     while True:
         await asyncio.sleep(poll_seconds)
         try:
             _, writer = await asyncio.wait_for(
                 asyncio.open_connection("127.0.0.1", http_port),
-                timeout=probe_timeout,
+                timeout=effective_timeout,
             )
         except (OSError, asyncio.TimeoutError):
-            if guarded:
-                logger.error(
-                    "HTTP listener stopped accepting connections; shutting down."
+            if not guarded:
+                continue
+            failures += 1
+            if failures < PROBE_FAILURE_THRESHOLD:
+                logger.warning(
+                    "HTTP listener probe failed (%d/%d consecutive); will exit at %d.",
+                    failures,
+                    PROBE_FAILURE_THRESHOLD,
+                    PROBE_FAILURE_THRESHOLD,
                 )
-                shutdown()
-                return
-            continue
+                continue
+            logger.error("HTTP listener stopped accepting connections; shutting down.")
+            shutdown()
+            return
         writer.close()
         try:
             await writer.wait_closed()
         except (ConnectionError, OSError):
             pass
+        failures = 0
         if not guarded:
             logger.info("HTTP listener probe healthy; guarding the port now.")
             guarded = True
