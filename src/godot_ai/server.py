@@ -7,7 +7,7 @@ import logging
 import signal
 import socket
 import time
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +37,7 @@ from godot_ai.middleware import (
     TrackMcpSessions,
 )
 from godot_ai.orphan_reaper import (
+    _request_self_shutdown,
     boot_grace_from_env,
     idle_grace_from_env,
     poll_seconds_from_env,
@@ -432,6 +433,12 @@ def _startup_record_data(
 
 ACCEPT_FAILED_MESSAGE = "Accept failed on a socket"
 
+## A localhost connect completes in well under a second even under load; a
+## longer wait already means the listener is gone, so waiting longer would
+## only delay the exit. Keep it well below the reaper poll cadence so the
+## probe finishes inside one poll period.
+LISTENER_PROBE_TIMEOUT_S = 5.0  # poll cadence: src/godot_ai/orphan_reaper.py DEFAULT_POLL_SECONDS
+
 
 def exit_on_dead_listener(loop: asyncio.AbstractEventLoop) -> None:
     """Shut down once the event loop has closed one of our listeners.
@@ -443,6 +450,11 @@ def exit_on_dead_listener(loop: asyncio.AbstractEventLoop) -> None:
     it and no new server could start. Raising SIGINT takes uvicorn's normal
     shutdown path, which releases both ports and the capability record so the
     plugin can relaunch.
+
+    This is one of two triggers for the same exit; :func:`watch_http_listener`
+    is the other and does not depend on the report reaching this handler at
+    all (the 2026-11-27 backend showed a dead HTTP listener whose report
+    never produced the handler's own log line).
     """
     previous = loop.get_exception_handler()
 
@@ -456,6 +468,47 @@ def exit_on_dead_listener(loop: asyncio.AbstractEventLoop) -> None:
             signal.raise_signal(signal.SIGINT)
 
     loop.set_exception_handler(handler)
+
+
+async def watch_http_listener(
+    http_port: int,
+    *,
+    poll_seconds: float,
+    shutdown: Callable[[], None] = _request_self_shutdown,
+    probe_timeout: float = LISTENER_PROBE_TIMEOUT_S,
+) -> None:
+    """Exit once a local connect to the HTTP port stops succeeding.
+
+    Backstop for :func:`exit_on_dead_listener`: an own connect to the port is
+    the authoritative check for a half-dead backend (WS port still held, HTTP
+    listener gone), because it exercises the same accept queue real clients
+    use. The probe only guards after it has seen one success, so a slow boot
+    that has not opened the listener yet cannot trip the exit.
+    """
+    guarded = False
+    while True:
+        await asyncio.sleep(poll_seconds)
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", http_port),
+                timeout=probe_timeout,
+            )
+        except (OSError, asyncio.TimeoutError):
+            if guarded:
+                logger.error(
+                    "HTTP listener stopped accepting connections; shutting down."
+                )
+                shutdown()
+                return
+            continue
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except (ConnectionError, OSError):
+            pass
+        if not guarded:
+            logger.info("HTTP listener probe healthy; guarding the port now.")
+            guarded = True
 
 
 def create_server(
@@ -606,6 +659,14 @@ def create_server(
             )
             logger.info("Lease-aware idle reaper armed for attach-owned server")
 
+        ## A half-dead backend (HTTP listener closed by an accept failure, WS
+        ## port still held) blocks every later attach with PORT_OCCUPIED, so
+        ## the listener probe arms unconditionally: CI and manual --reload
+        ## servers that go half-dead deserve the same self-release.
+        listener_probe_task = asyncio.create_task(
+            watch_http_listener(http_port, poll_seconds=poll_seconds_from_env())
+        )
+
         ## Defer initial telemetry off the lifespan start tick — mirrors
         ## unity-mcp's 1s stdio-handshake guard so the first POST never
         ## races the MCP protocol's own startup chatter. Scheduled via
@@ -650,6 +711,11 @@ def create_server(
                     await idle_task
                 except (asyncio.CancelledError, OSError):
                     pass
+            listener_probe_task.cancel()
+            try:
+                await listener_probe_task
+            except (asyncio.CancelledError, OSError):
+                pass
             ws_task.cancel()
             try:
                 await ws_task
