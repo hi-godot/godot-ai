@@ -361,6 +361,9 @@ func test_reimport_rejects_traversal_path() -> void:
 func test_readiness_holds_importing_until_scan_sources_settle() -> void:
 	## is_scanning() drops before class registration (Godot #119505); a scan
 	## seen in flight keeps readiness "importing" until sources_changed.
+	if McpConnection.is_scanning():
+		skip("a real scan is in flight; the synthetic pending flag would race it")
+		return
 	var previous := McpConnection._scan_settle_pending
 	McpConnection._scan_settle_pending = true
 	assert_eq(McpConnection.get_readiness(), "importing", "scan seen in flight, sources not settled")
