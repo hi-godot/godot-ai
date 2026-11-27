@@ -422,12 +422,12 @@ static func verify_entry(
 				if env.has(String(key)):
 					return false
 		if client.command_shape == McpClient.CommandShape.COMMAND_ARRAY:
-			if not _arrays_equal(entry.get("command", null), _launch_argv(launch)):
+			if not _command_arrays_equal(entry.get("command", null), _launch_argv(launch)):
 				return false
 			if entry.has("args"):
 				return false
 		else:
-			if entry.get("command") != launch.get("command"):
+			if _command_differs(entry.get("command"), launch.get("command")):
 				return false
 			if not _arrays_equal(entry.get("args", null), launch.get("args", null)):
 				return false
@@ -500,6 +500,39 @@ static func _arrays_equal(left: Variant, right: Variant) -> bool:
 		return false
 	for i in range(left_array.size()):
 		if left_array[i] != right_array[i]:
+			return false
+	return true
+
+
+## Windows path separators are interchangeable to the OS, and every client
+## tooling in the wild normalizes them differently: official configurators may
+## write mixed separators (`Scripts/pythonw.exe`) while other tooling rewrites
+## the same entry with fully-normalized backslashes. Compare commands with
+## separators unified so equivalent Windows paths are not flagged as drift.
+static func _command_differs(stored: Variant, expected: Variant) -> bool:
+	if typeof(stored) != TYPE_STRING or typeof(expected) != TYPE_STRING:
+		return stored != expected
+	return stored.replace("\\", "/") != expected.replace("\\", "/")
+
+
+## Array-shaped command entries compare the executable (first element) with the
+## same separator normalization as the flat shape; the remaining arguments must
+## match exactly so a changed argument still fails verification.
+static func _command_arrays_equal(stored: Variant, expected: Variant) -> bool:
+	if not (stored is Array or stored is PackedStringArray):
+		return false
+	if not (expected is Array or expected is PackedStringArray):
+		return false
+	var stored_items := _array_copy(stored)
+	var expected_items := _array_copy(expected)
+	if stored_items.size() != expected_items.size():
+		return false
+	if stored_items.is_empty():
+		return true
+	if _command_differs(stored_items[0], expected_items[0]):
+		return false
+	for i in range(1, stored_items.size()):
+		if stored_items[i] != expected_items[i]:
 			return false
 	return true
 
