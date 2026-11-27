@@ -8,6 +8,34 @@ from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
 
+async def audio_interactive_create(
+    runtime: DirectRuntime,
+    path: str,
+    clips: list[dict],
+    transitions: list[dict] | None = None,
+    initial_clip: str | None = None,
+) -> dict:
+    await require_writable_async(runtime)
+    params: dict[str, Any] = {
+        "path": path,
+        "clips": clips,
+        "transitions": [] if transitions is None else transitions,
+    }
+    if initial_clip is not None:
+        params["initial_clip"] = initial_clip
+    return await runtime.send_command("audio_interactive_create", params)
+
+
+async def audio_interactive_get(runtime: DirectRuntime, path: str) -> dict:
+    return await runtime.send_command("audio_interactive_get", {"path": path})
+
+
+async def audio_interactive_switch(runtime: DirectRuntime, player_path: str, clip: str) -> dict:
+    return await runtime.send_command(
+        "audio_interactive_switch", {"player_path": player_path, "clip": clip}
+    )
+
+
 async def audio_player_create(
     runtime: DirectRuntime,
     parent_path: str,

@@ -26,6 +26,20 @@ Bus/effect edits use global editor undo. Godot may autosave them to its active
 layout. bus_layout_save only exports a snapshot and does not switch that target.
 
 Ops:
+  • interactive_create(path, clips, transitions=[], initial_clip?)
+        Save a new native AudioStreamInteractive .tres. Clips use {name, stream_path, next_clip?}.
+        A non-looping clip can set next_clip to play another named clip automatically at its end.
+        Transition rules use {from, to, when?, start_at?, fade?, fade_beats?, filler_clip?}.
+        Use * on either endpoint for a wildcard. Godot prefers exact pairs, then a named source,
+        then a named destination, then the all-clips rule.
+        With * -> battle next_bar, stealth -> * next_beat, cave -> battle immediate,
+        and * -> * end, forest to battle uses next_bar and stealth to battle uses next_beat.
+        Beat/bar timing and fades use tempo metadata from the outgoing clip.
+        A named filler_clip plays a one-shot stinger and requires an explicit fade of in or cross.
+  • interactive_get(path)
+        Inspect clips, automatic follow-ons, and transitions with from_any/to_any wildcard flags.
+  • interactive_switch(player_path, clip)
+        Request a named clip on an active editor music preview. Start it with play first.
   • bus_list()
         List buses, sends, volume, mute, solo, bypass, and effect properties/enabled state.
   • bus_add(name, at_position=-1, send="Master")
@@ -66,6 +80,9 @@ def register_audio_tools(mcp: FastMCP) -> None:
         tool_name="audio_manage",
         description=_DESCRIPTION,
         ops={
+            "interactive_create": audio_handlers.audio_interactive_create,
+            "interactive_get": audio_handlers.audio_interactive_get,
+            "interactive_switch": audio_handlers.audio_interactive_switch,
             "bus_list": audio_handlers.audio_bus_list,
             "bus_add": audio_handlers.audio_bus_add,
             "bus_remove": audio_handlers.audio_bus_remove,
@@ -82,7 +99,9 @@ def register_audio_tools(mcp: FastMCP) -> None:
             "list": audio_handlers.audio_list,
         },
         read_resource_forms={
-            ## Audio reads are stateful and per-player; no aggregate resource.
+            ## Reads and previews target specific audio resources or editor state.
+            "interactive_get": None,
+            "interactive_switch": None,
             "bus_list": None,
             "play": None,
             "stop": None,
