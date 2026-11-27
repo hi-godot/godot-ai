@@ -20,6 +20,7 @@ const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 
 const AnimationPresets := preload("res://addons/godot_ai/handlers/animation_presets.gd")
 const AnimationValues := preload("res://addons/godot_ai/handlers/animation_values.gd")
+const BezierTrack := preload("res://addons/godot_ai/handlers/animation_bezier.gd")
 
 var _undo_redo: EditorUndoRedoManager
 var _presets
@@ -303,6 +304,58 @@ func _do_add_property_track(
 		var t: float = float(kf.get("time", 0.0))
 		var trans: float = AnimationValues.parse_transition(kf.get("transition", "linear"))
 		anim.track_insert_key(idx, t, kf.get("value"), trans)
+
+
+# ============================================================================
+# animation_add_bezier_track
+# ============================================================================
+
+func add_bezier_track(params: Dictionary) -> Dictionary:
+	for field in params:
+		if field not in ["player_path", "animation_name", "track_path", "keyframes", "_request_id"]:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Unknown Bézier track field '%s'" % [field])
+	for field in ["player_path", "animation_name", "track_path"]:
+		var value: Variant = params.get(field, "")
+		if not value is String:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a string" % field)
+		if value.is_empty():
+			return ErrorCodes.make(ErrorCodes.MISSING_REQUIRED_PARAM, "Missing required param: %s" % field)
+	var player_path: String = params.player_path
+	var anim_name: String = params.animation_name
+	var track_path: String = params.track_path
+	var resolved := _resolve_player(player_path)
+	if resolved.has("error"):
+		return resolved
+	var player: AnimationPlayer = resolved.player
+	var anim_resolved := _resolve_animation(player, anim_name)
+	if anim_resolved.has("error"):
+		return anim_resolved
+	var anim: Animation = anim_resolved.animation
+	var target_error := BezierTrack.target_error(player, track_path, EditorInterface.get_edited_scene_root())
+	if not target_error.is_empty():
+		return target_error
+	var staged := BezierTrack.stage(NodePath(track_path), params.get("keyframes"))
+	if staged.has("error"):
+		return staged
+	var track: Animation = staged.animation
+	var edit := BezierTrack.new(anim, track)
+	if edit.has_identical_track():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE,
+			"An identical Bézier track already exists at '%s'; create a distinct curve" % track_path)
+
+	_create_scene_pinned_action("MCP: Add Bézier track %s to %s" % [track_path, anim_name])
+	_undo_redo.add_do_method(edit, &"apply")
+	_undo_redo.add_undo_method(edit, &"revert")
+	_undo_redo.add_do_reference(edit)
+	_undo_redo.commit_action()
+	return {"data": {
+		"player_path": player_path,
+		"animation_name": anim_name,
+		"track_path": track_path,
+		"track_type": "bezier",
+		"keyframe_count": track.track_get_key_count(0),
+		"undoable": true,
+	}}
 
 
 # ============================================================================

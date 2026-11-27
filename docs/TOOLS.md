@@ -281,7 +281,7 @@ Calls take the form:
 | `editor_manage` | `state`, `selection_get`, `selection_set`, `monitors_get`, `quit`, `logs_clear`, `game_eval` |
 | `session_manage` | `list` |
 | `test_manage` | `results_get` |
-| `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
+| `animation_manage` | `tree_point_add`, `tree_point_set`, `tree_point_remove`, `tree_create`, `tree_get`, `tree_node_add`, `tree_node_remove`, `tree_node_set`, `tree_connect`, `tree_disconnect`, `tree_transition_add`, `tree_transition_set`, `tree_transition_remove`, `library_add`, `library_remove`, `library_list`, `player_create`, `delete`, `validate`, `add_property_track`, `add_bezier_track`, `add_method_track`, `set_autoplay`, `play`, `stop`, `list`, `get`, `create_simple`, `preset_fade`, `preset_slide`, `preset_shake`, `preset_pulse` |
 | `material_manage` | `create`, `set_param`, `set_shader_param`, `get`, `list`, `assign`, `apply_to_node`, `apply_preset`, `visual_shader_create_graph`, `visual_shader_get`, `visual_shader_node_catalog`, `visual_shader_edit`, `shader_create`, `shader_get`, `shader_validate`, `shader_patch` |
 | `audio_manage` | `bus_list`, `bus_add`, `bus_remove`, `bus_set`, `bus_effect_add`, `bus_effect_set`, `bus_effect_remove`, `bus_layout_save`, `player_create`, `player_set_stream`, `player_set_playback`, `play`, `stop`, `list` |
 | `particle_manage` | `create`, `set_main`, `set_process`, `set_draw_pass`, `restart`, `get`, `apply_preset` |
@@ -620,6 +620,41 @@ revalidate against intervening edits, then commit one undo action. Each returned
 The 4 ms budget applies to cooperative preparation. Final validation and the
 atomic undo action cannot yield; a maximum-size batch can exceed that budget.
 
+
+### Bézier animation tracks
+
+`animation_manage(op="add_bezier_track")` adds a native Bézier track to an
+existing `AnimationPlayer` clip. Use a `track_path` relative to the player's
+configured `root_node`. The path must select a writable floating-point property
+or component, such as `Icon:position:x` or `Panel:modulate:a`. A path such as
+`.:position:x` targets the root itself. Use `library/clip` for a named library.
+
+```json
+{
+  "op": "add_bezier_track",
+  "params": {
+    "player_path": "/Main/AnimationPlayer",
+    "animation_name": "slide",
+    "track_path": "Icon:position:x",
+    "keyframes": [
+      {"time": 0, "value": 0, "out_handle": [0.25, 10]},
+      {"time": 1, "value": 120, "in_handle": [-0.25, -10]}
+    ]
+  }
+}
+```
+
+Supply at least one key with a finite value and a finite, nonnegative time
+in seconds. Times must stay distinct at Godot's stored precision. Handles
+are `[time_offset, value_offset]` relative to the key, with finite offsets.
+The incoming time offset must be nonpositive and the outgoing time offset
+must be nonnegative. Omitted handles default to `[0, 0]`.
+
+The operation adds the track and all its keys in one editor undo action.
+It rejects an identical Bézier track with the same path and native key data.
+Use `animation_manage(op="get")` on the clip to inspect the `bezier` track.
+Each Bézier key includes `scalar_value`, `in_handle`, and `out_handle` along
+with the generic key fields. Save the scene to persist an embedded clip.
 
 ### Animation libraries
 

@@ -74,6 +74,9 @@ set parameters with node_set_property (e.g. property="parameters/Blend/blend_amo
                         interpolation="linear")
         Add a property track. track_path: "NodeName:property". keyframes:
         [{time, value, transition?}, ...]. interpolation: linear|nearest|cubic.
+  • add_bezier_track(player_path, animation_name, track_path, keyframes)
+        Add an undoable Bézier curve for a scalar property or component relative to root_node.
+        Use [{time, value, in_handle?, out_handle?}]. Handles are [time_offset, value_offset].
   • add_method_track(player_path, animation_name, target_node_path, keyframes)
         Add a method track. keyframes: [{time, method, args?}, ...].
   • set_autoplay(player_path, animation_name="")
@@ -85,7 +88,7 @@ set parameters with node_set_property (e.g. property="parameters/Blend/blend_amo
   • list(player_path)
         List animations with length, loop_mode, track_count, plus libraries and autoplay.
   • get(player_path, animation_name)
-        Inspect a clip's tracks and keyframes in detail.
+        Inspect a clip's tracks and keyframes, including scalar_value and handles for Bézier keys.
   • create_simple(player_path, name, tweens, length=None, loop_mode="none",
                    overwrite=False)
         High-level: build a multi-track clip from tween specs in one call.
@@ -126,7 +129,7 @@ def register_animation_tools(mcp: FastMCP) -> None:
         """Create a new Animation clip inside an AnimationPlayer's default library.
 
         After creating the clip, add tracks via ``animation_manage`` ops
-        ``add_property_track`` / ``add_method_track`` / ``create_simple``.
+        ``add_property_track``, ``add_bezier_track``, ``add_method_track`` or ``create_simple``.
         Track node paths are stored relative to the AnimationPlayer's
         ``root_node`` (default: its parent), not to the scene root — see
         ``animation_manage`` preset ops for a forgiving target_path that
@@ -177,6 +180,7 @@ def register_animation_tools(mcp: FastMCP) -> None:
             "delete": animation_handlers.animation_delete,
             "validate": animation_handlers.animation_validate,
             "add_property_track": animation_handlers.animation_add_property_track,
+            "add_bezier_track": animation_handlers.animation_add_bezier_track,
             "add_method_track": animation_handlers.animation_add_method_track,
             "set_autoplay": animation_handlers.animation_set_autoplay,
             "play": animation_handlers.animation_play,

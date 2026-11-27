@@ -135,11 +135,18 @@ func get_animation(params: Dictionary) -> Dictionary:
 		var keys: Array[Dictionary] = []
 		for k in anim.track_get_key_count(i):
 			var key_val = anim.track_get_key_value(i, k)
-			keys.append({
+			var key := {
 				"time": anim.track_get_key_time(i, k),
 				"value": serialize_value(key_val),
 				"transition": anim.track_get_key_transition(i, k),
-			})
+			}
+			if track_type == Animation.TYPE_BEZIER:
+				var incoming := anim.bezier_track_get_key_in_handle(i, k)
+				var outgoing := anim.bezier_track_get_key_out_handle(i, k)
+				key["scalar_value"] = serialize_value(anim.bezier_track_get_key_value(i, k))
+				key["in_handle"] = serialize_value([incoming.x, incoming.y])
+				key["out_handle"] = serialize_value([outgoing.x, outgoing.y])
+			keys.append(key)
 		tracks.append({
 			"index": i,
 			"type": type_name,
