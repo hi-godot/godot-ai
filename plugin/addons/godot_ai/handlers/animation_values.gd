@@ -21,6 +21,7 @@ const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializ
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
 const PropertyErrors := preload("res://addons/godot_ai/handlers/_property_errors.gd")
+const _INT64_LIMIT := 9223372036854775808.0
 
 
 const _NAMED_TRANSITIONS := {
@@ -260,46 +261,22 @@ static func player_root_node(player: AnimationPlayer) -> Node:
 	return player.get_parent()
 
 
-## Coerce a JSON value to match the expected Godot type for the given
-## track_path. Returns {"ok": value} or {"error": msg}.
-## Passes the raw value through when the target node isn't in the scene
-## yet (authoring-time path). Errors when the target exists but the
-## property doesn't, or when parsing a typed value (Color/Vector2/Vector3)
-## clearly fails — better to reject than silently store garbage.
-## `override_root_node` lets callers supply the root to resolve target paths
-## against when the player isn't in the tree yet (auto-create flow) — the
-## player's future parent stands in for the root the AnimationPlayer will
-## eventually use.
-static func coerce_value_for_track(value: Variant, track_path: String, player: AnimationPlayer, override_root_node: Node = null) -> Dictionary:
-	var ctx := resolve_track_prop_context(track_path, player, override_root_node)
-	if ctx.has("error"):
-		return {"error": ctx.error}
-	return coerce_with_context(value, ctx)
-
-
 ## Resolve a track_path's target property type once, so callers coercing many
 ## keyframes avoid walking `get_property_list()` on every one. Returns:
 ##   {pass_through: true}                   — no resolution / authoring-time
-##   {pass_through: false, prop_type, prop_name}  — coerce against this type
-##   {error: msg}                           — property not found on target
+##   {prop_type, prop_name, resource_target, component_base_type} — coercion context
+##   {error: msg}                           — invalid path on an existing target
 ##
-## Supports Godot's native NodePath subpath form `property:sub` (e.g.
-## `position:y`, `modulate:a`) — splits on the FIRST colon (node↔property
-## boundary), resolves the base property on the target, and for known
-## scalar subpaths (x/y/z/w on vectors, r/g/b/a on Color) narrows the
-## coerce target to TYPE_FLOAT so JSON numbers land as floats, not dicts.
+## As in the animation mixer, follow consecutive Resource-valued properties,
+## then use the remaining property name and optional scalar component on the
+## final target. The auto-create flow supplies the player's future parent.
 static func resolve_track_prop_context(track_path: String, player: AnimationPlayer, override_root_node: Node = null) -> Dictionary:
-	var colon := track_path.find(":")
-	if colon < 0:
-		return {"pass_through": true}
-
-	var node_part := track_path.substr(0, colon)
-	var prop_full := track_path.substr(colon + 1)
-
-	# Property may include a subpath: "position:y", "modulate:a", etc.
-	var sub_colon := prop_full.find(":")
-	var prop_base := prop_full if sub_colon < 0 else prop_full.substr(0, sub_colon)
-	var prop_sub := "" if sub_colon < 0 else prop_full.substr(sub_colon + 1)
+	var parts := track_path.split(":", true)
+	if parts.size() < 2:
+		return {"error": "Track path has no property: '%s'" % track_path}
+	for index in range(1, parts.size()):
+		if parts[index].is_empty():
+			return {"error": "Track path has an empty property segment: '%s'" % track_path}
 
 	var root_node: Node = override_root_node
 	if root_node == null:
@@ -307,35 +284,60 @@ static func resolve_track_prop_context(track_path: String, player: AnimationPlay
 	if root_node == null:
 		return {"pass_through": true}
 
-	var target: Node = root_node.get_node_or_null(node_part)
+	var target: Object = root_node.get_node_or_null(NodePath(track_path))
 	if target == null:
 		# Target node isn't in the scene yet — authoring-time path. Pass through.
 		return {"pass_through": true}
 
-	for p in target.get_property_list():
-		if p.name == prop_base:
-			var base_type: int = p.get("type", TYPE_NIL)
-			var coerce_type := base_type
-			if not prop_sub.is_empty():
-				var sub_type := subpath_component_type(base_type, prop_sub)
-				if sub_type == TYPE_NIL:
-					# Unknown subpath component — pass through so Godot's own
-					# NodePath resolution raises at playback if it's truly bogus,
-					# rather than fabricating a coerce error for a valid-but-
-					# uncommon form (e.g. Transform3D subpaths).
-					return {"pass_through": true}
-				coerce_type = sub_type
-			return {
-				"pass_through": false,
-				"prop_type": coerce_type,
-				"prop_name": prop_full,
-			}
+	for index in range(1, parts.size()):
+		var name := StringName(parts[index])
+		var property := _track_property(target, name)
+		if property.is_empty():
+			return {"error": "%s (track path: '%s')" % [PropertyErrors.build_message(target, name), track_path]}
+		var prop_type: int = property.type
+		if index == parts.size() - 1:
+			return _track_property_context(target, property, prop_type, track_path)
 
-	# Target exists but the property doesn't. Reject loudly — silently storing
-	# the raw value here produces garbage keyframes at playback time.
-	return {"error":
-		"%s (target path: '%s')" %
-		[PropertyErrors.build_message(target, prop_base), node_part]}
+		if prop_type == TYPE_OBJECT or prop_type == TYPE_NIL:
+			var holder: Variant = target.get(name)
+			if holder is Resource:
+				target = holder
+				continue
+			if holder == null:
+				return {"error": "Resource property '%s' is null in track path '%s'; assign the resource first" % [name, track_path]}
+			if prop_type == TYPE_NIL:
+				prop_type = typeof(holder)
+
+		if index == parts.size() - 2:
+			var component_type := subpath_component_type(prop_type, parts[index + 1])
+			if component_type != TYPE_NIL:
+				return _track_property_context(target, property, component_type, track_path, prop_type)
+		if not target is Resource:
+			# Retain existing authoring support for uncommon node subpaths.
+			return {"pass_through": true}
+		return {"error": "Expected a resource property or a known scalar component after '%s' in track path '%s'" % [name, track_path]}
+	return {"error": "Track path has no writable property: '%s'" % track_path}
+
+
+static func _track_property(target: Object, name: StringName) -> Dictionary:
+	for property: Dictionary in target.get_property_list():
+		var usage: int = property.usage
+		if property.name == name and not usage & (PROPERTY_USAGE_CATEGORY | PROPERTY_USAGE_GROUP | PROPERTY_USAGE_SUBGROUP):
+			return property
+	return {}
+
+
+static func _track_property_context(target: Object, property: Dictionary, prop_type: int, track_path: String, component_base_type: int = TYPE_NIL) -> Dictionary:
+	var resource_target := target is Resource
+	if resource_target:
+		var name: StringName = property.name
+		var native_class := target.get_class()
+		var native_getter := ClassDB.class_get_property_getter(native_class, name)
+		if (int(property.usage) & PROPERTY_USAGE_READ_ONLY) or (not native_getter.is_empty() and ClassDB.class_get_property_setter(native_class, name).is_empty()):
+			return {"error": "Property '%s' is read-only in track path '%s'" % [name, track_path]}
+		if prop_type == TYPE_NIL:
+			prop_type = typeof(target.get(name))
+	return {"prop_type": prop_type, "prop_name": track_path, "resource_target": resource_target, "component_base_type": component_base_type}
 
 
 ## Map a `property:sub` subpath to its scalar component type. Returns
@@ -351,7 +353,36 @@ static func subpath_component_type(base_type: int, sub: String) -> int:
 static func coerce_with_context(value: Variant, ctx: Dictionary) -> Dictionary:
 	if ctx.get("pass_through", false):
 		return {"ok": value}
-	return coerce_for_type(value, ctx.prop_type, ctx.prop_name)
+	# Integer-vector components narrow to signed 32 bits when the mixer writes
+	# them back to the resource, even though the key itself stores an int64.
+	if ctx.resource_target and ctx.prop_type == TYPE_INT and ctx.component_base_type != TYPE_NIL and (value is int or value is float):
+		if value < McpJsonValues.INT32_MIN or value > McpJsonValues.INT32_MAX:
+			return {"error": "Expected a value in the signed 32-bit range for '%s'" % ctx.prop_name}
+	if ctx.resource_target and value is float:
+		if not is_finite(value):
+			return {"error": "Expected a finite %s value for '%s'" % [type_string(ctx.prop_type), ctx.prop_name]}
+		if ctx.prop_type == TYPE_INT and (value < -_INT64_LIMIT or value >= _INT64_LIMIT or floorf(value) != value):
+			return {"error": "Expected an integral value in the int64 range for '%s'" % ctx.prop_name}
+	var result := coerce_for_type(value, ctx.prop_type, ctx.prop_name)
+	if result.has("error") or not ctx.resource_target or ctx.prop_type == TYPE_NIL:
+		return result
+	var converted: Variant = result.ok
+	if ctx.prop_type == TYPE_OBJECT and converted == null:
+		return result
+	if typeof(converted) != ctx.prop_type or not _is_finite_track_value(converted):
+		return {"error": "Expected a finite %s value for '%s'" % [type_string(ctx.prop_type), ctx.prop_name]}
+	return result
+
+
+static func _is_finite_track_value(value: Variant) -> bool:
+	match typeof(value):
+		TYPE_FLOAT:
+			return is_finite(Vector2(value, 0.0).x)
+		TYPE_VECTOR2, TYPE_VECTOR3, TYPE_VECTOR4:
+			return value.is_finite()
+		TYPE_COLOR:
+			return is_finite(value.r) and is_finite(value.g) and is_finite(value.b) and is_finite(value.a)
+	return true
 
 
 ## A rotation slerp can consume: all components finite and unit length within

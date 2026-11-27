@@ -621,6 +621,13 @@ The 4 ms budget applies to cooperative preparation. Final validation and the
 atomic undo action cannot yield; a maximum-size batch can exceed that budget.
 
 
+### Animation tracks on resources
+
+`animation_manage add_property_track` and `create_simple` can animate properties
+on assigned resources. For example, `Indicator:material_override:albedo_color`
+accepts color keys, and `Indicator:material_override:albedo_color:a` accepts
+numeric alpha keys. See the [door indicator recipe](animation-recipes.md#animate-a-door-indicators-material).
+
 ### Animation libraries
 
 `animation_manage library_add` attaches an existing AnimationLibrary with

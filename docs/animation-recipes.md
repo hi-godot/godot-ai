@@ -23,6 +23,37 @@ top-left corner). Recenter it before adding a scale recipe, in the same edit:
 {"path": "/Main/HUD/Button", "property": "pivot_offset", "value": {"x": 60, "y": 20}}
 ```
 
+## Animate a door indicator's material
+
+Give the `Indicator` mesh a `StandardMaterial3D` in its `material_override`
+slot. With `Indicator` and `AnimationPlayer` as children of `/Door`, this
+`animation_manage` call authors a one-second transition from red to green.
+
+```json
+{"op": "create_simple", "params": {
+  "player_path": "/Door/AnimationPlayer", "name": "unlock",
+  "tweens": [{"target": "Indicator", "property": "material_override:albedo_color",
+              "from": "#ff0000", "to": "#00ff00", "duration": 1.0}]
+}}
+```
+
+For a separate opacity clip, create an animation named `fade` with length
+one second, enable alpha transparency on the material, and add this track.
+The red, green, and blue components keep their current values during playback.
+
+```json
+{"op": "add_property_track", "params": {
+  "player_path": "/Door/AnimationPlayer", "animation_name": "fade",
+  "track_path": "Indicator:material_override:albedo_color:a",
+  "keyframes": [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 0.0}]
+}}
+```
+
+Godot animates the assigned resource itself. All meshes sharing that material
+see the change. Assign a unique material if only this indicator should animate.
+The same path syntax works with other resources, for example
+`CollisionShape3D:shape:radius` on a node with a sphere shape.
+
 ## Bounce — press feedback
 
 Center-pivot scale overshoot with a settle-back. 4 keys on `scale`:
