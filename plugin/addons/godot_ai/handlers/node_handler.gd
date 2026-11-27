@@ -2,18 +2,22 @@
 extends "res://addons/godot_ai/handlers/command_handler.gd"
 
 const ErrorCodes := preload("res://addons/godot_ai/utils/error_codes.gd")
+const ScenePlacement := preload("res://addons/godot_ai/handlers/scene_instance_placement.gd")
 const VariantSerializer := preload("res://addons/godot_ai/utils/variant_serializer.gd")
 
 ## Handles node creation and manipulation with undo/redo support.
 
 const ResourceHandler := preload("res://addons/godot_ai/handlers/resource_handler.gd")
 const MAX_PACKED_BYTE_ARRAY_SIZE := 65536
+const _INSTANTIATE_SCENE_DEFERRED_TIMEOUT_MS := 25000
 
 var _undo_redo: EditorUndoRedoManager
+var _connection: McpConnection
 
 
-func _init(undo_redo: EditorUndoRedoManager) -> void:
+func _init(undo_redo: EditorUndoRedoManager, connection: McpConnection = null) -> void:
 	_undo_redo = undo_redo
+	_connection = connection
 
 
 func set_editable_children(params: Dictionary) -> Dictionary:
@@ -85,43 +89,23 @@ static func _editable_children_has_edits(node: Node, root: Node) -> Dictionary:
 func create_node(params: Dictionary) -> Dictionary:
 	var node_type: String = params.get("type", "")
 	var node_name: String = params.get("name", "")
-	var parent_path: String = params.get("parent_path", "")
 	var scene_path: String = params.get("scene_path", "")
-
-	var scene_check := McpScenePath.require_edited_scene(params.get("scene_file", ""))
-	if scene_check.has("error"):
-		return scene_check
-	var scene_root: Node = scene_check.node
-
-	var parent: Node = scene_root
-	if not parent_path.is_empty():
-		parent = McpScenePath.resolve(parent_path, scene_root)
-		if parent == null:
-			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
-
-	var write_error := McpNodeValidator.writable_error(parent, scene_root)
-	if not write_error.is_empty():
-		return write_error
+	var resolved := _resolve_creation_parent(params)
+	if resolved.has("error"):
+		return resolved
 
 	var new_node: Node
-
 	if not scene_path.is_empty():
-		# Scene instancing path — load and instantiate a PackedScene.
-		# GEN_EDIT_STATE_INSTANCE makes the editor treat the result as a real
-		# scene instance (foldout icon, the .tscn stores a reference instead of
-		# an exploded subtree). Descendants remain owned by their sub-scene;
-		# setting their owner to our scene_root would break the instance link.
 		var scene_path_err = McpPathValidator.loadable_error(scene_path, "scene_path")
 		if scene_path_err != null:
 			return scene_path_err
-		if not ResourceLoader.exists(scene_path):
-			return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Scene not found: %s" % scene_path)
-		var packed_scene = ResourceLoader.load(scene_path)
-		if packed_scene == null or not packed_scene is PackedScene:
-			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a PackedScene" % scene_path)
-		new_node = packed_scene.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
-		if new_node == null:
-			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate scene: %s" % scene_path)
+		var source := _load_packed_scene(scene_path)
+		if source.has("error"):
+			return source
+		var instance := _instantiate_packed_scene(source.scene, scene_path)
+		if instance.has("error"):
+			return instance
+		new_node = instance.node
 	else:
 		# ClassDB path — create by type.
 		if node_type.is_empty():
@@ -133,11 +117,240 @@ func create_node(params: Dictionary) -> Dictionary:
 		new_node = ClassDB.instantiate(node_type)
 		if new_node == null:
 			return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate %s" % node_type)
+	return _commit_created_node(new_node, node_name, scene_path, resolved)
 
+
+func instantiate_scene(params: Dictionary) -> Dictionary:
+	for field in ["scene_path", "parent_path", "name", "scene_file", "space"]:
+		if params.has(field) and not params[field] is String:
+			return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "%s must be a string" % field)
+	var scene_path: String = params.get("scene_path", "")
+	var path_error: Variant = McpPathValidator.path_error(scene_path, "scene_path")
+	if path_error != null:
+		return path_error
+	scene_path = scene_path.replace("\\", "/").simplify_path()
+	if scene_path.get_extension().to_lower() != "tscn":
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "scene_path must name a saved res:// .tscn scene")
+	var space: String = params.get("space", "local")
+	if space not in ["local", "world"]:
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "space must be local or world")
+	var placement := ScenePlacement.parse_fields(params)
+	if placement.has("error"):
+		return placement
+	var request_id: String = params.get("_request_id", "")
+	if _connection != null and request_id.is_empty():
+		return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "Scene instancing needs a standalone scene_manage(op=\"instantiate\") call outside batch_execute")
+	var resolved := _resolve_instance_parent(params)
+	if resolved.has("error"):
+		return resolved
+	if not FileAccess.file_exists(scene_path):
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Saved scene not found: %s" % scene_path)
+	if _connection != null:
+		_finish_instancing(request_id, scene_path, params, placement.fields, resolved)
+		return {"_deferred": true, "_deferred_timeout_ms": _INSTANTIATE_SCENE_DEFERRED_TIMEOUT_MS}
+
+	var scan := ScenePlacement.new(scene_path, resolved.root.scene_file_path)
+	var packed_scene: PackedScene
+	while true:
+		while scan.has_dependencies():
+			var error := scan.scan_dependency()
+			if not error.is_empty():
+				return error
+		var path := scan.take_scene_to_load()
+		if path.is_empty():
+			break
+		var loaded := _load_packed_scene(path)
+		if loaded.has("error"):
+			return loaded
+		scan.inspect_loaded_scene(path, loaded.scene)
+		if path == scene_path:
+			packed_scene = loaded.scene
+	var link_error := scan.validate_scene_links()
+	if not link_error.is_empty():
+		return link_error
+	scan.begin_version_recheck()
+	while scan.has_version_checks():
+		var error := scan.recheck_version()
+		if not error.is_empty():
+			return error
+	return _place_instance(packed_scene, scene_path, params, placement.fields, resolved)
+
+
+func _finish_instancing(request_id: String, scene_path: String, params: Dictionary, fields: Dictionary, expected: Dictionary) -> void:
+	var work := ScriptWork.begin("instantiate_scene")
+	var result := await _prepare_instance(request_id, scene_path, params, fields, expected)
+	if _instancing_pending(request_id):
+		_connection.send_deferred_response(request_id, result)
+	ScriptWork.finish(work)
+
+
+func _instancing_pending(request_id: String) -> bool:
+	return is_instance_valid(_connection) and _connection.dispatcher != null and _connection.dispatcher.has_pending_deferred_response(request_id)
+
+
+func _prepare_instance(request_id: String, scene_path: String, params: Dictionary, fields: Dictionary, expected: Dictionary) -> Dictionary:
+	var tree := _connection.get_tree()
+	var edited_path: String = expected.root.scene_file_path
+	var parent_path := McpScenePath.from_node(expected.parent, expected.root)
+	var deadline := Time.get_ticks_msec() + _INSTANTIATE_SCENE_DEFERRED_TIMEOUT_MS
+	# The dispatcher registers the pending response after instantiate_scene returns.
+	await tree.process_frame
+	var scan := ScenePlacement.new(scene_path, edited_path)
+	var packed_scene: PackedScene
+	while _instancing_pending(request_id):
+		var slice_started := Time.get_ticks_usec()
+		while scan.has_dependencies() and _instancing_pending(request_id):
+			var error := scan.scan_dependency()
+			if not error.is_empty():
+				return error
+			if Time.get_ticks_usec() - slice_started >= 3000:
+				await tree.process_frame
+				slice_started = Time.get_ticks_usec()
+		if not _instancing_pending(request_id):
+			return {}
+		if Time.get_ticks_msec() >= deadline:
+			return _instance_timeout()
+		var path := scan.take_scene_to_load()
+		if path.is_empty():
+			break
+		var loaded := await _load_instance_source(tree, path)
+		if loaded.has("error"):
+			return loaded
+		scan.inspect_loaded_scene(path, loaded.scene)
+		if path == scene_path:
+			packed_scene = loaded.scene
+	if not _instancing_pending(request_id):
+		return {}
+	var link_error := scan.validate_scene_links()
+	if not link_error.is_empty():
+		return link_error
+	scan.begin_version_recheck()
+	var slice_started := Time.get_ticks_usec()
+	while scan.has_version_checks():
+		if not _instancing_pending(request_id):
+			return {}
+		if Time.get_ticks_msec() >= deadline:
+			return _instance_timeout()
+		var error := scan.recheck_version()
+		if not error.is_empty():
+			return error
+		if Time.get_ticks_usec() - slice_started >= 3000:
+			await tree.process_frame
+			slice_started = Time.get_ticks_usec()
+	if not _instancing_pending(request_id):
+		return {}
+	if Time.get_ticks_msec() >= deadline:
+		return _instance_timeout()
+	return _commit_prepared_instance(packed_scene, scene_path, params, fields, expected, edited_path, parent_path)
+
+
+static func _instance_timeout() -> Dictionary:
+	return ErrorCodes.make(ErrorCodes.DEFERRED_TIMEOUT, "Scene preparation timed out before placement; try again after the project finishes loading")
+
+
+static func _load_instance_source(tree: SceneTree, path: String) -> Dictionary:
+	var start_error := ResourceLoader.load_threaded_request(path, "", true)
+	if start_error != OK:
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Could not start loading scene: %s (%s)" % [path, error_string(start_error)])
+	while ResourceLoader.load_threaded_get_status(path) == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+		await tree.process_frame
+	# Release our native load request even if the caller timed out or left.
+	var packed_scene := ResourceLoader.load_threaded_get(path) as PackedScene
+	if packed_scene == null:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a PackedScene" % path)
+	return {"scene": packed_scene}
+
+
+func _commit_prepared_instance(packed_scene: PackedScene, scene_path: String, params: Dictionary, fields: Dictionary, expected: Dictionary, edited_path: String, parent_path: String) -> Dictionary:
+	if EditorInterface.is_playing_scene():
+		return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_PLAYING, "Stop the running project before instancing a scene", true)
+	var filesystem := EditorInterface.get_resource_filesystem()
+	if filesystem != null and filesystem.is_scanning():
+		return ErrorCodes.make_not_ready(ErrorCodes.SUB_EDITOR_IMPORTING, "Wait for project scanning to finish before instancing a scene", true)
+	var root := EditorInterface.get_edited_scene_root()
+	if not is_instance_valid(expected.root) or root != expected.root or root.scene_file_path != edited_path:
+		return ErrorCodes.make(ErrorCodes.EDITED_SCENE_MISMATCH, "The edited scene changed while preparing the instance; retry in the intended scene")
+	var resolved := _resolve_instance_parent(params)
+	if resolved.has("error"):
+		return resolved
+	if not is_instance_valid(expected.parent) or resolved.parent != expected.parent or McpScenePath.from_node(resolved.parent, resolved.root) != parent_path:
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "The parent changed while preparing the instance; retry with its current path")
+	return _place_instance(packed_scene, scene_path, params, fields, resolved)
+
+
+static func _resolve_instance_parent(params: Dictionary) -> Dictionary:
+	var resolved := _resolve_creation_parent(params)
+	if resolved.has("error"):
+		return resolved
+	var parent: Node = resolved.parent
+	var root: Node = resolved.root
+	if parent != root and not root.is_ancestor_of(parent):
+		return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, "parent_path must resolve inside the edited scene")
+	var ancestor := parent
+	while ancestor != root:
+		if ancestor.owner == null:
+			return ErrorCodes.make(ErrorCodes.VALUE_OUT_OF_RANGE, "parent_path passes through '%s', which is not owned by a saved scene" % ancestor.name)
+		ancestor = ancestor.get_parent()
+	return resolved
+
+
+func _place_instance(packed_scene: PackedScene, scene_path: String, params: Dictionary, fields: Dictionary, resolved: Dictionary) -> Dictionary:
+	var instance := _instantiate_packed_scene(packed_scene, scene_path)
+	if instance.has("error"):
+		return instance
+	var new_node: Node = instance.node
+	var placement := ScenePlacement.resolve_transform(new_node, resolved.parent, params.get("space", "local"), fields)
+	if placement.has("error"):
+		new_node.free()
+		return placement
+	return _commit_created_node(new_node, params.get("name", ""), scene_path, resolved, placement.get("properties", {}), true)
+
+
+static func _resolve_creation_parent(params: Dictionary) -> Dictionary:
+	var scene_check := McpScenePath.require_edited_scene(params.get("scene_file", ""))
+	if scene_check.has("error"):
+		return scene_check
+	var scene_root: Node = scene_check.node
+	var parent_path: String = params.get("parent_path", "")
+	var parent := scene_root
+	if not parent_path.is_empty():
+		parent = McpScenePath.resolve(parent_path, scene_root)
+		if parent == null:
+			return ErrorCodes.make(ErrorCodes.NODE_NOT_FOUND, McpScenePath.format_parent_error(parent_path, scene_root))
+	var write_error := McpNodeValidator.writable_error(parent, scene_root)
+	if not write_error.is_empty():
+		return write_error
+	return {"parent": parent, "root": scene_root}
+
+
+static func _load_packed_scene(scene_path: String) -> Dictionary:
+	if not ResourceLoader.exists(scene_path):
+		return ErrorCodes.make(ErrorCodes.RESOURCE_NOT_FOUND, "Scene not found: %s" % scene_path)
+	var packed_scene := ResourceLoader.load(scene_path) as PackedScene
+	if packed_scene == null:
+		return ErrorCodes.make(ErrorCodes.WRONG_TYPE, "Resource at %s is not a PackedScene" % scene_path)
+	return {"scene": packed_scene}
+
+
+static func _instantiate_packed_scene(packed_scene: PackedScene, scene_path: String) -> Dictionary:
+	# The root retains its scene link. Its descendants retain their source owners.
+	var new_node := packed_scene.instantiate(PackedScene.GEN_EDIT_STATE_INSTANCE)
+	if new_node == null:
+		return ErrorCodes.make(ErrorCodes.INTERNAL_ERROR, "Failed to instantiate scene: %s" % scene_path)
+	return {"node": new_node}
+
+
+func _commit_created_node(new_node: Node, node_name: String, scene_path: String, resolved: Dictionary, properties: Dictionary = {}, pin_scene: bool = false) -> Dictionary:
 	if not node_name.is_empty():
 		new_node.name = node_name
 
-	_undo_redo.create_action("MCP: Create %s" % new_node.name)
+	var parent: Node = resolved.parent
+	var scene_root: Node = resolved.root
+	_undo_redo.create_action("MCP: Create %s" % new_node.name, UndoRedo.MERGE_DISABLE, scene_root if pin_scene else null)
+	for property: StringName in properties:
+		# Set detached properties without recording editor overrides on a path
+		# that does not exist until the subsequent attachment.
+		_undo_redo.add_do_method(new_node, &"set", property, properties[property])
 	_undo_redo.add_do_method(parent, "add_child", new_node, true)
 	_undo_redo.add_do_method(new_node, "set_owner", scene_root)
 	_undo_redo.add_do_reference(new_node)

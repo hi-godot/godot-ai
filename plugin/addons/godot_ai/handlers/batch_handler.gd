@@ -37,6 +37,8 @@ const FORBIDDEN_SUBCOMMANDS := {
 	"remove_client":
 		"remove_client is deferred and has no completion channel inside a batch — "
 		+ "run it as its own tool call",
+	"instantiate_scene":
+		"Scene instancing prepares its resources asynchronously; run scene_manage(op=\"instantiate\") as a standalone call",
 }
 
 ## The whole batch executes synchronously inside one dispatcher tick,

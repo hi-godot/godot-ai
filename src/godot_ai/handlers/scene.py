@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import EllipsisType
+
 from godot_ai.handlers._readiness import require_writable_async
 from godot_ai.runtime.direct import DirectRuntime
 
@@ -44,6 +46,36 @@ async def scene_open(
     if force_reload:
         params["force_reload"] = True
     return await runtime.send_command("open_scene", params)
+
+
+async def scene_instantiate(
+    runtime: DirectRuntime,
+    scene_path: str,
+    parent_path: str = "",
+    name: str = "",
+    scene_file: str = "",
+    space: str = "local",
+    position: dict | EllipsisType = ...,
+    rotation_degrees: float | dict | EllipsisType = ...,
+    scale: dict | EllipsisType = ...,
+) -> dict:
+    await require_writable_async(runtime)
+    params: dict = {"scene_path": scene_path, "space": space}
+    if parent_path:
+        params["parent_path"] = parent_path
+    if name:
+        params["name"] = name
+    if scene_file:
+        params["scene_file"] = scene_file
+    # Preserve explicit JSON null so the editor can reject a malformed placement.
+    if position is not ...:
+        params["position"] = position
+    if rotation_degrees is not ...:
+        params["rotation_degrees"] = rotation_degrees
+    if scale is not ...:
+        params["scale"] = scale
+    # Dependency checks yield between editor frames before the native threaded load.
+    return await runtime.send_command("instantiate_scene", params, timeout=30.0)
 
 
 async def scene_save(runtime: DirectRuntime) -> dict:

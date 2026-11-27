@@ -4791,7 +4791,52 @@ class TestPerCallSessionRouting:
         finally:
             await plugin_b.close()
 
-    async def test_session_id_respects_target_readiness(self, mcp_stack, mcp_ws_port):
+    async def test_scene_instantiate_forwards_placement_to_pinned_session(
+        self, mcp_stack, mcp_ws_port
+    ):
+        client, _ = mcp_stack
+        plugin = await self._connect_second_plugin(mcp_ws_port, "level@0002")
+        params = {
+            "scene_path": "res://Door.tscn",
+            "parent_path": "/Level/Doors",
+            "name": "EastDoor",
+            "scene_file": "res://Level.tscn",
+            "space": "world",
+            "position": {"x": 12, "y": 0, "z": 4},
+            "rotation_degrees": {"x": 0, "y": 90, "z": 0},
+            "scale": {"x": 1, "y": 2, "z": 1},
+        }
+        try:
+
+            async def respond():
+                cmd = await plugin.recv_command()
+                await plugin.send_response(
+                    cmd["request_id"], {"path": "/Level/Doors/EastDoor", "undoable": True}
+                )
+                return cmd
+
+            result, command = await asyncio.gather(
+                client.call_tool(
+                    "scene_manage",
+                    {"op": "instantiate", "params": params, "session_id": "level@0002"},
+                ),
+                respond(),
+            )
+            assert command["command"] == "instantiate_scene"
+            assert command["params"] == params
+            assert result.data["path"] == "/Level/Doors/EastDoor"
+            assert result.data["undoable"] is True
+        finally:
+            await plugin.close()
+
+    @pytest.mark.parametrize(
+        ("tool", "params"),
+        [
+            ("node_create", {"type": "Node3D", "name": "Blocked"}),
+            ("scene_manage", {"op": "instantiate", "params": {"scene_path": "res://Door.tscn"}}),
+        ],
+    )
+    async def test_session_id_respects_target_readiness(self, mcp_stack, mcp_ws_port, tool, params):
         client, plugin_a = mcp_stack
         ## Active session (plugin_a/mcp-test) is ready; plugin_b is playing.
         plugin_b = await self._connect_second_plugin(
@@ -4800,8 +4845,8 @@ class TestPerCallSessionRouting:
         try:
             ## require_writable must see the bound session's readiness, not active.
             result = await client.call_tool(
-                "node_create",
-                {"type": "Node3D", "name": "Blocked", "session_id": "proj-b@0002"},
+                tool,
+                {**params, "session_id": "proj-b@0002"},
                 raise_on_error=False,
             )
             assert result.is_error
