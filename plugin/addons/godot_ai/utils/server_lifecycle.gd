@@ -751,6 +751,17 @@ func _effect_probe(payload: Dictionary) -> Dictionary:
 		if not pre_v4.is_empty():
 			blocked["message"] = stale_pre_v4_message(port, pre_v4)
 			blocked["target"]["hint"] = STALE_PRE_V4_HINT
+		## A half-dead occupant (a capability record for this port exists but
+		## its status probe failed) must not wedge the cluster: the pid is
+		## alive yet nothing answers, and every restart attempt then loses the
+		## occupancy check forever. Authorize the replacement flow, which
+		## launches our server first and kills the stale target only then. A
+		## listener that did not answer as godot-ai at all is not ours to
+		## kill, so it stays non-replaceable.
+		var probe_failed := not str(live.get("error", "")).is_empty()
+		var record_present := not str(capability.get("http", "")).is_empty()
+		if probe_failed and record_present:
+			blocked["target"]["replaceable"] = true
 		return blocked
 	## The server binds both ports before it publishes anything. A held
 	## WebSocket port (a server moved off the HTTP port, or another editor)

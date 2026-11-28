@@ -99,13 +99,17 @@ def idle_grace_from_env() -> float:
     return _grace_from_env(IDLE_GRACE_ENV)
 
 
-def should_arm_idle_exit(_owner_pid: int | None = None) -> bool:
+def should_arm_idle_exit(owner_pid: int | None = None) -> bool:
     """Whether the idle self-terminate backstop (#498) should run.
 
-    Arms only for plugin-spawned servers carrying the explicit
-    ``GODOT_AI_PLUGIN_SPAWNED`` marker. Never arms for:
+    Arms for plugin-spawned servers carrying the explicit
+    ``GODOT_AI_PLUGIN_SPAWNED`` marker, and for servers started with an owner
+    pid when the owner-PID reaper cannot run (Windows, #497): a hand-started
+    ``--owner-pid`` server there previously had NO exit path at all once its
+    editor died (reported in the 2026-11-28 flood), so the idle backstop now
+    covers it too. Never arms for:
 
-    - manual dev servers / CI (neither marker nor owner pid in the env);
+    - manual dev servers / CI (neither marker nor owner pid);
     - ``--reload`` dev runs (detected via the reload runner's
       ``GODOT_AI_DEV_TRANSPORT`` env, inherited by uvicorn's reload worker) —
       an idle reloading server is a dev convenience, not an orphan;
@@ -118,6 +122,8 @@ def should_arm_idle_exit(_owner_pid: int | None = None) -> bool:
         return False
     if os.environ.get(DEV_TRANSPORT_ENV, "").strip():
         return False
+    if owner_pid is not None and owner_pid > 0:
+        return True
     return _env_truthy(PLUGIN_SPAWNED_ENV)
 
 
