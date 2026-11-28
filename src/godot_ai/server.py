@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 import time
 from collections.abc import AsyncIterator, Iterable, Sequence
@@ -172,6 +173,10 @@ class GodotAIFastMCP(FastMCP):
 ## ``tests/unit/test_server_instructions.py``.
 
 _INSTRUCTIONS_PREAMBLE = "Production-grade Godot MCP server with persistent editor integration.\n\n"
+
+## Grace period before a claim-loser process is force-exited (see the
+## backstop in _lifespan).
+STARTUP_FAILURE_EXIT_BACKSTOP_S = 30.0  # covers uvicorn's graceful shutdown window; https://www.uvicorn.org/settings/#timeout-graceful-shutdown
 
 ## The always-loaded core verbs (one line each). Core tools survive their
 ## domain's exclusion (see CORE_BEARING_DOMAINS), so these lines are
@@ -489,6 +494,16 @@ def create_server(
                         f"HTTP port {http_port} is already claimed by another godot-ai server"
                     )
                     report_startup_failure(claimed)
+                    ## Backstop for hosts where the raised lifespan failure does
+                    ## not take the process down (observed on Windows: a spawn
+                    ## storm left nine claim-loser processes alive). uvicorn is
+                    ## given the normal shutdown window first; anything still
+                    ## alive after that is killed unconditionally so a lost
+                    ## claim race can never strand a zombie server.
+                    loop.call_later(
+                        STARTUP_FAILURE_EXIT_BACKSTOP_S,
+                        lambda: os._exit(3),
+                    )
                     raise claimed from exc
                 await asyncio.sleep(0.05)
             except OSError as exc:
